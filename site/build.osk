@@ -2119,6 +2119,9 @@ struct Code {
     // How safe that fix is to apply: `machine`, `maybe` or
     // `placeholders`, as a diagnostic's fix says.
     applicability: Untrusted<String>,
+    // When the applicability depends on where the fix is offered, the
+    // rest of the rule: `on main, maybe elsewhere`.
+    applicability_note: Untrusted<String>,
     // A program that fails with the code, and the same program fixed.
     example: Untrusted<String>,
     fixed: Untrusted<String>,
@@ -2247,7 +2250,9 @@ fn is_code(word: Untrusted<String>) -> Bool {
 
 // A table row `| `E0300` | meaning | fix | applicability |` as a code
 // with no examples. The runtime's tables have no fix column and no
-// applicability. A `|` inside a cell is written `\|`.
+// applicability. A `|` inside a cell is written `\|`. The applicability
+// cell is a name, then optionally a note: `machine on main, maybe
+// elsewhere`.
 fn code_row(line: Untrusted<String>, source: Untrusted<String>) -> Option<Code> {
     if !line.starts_with("| `") || !line.ends_with(" |") {
         return None
@@ -2260,13 +2265,16 @@ fn code_row(line: Untrusted<String>, source: Untrusted<String>) -> Option<Code> 
     let message = cells.at(0).replace("\\|", "|")
     var fix = ""
     var applicability = ""
+    var note = ""
     if cells.len() > 1 && !cells.at(1).starts_with("None") {
         fix = cells.at(1).replace("\\|", "|")
         if cells.len() > 2 {
-            applicability = cells.at(2)
+            let words = cells.at(2).split(" ")
+            applicability = words.at(0)
+            note = " ".join(sub(words, 1, words.len()))
         }
     }
-    Some(Code(code: parts.at(0), message: message, fix: fix, applicability: applicability, example: "", fixed: "", source: source))
+    Some(Code(code: parts.at(0), message: message, fix: fix, applicability: applicability, applicability_note: note, example: "", fixed: "", source: source))
 }
 
 // `row` with the examples `examples` holds for it.
@@ -2282,7 +2290,7 @@ fn with_examples(row: Code, examples: List<Example>) -> Code {
             }
         }
     }
-    Code(code: row.code, message: row.message, fix: row.fix, applicability: row.applicability, example: example, fixed: fixed, source: row.source)
+    Code(code: row.code, message: row.message, fix: row.fix, applicability: row.applicability, applicability_note: row.applicability_note, example: example, fixed: fixed, source: row.source)
 }
 
 // The page for one code.
@@ -2298,10 +2306,15 @@ fn code_page(all: Site, code: Code) -> Page {
         parts.push("**Machine-applicable fix:** none.")
     } else {
         // Only a `machine` fix is certainly right (the glossary's Fix
-        // applicability); a `maybe` or `placeholders` fix is not machine-applicable.
-        let label = if code.applicability == "maybe" || code.applicability == "placeholders" { "Fix" } else { "Machine-applicable fix" }
+        // applicability); a `maybe` or `placeholders` fix is not
+        // machine-applicable, and neither is one that is `machine` only in
+        // some places.
+        let label = if code.applicability == "maybe" || code.applicability == "placeholders" || code.applicability_note != "" { "Fix" } else { "Machine-applicable fix" }
         parts.push("**{label}:** {code.fix}")
-        if code.applicability != "" {
+        if code.applicability_note != "" {
+            parts.push("")
+            parts.push("**Fix applicability:** `{code.applicability}` {code.applicability_note}.")
+        } else if code.applicability != "" {
             parts.push("")
             parts.push("**Fix applicability:** `{code.applicability}`.")
         }

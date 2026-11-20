@@ -55,11 +55,12 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac new <name> [--lib] [--no-agent-files] [--format=json]
                                            Lay out a new package in the
@@ -104,7 +105,7 @@ USAGE:
 | Flag | Used by | Effect |
 | --- | --- | --- |
 | `--format=json` | every command | Machine-readable output. See [output formats](#output-formats). |
-| `--release` | `check` | Reject `dbg(...)` (`E0216`) and `todo()` (`E0293`). The other commands accept the flag and ignore it. |
+| `--release` | `check`, `fix` | Run the release check: reject `dbg(...)` (`E0216`), `todo()` (`E0293`) and unused authority, a capability-bearing parameter its function never uses (`E0296`). `oskac fix --release` checks the same way, so it applies the release check's `machine` fixes too, such as removing an unused parameter of `main`. The other commands accept the flag and ignore it. |
 | `--baseline=<file>` | `check` | Compare the program's authority with the [authority baseline](#authority-baseline) in `<file>`, and exit with 3 when it widened. Any other command refuses it as a usage error. |
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--grant=<file>` | `check`, `run` | Compare the program's authority with the [authority grant](#authority-grant) in `<file>`, and exit with 3 when it goes past it; `run` then runs nothing. Not with `--baseline` or `--update-baseline`; a repeated flag, an empty file name, or the flag on any other command is a usage error (exit code 2). |
@@ -300,7 +301,7 @@ The first line puts the name and the version under the signature, so a signed re
 
 ## `oskac fix`
 
-`oskac fix [path] [--dry-run] [--placeholders] [--format=json]` applies the fixes that are safe to apply automatically to a file or package, as `check` takes them. It checks the program, applies the fix of the first diagnostic, in the order `check` reports them, whose applicability is `machine`, checks again, and repeats until no such fix is left. With `--placeholders` it applies `placeholders` fixes too, such as `match` arms whose body is `todo()`, which compile but are left to fill in. It never applies a `maybe` fix or a suggestion. It stops early when a fix leaves its own diagnostic in place, which it then undoes, or after 100 rounds.
+`oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]` applies the fixes that are safe to apply automatically to a file or package, as `check` takes them. With `--release` each check is the release check, so the release check's `machine` fixes are applied too, such as removing `dbg` (`E0216`) and an unused parameter of `main` (`E0296`). It checks the program, applies the fix of the first diagnostic, in the order `check` reports them, whose applicability is `machine`, checks again, and repeats until no such fix is left. With `--placeholders` it applies `placeholders` fixes too, such as `match` arms whose body is `todo()`, which compile but are left to fill in. It never applies a `maybe` fix or a suggestion. It stops early when a fix leaves its own diagnostic in place, which it then undoes, or after 100 rounds.
 
 The fixes are made in memory. At the end, each changed file is written once, replacing the old file in one step. Nothing is written, and the command says which rule refused it in an `error:` line on standard error, when:
 
