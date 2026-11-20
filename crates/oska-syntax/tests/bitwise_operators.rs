@@ -75,12 +75,12 @@ fn each_operator_parses_as_its_binary_or_unary_node() {
 }
 
 #[test]
-fn a_chain_of_one_operator_needs_no_parentheses_and_groups_left() {
+fn a_chain_of_one_associative_operator_needs_no_parentheses_and_groups_left() {
     assert_eq!(grouped("a & b & c"), "((a & b) & c)");
     assert_eq!(grouped("a | b | c"), "((a | b) | c)");
     assert_eq!(grouped("a ^ b ^ c"), "((a ^ b) ^ c)");
-    assert_eq!(grouped("a << 1 << 2"), "((a << 1) << 2)");
-    assert_eq!(grouped("a >> 1 >> 2"), "((a >> 1) >> 2)");
+    assert_eq!(grouped("(a << 1) << 2"), "((a << 1) << 2)");
+    assert_eq!(grouped("a >> (1 >> 2)"), "(a >> (1 >> 2))");
 }
 
 #[test]
@@ -154,6 +154,18 @@ fn two_different_bitwise_operators_need_parentheses() {
     assert_mixed("a ^ b & c", "a ^ b & c", "a ^ (b & c)");
     assert_mixed("a << b >> c", "a << b >> c", "(a << b) >> c");
     assert_mixed("a & b << 2", "a & b << 2", "a & (b << 2)");
+}
+
+#[test]
+fn a_chain_of_one_shift_needs_parentheses_since_shifts_do_not_associate() {
+    assert_mixed("a << 1 << 2", "a << 1 << 2", "(a << 1) << 2");
+    assert_mixed("a >> 1 >> 2", "a >> 1 >> 2", "(a >> 1) >> 2");
+    let err = module_err("fn f() {\n    let v = a << 1 << 2\n}");
+    assert_eq!(
+        err.message,
+        "`<<` does not chain without parentheses; \
+         write `(a << 1) << 2` to say which applies first"
+    );
 }
 
 #[test]

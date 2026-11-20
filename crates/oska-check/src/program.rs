@@ -845,6 +845,16 @@ impl IntType {
         self != IntType::Int
     }
 
+    /// The number of bits in a value of the type.
+    pub fn bits(self) -> u32 {
+        match self {
+            IntType::I8 | IntType::U8 => 8,
+            IntType::I16 | IntType::U16 => 16,
+            IntType::I32 | IntType::U32 => 32,
+            IntType::Int | IntType::I64 | IntType::U64 => 64,
+        }
+    }
+
     /// The smallest value of the type.
     pub fn min(self) -> i128 {
         match self {

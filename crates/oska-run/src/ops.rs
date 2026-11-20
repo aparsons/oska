@@ -76,7 +76,7 @@ pub fn rotate(x: Value, n: Value, left: bool, span: Span) -> Result<Value, Panic
     };
     let name = if left { "rotl" } else { "rotr" };
     let n = amount(name, n.as_int(), int, span)?;
-    let bits = width(int);
+    let bits = int.bits();
     let back = (bits - n) % bits;
     let value = if left {
         (x << n | x >> back) & mask(int)
@@ -86,20 +86,15 @@ pub fn rotate(x: Value, n: Value, left: bool, span: Span) -> Result<Value, Panic
     Ok(Value::Int(value, int))
 }
 
-/// The number of bits in an integer of type `int`.
-fn width(int: IntType) -> u32 {
-    (int.max() - int.min()).count_ones()
-}
-
 /// Every bit of an integer of type `int` set.
 fn mask(int: IntType) -> i128 {
-    (1i128 << width(int)) - 1
+    (1i128 << int.bits()) - 1
 }
 
 /// `n` as the amount of a shift or rotation, `op`, of an integer of type
 /// `int`: `P0008` unless it is from 0 to the type's width less 1.
 fn amount(op: &str, n: i128, int: IntType, span: Span) -> Result<u32, Panic> {
-    let bits = width(int);
+    let bits = int.bits();
     match u32::try_from(n) {
         Ok(n) if n < bits => Ok(n),
         _ => Err(Panic::new(

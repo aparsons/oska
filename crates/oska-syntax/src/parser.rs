@@ -13,7 +13,7 @@
 //! | 6 | `\|` | left |
 //! | 7 | `^` | left |
 //! | 8 | `&` | left |
-//! | 9 | `<<` `>>` | left |
+//! | 9 | `<<` `>>` | none (chaining is error E0108) |
 //! | 10 | `+` `-` | left |
 //! | 11 | `*` `/` `%` | left |
 //! | 12 | prefix `-` `!` `~` | prefix |
@@ -23,7 +23,8 @@
 //! bitwise or shift operator whose operand, or whose parent, is a
 //! different binary operator (or a range) without parentheses is error
 //! `E0108`, so the order never decides what such code means. A chain of
-//! one operator, such as `a ^ b ^ c`, needs none. `<<` and `>>` are two
+//! one associative operator, such as `a ^ b ^ c`, needs none; shifts do
+//! not associate, so `a << b << c` needs them too. `<<` and `>>` are two
 //! adjacent `<` or `>` tokens in expression position: the lexer emits
 //! them singly, so `List<List<U8>>` still closes both arguments. `|` in
 //! prefix position starts a closure, and in infix position is bitwise
@@ -1462,7 +1463,8 @@ impl<'a> Parser<'a> {
 
     /// `E0108` when `lhs` or `rhs`, the operands of `op` (bitwise or a
     /// shift when `bitwise`), is a binary operation without parentheses
-    /// that mixes a bitwise or shift operator with a different one. Its
+    /// that mixes a bitwise or shift operator with a different one, or
+    /// chains a shift. Its
     /// fix puts parentheses around each such operand, which keeps the
     /// meaning the parser gave it: Rust's precedence.
     fn unmixed(&self, op: &str, bitwise: bool, lhs: &Expr, rhs: &Expr) -> Result<(), Diagnostic> {
@@ -1474,7 +1476,7 @@ impl<'a> Parser<'a> {
                     lhs: a,
                     rhs: b,
                 } if operand.span == join(a.span, b.span)
-                    && inner.text() != op
+                    && (inner.text() != op || inner.is_shift())
                     && (bitwise || inner.is_bitwise()) =>
                 {
                     Some((operand, *inner))
@@ -1504,7 +1506,11 @@ impl<'a> Parser<'a> {
         } else {
             (inner.text(), op)
         };
-        let mut message = format!("`{bit}` cannot be mixed with `{other}` without parentheses");
+        let mut message = if bit == other {
+            format!("`{bit}` does not chain without parentheses")
+        } else {
+            format!("`{bit}` cannot be mixed with `{other}` without parentheses")
+        };
         if !fixed.contains('\n') {
             message.push_str(&format!("; write `{fixed}` to say which applies first"));
         }

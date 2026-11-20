@@ -127,11 +127,33 @@ fn mixing_without_parentheses_is_e0108_with_a_fix_that_adds_them() {
     assert_ok("fn f(a: U32, b: U32) -> U32 {\n    (a + b) << 3\n}");
 }
 
+/// The Lean model of Oska Core needs no change for these operators:
+/// their operands are `U8`, `U32` or `U64` (`Int` has none, E0223 above),
+/// and the core IR export refuses a value of each of those types wherever
+/// it appears, so no program it accepts can reach a bitwise operator.
 #[test]
-fn bitwise_operators_are_outside_oska_core() {
-    let report = oska_check::check_module(
-        "fn main() {\n    let a: U8 = 12\n    let b = ~(a & 10) ^ a.rotl(1)\n}",
-    );
-    let program = report.program.expect("the program checks");
-    assert!(oska_check::core_ir::export(&program).is_err());
+fn no_oska_core_program_can_reach_a_bitwise_operator() {
+    let export = |src: &str| {
+        let report = oska_check::check_module(src);
+        let program = report
+            .program
+            .unwrap_or_else(|| panic!("{src} should check: {:#?}", report.diagnostics));
+        oska_check::core_ir::export(&program)
+    };
+    assert!(export("fn main() {\n    let a: Int = 12\n}").is_ok());
+    for ty in TYPES {
+        // A value of the type alone, with no operator, is refused.
+        let refusal = export(&format!("fn main() {{\n    let a: {ty} = 12\n}}"))
+            .expect_err("a sized integer is outside Oska Core");
+        assert!(
+            refusal.construct.contains(&format!("`{ty}`")),
+            "{ty}: {}",
+            refusal.construct
+        );
+        // So is every program that uses the operators on it.
+        assert!(export(&format!(
+            "fn main() {{\n    let a: {ty} = 12\n    let b = ~(a & 10) ^ (a << 1) ^ a.rotl(1)\n}}"
+        ))
+        .is_err());
+    }
 }

@@ -100,7 +100,7 @@ fn shifts_compute_what_the_interpreter_does_at_every_edge() {
             // An amount held in a value, not a literal.
             checks.push((format!("v{i} << v3"), (a << (bits - 1)) & mask(bits)));
             checks.push((format!("v{i} >> v3"), a >> (bits - 1)));
-            checks.push((format!("v{i} << v1 << v1"), (a << 2) & mask(bits)));
+            checks.push((format!("(v{i} << v1) << v1"), (a << 2) & mask(bits)));
         }
         assert_all_hold(&format!("shifts_{ty}"), &checking(ty, &values, &checks));
     });

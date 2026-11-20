@@ -730,17 +730,19 @@ fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
 
 /// `U8.rotl(self, n)`, and `U32`'s and `U64`'s: `P0008` for an amount
 /// out of range (`ops::rotate`).
-fn rotl(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let n = args.pop().expect("a rotation's amount");
-    let x = args.pop().expect("a rotation's receiver");
-    ops::rotate(x, n, true, span)
+fn rotl(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    rotate(args, true, span)
 }
 
 /// `U8.rotr(self, n)`, and `U32`'s and `U64`'s.
-fn rotr(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let n = args.pop().expect("a rotation's amount");
-    let x = args.pop().expect("a rotation's receiver");
-    ops::rotate(x, n, false, span)
+fn rotr(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    rotate(args, false, span)
+}
+
+/// A rotation's receiver and amount, `args`, rotated left or not.
+fn rotate(args: Vec<Value>, left: bool, span: Span) -> Result<Value, Panic> {
+    let [x, n]: [Value; 2] = args.try_into().expect("a rotation's receiver and amount");
+    ops::rotate(x, n, left, span)
 }
 
 /// `Int.to_string(self)`: the integer in decimal.
