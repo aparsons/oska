@@ -309,7 +309,7 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
   - Every trust assertion (`.assume_trusted()`) and every secret exposure (`.expose()`) is an **audit site**.
   - `oskac check --format=json` lists all audit sites, with their spans, in an `"audit"` array. The human-readable report lists them too.
 - **Scope.**
-  - For now, trust is tracked on text only. `Bytes` will be added when the first binary API needs it.
+  - Trust is tracked on text and on `Bytes`, and on nothing else: `Untrusted<...>` of any other type is `E0320`. Bytes from a capability (`read_bytes`, `receive_bytes`) are `Untrusted<Bytes>`, every `Bytes` operation follows trust as text operations do, and `.assume_trusted()` on bytes is an audit site.
   - The diagnostic codes are `E03xx`. The range covers trust, sinks, and secrets, and also the `std` modules: imports, qualified names, and sink literal tags.
 - **Runtime implementations.** The sink modules start as signature-only prelude declarations. Their runtime implementations arrive with the interpreter.
 

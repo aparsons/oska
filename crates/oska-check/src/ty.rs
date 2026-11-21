@@ -12,8 +12,9 @@ use crate::program::IntType;
 pub enum Ty {
     /// A named type with its arguments: a primitive (`Int`, `String`), a
     /// prelude or user struct or enum, or a built-in capability. Its
-    /// [`Trust`] matters only for text (see [`Ty::is_text`]); every other
-    /// type is always [`Trust::Trusted`].
+    /// [`Trust`] matters only for the types that carry a trust flag (see
+    /// [`Ty::carries_trust_flag`]); every other type is always
+    /// [`Trust::Trusted`].
     Named(String, Vec<Ty>, Trust),
     /// `()`.
     Unit,
@@ -97,12 +98,12 @@ pub const INT: &str = "Int";
 pub const STRING: &str = "String";
 /// The syntax for untrusted text, as in `Untrusted<String>`.
 pub const UNTRUSTED: &str = "Untrusted";
-/// The types that carry a trust flag.
-const TEXT: &[&str] = &[STRING];
+/// The types that carry a trust flag: text, and bytes (#223).
+const TRUST_FLAGGED: &[&str] = &[STRING, crate::builtins::BYTES];
 
 /// Whether the type named `name` carries a trust flag.
-pub fn is_text_name(name: &str) -> bool {
-    TEXT.contains(&name)
+pub fn carries_trust_flag(name: &str) -> bool {
+    TRUST_FLAGGED.contains(&name)
 }
 pub const OPTION: &str = "Option";
 pub const RESULT: &str = "Result";
@@ -152,14 +153,19 @@ impl Ty {
     }
 
     /// A type that carries a trust flag.
+    pub fn carries_trust_flag(&self) -> bool {
+        matches!(self, Ty::Named(name, _, _) if carries_trust_flag(name))
+    }
+
+    /// Text: `String`, of either trust.
     pub fn is_text(&self) -> bool {
-        matches!(self, Ty::Named(name, _, _) if is_text_name(name))
+        matches!(self, Ty::Named(name, _, _) if name == STRING)
     }
 
     /// This text type with trust `trust`; any other type unchanged.
     pub fn with_trust(self, trust: Trust) -> Ty {
         match self {
-            Ty::Named(name, args, _) if is_text_name(&name) => Ty::Named(name, args, trust),
+            Ty::Named(name, args, _) if carries_trust_flag(&name) => Ty::Named(name, args, trust),
             other => other,
         }
     }
@@ -171,7 +177,7 @@ impl Ty {
         match self {
             Ty::Named(name, args, trust) => {
                 let args = args.iter().map(|a| a.map_trust(map)).collect();
-                let trust = if is_text_name(name) {
+                let trust = if carries_trust_flag(name) {
                     map(*trust)
                 } else {
                     *trust
@@ -227,11 +233,35 @@ impl Ty {
         })
     }
 
+    /// The names of the types that carry an untrusted flag in this type,
+    /// at any depth, such as `String` for `Option<Untrusted<String>>`.
+    pub fn untrusted_names(&self) -> Vec<&str> {
+        let mut names = Vec::new();
+        self.collect_untrusted(&mut names);
+        names
+    }
+
+    fn collect_untrusted<'a>(&'a self, names: &mut Vec<&'a str>) {
+        match self {
+            Ty::Named(name, args, trust) => {
+                if self.carries_trust_flag() && *trust == Trust::Untrusted {
+                    names.push(name);
+                }
+                args.iter().for_each(|a| a.collect_untrusted(names));
+            }
+            Ty::Fn { params, ret, .. } => {
+                params.iter().for_each(|p| p.collect_untrusted(names));
+                ret.collect_untrusted(names);
+            }
+            Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => {}
+        }
+    }
+
     /// Holds a text type that is fixed trusted, at any depth.
     pub fn has_trusted_text(&self) -> bool {
         match self {
             Ty::Named(_, args, trust) => {
-                (self.is_text() && *trust == Trust::Trusted)
+                (self.carries_trust_flag() && *trust == Trust::Trusted)
                     || args.iter().any(Ty::has_trusted_text)
             }
             Ty::Fn { params, ret, .. } => {

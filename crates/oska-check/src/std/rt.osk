@@ -5078,17 +5078,50 @@ fn lone_file(fd: Int, names: List<String>) -> Result<(), IoError> {
 
 // ---- Reading and writing ---------------------------------------------------
 
-// The text of the regular file reached by walking `names` beneath `root`.
-fn read_beneath(root: Int, names: List<String>) -> Result<String, IoError> {
+// An object holding the bytes of the regular file reached by walking
+// `names` beneath `root`: its address. It is a bytes object when `bytes`,
+// and otherwise a text object not yet known to be UTF-8.
+fn read_raw_beneath(root: Int, names: List<String>, bytes: Bool) -> Result<Int, IoError> {
     let fd = open_file(root, names, file_read_flags())?
-    let text = read_all(fd)
+    let object = read_all(fd, bytes)
     close(fd)
-    text
+    object
 }
 
-// Everything left to read from `fd`, as text, as Rust's `read_to_string`
-// reads it: an error when it is not UTF-8.
-fn read_all(fd: Int) -> Result<String, IoError> {
+// The text the object at `object`, read from outside, holds, or an error,
+// as Rust's `read_to_string` words it, when it is not UTF-8.
+fn text_checked(object: Int) -> Result<String, IoError> {
+    if !utf8_valid(text_data(object), text_length(object)) {
+        free(object)
+        return Err(io_error_text("stream did not contain valid UTF-8"))
+    }
+    Ok(rt_mem_as_text(object))
+}
+
+// A new object with room for `capacity` bytes, a bytes object when
+// `bytes` and a text object otherwise, or 0 when no memory holds it
+// (`try_alloc`): its address. Either keeps its length at offset 8.
+fn raw_try_new(capacity: Int, bytes: Bool) -> Int {
+    if !bytes {
+        return text_try_new(capacity)
+    }
+    let room = bytes_room(capacity)
+    let object = try_alloc(rt_mem_add(24, room))
+    if object == 0 {
+        return 0
+    }
+    bytes_init(object, room)
+}
+
+// Where the bytes of the object `raw_try_new` made at `object` begin.
+fn raw_data(object: Int, bytes: Bool) -> Int {
+    if bytes { bytes_data(object) } else { text_data(object) }
+}
+
+// Everything left to read from `fd`, in a new object, a bytes object when
+// `bytes` and otherwise a text object that may not be UTF-8: its address.
+// The bytes are read into it once, never copied whole into another.
+fn read_all(fd: Int, bytes: Bool) -> Result<Int, IoError> {
     // Room for the whole file, as `fstat` sizes it, and a little more.
     // Rust reserves it fallibly: a buffer no memory holds (a sparse file of
     // a terabyte) is an `IoError`, "out of memory", not the end of the
@@ -5108,24 +5141,24 @@ fn read_all(fd: Int) -> Result<String, IoError> {
         }
         free(buffer)
     }
-    var object = text_try_new(capacity)
+    var object = raw_try_new(capacity, bytes)
     if object == 0 {
         return Err(io_error_text("out of memory"))
     }
     var length = 0
     while true {
         if length == capacity {
-            let larger = text_try_new(rt_mem_shl(capacity, 1))
+            let larger = raw_try_new(rt_mem_shl(capacity, 1), bytes)
             if larger == 0 {
                 free(object)
                 return Err(io_error_text("out of memory"))
             }
-            copy_bytes(text_data(larger), text_data(object), length)
+            copy_bytes(raw_data(larger, bytes), raw_data(object, bytes), length)
             free(object)
             object = larger
             capacity = rt_mem_shl(capacity, 1)
         }
-        let into = rt_mem_add(text_data(object), length)
+        let into = rt_mem_add(raw_data(object, bytes), length)
         let got = if on_windows() { win_read(fd, into, io_count(capacity - length)) } else { rt_sys_read(fd, into, io_count(capacity - length)) }
         if interrupted(got) {
             continue
@@ -5139,12 +5172,8 @@ fn read_all(fd: Int) -> Result<String, IoError> {
         }
         length = length + got
     }
-    if !utf8_valid(text_data(object), length) {
-        free(object)
-        return Err(io_error_text("stream did not contain valid UTF-8"))
-    }
     rt_mem_store64(rt_mem_add(object, 8), length)
-    Ok(rt_mem_as_text(object))
+    Ok(object)
 }
 
 // Create the regular file reached by walking `names` beneath `root`, or
@@ -5152,6 +5181,18 @@ fn read_all(fd: Int) -> Result<String, IoError> {
 // included, so nothing is created through one; a file already there is
 // emptied only once it is known to be a regular one with one link.
 fn write_beneath(root: Int, names: List<String>, contents: String) -> Result<(), IoError> {
+    let object = rt_mem_text(contents)
+    write_raw_beneath(root, names, text_data(object), text_length(object))
+}
+
+// `write_beneath` with bytes.
+fn write_bytes_beneath(root: Int, names: List<String>, contents: Bytes) -> Result<(), IoError> {
+    let object = rt_mem_bytes(contents)
+    write_raw_beneath(root, names, bytes_data(object), bytes_length(object))
+}
+
+// `write_beneath` with the `count` bytes at `data`.
+fn write_raw_beneath(root: Int, names: List<String>, data: Int, count: Int) -> Result<(), IoError> {
     let fd = open_file(root, names, file_write_flags())?
     // On Windows the handle is at the file's start: it ends there.
     var emptied = if on_windows() { rt_sys_set_end_of_file(fd) } else { rt_sys_ftruncate(fd, 0) }
@@ -5162,8 +5203,7 @@ fn write_beneath(root: Int, names: List<String>, contents: String) -> Result<(),
         close(fd)
         return Err(io_error(0 - emptied))
     }
-    let object = rt_mem_text(contents)
-    let written = write_all(fd, text_data(object), text_length(object))
+    let written = write_all(fd, data, count)
     close(fd)
     if written < 0 {
         return Err(io_error(0 - written))
@@ -5578,6 +5618,19 @@ fn file_names(root: Root) -> List<String> {
 
 // `DirRead.read_to_string(path)`.
 pub fn dir_read_to_string(root: Root, path: Path) -> Result<String, IoError> {
+    let object = dir_read_raw(root, path, false)?
+    text_checked(object)
+}
+
+// `DirRead.read_bytes(path)`.
+pub fn dir_read_bytes(root: Root, path: Path) -> Result<Bytes, IoError> {
+    let object = dir_read_raw(root, path, true)?
+    Ok(rt_mem_as_bytes(object))
+}
+
+// An object holding the bytes of the file a `DirRead` reaches at `path`,
+// as `read_raw_beneath` makes one: its address.
+fn dir_read_raw(root: Root, path: Path, bytes: Bool) -> Result<Int, IoError> {
     usable(root)?
     let raw = path_text(path)
     let names = confine_names(raw)?
@@ -5585,10 +5638,10 @@ pub fn dir_read_to_string(root: Root, path: Path) -> Result<String, IoError> {
         return Err(io_error_text("`{raw}` names the directory capability's root itself, not a file"))
     }
     if faking() {
-        return fake_read(fake_walk(root.path, names)?)
+        return fake_read(fake_walk(root.path, names)?, bytes)
     }
     win_check_names(names)?
-    read_beneath(root.handle, names)
+    read_raw_beneath(root.handle, names, bytes)
 }
 
 // `DirRead.list_dir(path)`: `.` lists the root.
@@ -5624,6 +5677,17 @@ pub fn dir_write(root: Root, path: Path, contents: String) -> Result<(), IoError
     write_beneath(root.handle, names, contents)
 }
 
+// `DirWrite.write_bytes(path, contents)`.
+pub fn dir_write_bytes(root: Root, path: Path, contents: Bytes) -> Result<(), IoError> {
+    usable(root)?
+    let names = names_to_create(path_text(path))?
+    if faking() {
+        return fake_put_file(fake_walk(root.path, names)?, raw_text_of(contents))
+    }
+    win_check_names(names)?
+    write_bytes_beneath(root.handle, names, contents)
+}
+
 // `DirWrite.create_dir(path)`.
 pub fn dir_create_dir(root: Root, path: Path) -> Result<(), IoError> {
     usable(root)?
@@ -5637,11 +5701,24 @@ pub fn dir_create_dir(root: Root, path: Path) -> Result<(), IoError> {
 
 // `FileRead.read_to_string()`.
 pub fn file_read_to_string(root: Root) -> Result<String, IoError> {
+    let object = file_read_raw(root, false)?
+    text_checked(object)
+}
+
+// `FileRead.read_bytes()`.
+pub fn file_read_bytes(root: Root) -> Result<Bytes, IoError> {
+    let object = file_read_raw(root, true)?
+    Ok(rt_mem_as_bytes(object))
+}
+
+// An object holding the bytes of a `FileRead`'s file, as
+// `read_raw_beneath` makes one: its address.
+fn file_read_raw(root: Root, bytes: Bool) -> Result<Int, IoError> {
     usable(root)?
     if faking() {
-        return fake_read(root.path)
+        return fake_read(root.path, bytes)
     }
-    read_beneath(root.handle, file_names(root))
+    read_raw_beneath(root.handle, file_names(root), bytes)
 }
 
 // `FileWrite.write(contents)`.
@@ -5651,6 +5728,22 @@ pub fn file_write(root: Root, contents: String) -> Result<(), IoError> {
         return fake_put_file(root.path, contents)
     }
     write_beneath(root.handle, file_names(root), contents)
+}
+
+// `FileWrite.write_bytes(contents)`.
+pub fn file_write_bytes(root: Root, contents: Bytes) -> Result<(), IoError> {
+    usable(root)?
+    if faking() {
+        return fake_put_file(root.path, raw_text_of(contents))
+    }
+    write_bytes_beneath(root.handle, file_names(root), contents)
+}
+
+// The test host keeps a file's bytes in a text object, UTF-8 or not: the
+// one for `contents`.
+fn raw_text_of(contents: Bytes) -> String {
+    let object = rt_mem_bytes(contents)
+    text_from(bytes_data(object), bytes_length(object))
 }
 
 // ---- The test host ---------------------------------------------------------
@@ -5982,13 +6075,22 @@ fn fake_restrict_to_file_beneath(root: Root, raw: String, names: List<String>) -
     }
 }
 
-// The text of the file at `path`.
-fn fake_read(path: String) -> Result<String, IoError> {
+// A new object holding the bytes of the file at `path`, as
+// `read_raw_beneath` makes one: its address.
+fn fake_read(path: String, bytes: Bool) -> Result<Int, IoError> {
     let at = fake_file(path)
     if at < 0 {
         return Err(fake_not_found(path))
     }
-    Ok(word_list(37).at(at))
+    let object = rt_mem_text(word_list(37).at(at))
+    let length = text_length(object)
+    let copy = raw_try_new(length, bytes)
+    if copy == 0 {
+        return Err(io_error_text("out of memory"))
+    }
+    copy_bytes(raw_data(copy, bytes), text_data(object), length)
+    rt_mem_store64(rt_mem_add(copy, 8), length)
+    Ok(copy)
 }
 
 // Write `contents` to the file at `path`, created if need be in its

@@ -172,14 +172,21 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         "DirRead.read_to_string",
         Prelude::Runtime("dir_read_to_string"),
     ),
+    ("DirRead.read_bytes", Prelude::Runtime("dir_read_bytes")),
     ("DirRead.list_dir", Prelude::Runtime("dir_list_dir")),
     ("DirWrite.write", Prelude::Runtime("dir_write")),
+    ("DirWrite.write_bytes", Prelude::Runtime("dir_write_bytes")),
     ("DirWrite.create_dir", Prelude::Runtime("dir_create_dir")),
     (
         "FileRead.read_to_string",
         Prelude::Runtime("file_read_to_string"),
     ),
+    ("FileRead.read_bytes", Prelude::Runtime("file_read_bytes")),
     ("FileWrite.write", Prelude::Runtime("file_write")),
+    (
+        "FileWrite.write_bytes",
+        Prelude::Runtime("file_write_bytes"),
+    ),
     ("TestContext.printed", Prelude::Runtime("test_printed")),
     ("Bytes.new", Prelude::Runtime("bytes_new")),
     (
@@ -247,6 +254,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("Bytes.eq", Prelude::Runtime("bytes_eq")),
     ("Bytes.hash", Prelude::Runtime("bytes_hash")),
     ("String.to_bytes", Prelude::Runtime("string_to_bytes")),
+    ("Bytes.assume_trusted", Prelude::Identity),
     (
         "Bytes.push",
         Prelude::Mutating("bytes_push", Check::BytesGrow(1)),
