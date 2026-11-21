@@ -86,7 +86,7 @@ Text or bytes that came from outside the program, through a capability or a prog
 _Avoid_: tainted, dirty, unsafe input
 
 **Bytes**:
-The prelude's buffer of raw bytes, for binary data that is not text. It is a value, copied on write like a `List`, and it carries the same trust flag as text.
+The prelude's buffer of raw bytes, for binary data that is not text. It is a value, like every Oska value, and it carries the same trust flag as text.
 _Avoid_: byte array, blob, binary string
 
 **Validator**:
@@ -110,7 +110,7 @@ A secret value of a fixed-width unsigned integer type: `Secret<U8>`, `Secret<U32
 _Avoid_: constant-time int, CtU32
 
 **Constant time**:
-The property that no conditional branch, memory address, or variable-time instruction depends on a secret value, so the time code takes and the memory it touches do not reveal the secret. The checker's rules ask for it and the native backend keeps it; the interpreter computes the same values but promises no timing.
+The property of code that no conditional branch or memory address depends on a secret value, and no secret is a divisor or a shift amount, so the path the code takes and the memory it touches do not reveal the secret. It holds for native code, not for the interpreter, and not for what the hardware does with the instructions.
 _Avoid_: timing-safe, side-channel free
 
 **Sink**:

@@ -47,7 +47,7 @@ Bytes index as a `List` does:
 - `b.slice(start, end)` gives a new `Bytes` from `start` up to, but excluding, `end`. Bounds that are out of range or reversed panic (`P0042`); nothing is cut short silently.
 - `read_u16_be`, `read_u32_be` and `read_u64_be` read an integer at a byte offset, most significant byte first (big-endian, the network's order). The `_le` forms read it least significant byte first (little-endian, the order of most file formats). A read whose bytes do not all lie inside the buffer panics (`P0042`).
 
-`==` and `!=` compare two buffers, and `Bytes` can be a map key.
+`==` and `!=` compare two buffers, and `Bytes` is `Hash`.
 
 ## Building
 
@@ -68,7 +68,7 @@ The bytes a buffer gives are `U8`, and the endian reads give `U16`, `U32` and `U
 
 `U8`, `U32` and `U64` have the bitwise operators `&`, `|`, `^` and `~`, the shifts `<<` and `>>`, and the rotations `rotl(n)` and `rotr(n)`. A shift amount has the shifted value's type; a rotation amount is an `Int`. An amount below 0 or not below the type's width (8, 32 or 64) panics (`P0008`); it is never taken modulo the width. `U16` has the conversions and the endian reads, but no bitwise operators. `Int` and the signed types have none either (`E0223`).
 
-`+`, `-` and `*` are checked, and panic on overflow (`P0001`). Hashes and ciphers wrap on purpose, so they say so: `wrapping_add`, `wrapping_sub` and `wrapping_mul`.
+`+`, `-` and `*` are checked, and panic on overflow (`P0001`). Hashes and ciphers wrap on purpose, so they say so: `wrapping_add`, `wrapping_sub` and `wrapping_mul`, on `U8`, `U32` and `U64` (not `U16`).
 
 Where a bitwise or shift operator meets a different binary operator, parentheses are required, so that `x & mask == 0` cannot mean something other than what it looks like:
 

@@ -34,7 +34,24 @@ Text operations keep the flag. If any text input is untrusted, every text in the
 
 In your own code, a `String` parameter, field, or return type is trusted. Code that accepts raw input declares `Untrusted<String>`. User functions cannot be generic over trust.
 
-Bytes carry the same flag. `DirRead.read_bytes`, `FileRead.read_bytes` and `Connection.receive_bytes` give `Untrusted<Bytes>`, and `write_bytes` and `send_bytes` accept it. Untrusted bytes where trusted `Bytes` is required are `E0300`, as text is. Every `Bytes` operation keeps the flag: `slice`, `append`, `to_hex` and `to_text` of untrusted bytes are untrusted (`to_text()` gives `Option<Untrusted<String>>`), `to_bytes()` of untrusted text is `Untrusted<Bytes>`, and the integers that `at`, `len` and the endian reads such as `read_u32_be` give are trusted, so parsing a binary format needs no trust assertion until you vouch for the bytes themselves with `.assume_trusted()`. See [bytes and binary data](bytes.md).
+Bytes carry the same flag. `DirRead.read_bytes`, `FileRead.read_bytes` and `Connection.receive_bytes` give `Untrusted<Bytes>`, and `write_bytes` and `send_bytes` accept it. Untrusted bytes where trusted `Bytes` is required are `E0300`, as text is. Every `Bytes` operation keeps the flag: `slice`, `append`, `to_hex` and `to_text` of untrusted bytes are untrusted (`to_text()` gives `Option<Untrusted<String>>`), `to_bytes()` of untrusted text is `Untrusted<Bytes>`, and the integers that `at`, `len` and the endian reads such as `read_u32_be` give are trusted, so parsing a binary format needs no trust assertion until you vouch for the bytes themselves with `.assume_trusted()`. A validator for a binary record reads its integers freely, and vouches for the bytes only after checking them:
+
+```oska
+struct Frame { kind: U8, body: Bytes }
+
+fn parse_frame(raw: Untrusted<Bytes>) -> Option<Frame> {
+    if raw.len() < 3 {
+        return None
+    }
+    let size = raw.read_u16_be(1).to_int()
+    if raw.len() != 3 + size {
+        return None
+    }
+    Some(Frame(kind: raw.at(0), body: raw.slice(3, 3 + size).assume_trusted()))
+}
+```
+
+See [bytes and binary data](bytes.md) for a whole program.
 
 ## Validators and trust assertions
 

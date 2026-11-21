@@ -1,6 +1,6 @@
 # Secrets and constant-time code
 
-A key, a password or a token must not leak: not into a log, not into an error message, and not through how long the code takes. A **secret value** in Oska is a `Secret<T>`. The checker keeps it out of text, and for the secret types that code computes on, it keeps the secret's value from deciding a branch, a memory address or a variable-time instruction, so the native code runs in **constant time**. Every program on this page is checked by `oskac` when the documentation is tested, and the output shown is what `oskac run` prints.
+A key, a password or a token must not leak: not into a log, not into an error message, and not through how long the code takes. A **secret value** in Oska is a `Secret<T>`. The checker keeps it out of text, and for the secret types that code computes on, it keeps the secret's value from deciding a branch, a memory address, a division or a shift amount. The native backend then checks that the code it writes branches and addresses memory without regard to the secret, so the parts of **constant time** that the [last section](#what-constant-time-means-here) lists hold in the executable. Every program on this page is checked by `oskac` when the documentation is tested, and the output shown is what `oskac run` prints.
 
 ## The secret types
 
@@ -18,7 +18,7 @@ Every secret type keeps these rules:
 - It has no `Display`, so it cannot be printed or turned into text (`E0352`), and it cannot be interpolated, nor can a value that holds one (`E0350`).
 - It cannot be compared with `==` or `!=` (`E0351`). The fix rewrites the comparison to the constant-time one for the type.
 - `dbg` prints it as `<redacted>`, in generic code too.
-- It satisfies no `Eq`, `Hash` or `Display` bound, so it cannot become a map key or text through a generic function either.
+- It satisfies no `Eq`, `Hash` or `Display` bound: it is not `Hash`, and it cannot become text through a generic function either.
 - `.expose()` is the only way out. It returns the public value, and each call is an audit site that `oskac check` lists, so a reviewer sees every place a secret becomes public.
 
 `Secret<String>`, read from the environment, is covered in [untrusted data and secrets](untrusted-data.md#secrets). The rest of this page is about the secret types code computes on.
@@ -105,7 +105,7 @@ no match
 
 A secret may not decide anything observable. Each kind of use has its own code, reported in place of a plain type error, and the rules follow the types through a generic function, a closure, a struct field and a `List` element.
 
-**A branch (`E0353`).** A secret as the condition of an `if` or a `while`, a `requires` or `ensures` clause, a `match` scrutinee or guard, a range bound, or an operand of `&&`, `||` or `!`. Combine conditions with `and`, `or` and `not`, and choose with `ct_select`. For `!a`, `a && b` and `a || b`, the fix rewrites to `a.not()`, `a.and(b)` and `a.or(b)`.
+**A branch (`E0353`).** A secret as the condition of an `if` or a `while`, a `requires` or `ensures` clause, a `match` scrutinee or guard, a range bound, or an operand of `&&`, `||`, `implies` or `!`. Combine conditions with `and`, `or` and `not`, and choose with `ct_select`. The fix rewrites `!a` to `a.not()`, and `a && b` and `a || b` to `a.and(b)` and `a.or(b)` when both operands are secret; with one public `Bool` operand there is no fix.
 
 ```oska error=E0353
 fn choose(c: Secret<Bool>, a: Secret<U32>, b: Secret<U32>) -> Secret<U32> {
@@ -159,6 +159,13 @@ fn same(a: Secret<U32>, b: Secret<U32>) -> Bool {
 
 ## What constant time means here
 
-The checker's rules mean that no operation on a secret takes a path, reads memory, or panics depending on its value. The native backend keeps that promise in the machine code it writes, on every target platform: after optimizing, it follows every value computed from a secret and refuses to build (`E0398`, exit code 2) if one would become the condition of a branch or the address of a load or store. No program is meant to reach `E0398`; if one does, it is a bug in `oskac`, and the build stops instead of writing an executable that leaks.
+The checker's rules mean that no operation on a secret takes a path, reads memory, or panics depending on its value, and that no secret is an operand of `/` or `%` or a shift or rotation amount (`E0355`).
 
-The interpreter (`oskac run --interpret`) computes the same values and prints the same output, but makes no timing promise. Nothing in the toolchain measures timing. The guarantee is about the code's shape, and it does not cover what the hardware does with constant-time instructions, nor memory that a secret leaves behind when it is freed.
+The native backend checks part of that again in the machine code it writes, on every target platform. After optimizing, it follows each value read out of a secret, and each value computed from one, through the functions it is passed to and returned from. It refuses to build (`E0398`, exit code 2) if one would be the condition of a branch, an operand of checked arithmetic (which branches on overflow), the address of a load, a store or a call, or an argument of an indirect call. No program is meant to reach `E0398`; if one does, it is a bug in `oskac`, and the build stops instead of writing an executable that leaks.
+
+What the guarantee does not cover:
+
+- Variable-time instructions. The backend does not check which instructions a secret reaches; only the checker's `E0355` keeps secrets out of division and shift amounts.
+- A secret stored to memory and loaded back. The backend's check does not follow it there; it marks secrets again where they are read out of their `Secret`.
+- The interpreter (`oskac run --interpret`). It computes the same values and prints the same output, but makes no timing promise.
+- What the hardware does with the instructions, and memory that a secret leaves behind when it is freed. Nothing in the toolchain measures timing.
