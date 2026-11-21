@@ -40,10 +40,14 @@ jobs:
       # <lastmod>: one `YYYY-MM-DD path` line per file.
       - name: Write site/lastmod.txt
         run: |
-          git ls-files -z -- docs SECURITY.md CHANGELOG.md GLOSSARY.md |
-            while IFS= read -r -d '' file; do
-              printf '%s %s\n' "$(git log -1 --format=%cs -- "$file")" "$file"
-            done > site/lastmod.txt
+          set -euo pipefail
+          git ls-files -z -- docs SECURITY.md CHANGELOG.md GLOSSARY.md site/agent-setup/prompt.md \
+            > "$RUNNER_TEMP/sources"
+          while IFS= read -r -d '' file; do
+            date=$(git log -1 --format=%cs -- "$file")
+            [ -n "$date" ] || { echo "no commit date for $file" >&2; exit 1; }
+            printf '%s %s\n' "$date" "$file"
+          done < "$RUNNER_TEMP/sources" > site/lastmod.txt
       - run: ./target/release/oskac run site/build.osk
       # Releases are stored in GitHub Releases (see release.yml). Fetch them
       # all, verify each against the committed key, and publish them under

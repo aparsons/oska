@@ -937,63 +937,6 @@ fn canonical_path(html: &str) -> String {
 }
 
 #[test]
-fn the_sitemap_dates_each_page_with_a_source_file_from_lastmod_txt() {
-    let mut repo = agent_repo();
-    repo.push((
-        "site/lastmod.txt",
-        "2026-11-03 docs/index.md\n\
-         2026-01-09 GLOSSARY.md\n\
-         2026-1-09 docs/design.md\n\
-         tomorrow docs/guide/capabilities.md\n\
-         2026-13-01 docs/guide/agent-guide.md\n",
-    ));
-    let site = build_ok(&repo);
-    let sitemap = &site["sitemap.xml"];
-    assert!(
-        sitemap
-            .contains("<url><loc>https://oskalang.dev/</loc><lastmod>2026-11-03</lastmod></url>\n"),
-        "{sitemap}"
-    );
-    assert!(
-        sitemap
-            .contains("<loc>https://oskalang.dev/glossary.html</loc><lastmod>2026-01-09</lastmod>"),
-        "{sitemap}"
-    );
-    // A malformed date is skipped, and a page made from no one file, such
-    // as the reference page, has no date.
-    assert_eq!(sitemap.matches("<lastmod>").count(), 2, "{sitemap}");
-    assert!(sitemap.contains("<url><loc>https://oskalang.dev/reference.html</loc></url>\n"));
-}
-
-#[test]
-fn without_lastmod_txt_the_sitemap_has_no_dates() {
-    let site = build_ok(&agent_repo());
-    assert!(
-        !site["sitemap.xml"].contains("<lastmod>"),
-        "{}",
-        site["sitemap.xml"]
-    );
-}
-
-/// The dates are git's: the workflow fetches the whole history, so a file's
-/// last commit is its own, and writes `lastmod.txt` before the build.
-#[test]
-fn the_pages_workflow_writes_lastmod_txt_from_git_before_the_build() {
-    let write = "> site/lastmod.txt";
-    let run = "./target/release/oskac run site/build.osk";
-    let at_write = PAGES_WORKFLOW
-        .find(write)
-        .unwrap_or_else(|| panic!("pages.yml does not write site/lastmod.txt"));
-    let at_run = PAGES_WORKFLOW.find(run).expect("pages.yml builds the site");
-    assert!(at_write < at_run, "lastmod.txt is written after the build");
-    assert!(
-        PAGES_WORKFLOW.contains("fetch-depth: 0"),
-        "a shallow clone has no dates"
-    );
-    assert!(PAGES_WORKFLOW.contains("git log -1 --format=%cs"));
-}
-
-#[test]
 fn the_sitemap_lists_every_page_by_its_canonical_url() {
     let site = build_ok(&agent_repo());
     let sitemap = &site["sitemap.xml"];

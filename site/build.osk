@@ -350,22 +350,48 @@ fn dates_of(text: Untrusted<String>) -> List<Dated> {
     dates
 }
 
-// `text` as a trusted `YYYY-MM-DD` date, or "" if it is not one. Each
-// part is read as a number, so what comes back is trusted.
+// `text` as a trusted `YYYY-MM-DD` date, or "" if it is not a real one:
+// four, two and two digits, a month from 1 to 12, and a day the month has.
+// Each part is read as a number, so what comes back is trusted.
 fn date_of(text: Untrusted<String>) -> String {
     let parts = text.split("-")
     if parts.len() != 3 || parts.at(0).len() != 4 || parts.at(1).len() != 2 || parts.at(2).len() != 2 {
         return ""
     }
+    for part in parts {
+        if !all_digits(part) {
+            return ""
+        }
+    }
     let year = parts.at(0).parse_int().unwrap_or(0)
     let month = parts.at(1).parse_int().unwrap_or(0)
     let day = parts.at(2).parse_int().unwrap_or(0)
-    if year < 1000 || month < 1 || month > 12 || day < 1 || day > 31 {
+    if year < 1000 || month < 1 || month > 12 || day < 1 || day > days_in(year, month) {
         return ""
     }
     let mm = two_digits(month)
     let dd = two_digits(day)
     "{year}-{mm}-{dd}"
+}
+
+// Whether every character of `text` is an ASCII digit.
+fn all_digits(text: Untrusted<String>) -> Bool {
+    for c in text.chars() {
+        if !"0123456789".contains(c) {
+            return false
+        }
+    }
+    true
+}
+
+// The number of days in `month` (1 to 12) of `year`, in the Gregorian
+// calendar.
+fn days_in(year: Int, month: Int) -> Int {
+    if month == 2 {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+        return if leap { 29 } else { 28 }
+    }
+    if month == 4 || month == 6 || month == 9 || month == 11 { 30 } else { 31 }
 }
 
 // `n`, from 1 to 99, with a leading zero below 10.
@@ -588,22 +614,30 @@ fn sitemap(all: Site, pages: List<Page>) -> Untrusted<String> {
     for page in pages {
         let loc = canonical(page.path)
         let date = last_changed(all, page.path)
-        let lastmod = if date == "" { empty() } else { markup("<lastmod>{date}</lastmod>") }
+        let lastmod = if date == "" { empty() } else { wrap("<lastmod>", html.text(date), "</lastmod>") }
         out = out.concat(wrap("<url><loc>", html.text(loc), "</loc>")).concat(lastmod).concat(markup("</url>\n"))
     }
     out.concat(markup("</urlset>\n")).render()
 }
 
 // When the source file of the page at `page` last changed, or "" if the
-// page has no one source file or `site/lastmod.txt` does not list it.
+// page has no one source file or `site/lastmod.txt` does not list it. A
+// doc's page comes from the doc, and the agent-setup page from its prompt.
+// A code's page is one entry of a larger file, so that file's date is not
+// the code's, and it gets none.
 fn last_changed(all: Site, page: Untrusted<String>) -> String {
+    var source: Untrusted<String> = if page == "agent-setup.html" { "site/agent-setup/prompt.md" } else { "" }
     for doc in all.docs {
         if doc.page == page {
-            for dated in all.dates {
-                if dated.repo == doc.repo {
-                    return dated.date
-                }
-            }
+            source = doc.repo
+        }
+    }
+    if source == "" {
+        return ""
+    }
+    for dated in all.dates {
+        if dated.repo == source {
+            return dated.date
         }
     }
     ""
@@ -1139,8 +1173,8 @@ fn banner(version: String) -> html.Html {
 // The home page's JSON-LD: schema.org's description of the software, for
 // search engines and agents. The application's `downloadUrl` is the
 // latest release's page and its `softwareHelp` the guides. It has no
-// `offers` or rating: a free pre-alpha compiler has no honest rating. It is a data block, which no browser runs.
-// Every value in it is written here or is the version, which `version_of`
+// `offers` or rating: a free pre-alpha compiler has no honest rating.
+// It is a data block, which no browser runs. Every value in it is written here or is the version, which `version_of`
 // has read as numbers, so nothing needs escaping.
 fn structured_data(version: String) -> html.Html {
     let base = origin()
