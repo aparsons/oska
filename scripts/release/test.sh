@@ -470,6 +470,30 @@ test_stage_site_refuses_releases_without_a_key_to_check_them() {
   fi
 }
 
+# ---- The release page links its notes on the changelog (#514) ---------------
+
+test_stage_site_release_page_links_its_version_on_the_changelog() {
+  signed_release v1.10.0
+  mkdir site
+  OSKA_SITE_URL=https://example.test "$here/stage-site.sh" out site key.pub
+  grep -qF '<a href="https://example.test/changelog.html#v1100">What changed in 1.10.0</a>' \
+    site/releases/v1.10.0/index.html || fail "the release page does not link #v1100"
+}
+
+test_stage_site_pre_release_page_links_its_base_version_on_the_changelog() {
+  signed_release v1.10.0-rc.1
+  mkdir site
+  "$here/stage-site.sh" out site key.pub
+  page=site/releases/v1.10.0-rc.1/index.html
+  grep -qF '<a href="https://oskalang.dev/changelog.html#v1100">What changed in 1.10.0</a>' "$page" ||
+    fail "the pre-release page does not link its base version, #v1100"
+  if grep -q 'rc' <(grep -F changelog.html "$page"); then
+    fail "the changelog link names the pre-release"
+  fi
+}
+
+# ---- End of the changelog link tests (#514) ----------------------------------
+
 # Writes working fake binaries into ./builds: scripts that answer
 # --version, in text and JSON, with <version>, as the real oskac does.
 working_builds() {
@@ -1120,6 +1144,43 @@ test_the_index_is_resigned_monthly_and_on_demand_from_main_only() {
   grep -q 'select(.event == "push" or .event == "workflow_dispatch")' "$wf" ||
     fail "the wait counts runs that cannot publish"
   grep -q 'gh workflow run pages.yml --ref main' "$wf" || fail "does not publish through pages.yml"
+}
+
+# ---- Release notes in release.yml ------------------------------------------
+#
+# notes.sh itself is tested by scripts/release/notes-test.sh. These are
+# the checks around its steps: the notes step runs on a pull request too,
+# so the dry run fails for a version with no section; it comes before sign,
+# in a job that holds no secret, no environment and no permission of its
+# own; and no workflow rewrites a release body.
+
+test_the_release_workflow_writes_the_notes_before_signing() {
+  local wf=$here/../../.github/workflows/release.yml assemble step
+  assemble=$(job_text "$wf" assemble)
+  step=$(awk '/- name: Write the release notes$/ {p = 1; print; next} p && /^      - / {exit} p' <<<"$assemble")
+  [ -n "$step" ] || fail "assemble does not write the release notes"
+  grep -q '^        if:' <<<"$step" && fail "the notes step does not run on every event"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'scripts/release/notes.sh "$TAG" CHANGELOG.md site/oska-release.pub' <<<"$step" ||
+    fail "the notes step does not run notes.sh with the committed key"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'TAG: ${{ steps.tag.outputs.tag }}' <<<"$step" ||
+    fail "the notes step does not take the tag that assemble named"
+  grep -Eq '^    (environment|permissions):|secrets\.' <<<"$assemble" &&
+    fail "assemble holds a secret, an environment or a permission"
+  # Before the dry run signs and before the unsigned release is uploaded.
+  local notes dry upload
+  notes=$(grep -n 'name: Write the release notes' <<<"$assemble" | cut -d: -f1)
+  dry=$(grep -n 'name: Sign and verify with a throwaway key' <<<"$assemble" | cut -d: -f1)
+  upload=$(grep -n 'name: unsigned-' <<<"$assemble" | cut -d: -f1)
+  [ "$notes" -lt "$dry" ] && [ "$notes" -lt "$upload" ] ||
+    fail "the notes are written after the release is signed or uploaded"
+  local file
+  for file in "$here"/../../.github/workflows/*.yml; do
+    if grep -Eq 'gh release edit|--notes[ =]|--notes$' "$file"; then
+      fail "$(basename "$file") sets a release body other than from the notes file"
+    fi
+  done
 }
 
 # ---- /.well-known/security.txt ----------------------------------------------

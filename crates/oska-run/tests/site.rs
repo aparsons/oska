@@ -382,6 +382,7 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
     for narrowing in [
         "read.restrict_to(\"docs\")",
         "read.restrict_to_file(\"GLOSSARY.md\")",
+        "read.restrict_to_file(\"CHANGELOG.md\")",
         "read.restrict_to_file(\"site/style.css\")",
         "read.restrict_to_file(\"site/search.js\")",
         "read.restrict_to_file(\"site/favicon.svg\")",
@@ -441,6 +442,17 @@ fn without_an_authority_report_there_is_no_authority_page() {
     assert!(!site.contains_key("authority.md"));
 }
 
+// ---- The changelog (#514) --------------------------------------------------------------
+
+#[test]
+fn without_a_changelog_there_is_no_changelog_page() {
+    let site = build_ok(&[]);
+    assert!(!site.contains_key("changelog.html"));
+    assert!(!navigation(&site["index.html"])
+        .iter()
+        .any(|(href, _)| href == "/changelog.html"));
+}
+
 #[test]
 fn the_real_site_shows_the_generator_s_own_report_linked_from_the_capabilities_guide() {
     let site = real_site();
@@ -459,6 +471,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
     for line in [
         "  FsRead -> DirRead: restrict_to \"docs\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"GLOSSARY.md\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"CHANGELOG.md\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"site/favicon.svg\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
@@ -1998,6 +2011,7 @@ fn the_real_navigation_and_reference_page_reach_every_section() {
             "Agent setup",
             "Codes",
             "Security",
+            "Changelog",
             "Reference"
         ]
     );
@@ -2020,6 +2034,69 @@ fn the_real_navigation_and_reference_page_reach_every_section() {
     ] {
         assert!(reference.iter().any(|h| h == href), "{href}: {reference:?}");
     }
+}
+
+/// Every released version has its notes at a stable anchor on
+/// `/changelog.html`, the anchor each release page links (#514).
+#[test]
+fn the_real_changelog_page_has_an_anchor_for_every_released_version() {
+    let site = real_site();
+    let page = &site["changelog.html"];
+    let changelog = std::fs::read_to_string(common::site::repository_root().join("CHANGELOG.md"))
+        .expect("CHANGELOG.md should be readable");
+    let versions = changelog_versions(&changelog);
+    assert!(!versions.is_empty(), "CHANGELOG.md has no `## v` heading");
+    for version in versions {
+        let anchor = format!("v{}", version.replace('.', ""));
+        assert!(
+            page.contains(&format!("<h2 id=\"{anchor}\">v{version}</h2>")),
+            "changelog.html has no #{anchor} for v{version}"
+        );
+    }
+    assert!(
+        site["llms.txt"].contains("- [Changelog](https://oskalang.dev/changelog.md): "),
+        "{}",
+        site["llms.txt"]
+    );
+}
+
+/// The versions of the `## vX.Y.Z` headings in `changelog`, outside code
+/// fences. Fences follow scripts/release/notes.sh, which writes the release
+/// notes: a fence may be indented or use tildes, and only a run of the same
+/// marker, at least as long, with nothing after it, closes it.
+fn changelog_versions(changelog: &str) -> Vec<&str> {
+    let mut versions = Vec::new();
+    let mut fence: Option<&str> = None;
+    for line in changelog.lines() {
+        let text = line.trim_start_matches([' ', '\t']);
+        let marker = text.chars().next().filter(|c| *c == '`' || *c == '~');
+        let run = marker
+            .map(|m| &text[..text.len() - text.trim_start_matches(m).len()])
+            .filter(|run| run.len() >= 3);
+        match (fence, run) {
+            (Some(open), Some(run)) => {
+                if run.starts_with(&open[..1])
+                    && run.len() >= open.len()
+                    && text[run.len()..].trim_matches([' ', '\t']).is_empty()
+                {
+                    fence = None;
+                }
+            }
+            (None, Some(run)) => fence = Some(run),
+            (None, None) => versions.extend(line.strip_prefix("## v")),
+            (Some(_), None) => {}
+        }
+    }
+    versions
+}
+
+#[test]
+fn a_version_heading_inside_a_code_fence_is_not_a_changelog_version() {
+    // The fence rules of scripts/release/notes.sh: a fence may be indented
+    // or use tildes, and only the same marker, at least as long, closes it.
+    let changelog = "## v1.1.0\n\n- A change:\n\n  ```\n## v9.9.9\n  ```\n\n\
+~~~\n```\n## v9.9.8\n~~~\n\n````\n```\n## v9.9.7\n````\n\n## v1.0.0\n";
+    assert_eq!(changelog_versions(changelog), ["1.1.0", "1.0.0"]);
 }
 
 #[test]
