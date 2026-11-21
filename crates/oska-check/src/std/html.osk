@@ -1,9 +1,13 @@
-// `std.html`: the HTML sink. Signature-only, like `std.sql`; the runtime
-// implementation comes with the interpreter (#9).
+// `std.html`: build HTML so that untrusted text cannot inject markup.
+// `use std.html`, then write `html.text(...)` and the like.
 //
 // Text is a **data position**: `text` escapes it. Raw markup is a
 // **structural position**: `TrustedHtml.new` takes trusted text only, so
 // putting untrusted text into markup needs an explicit `.assume_trusted()`.
+
+// For maintainers: like the prelude, this file is parsed in prelude mode.
+// The comment block directly above a `pub` item is its description in the
+// API reference.
 
 // A fragment of HTML. Its field is private: code builds one with `text`,
 // `raw`, and `concat`, never from a bare string.
@@ -16,11 +20,14 @@ pub fn text(text: Untrusted<String>) -> Html
 pub struct TrustedHtml { markup: String }
 
 impl TrustedHtml {
+    // Vouch for `markup`, which must be trusted text, such as a literal.
     pub fn new(markup: String) -> TrustedHtml
 }
 
 impl Html {
+    // The vouched-for `markup`, inserted unescaped.
     pub fn raw(markup: TrustedHtml) -> Html
+    // This fragment followed by `other`.
     pub fn concat(self, other: Html) -> Html
     // The markup, ready to send. It may contain escaped untrusted text, so
     // it is untrusted: it can be written out, but not used structurally.

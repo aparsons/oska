@@ -2,7 +2,7 @@
 
 Checks only: `oskac run` refuses a program that uses `std.sql` (E0371).
 
-`std.sql`: the SQL sink. Like the prelude it is parsed in prelude mode and is signature-only; the runtime implementation comes with the interpreter (#9). A module sees these declarations only after `use std.sql`, as `sql.Db` and the like.
+`std.sql`: query a database so that untrusted text cannot inject SQL. A module sees these declarations only after `use std.sql`, as `sql.Db` and the like. It checks but has no runtime yet: `oskac run` refuses a program that imports it (`E0371`).
 
 Query text is a **structural position**: it must be a `sql"..."` literal. Values enter a query only as parameters, a **data position**.
 
@@ -52,11 +52,15 @@ A result row. Its values come from the database, so they are untrusted.
 
 Authority: pure.
 
+The value of `column`, or `None` when the row has no such column.
+
 ## struct SqlError
 
     pub struct SqlError { pub message: Untrusted<String> }
 
 Authority: pure.
+
+Why a connection or a query failed.
 
 ## impl Display for SqlError
 

@@ -400,3 +400,16 @@ fn the_checks_only_marks_agree_with_what_works_today() {
             .all(|i| i.get("runs") == Some(&JsonValue::Bool(false))));
     }
 }
+
+#[test]
+fn every_item_but_a_trait_impl_has_a_description() {
+    let missing: Vec<String> = json_items(&[])
+        .iter()
+        .filter(|i| field(i, "kind") != "impl" && field(i, "description").is_empty())
+        .map(|i| format!("{} {}", field(i, "module"), field(i, "name")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "write a comment directly above each of these in its source: {missing:?}"
+    );
+}
