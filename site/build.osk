@@ -5,9 +5,11 @@
 // handed the filesystem read-only and write-only, and narrows each before
 // it reads or writes anything: reading to `docs/` and to the files the
 // site needs beside it (the security policy, the changelog, the glossary,
-// `Cargo.toml` for the version, the stylesheet, the search script and the
-// favicon), each restricted to on its own, and writing to `_site/`, which
-// it creates.
+// `Cargo.toml` for the version, the stylesheet, the search script, the
+// favicon, `site/agent-setup/`, and the two files the Pages workflow
+// writes just before the build: the generator's authority report and the
+// API reference, `site/api.json`), each restricted to on its own, and
+// writing to `_site/`, which it creates.
 // The home page is `docs/index.md`; the README is the repository's front
 // page, for contributors, and the site does not read it.
 //
@@ -29,6 +31,10 @@
 // code, block quotes, and pipe tables; inline, links, images, code spans,
 // `**strong**`, `*em*` and `_em_`, and backslash escapes. Raw HTML is not
 // markup here: it shows as text.
+//
+// From `site/api.json`, what `oskac doc --format=json` printed, it
+// publishes the API reference: `/api/`, a page per module, and `api.json`
+// (see "The API reference" below).
 //
 // For crawlers and agents it also writes, from the pages it publishes: a
 // Markdown copy of each (`design.html` has `design.md`), `llms.txt`,
@@ -78,6 +84,15 @@ cap struct Sources {
     // site/build.osk` printed for this program, which the Pages workflow
     // writes just before the build. Without it there is no authority page.
     authority: FileRead,
+    // `site/api.json`: the API reference `oskac doc --format=json` printed,
+    // which the Pages workflow writes just before the build. Without it
+    // there is no API reference.
+    api: FileRead,
+    // `site/lastmod.txt`: one line per source file, its last commit date
+    // and its path (`2026-11-21 docs/index.md`), which the Pages workflow
+    // writes from git just before the build. Without it the sitemap has
+    // no `<lastmod>`.
+    lastmod: FileRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
@@ -92,6 +107,8 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
         favicon: read.restrict_to_file("site/favicon.svg"),
         setup: read.restrict_to("site/agent-setup"),
         authority: read.restrict_to_file("site/authority.txt"),
+        api: read.restrict_to_file("site/api.json"),
+        lastmod: read.restrict_to_file("site/lastmod.txt"),
     )
     // Writing is narrowed to the repository before anything is written,
     // then to `_site` once it exists (a narrowing needs its directory).
@@ -136,6 +153,20 @@ struct Site {
     assets: List<Asset>,
     // The generator's own authority report, or "" if there is none.
     authority: Untrusted<String>,
+    // The items of the API reference, in order, none if there is no
+    // `site/api.json`.
+    api: List<ApiItem>,
+    // When each source file last changed, from `site/lastmod.txt`; none
+    // if there is no such file.
+    dates: List<Dated>,
+}
+
+// The date a source file last changed, as `site/lastmod.txt` gives it.
+struct Dated {
+    // Its path in the repository, as a `Doc`'s `repo` names it.
+    repo: Untrusted<String>,
+    // `YYYY-MM-DD`, read as numbers, so it is trusted.
+    date: String,
 }
 
 // Every file of the site.
@@ -174,6 +205,13 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     if all.authority != "" {
         pages.push(authority_page(all))
     }
+    if has_api(all) {
+        site.create_dir(Path.new("api"))?
+        pages.push(api_index(all))
+        for module in api_modules(all) {
+            pages.push(api_page(all, module))
+        }
+    }
     if !has_doc(all, "reference.html") {
         pages.push(reference_page(all))
     }
@@ -189,7 +227,7 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
         publish_setup(site, all)?
     }
     site.write(Path.new("robots.txt"), robots())?
-    site.write(Path.new("sitemap.xml"), sitemap(pages))?
+    site.write(Path.new("sitemap.xml"), sitemap(all, pages))?
     site.write(Path.new("latest.json"), latest_json(all.version))?
     site.write(Path.new("llms.txt"), llms_txt(all, pages))?
     site.write(Path.new("llms-full.txt"), llms_full(all, pages))?
@@ -210,6 +248,9 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     site.write(Path.new("CNAME"), cname())?
     if has_catalog(all) {
         site.write(Path.new("codes.json"), codes_json(codes))?
+    }
+    if has_api(all) {
+        site.write(Path.new("api.json"), api_json(all.api))?
     }
     Ok(())
 }
@@ -310,7 +351,87 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         Ok(text) => text
         Err(_) => ""
     }
-    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority))
+    let api: List<ApiItem> = match sources.api.read_to_string() {
+        Ok(text) => {
+            match api_reference(text) {
+                Ok(items) => items
+                Err(why) => {
+                    return Err(IoError(message: "site/api.json: {why}"))
+                }
+            }
+        }
+        Err(_) => List.new()
+    }
+    let dates = match sources.lastmod.read_to_string() {
+        Ok(text) => dates_of(text)
+        Err(_) => List.new()
+    }
+    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority, api: api, dates: dates))
+}
+
+// The lines of `site/lastmod.txt`: a date, one space, and a path. A line
+// whose date is not `YYYY-MM-DD` is skipped.
+fn dates_of(text: Untrusted<String>) -> List<Dated> {
+    var dates: List<Dated> = List.new()
+    for line in text.lines() {
+        if line.len() < 12 || line.slice(10, 11) != " " {
+            continue
+        }
+        let date = date_of(line.slice(0, 10))
+        if date != "" {
+            dates.push(Dated(repo: line.slice(11, line.len()), date: date))
+        }
+    }
+    dates
+}
+
+// `text` as a trusted `YYYY-MM-DD` date, or "" if it is not a real one:
+// four, two and two digits, a month from 1 to 12, and a day the month has.
+// Each part is read as a number, so what comes back is trusted.
+fn date_of(text: Untrusted<String>) -> String {
+    let parts = text.split("-")
+    if parts.len() != 3 || parts.at(0).len() != 4 || parts.at(1).len() != 2 || parts.at(2).len() != 2 {
+        return ""
+    }
+    for part in parts {
+        if !all_digits(part) {
+            return ""
+        }
+    }
+    let year = parts.at(0).parse_int().unwrap_or(0)
+    let month = parts.at(1).parse_int().unwrap_or(0)
+    let day = parts.at(2).parse_int().unwrap_or(0)
+    if year < 1000 || month < 1 || month > 12 || day < 1 || day > days_in(year, month) {
+        return ""
+    }
+    let mm = two_digits(month)
+    let dd = two_digits(day)
+    "{year}-{mm}-{dd}"
+}
+
+// Whether every character of `text` is an ASCII digit.
+fn all_digits(text: Untrusted<String>) -> Bool {
+    for c in text.chars() {
+        if !"0123456789".contains(c) {
+            return false
+        }
+    }
+    true
+}
+
+// The number of days in `month` (1 to 12) of `year`, in the Gregorian
+// calendar.
+fn days_in(year: Int, month: Int) -> Int {
+    if month == 2 {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+        return if leap { 29 } else { 28 }
+    }
+    if month == 4 || month == 6 || month == 9 || month == 11 { 30 } else { 31 }
+}
+
+// `n`, from 1 to 99, with a leading zero below 10.
+fn two_digits(n: Int) -> String {
+    if n < 10 { "0{n}" } else { "{n}" }
 }
 
 // The `version` in a `Cargo.toml`, as `major.minor.patch`: each part is
@@ -520,14 +641,41 @@ fn robots() -> String {
     "{group}\nAllow: /\n\nSitemap: {base}/sitemap.xml\n"
 }
 
-// `sitemap.xml`: the canonical URL of every page.
-fn sitemap(pages: List<Page>) -> Untrusted<String> {
+// `sitemap.xml`: the canonical URL of every page, and when its source
+// file last changed if `site/lastmod.txt` says. A page made from no one
+// file, such as a section's index or a code's page, has no `<lastmod>`.
+fn sitemap(all: Site, pages: List<Page>) -> Untrusted<String> {
     var out = markup("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n")
     for page in pages {
         let loc = canonical(page.path)
-        out = out.concat(wrap("<url><loc>", html.text(loc), "</loc></url>\n"))
+        let date = last_changed(all, page.path)
+        let lastmod = if date == "" { empty() } else { wrap("<lastmod>", html.text(date), "</lastmod>") }
+        out = out.concat(wrap("<url><loc>", html.text(loc), "</loc>")).concat(lastmod).concat(markup("</url>\n"))
     }
     out.concat(markup("</urlset>\n")).render()
+}
+
+// When the source file of the page at `page` last changed, or "" if the
+// page has no one source file or `site/lastmod.txt` does not list it. A
+// doc's page comes from the doc, and the agent-setup page from its prompt.
+// A code's page is one entry of a larger file, so that file's date is not
+// the code's, and it gets none.
+fn last_changed(all: Site, page: Untrusted<String>) -> String {
+    var source: Untrusted<String> = if page == "agent-setup.html" { "site/agent-setup/prompt.md" } else { "" }
+    for doc in all.docs {
+        if doc.page == page {
+            source = doc.repo
+        }
+    }
+    if source == "" {
+        return ""
+    }
+    for dated in all.dates {
+        if dated.repo == source {
+            return dated.date
+        }
+    }
+    ""
 }
 
 // The canonical URL of the page at `page`.
@@ -572,13 +720,16 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
     out = "{out}{start}"
     let setup = if has_setup(all) { setup_group(all) } else { "" }
     out = "{out}{setup}"
-    // The guides, then the docs, then the other sections.
+    // The guides, the API reference, then the docs, then the other
+    // sections.
     for section in all.sections {
         if section.dir == "guide" {
             let group = llms_group(section.title, section.dir, pages)
             out = "{out}{group}"
         }
     }
+    let api = llms_group("API reference", "api", pages)
+    out = "{out}{api}"
     let docs = llms_group("Docs", "", pages)
     out = "{out}{docs}"
     for section in all.sections {
@@ -588,7 +739,8 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
         }
     }
     let optional = optional_group(all, pages)
-    "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): the documentation, as Markdown, in one file{without}\n- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n{optional}"
+    let api_data: Untrusted<String> = if has_api(all) { "- [api.json]({base}/api.json): every item of the API reference, as `oskac doc --format=json` prints it: its module, name, kind, signature, description and authority, whether it runs, and the URL of its entry\n" } else { "" }
+    "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): the documentation, as Markdown, in one file{without}\n{api_data}- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n{optional}"
 }
 
 // What `llms-full.txt` leaves out, as a noun phrase saying where it is: the
@@ -1058,13 +1210,15 @@ fn banner(version: String) -> html.Html {
 }
 
 // The home page's JSON-LD: schema.org's description of the software, for
-// search engines and agents. It is a data block, which no browser runs.
-// Every value in it is written here or is the version, which `version_of`
+// search engines and agents. The application's `downloadUrl` is the
+// latest release's page and its `softwareHelp` the guides. It has no
+// `offers` or rating: a free pre-alpha compiler has no honest rating.
+// It is a data block, which no browser runs. Every value in it is written here or is the version, which `version_of`
 // has read as numbers, so nothing needs escaping.
 fn structured_data(version: String) -> html.Html {
     let base = origin()
     let source = repository()
-    markup("<script type=\"application/ld+json\">\n\{\n  \"@context\": \"https://schema.org\",\n  \"@type\": \"SoftwareSourceCode\",\n  \"name\": \"Oska\",\n  \"description\": \"An AI-first, secure-by-default programming language.\",\n  \"url\": \"{base}/\",\n  \"codeRepository\": \"{source}\",\n  \"license\": \"https://spdx.org/licenses/Apache-2.0.html\",\n  \"version\": \"{version}\",\n  \"programmingLanguage\": \"Oska\",\n  \"targetProduct\": \{\n    \"@type\": \"SoftwareApplication\",\n    \"name\": \"oskac\",\n    \"applicationCategory\": \"DeveloperApplication\",\n    \"softwareVersion\": \"{version}\",\n    \"installUrl\": \"{base}/install.sh\",\n    \"additionalProperty\": \{\n      \"@type\": \"PropertyValue\",\n      \"name\": \"installCommand\",\n      \"value\": \"curl -fsSL {base}/install.sh | sh\"\n    \}\n  \}\n\}\n</script>\n")
+    markup("<script type=\"application/ld+json\">\n\{\n  \"@context\": \"https://schema.org\",\n  \"@type\": \"SoftwareSourceCode\",\n  \"name\": \"Oska\",\n  \"description\": \"An AI-first, secure-by-default programming language.\",\n  \"url\": \"{base}/\",\n  \"codeRepository\": \"{source}\",\n  \"license\": \"https://spdx.org/licenses/Apache-2.0.html\",\n  \"version\": \"{version}\",\n  \"programmingLanguage\": \"Oska\",\n  \"targetProduct\": \{\n    \"@type\": \"SoftwareApplication\",\n    \"name\": \"oskac\",\n    \"applicationCategory\": \"DeveloperApplication\",\n    \"softwareVersion\": \"{version}\",\n    \"installUrl\": \"{base}/install.sh\",\n    \"downloadUrl\": \"{source}/releases/latest\",\n    \"softwareHelp\": \{\n      \"@type\": \"CreativeWork\",\n      \"name\": \"Oska guides\",\n      \"url\": \"{base}/guide/\"\n    \},\n    \"additionalProperty\": \{\n      \"@type\": \"PropertyValue\",\n      \"name\": \"installCommand\",\n      \"value\": \"curl -fsSL {base}/install.sh | sh\"\n    \}\n  \}\n\}\n</script>\n")
 }
 
 // The site's navigation, with the link to `current`, the page it is on,
@@ -1116,14 +1270,18 @@ fn publishes(all: Site, page: Untrusted<String>) -> Bool {
 }
 
 // The Reference page: what is not a task, one step from the navigation.
-// The internals (every top-level doc of `docs/` but the home page), the
-// generator's authority report, the glossary, and every section but the
-// guides, which have their own entry: the decisions and the research.
+// The API reference, the internals (every top-level doc of `docs/` but the
+// home page), the generator's authority report, the glossary, and every
+// section but the guides, which have their own entry: the decisions and
+// the research.
 fn reference_page(all: Site) -> Page {
     let intro = "How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides."
     var items = markup("<h1>Reference</h1>\n<p>").concat(html.text(intro)).concat(markup("</p>\n<ul>\n"))
     var md = "# Reference\n\n{intro}\n\n"
     var entries: List<List<Untrusted<String>>> = List.new()
+    if has_api(all) {
+        entries.push(["api/index.html", "API reference"])
+    }
     for doc in all.docs {
         if doc.section == "" && doc.repo.starts_with("docs/") && doc.page != "index.html" {
             entries.push([doc.page, doc.title])
@@ -2610,4 +2768,599 @@ fn publish_setup(site: DirWrite, all: Site) -> Result<(), IoError> {
         }
     }
     Ok(())
+}
+
+// ---- The API reference --------------------------------------------------------------
+//
+// `site/api.json` is what `oskac doc --format=json` printed for the
+// toolchain the site was built with: the Pages workflow writes it just
+// before the build. It is `{"items": [...]}`, one flat object per item of
+// the prelude and the user-facing `std` modules, whose values are strings
+// but `runs`, a Boolean; `docs/guide/cli-reference.md` documents the shape.
+// From it the site publishes `/api/`, which lists the modules; a page per
+// module, `api/std-sql.html` for `std.sql`, with a heading per item whose
+// anchor is the one in the item's `url`; and `api.json`, the same items
+// again. A repository without the file has none of this. A file that is
+// not that shape, or whose items disagree with the pages they would be on,
+// fails the build. Every text in it is untrusted, and reaches a page only
+// as Markdown rendered by `markdown`, as a doc's text does.
+
+// One item of the reference: its module (`std.sql`, or `prelude`), its
+// name (`List.push`, `Display for IoError`, or for the module's own item
+// the module's path), its kind, its signature on one line, its description
+// as Markdown, its authority in the authority report's words, whether a
+// program that uses it runs (`false` when it only checks), and its URL.
+struct ApiItem {
+    module: Untrusted<String>,
+    name: Untrusted<String>,
+    kind: Untrusted<String>,
+    signature: Untrusted<String>,
+    description: Untrusted<String>,
+    authority: Untrusted<String>,
+    runs: Bool,
+    url: Untrusted<String>,
+}
+
+fn has_api(all: Site) -> Bool {
+    all.api.len() > 0
+}
+
+// The items of the reference in `text`, the contents of `site/api.json`,
+// or why it is not a reference.
+fn api_reference(text: Untrusted<String>) -> Result<List<ApiItem>, Untrusted<String>> {
+    let items = read_api(text)?
+    check_api(items)?
+    Ok(items)
+}
+
+// ---- Reading `site/api.json` ----
+//
+// A strict reader for the one shape the file has, as RFC 8259 writes JSON:
+// white space between tokens, an object with one key, `items`, whose value
+// is an array of objects, each of whose values is a string, `true` or
+// `false`. Anything else (a number, `null`, a nested value, a missing
+// comma, text after the end) is refused, naming the character where it
+// went wrong, counted from 0. An item must have each key of `api_keys`,
+// once; a key it does not know is skipped, so a field added to the shape
+// later does not break the build.
+//
+// Oska has no way to make a character from its code, so a `\u` escape is
+// decoded only for the characters a literal can spell: printable ASCII,
+// tab, line feed, carriage return and NUL. Any other, `\b` and `\f` among
+// them, is refused rather than guessed. `oskac doc` writes every other
+// character as itself, so it never writes one.
+
+// A string or a Boolean the reader has read, and the index of the
+// character after it.
+struct JsonValue {
+    is_text: Bool,
+    // A string's text, its escapes decoded, or "" for a Boolean.
+    text: Untrusted<String>,
+    // A Boolean's value, or `false` for a string.
+    flag: Bool,
+    next: Int,
+}
+
+// An item the reader has read, and the index of the character after it.
+struct JsonItem {
+    item: ApiItem,
+    next: Int,
+}
+
+// The keys every item has.
+fn api_keys() -> List<String> {
+    ["module", "name", "kind", "signature", "description", "authority", "runs", "url"]
+}
+
+// The items of `text`, in order.
+fn read_api(text: Untrusted<String>) -> Result<List<ApiItem>, Untrusted<String>> {
+    let cs = text.chars()
+    var i = expect(cs, skip_json_space(cs, 0), "\{")?
+    i = skip_json_space(cs, i)
+    let key = json_text(cs, i)?
+    if key.text != "items" {
+        return Err("expected the key \"items\" at character {i}")
+    }
+    i = expect(cs, skip_json_space(cs, key.next), ":")?
+    i = expect(cs, skip_json_space(cs, i), "[")?
+    i = skip_json_space(cs, i)
+    var items: List<ApiItem> = List.new()
+    if is_at(cs, i, "]") {
+        i = i + 1
+    } else {
+        while true {
+            let read = json_item(cs, i)?
+            items.push(read.item)
+            i = skip_json_space(cs, read.next)
+            if !is_at(cs, i, ",") {
+                break
+            }
+            i = skip_json_space(cs, i + 1)
+        }
+        i = expect(cs, i, "]")?
+    }
+    i = expect(cs, skip_json_space(cs, i), "\}")?
+    i = skip_json_space(cs, i)
+    if i < cs.len() {
+        return Err("text after the end of the object, at character {i}")
+    }
+    Ok(items)
+}
+
+// The object at `start`, as an item.
+fn json_item(cs: List<Untrusted<String>>, start: Int) -> Result<JsonItem, Untrusted<String>> {
+    var i = expect(cs, start, "\{")?
+    var item = ApiItem(module: "", name: "", kind: "", signature: "", description: "", authority: "", runs: false, url: "")
+    var seen: List<Untrusted<String>> = List.new()
+    i = skip_json_space(cs, i)
+    if is_at(cs, i, "\}") {
+        return Err("an empty item at character {start}")
+    }
+    while true {
+        let at = i
+        let key = json_text(cs, i)?
+        i = expect(cs, skip_json_space(cs, key.next), ":")?
+        let value = json_value(cs, skip_json_space(cs, i))?
+        for earlier in seen {
+            if earlier == key.text {
+                return Err("the key \"{key.text}\" twice in one item, at character {at}")
+            }
+        }
+        seen.push(key.text)
+        if key.text == "runs" {
+            if value.is_text {
+                return Err("\"runs\" is not true or false, at character {at}")
+            }
+            item.runs = value.flag
+        } else if api_keys_hold(key.text) {
+            if !value.is_text {
+                return Err("\"{key.text}\" is not a string, at character {at}")
+            }
+            if key.text == "module" {
+                item.module = value.text
+            } else if key.text == "name" {
+                item.name = value.text
+            } else if key.text == "kind" {
+                item.kind = value.text
+            } else if key.text == "signature" {
+                item.signature = value.text
+            } else if key.text == "description" {
+                item.description = value.text
+            } else if key.text == "authority" {
+                item.authority = value.text
+            } else {
+                item.url = value.text
+            }
+        }
+        i = skip_json_space(cs, value.next)
+        if !is_at(cs, i, ",") {
+            break
+        }
+        i = skip_json_space(cs, i + 1)
+    }
+    i = expect(cs, i, "\}")?
+    for key in api_keys() {
+        var found = false
+        for earlier in seen {
+            if earlier == key {
+                found = true
+            }
+        }
+        if !found {
+            return Err("an item without \"{key}\", at character {start}")
+        }
+    }
+    Ok(JsonItem(item: item, next: i))
+}
+
+// Whether `key` is one of `api_keys`.
+fn api_keys_hold(key: Untrusted<String>) -> Bool {
+    for known in api_keys() {
+        if known == key {
+            return true
+        }
+    }
+    false
+}
+
+// The string, `true` or `false` at `i`.
+fn json_value(cs: List<Untrusted<String>>, i: Int) -> Result<JsonValue, Untrusted<String>> {
+    if is_at(cs, i, "\"") {
+        return json_text(cs, i)
+    }
+    if word_at(cs, i, "true") {
+        return Ok(JsonValue(is_text: false, text: "", flag: true, next: i + 4))
+    }
+    if word_at(cs, i, "false") {
+        return Ok(JsonValue(is_text: false, text: "", flag: false, next: i + 5))
+    }
+    Err("expected a string, true or false at character {i}")
+}
+
+// The string at `start`, its escapes decoded.
+fn json_text(cs: List<Untrusted<String>>, start: Int) -> Result<JsonValue, Untrusted<String>> {
+    if !is_at(cs, start, "\"") {
+        return Err("expected a string at character {start}")
+    }
+    var out: List<Untrusted<String>> = List.new()
+    var i = start + 1
+    while i < cs.len() {
+        let c = cs.at(i)
+        if c == "\"" {
+            return Ok(JsonValue(is_text: true, text: "".join(out), flag: false, next: i + 1))
+        }
+        // JSON has a string's control characters escaped. These are the
+        // ones a literal can name, and so the ones the reader can tell.
+        if c == "\n" || c == "\r" || c == "\t" || c == "\0" {
+            return Err("a control character in a string, at character {i}")
+        }
+        if c != "\\" {
+            out.push(c)
+            i = i + 1
+            continue
+        }
+        if i + 1 >= cs.len() {
+            break
+        }
+        let e = cs.at(i + 1)
+        if e == "u" {
+            out.push(unicode_escape(cs, i)?)
+            i = i + 6
+            continue
+        }
+        let decoded = match e {
+            "\"" => "\""
+            "\\" => "\\"
+            "/" => "/"
+            "n" => "\n"
+            "r" => "\r"
+            "t" => "\t"
+            _ => {
+                return Err("an escape the reader cannot decode, \\{e}, at character {i}")
+            }
+        }
+        out.push(decoded)
+        i = i + 2
+    }
+    Err("a string that does not end, from character {start}")
+}
+
+// The character the `\uXXXX` escape at `i` stands for, if it is one the
+// reader decodes.
+fn unicode_escape(cs: List<Untrusted<String>>, i: Int) -> Result<Untrusted<String>, Untrusted<String>> {
+    if i + 6 > cs.len() {
+        return Err("a \\u escape cut short, at character {i}")
+    }
+    var code = 0
+    for digit in sub(cs, i + 2, i + 6) {
+        let value = hex_digit(digit)
+        if value < 0 {
+            return Err("a \\u escape with a digit that is not hexadecimal, at character {i}")
+        }
+        code = code * 16 + value
+    }
+    if code >= 32 && code <= 126 {
+        return Ok(printable_ascii().slice(code - 32, code - 31))
+    }
+    match code {
+        0 => Ok("\0")
+        9 => Ok("\t")
+        10 => Ok("\n")
+        13 => Ok("\r")
+        _ => Err("a \\u escape the reader cannot decode, at character {i}: it decodes only printable ASCII, tab, line feed, carriage return and NUL")
+    }
+}
+
+// The value of the hexadecimal digit `c`, or -1 if it is not one.
+fn hex_digit(c: Untrusted<String>) -> Int {
+    let digits = "0123456789abcdef".chars()
+    let lower = c.to_lowercase()
+    var value = 0
+    while value < 16 {
+        if digits.at(value) == lower {
+            return value
+        }
+        value = value + 1
+    }
+    -1
+}
+
+// The printable ASCII characters, from the space (32) to `~` (126), in
+// order: the one with code `n` is at `n - 32`.
+fn printable_ascii() -> String {
+    " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz\{|\}~"
+}
+
+// The index of the first character from `i` that is not JSON's white
+// space.
+fn skip_json_space(cs: List<Untrusted<String>>, i: Int) -> Int {
+    var at = i
+    while at < cs.len() && (cs.at(at) == " " || cs.at(at) == "\n" || cs.at(at) == "\r" || cs.at(at) == "\t") {
+        at = at + 1
+    }
+    at
+}
+
+// Whether the character at `i` is `c`.
+fn is_at(cs: List<Untrusted<String>>, i: Int, c: String) -> Bool {
+    i < cs.len() && cs.at(i) == c
+}
+
+// Whether the characters from `i` spell `word`.
+fn word_at(cs: List<Untrusted<String>>, i: Int, word: String) -> Bool {
+    let letters = word.chars()
+    if i + letters.len() > cs.len() {
+        return false
+    }
+    var k = 0
+    while k < letters.len() {
+        if cs.at(i + k) != letters.at(k) {
+            return false
+        }
+        k = k + 1
+    }
+    true
+}
+
+// The index after the character `c` at `i`, or why there is no `c` there.
+fn expect(cs: List<Untrusted<String>>, i: Int, c: String) -> Result<Int, Untrusted<String>> {
+    if is_at(cs, i, c) {
+        Ok(i + 1)
+    } else {
+        Err("expected `{c}` at character {i}")
+    }
+}
+
+// ---- Checking the items ----
+
+// Why `items` are not a reference the site can publish, if they are not:
+// an item of an unknown kind; a module whose path is not letters, digits,
+// `_` and `.`, which name its page; a name that is empty, spans lines, or
+// starts or ends with a space, which its heading would not keep; a URL
+// other than the one its page and its heading give it; two items with one
+// URL; or an item whose module has no item of kind `module`.
+fn check_api(items: List<ApiItem>) -> Result<(), Untrusted<String>> {
+    let kinds = ["module", "fn", "struct", "enum", "trait", "capability", "method", "impl"]
+    var urls: List<Untrusted<String>> = List.new()
+    for item in items {
+        var known = false
+        for kind in kinds {
+            if item.kind == kind {
+                known = true
+            }
+        }
+        if !known {
+            return Err("`{item.name}` is of an unknown kind, `{item.kind}`")
+        }
+        if item.module == "" {
+            return Err("`{item.name}` has no module")
+        }
+        for c in item.module.chars() {
+            if !is_alphanumeric(c) && c != "_" && c != "." {
+                return Err("the module `{item.module}` is not a path of letters, digits, `_` and `.`")
+            }
+        }
+        if item.name == "" || item.name.trim() != item.name || item.name.contains("\n") || item.name.contains("\r") {
+            return Err("an item of `{item.module}` has the name `{item.name}`, which no heading can show")
+        }
+        let expected = api_url(item)
+        if item.url != expected {
+            return Err("the url of `{item.name}` is `{item.url}`, not `{expected}`")
+        }
+        for url in urls {
+            if url == item.url {
+                return Err("two items have the url `{url}`")
+            }
+        }
+        urls.push(item.url)
+        var listed = false
+        for module in items {
+            if module.kind == "module" && module.name == item.module {
+                listed = true
+            }
+        }
+        if !listed {
+            return Err("`{item.name}` is in `{item.module}`, which has no item of kind `module`")
+        }
+    }
+    Ok(())
+}
+
+// ---- The pages ----
+
+// The page of `module`, under `api/`, without `.html`: `std-sql` for
+// `std.sql`.
+fn api_page_name(module: Untrusted<String>) -> Untrusted<String> {
+    module.replace(".", "-")
+}
+
+// Where `item` is on the site: its module's page, and, but for the
+// module's own item, the anchor of its heading there.
+fn api_url(item: ApiItem) -> Untrusted<String> {
+    let page = api_page_name(item.module)
+    let url = canonical("api/{page}.html")
+    if item.kind == "module" {
+        url
+    } else {
+        let anchor = slug(item.name)
+        "{url}#{anchor}"
+    }
+}
+
+// The modules' own items, in order.
+fn api_modules(all: Site) -> List<ApiItem> {
+    var out: List<ApiItem> = List.new()
+    for item in all.api {
+        if item.kind == "module" {
+            out.push(item)
+        }
+    }
+    out
+}
+
+// `/api/`: every module, linked, with the first paragraph of its
+// description.
+fn api_index(all: Site) -> Page {
+    let links = Links(site: all, dir: "docs")
+    let base = origin()
+    let intro = "# API reference\n\nEvery public item of the prelude, which every module sees, and of the `std` modules a program can `use`: its signature, its authority, whether it runs, and what it does. It is generated from the sources the checker reads, so it says what the checker accepts. `oskac doc` prints the same reference offline.\n"
+    let data = wrap("<p>All of it is in ", anchor_to("/api.json", html.text("api.json")), " as data.</p>\n")
+    var md = "{intro}\nAll of it is in [api.json]({base}/api.json) as data.\n\n"
+    var items = empty()
+    for module in api_modules(all) {
+        let page = api_page_name(module.name)
+        let first = collapse(module.description.split("\n\n").at(0))
+        let link = anchor_to("/api/{page}.html", html.text(module.name))
+        let line = if first == "" { link } else { link.concat(html.text(": ")).concat(inline(first, links)) }
+        items = items.concat(html_item(line))
+        let note: Untrusted<String> = if first == "" { "" } else { ": {first}" }
+        md = "{md}- [{module.name}]({base}/api/{page}.md){note}\n"
+    }
+    let body = markdown(intro, links).concat(data).concat(wrap("<ul>\n", items, "</ul>\n"))
+    Page(path: "api/index.html", title: "API reference", body: body, md: md)
+}
+
+// The page of one module: its description, then each of its items under a
+// heading of its own.
+fn api_page(all: Site, module: ApiItem) -> Page {
+    let links = Links(site: all, dir: "docs")
+    var parts: List<Untrusted<String>> = List.new()
+    let title = escape_markdown(module.name)
+    parts.push("# {title}")
+    parts.push("")
+    if module.description != "" {
+        parts.push(api_description(module.description))
+        parts.push("")
+    }
+    if !module.runs {
+        parts.push(not_run_note(all))
+        parts.push("")
+    }
+    parts.push("`oskac doc {module.name}` prints this page offline.")
+    for item in all.api {
+        if item.module == module.name && item.kind != "module" {
+            parts.push("")
+            parts.push(api_entry(all, item))
+        }
+    }
+    let source = "\n".join(parts)
+    let page = api_page_name(module.name)
+    let back = wrap("<p>", anchor_to("/api/", html.text("All modules")), "</p>\n")
+    Page(path: "api/{page}.html", title: module.name, body: markdown("{source}\n", links).concat(back), md: retarget("{source}\n", links))
+}
+
+// One item as Markdown: a heading that is exactly its name, so that its
+// anchor is the one in its `url`; its kind and authority; its signature;
+// whether it runs; and its description.
+fn api_entry(all: Site, item: ApiItem) -> Untrusted<String> {
+    var parts: List<Untrusted<String>> = List.new()
+    let heading = escape_markdown(item.name)
+    parts.push("## {heading}")
+    parts.push("")
+    let authority = escape_markdown(one_line(item.authority))
+    let reach: Untrusted<String> = if item.authority == "" { "" } else { " · **Authority:** {authority}" }
+    parts.push("**Kind:** {item.kind}{reach}")
+    if item.signature != "" {
+        // On one line, so a fence can always be chosen that it does not
+        // start with.
+        let signature = one_line(item.signature)
+        let fence = if signature.trim().starts_with("```") { "~~~" } else { "```" }
+        parts.push("")
+        parts.push("{fence}oska")
+        parts.push(signature)
+        parts.push(fence)
+    }
+    if !item.runs {
+        parts.push("")
+        parts.push(not_run_note(all))
+    }
+    if item.description != "" {
+        parts.push("")
+        parts.push(api_description(item.description))
+    }
+    "\n".join(parts)
+}
+
+// What an item that only checks says: a program that uses it checks, but
+// does not run.
+fn not_run_note(all: Site) -> Untrusted<String> {
+    let see = if has_doc(all, "guide/what-works-today.html") { " See [What works today](guide/what-works-today.md)." } else { "" }
+    "> **Checks but does not run.** `oskac check` accepts a program that uses this, but `oskac run`, `oskac test` and `oskac build` refuse it.{see}"
+}
+
+// A description, as Markdown that stays inside its item: a line that would
+// be a heading is shown as text, so that it adds no anchor to the page,
+// and a code fence it leaves open is closed, so that it cannot swallow the
+// items after it.
+fn api_description(text: Untrusted<String>) -> Untrusted<String> {
+    let lines = text.lines()
+    let fenced = fence_flags(lines)
+    var out: List<Untrusted<String>> = List.new()
+    var fence: Untrusted<String> = ""
+    var i = 0
+    while i < lines.len() {
+        let line = lines.at(i)
+        let trimmed = line.trim()
+        if fenced.at(i) {
+            out.push(line)
+            if fence == "" {
+                fence = trimmed.slice(0, 3)
+            } else if trimmed.starts_with(fence) {
+                fence = ""
+            }
+        } else if trimmed.starts_with("#") {
+            out.push("\\{trimmed}")
+        } else {
+            out.push(line)
+        }
+        i = i + 1
+    }
+    let body = "\n".join(out)
+    if fence == "" { body } else { "{body}\n{fence}" }
+}
+
+// `text`, which is not Markdown, escaped so that `inline` shows it as it
+// is: each character that could start a code span, emphasis, a link or an
+// image gets a backslash, but `_` inside a word, as in `to_lowercase`,
+// which `inline` never reads as emphasis. A heading's anchor is the same
+// with the escapes as without, as `slug` drops the backslashes.
+fn escape_markdown(text: Untrusted<String>) -> Untrusted<String> {
+    let cs = text.chars()
+    var out: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < cs.len() {
+        let c = cs.at(i)
+        let in_word = i > 0 && i + 1 < cs.len() && is_alphanumeric(cs.at(i - 1)) && is_alphanumeric(cs.at(i + 1))
+        if "\\`*[]!".contains(c) ||(c == "_" && !in_word) {
+            out.push("\\")
+        }
+        out.push(c)
+        i = i + 1
+    }
+    "".join(out)
+}
+
+// `text` with its line breaks made spaces.
+fn one_line(text: Untrusted<String>) -> Untrusted<String> {
+    text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+}
+
+// `api.json`: every item, in the shape `oskac doc --format=json` prints,
+// one per line. Each string is written by `json_string`, which also
+// escapes `<`.
+fn api_json(items: List<ApiItem>) -> Untrusted<String> {
+    var entries: List<Untrusted<String>> = List.new()
+    for item in items {
+        let module = json_string(item.module)
+        let name = json_string(item.name)
+        let kind = json_string(item.kind)
+        let signature = json_string(item.signature)
+        let description = json_string(item.description)
+        let authority = json_string(item.authority)
+        let runs = if item.runs { "true" } else { "false" }
+        let url = json_string(item.url)
+        entries.push("\{\"module\":{module},\"name\":{name},\"kind\":{kind},\"signature\":{signature},\"description\":{description},\"authority\":{authority},\"runs\":{runs},\"url\":{url}\}")
+    }
+    let all = ",\n  ".join(entries)
+    "\{\"items\": [\n  {all}\n]\}\n"
 }

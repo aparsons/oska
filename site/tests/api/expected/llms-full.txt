@@ -1,0 +1,144 @@
+# Oska: full documentation
+
+Oska 0.1.0 (pre-alpha). The pages of https://oskalang.dev as Markdown, one after another, in the order to read them, each after a line `Source:` that names it.
+
+---
+
+Source: https://oskalang.dev/guide/
+
+# Guides
+
+- [What works today](/guide/what-works-today.md)
+
+---
+
+Source: https://oskalang.dev/guide/what-works-today.html
+
+# What works today
+
+What runs, and what only checks.
+
+---
+
+Source: https://oskalang.dev/glossary.html
+
+# Glossary
+
+## Capability
+
+A value.
+
+---
+
+Source: https://oskalang.dev/
+
+# Oska
+
+A language.
+
+---
+
+Source: https://oskalang.dev/api/
+
+# API reference
+
+Every public item of the prelude, which every module sees, and of the `std` modules a program can `use`: its signature, its authority, whether it runs, and what it does. It is generated from the sources the checker reads, so it says what the checker accepts. `oskac doc` prints the same reference offline.
+
+All of it is in [api.json](https://oskalang.dev/api.json) as data.
+
+- [prelude](https://oskalang.dev/api/prelude.md): The prelude: what every module sees without `use`.
+- [std.sql](https://oskalang.dev/api/std-sql.md): The SQL sink. See <b>this</b>.
+
+---
+
+Source: https://oskalang.dev/api/prelude.html
+
+# prelude
+
+The prelude: what every module sees without `use`.
+
+A second paragraph, which the index leaves out.
+
+`oskac doc prelude` prints this page offline.
+
+## Eq for Option<T>
+
+**Kind:** impl · **Authority:** pure
+
+```oska
+impl<T> Eq for Option<T>
+```
+
+Hostile: <script>alert(1)</script>, [a link](javascript:alert(1)), ``a `tick` span``, "quotes", a back\slash, Ab< / a slash,	and a tab.
+
+\# Not a heading
+
+```
+an open fence <b>bold</b>
+## nor this
+```
+
+## List.push
+
+**Kind:** method · **Authority:** pure
+
+```oska
+pub fn push(var self, item: T)
+```
+
+Add `item` at the end.
+
+## String.to_lowercase
+
+**Kind:** method · **Authority:** pure
+
+```oska
+pub fn to_lowercase(self) -> String
+```
+
+Every letter in lower case: `"ÀB".to_lowercase()` is `"àb"`.
+
+---
+
+Source: https://oskalang.dev/api/std-sql.html
+
+# std.sql
+
+The SQL sink. See <b>this</b>.
+
+> **Checks but does not run.** `oskac check` accepts a program that uses this, but `oskac run`, `oskac test` and `oskac build` refuse it. See [What works today](/guide/what-works-today.md).
+
+`oskac doc std.sql` prints this page offline.
+
+## connect
+
+**Kind:** fn · **Authority:** NetConnect (net)
+
+```oska
+pub fn connect(net: NetConnect, url: String) -> Result<Db, SqlError>
+```
+
+> **Checks but does not run.** `oskac check` accepts a program that uses this, but `oskac run`, `oskac test` and `oskac build` refuse it. See [What works today](/guide/what-works-today.md).
+
+Connect to the database at `url`.
+
+## Db.\*query\*
+
+**Kind:** method · **Authority:** <img src=x onerror=alert(1)> \_em\_ \`tick\`
+
+~~~oska
+```</code></pre><script>alert(1)</script>
+~~~
+
+> **Checks but does not run.** `oskac check` accepts a program that uses this, but `oskac run`, `oskac test` and `oskac build` refuse it. See [What works today](/guide/what-works-today.md).
+
+---
+
+Source: https://oskalang.dev/reference.html
+
+# Reference
+
+How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
+
+- [API reference](/api/index.md)
+- [Glossary](/glossary.md)

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prelude · Oska</title>
+<meta name="description" content="The prelude: what every module sees without use.">
+<meta property="og:title" content="prelude · Oska">
+<meta property="og:description" content="The prelude: what every module sees without use.">
+<meta property="og:url" content="https://oskalang.dev/api/prelude.html">
+<meta property="og:type" content="article">
+<link rel="canonical" href="https://oskalang.dev/api/prelude.html">
+<link rel="alternate" type="text/markdown" href="/api/prelude.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<aside aria-label="Version">
+<p>Oska 0.1.0 (pre-alpha). These docs track <code>main</code>, which can be ahead of the latest release: see <a href="/latest.json">latest.json</a>.</p>
+</aside>
+<header>
+<nav aria-label="Site">
+<ul>
+<li><a href="/">Oska</a></li>
+<li><a href="/guide/">Guides</a></li>
+<li><a href="/reference.html">Reference</a></li>
+</ul>
+</nav>
+</header>
+<main id="main-content">
+<h1 id="prelude">prelude</h1>
+<p>The prelude: what every module sees without <code>use</code>.</p>
+<p>A second paragraph, which the index leaves out.</p>
+<p><code>oskac doc prelude</code> prints this page offline.</p>
+<h2 id="eq-for-optiont">Eq for Option&lt;T&gt;</h2>
+<p><strong>Kind:</strong> impl · <strong>Authority:</strong> pure</p>
+<pre><code>impl&lt;T&gt; Eq for Option&lt;T&gt;
+</code></pre>
+<p>Hostile: &lt;script&gt;alert(1)&lt;/script&gt;, a link, <code>a `tick` span</code>, &quot;quotes&quot;, a back\slash, Ab&lt; / a slash,	and a tab.</p>
+<p># Not a heading</p>
+<pre><code>an open fence &lt;b&gt;bold&lt;/b&gt;
+## nor this
+</code></pre>
+<h2 id="listpush">List.push</h2>
+<p><strong>Kind:</strong> method · <strong>Authority:</strong> pure</p>
+<pre><code>pub fn push(var self, item: T)
+</code></pre>
+<p>Add <code>item</code> at the end.</p>
+<h2 id="stringto_lowercase">String.to_lowercase</h2>
+<p><strong>Kind:</strong> method · <strong>Authority:</strong> pure</p>
+<pre><code>pub fn to_lowercase(self) -&gt; String
+</code></pre>
+<p>Every letter in lower case: <code>&quot;ÀB&quot;.to_lowercase()</code> is <code>&quot;àb&quot;</code>.</p>
+<p><a href="/api/">All modules</a></p>
+</main>
+<footer>
+<p>Built from the <a href="https://github.com/aparsons/oska">Oska repository on GitHub</a> by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>
+</footer>
+<script src="/search.js"></script>
+</body>
+</html>

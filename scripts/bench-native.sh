@@ -184,4 +184,5 @@ echo "| Workload   | Interpreter | Native |  Speedup |"
 echo "| ---------- | ----------: | -----: | -------: |"
 (cd "$work" && for name in loop text bulk-text lists recursion; do bench "$name" "$name.osk"; done)
 "$oskac" check site/build.osk >site/authority.txt || true
+"$oskac" doc --format=json >site/api.json
 bench site site/build.osk
