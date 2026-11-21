@@ -1364,7 +1364,7 @@ main() {
 
   # Which file to download, from the signed SHA256SUMS. On Linux a release
   # has a glibc build (-gnu) and a musl build (-musl) (ADR 0022), and
-  # choose_linux_build has picked one. A release from before them (v0.5.0
+  # choose_linux_build has picked one. A release from before them (v0.6.0
   # and earlier) has one Linux file, oskac-<platform>, the glibc build: it
   # is installed only where the glibc build was chosen, and refused, as
   # those releases always were, where only the musl build would run.

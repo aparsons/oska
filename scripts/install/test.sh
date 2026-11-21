@@ -880,7 +880,7 @@ test_an_empty_oska_libc_chooses_as_if_unset() {
   OSKA_LIBC='' assert_build musl musl false
 }
 
-# A release from before the two Linux builds (v0.5.0 and earlier) has one
+# A release from before the two Linux builds (v0.6.0 and earlier) has one
 # Linux file per processor, the glibc build, under the old name.
 OLD_ASSETS="oskac-linux-aarch64 oskac-linux-x86_64 oskac-macos-aarch64 oskac-macos-x86_64 oskac-windows-x86_64.exe"
 

@@ -312,7 +312,7 @@ test_verify_refuses_an_image_digest_that_is_a_symlink() {
   grep -q 'not a regular file' err || fail "error does not say why: $(cat err)"
 }
 
-# Releases before the image (v0.5.0 and older) have no digest file and
+# Releases before the image (v0.6.0 and older) have no digest file and
 # still verify, so the Pages build keeps publishing them.
 test_verify_accepts_an_older_release_without_an_image_digest() {
   signed_release v1.2.3
