@@ -22,7 +22,7 @@ Everything below needs judgement.
 - **The site generator is an Oska program,** run with `oskac run`.
 - **`main` narrows its file access before doing anything else.** It may read only the inputs it uses and write only `_site`.
 - **Everything emitted goes through `std.html`.** Hand-built markup is allowed only for static literals.
-- **Third-party assets need a pinned version, SRI, and a `<meta>` CSP naming only their origins. No analytics.** The site conformance tests in `crates/oska-run/tests/site.rs` check fonts and scripts. A new kind of asset needs a matching test.
+- **Pages load nothing from another origin, and the `<meta>` CSP names none. No analytics.** Fonts are the system's. A third-party asset would need a pinned version, SRI, and a decision to add its origin to the CSP. The site conformance tests in `crates/oska-run/tests/site.rs` check that no page loads from another origin and check its scripts. A new kind of asset needs a matching test.
 
 ## Release and install path
 
