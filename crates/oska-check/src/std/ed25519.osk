@@ -81,8 +81,8 @@ pub fn verify(key: PublicKey, message: Untrusted<Bytes>, signature: Untrusted<By
     hasher.update(key.encoding)
     hasher.update(message)
     let k = reduce_mod_order(hasher.finish())
-    let check = double_scalar_mul(scalar_bytes(s), base_point(), k, negate(key.point))
-    encode_point(check) == scalar_bytes(r)
+    let check = double_scalar_mul(s, base_point(), k, negate(key.point))
+    encode_point(check) == r
 }
 
 // ---- Scalars --------------------------------------------------------------
@@ -93,15 +93,6 @@ pub fn verify(key: PublicKey, message: Untrusted<Bytes>, signature: Untrusted<By
 // little-endian.
 fn order_bytes() -> Bytes {
     Bytes.from_hex("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010").unwrap_or(Bytes.new())
-}
-
-// The same bytes, trusted: the integers of a scalar, read out of it.
-fn scalar_bytes(s: Untrusted<Bytes>) -> Bytes {
-    var out = Bytes.new()
-    for i in 0..s.len() {
-        out.push(s.at(i))
-    }
-    out
 }
 
 // Whether the 32-byte little-endian `s` is below L (RFC 8032, section
@@ -163,7 +154,7 @@ fn subtract_if_at_least(a: List<U64>, b: List<U64>) -> List<U64> {
 }
 
 // Bit `i` of the little-endian scalar `s`.
-fn bit_of(s: Bytes, i: Int) -> Bool {
+fn bit_of(s: Untrusted<Bytes>, i: Int) -> Bool {
     ((s.at(i / 8) >> (i % 8).to_u8()) & 1) == 1
 }
 
@@ -226,7 +217,7 @@ fn double(p: Point) -> Point {
 
 // [a]P + [b]Q for scalars `a` and `b` below 2^256, both at once: one
 // doubling a bit, from the top, and an addition for each bit set.
-fn double_scalar_mul(a: Bytes, p: Point, b: Bytes, q: Point) -> Point {
+fn double_scalar_mul(a: Untrusted<Bytes>, p: Point, b: Untrusted<Bytes>, q: Point) -> Point {
     let both = add_points(p, q)
     var acc = identity()
     var i = 255
