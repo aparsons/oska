@@ -12,6 +12,9 @@
 //!    implemented. Anything the backend cannot compile yet is refused
 //!    here, with `E0390`.
 //!    `optimize.rs` then cleans up the code and inlines small functions.
+//!    `constant_time.rs` checks the result: no branch and no memory
+//!    address depends on a secret, or the build fails with an internal
+//!    error (ADR 0012).
 //! 2. The target's code generator (`target.rs`): `aarch64.rs` or
 //!    `x86_64.rs`, with register allocation (`regalloc.rs`), instruction
 //!    selection and encoding.
@@ -28,6 +31,7 @@ use oska_syntax::{Diagnostic, Frame, Frames, SnapshotRecord, Span};
 pub use target::Target;
 
 mod aarch64;
+mod constant_time;
 mod elf;
 mod intrinsics;
 mod ir;

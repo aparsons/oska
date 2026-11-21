@@ -25,7 +25,7 @@ use std::ops::ControlFlow;
 
 use oska_check::builtins;
 use oska_check::program::{
-    walk, Callee, Construct, Expr, ExprKind, Function, Place, Stmt, Type, Visit,
+    secrets, walk, Callee, Construct, Expr, ExprKind, Function, Place, Stmt, Type, Visit,
 };
 use oska_syntax::{Diagnostic, Span};
 
@@ -176,7 +176,10 @@ impl Body<'_, '_> {
             Some(object) => (object, false),
             None => (self.expr(base)?, true),
         };
-        let value = self.load(object, layout::struct_field(index));
+        let mut value = self.load(object, layout::struct_field(index));
+        if self.is_secret_word(&base.ty) {
+            value = self.mark_secret(value);
+        }
         if self.counted(ty) {
             self.retain(value);
             self.own(value, ty);
@@ -185,6 +188,22 @@ impl Body<'_, '_> {
             self.consume(object)?;
         }
         Ok(value)
+    }
+
+    /// Whether `ty` is a secret held in a word: `Secret<U8>`,
+    /// `Secret<U32>`, `Secret<U64>` or `Secret<Bool>`. The value read out
+    /// of one is marked (`constant_time.rs`); a `Secret<Bytes>`'s object is
+    /// public, and `std.rt` marks its bytes as it reads them.
+    pub(super) fn is_secret_word(&self, ty: &Type) -> bool {
+        let ty = self.ty(ty);
+        matches!(secrets::secret_inner(&ty), Some(Type::Bool | Type::Int(_)))
+    }
+
+    /// A copy of `value`, marked secret.
+    pub(super) fn mark_secret(&mut self, value: Temp) -> Temp {
+        let dst = self.temp();
+        self.push(Inst::Secret { dst, src: value });
+        dst
     }
 
     /// The value of `expr` without a reference of its own, when it is a

@@ -80,6 +80,8 @@ mod int_methods;
 mod lists;
 mod patterns;
 mod select;
+#[cfg(test)]
+pub(crate) use select::BRANCHY;
 mod tasks;
 mod tests;
 mod traits;
@@ -324,6 +326,8 @@ pub fn program(
         }
     }
     optimize::module(&mut lowering.functions);
+    // The code is final: no secret may decide a branch or an address.
+    crate::constant_time::verify(&lowering.functions)?;
     let stack = lowering.size_stack(entry);
     // The globals, then the step counter under `--max-steps`, then the
     // memory limit's report under `--max-memory` (which keeps the counter's
@@ -2412,6 +2416,7 @@ impl<'l, 'p> Body<'l, 'p> {
             // A copy: the argument's reference, if it holds one, is
             // released after the call, and the word stays.
             Runtime::Identity => self.copy(arg(0)),
+            Runtime::Conceal => self.mark_secret(arg(0)),
             Runtime::Globals => {
                 let dst = self.temp();
                 self.push(Inst::Addr {

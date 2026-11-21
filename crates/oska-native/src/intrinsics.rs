@@ -334,6 +334,10 @@ pub enum Runtime {
     /// `std.rt`'s table of what differs between target platforms, the
     /// target platform's ([`Platform::table`]).
     PlatformTable,
+    /// Its one argument, marked secret (`Inst::Secret`): a byte read from
+    /// secret bytes, which no branch or address may then depend on
+    /// (`constant_time.rs`).
+    Conceal,
 }
 
 /// An operating-system call, which the `std.rt` intrinsic of its name
@@ -1224,6 +1228,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_add", Runtime::Binary(BinOp::Add)),
     ("rt_mem_sub", Runtime::Binary(BinOp::Sub)),
     ("rt_mem_mul", Runtime::Binary(BinOp::Mul)),
+    ("rt_mem_conceal", Runtime::Conceal),
     ("rt_mem_text", Runtime::Identity),
     ("rt_mem_as_text", Runtime::Identity),
     ("rt_mem_secret", Runtime::Identity),

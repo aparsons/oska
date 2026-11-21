@@ -201,6 +201,10 @@ struct Emitter {
     jumps: Vec<(usize, u32, Jump)>,
     /// [`Module::extra_args`].
     extra_args: u32,
+    /// For each function emitted, the words each of its instructions
+    /// became (`trace`).
+    #[cfg(test)]
+    ranges: Vec<Vec<std::ops::Range<usize>>>,
 }
 
 impl Emitter {
@@ -239,7 +243,11 @@ impl Emitter {
         }
         let mut labels = vec![0usize; function.labels as usize];
         self.jumps.clear();
+        #[cfg(test)]
+        self.ranges.push(Vec::new());
         for inst in &function.insts {
+            #[cfg(test)]
+            let start = self.words.len();
             match inst {
                 Inst::Label(label) => {
                     if let Some(at) = labels.get_mut(*label as usize) {
@@ -247,6 +255,10 @@ impl Emitter {
                     }
                 }
                 other => self.inst(other),
+            }
+            #[cfg(test)]
+            if let Some(ranges) = self.ranges.last_mut() {
+                ranges.push(start..self.words.len());
             }
         }
         for &(at, label, kind) in &self.jumps {
@@ -404,7 +416,9 @@ impl Emitter {
                 self.constant(r, *value);
                 self.write(*dst, r);
             }
-            Inst::Copy { dst, src } => {
+            // A secret's mark is the optimizer's and the guard's
+            // (`constant_time.rs`): here it is a copy.
+            Inst::Copy { dst, src } | Inst::Secret { dst, src } => {
                 let s = self.read(*src, X9);
                 self.write(*dst, s);
             }
@@ -931,4 +945,50 @@ fn word_offset(from: usize, to: usize) -> i64 {
 fn fits(offset: i64, bits: u32) -> bool {
     let limit = 1i64 << (bits - 1);
     (-limit..limit).contains(&offset)
+}
+
+/// For each function of `module`, for each of its instructions, what its
+/// machine code does that a secret must not decide: its conditional
+/// branches (`b.cond`, `cbz`, `cbnz`, `tbz`, `tbnz`) and its loads and
+/// stores, by whether `sp` or the frame pointer addresses them.
+#[cfg(test)]
+pub(crate) fn trace(module: &Module) -> Vec<Vec<crate::target::Selected>> {
+    let mut emitter = Emitter {
+        extra_args: module.extra_args,
+        ..Emitter::default()
+    };
+    for function in &module.functions {
+        emitter
+            .function(function)
+            .expect("the code should be emitted");
+    }
+    let words = &emitter.words;
+    emitter
+        .ranges
+        .iter()
+        .map(|function| {
+            function
+                .iter()
+                .map(|range| {
+                    let mut selected = crate::target::Selected::default();
+                    for &word in &words[range.clone()] {
+                        let conditional = word & 0xff00_0010 == B_COND
+                            || word & 0x7e00_0000 == 0x3400_0000
+                            || word & 0x7e00_0000 == 0x3600_0000;
+                        if conditional {
+                            selected.conditional_branches += 1;
+                        }
+                        // Loads and stores: op0 is x1x0.
+                        if word >> 25 & 0b0101 == 0b0100 {
+                            match word >> 5 & 31 {
+                                SP | FP => selected.stack_accesses += 1,
+                                _ => selected.other_accesses += 1,
+                            }
+                        }
+                    }
+                    selected
+                })
+                .collect()
+        })
+        .collect()
 }
