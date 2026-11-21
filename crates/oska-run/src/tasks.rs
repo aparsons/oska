@@ -26,7 +26,7 @@ use oska_syntax::Span;
 
 use crate::interp::{FrameName, Interpreter};
 use crate::intrinsics::Intrinsic::HigherOrder;
-use crate::intrinsics::Table;
+use crate::intrinsics::{Args, Table};
 use crate::panics::{codes, Panic};
 use crate::value::Value;
 
@@ -156,7 +156,7 @@ impl Interpreter<'_, '_> {
 /// scope's block has ended.
 fn scope_spawn(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     let Value::Scope(scope) = args[0] else {
@@ -174,7 +174,7 @@ fn scope_spawn(
 }
 
 /// `Task.join(self)`: the task's result.
-fn task_join(interp: &mut Interpreter<'_, '_>, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn task_join(interp: &mut Interpreter<'_, '_>, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let Value::Task(task) = args[0] else {
         unreachable!("the checker guarantees a task, found {:?}", args[0]);
     };

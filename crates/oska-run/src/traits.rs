@@ -14,7 +14,7 @@ use oska_syntax::Span;
 use crate::host::Host;
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
-use crate::intrinsics::Table;
+use crate::intrinsics::{Args, Table};
 use crate::panics::Panic;
 use crate::value::Value;
 
@@ -43,23 +43,19 @@ pub const INTRINSICS: Table = &[
 
 /// `eq(self, other)` for a type whose values are equal exactly when
 /// they hold the same data: integers, `Bool`, text, `Path`, `IoError`.
-fn same(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn same(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0] == args[1]))
 }
 
 /// `IoError.to_string(self)`: its message.
-fn io_error_to_string(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn io_error_to_string(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args[0].field(0))
 }
 
 /// `eq(self, other)` for `Option`, `Result`, and `List`: the same variant
 /// or length, with each item equal to the other's through `Eq` for its
 /// type.
-fn items_eq(
-    interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
-    span: Span,
-) -> Result<Value, Panic> {
+fn items_eq(interp: &mut Interpreter<'_, '_>, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let (lhs, rhs): (&Rc<Vec<Value>>, &Rc<Vec<Value>>) = match (&args[0], &args[1]) {
         (Value::List(lhs), Value::List(rhs)) => (lhs, rhs),
         (
