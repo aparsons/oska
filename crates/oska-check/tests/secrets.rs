@@ -226,3 +226,20 @@ fn a_display_hole_interpolates() {
          fn f<T: Display>(p: P, n: Int, s: String, t: T) -> Untrusted<String> {\n    \"{p} {n} {s} {t}\"\n}",
     );
 }
+
+// ---- Secret text as secret bytes (#232) -----------------------------------------------
+
+#[test]
+fn secret_text_becomes_secret_bytes_with_no_audit_site() {
+    let src = "fn key(env: Env) -> Secret<Bytes> {\n    env.secret(\"HMAC_KEY\").to_bytes()\n}";
+    assert_ok(src);
+    assert_audit(src, &[]);
+}
+
+#[test]
+fn secret_bytes_of_secret_text_stay_secret() {
+    assert_errors(
+        "fn leak(env: Env) -> Bytes {\n    env.secret(\"HMAC_KEY\").to_bytes()\n}",
+        &[("E0220", "env.secret(\"HMAC_KEY\").to_bytes()")],
+    );
+}

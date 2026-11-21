@@ -291,6 +291,11 @@ impl Secret<String> {
     // Compare with another secret without leaking timing information,
     // and without exposing either.
     pub fn constant_time_eq_secret(self, other: Secret<String>) -> Bool
+    // Its UTF-8 encoding, as secret bytes, such as an HMAC key made from
+    // an environment secret. The secret stays secret, so this is not an
+    // audit site.
+    #[follows_trust]
+    pub fn to_bytes(self) -> Secret<Bytes>
 }
 
 // A secret integer has the public type's rotations (by a public amount,
