@@ -81,7 +81,11 @@ fn every_kind_of_call_binds_its_arguments_to_the_same_slots() {
 }
 
 /// Makes lists and structs through every kind of call and keeps them all,
-/// so nothing it charges is freed before it ends.
+/// the arguments' lists included, so nothing it charges is freed before
+/// it ends: the meter's sweep frees nothing, and the smallest limit it
+/// fits in is exactly what it was charged. (With garbage to sweep, that
+/// limit depends on what a sweep finds dead, which differed between this
+/// machine and CI's x86_64 runners.)
 const KEEPS: &str = r#"struct Pair { left: List<Int>, right: List<Int> }
 
 impl Pair {
@@ -109,13 +113,15 @@ fn longer(items: List<Int>, extra: Int) -> List<Int>
 
 fn main() {
     let a = pair([1, 2, 3], 0, [4, 5])
-    let b = longer([6, 7], 8)
+    let six = [6, 7]
+    let b = longer(six, 8)
+    let ten = [10, 11, 12, 13]
     let make = |xs: List<Int>, _: Int| [xs.len(), 9]
-    let c = make([10, 11, 12, 13], 0)
+    let c = make(ten, 0)
     var d = a.swapped(0)
     d.grow(14)
     let e = [a, d]
-    let f = [b, c]
+    let f = [b, c, six, ten]
 }
 "#;
 
@@ -141,7 +147,7 @@ fn keeps_fits_in(limit: u64) -> bool {
 
 /// The bytes `KEEPS` holds at its end, as the meter counted them before
 /// ticket #505 changed how calls pass their arguments, on a 64-bit host.
-const KEEPS_BYTES: u64 = 2476;
+const KEEPS_BYTES: u64 = 3200;
 
 #[test]
 fn max_memory_charges_the_values_calls_make_exactly_as_before() {
