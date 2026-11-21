@@ -479,7 +479,7 @@ Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench
 
 | Code | Panic |
 | --- | --- |
-| `P0001` | integer overflow |
+| `P0001` | integer overflow, or a `to_<type>()` conversion given a value that does not fit its target, such as `300.to_u8()` |
 | `P0002` | index out of bounds |
 | `P0003` | `todo()` reached |
 | `P0004` | division by zero |

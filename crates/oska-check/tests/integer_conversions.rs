@@ -17,6 +17,19 @@ const CONVERTIBLE: [(&str, &str); 5] = [
     ("U64", "u64"),
 ];
 
+/// Assert that `src` reports one error, `E0228` at the name of `method`,
+/// which a value of type `ty` does not have.
+fn assert_no_method(src: &str, ty: &str, method: &str) {
+    assert_errors(src, &[("E0228", method)]);
+    assert!(
+        check(src).diagnostics[0]
+            .message
+            .starts_with(&format!("`{ty}` has no method `{method}`")),
+        "{src}: {:#?}",
+        check(src).diagnostics
+    );
+}
+
 #[test]
 fn wrapping_arithmetic_takes_and_gives_the_receivers_type() {
     for ty in ["U8", "U32", "U64"] {
@@ -34,12 +47,10 @@ fn wrapping_arithmetic_takes_and_gives_the_receivers_type() {
 #[test]
 fn other_integer_types_have_no_wrapping_arithmetic() {
     for ty in ["Int", "I8", "I64", "U16"] {
-        let report = check(&format!(
-            "fn f(a: {ty}) -> {ty} {{\n    a.wrapping_add(a)\n}}"
-        ));
-        assert!(
-            !report.diagnostics.is_empty(),
-            "`{ty}.wrapping_add` should not check"
+        assert_no_method(
+            &format!("fn f(a: {ty}) -> {ty} {{\n    a.wrapping_add(a)\n}}"),
+            ty,
+            "wrapping_add",
         );
     }
 }
@@ -84,32 +95,62 @@ fn wrapping_conversions_narrow_a_wider_unsigned_type() {
 
 #[test]
 fn there_is_no_wrapping_conversion_that_widens_or_starts_from_int() {
-    for src in [
-        "fn f(a: U8) -> U32 {\n    a.wrapping_to_u32()\n}",
-        "fn f(a: U32) -> U32 {\n    a.wrapping_to_u32()\n}",
-        "fn f(a: Int) -> U8 {\n    a.wrapping_to_u8()\n}",
-    ] {
-        assert!(!check(src).diagnostics.is_empty(), "{src} should not check");
+    for (from, to) in [("U8", "U32"), ("U32", "U32"), ("Int", "U8")] {
+        let method = format!("wrapping_to_{}", to.to_lowercase());
+        assert_no_method(
+            &format!("fn f(a: {from}) -> {to} {{\n    a.{method}()\n}}"),
+            from,
+            &method,
+        );
     }
 }
 
 #[test]
 fn the_signed_sized_types_have_no_conversions() {
     for ty in ["I8", "I16", "I32", "I64"] {
-        let report = check(&format!("fn f(a: {ty}) -> Int {{\n    a.to_int()\n}}"));
-        assert!(
-            !report.diagnostics.is_empty(),
-            "`{ty}.to_int` should not check"
+        assert_no_method(
+            &format!("fn f(a: {ty}) -> Int {{\n    a.to_int()\n}}"),
+            ty,
+            "to_int",
         );
     }
 }
 
-/// The Lean model of Oska Core needs no change for these methods: each
-/// takes or gives a `U8`, `U16`, `U32` or `U64`, which the core IR export
-/// refuses wherever it appears, and the export refuses every built-in it
-/// does not list, so no program it accepts can call one.
+/// Every method this ticket adds, by the name the checked program calls
+/// it by: the wrapping arithmetic, the conversions and the wrapping
+/// conversions.
+fn every_method() -> Vec<(String, String)> {
+    let mut all = Vec::new();
+    for ty in ["U8", "U32", "U64"] {
+        for op in ["add", "sub", "mul"] {
+            all.push((ty.to_string(), format!("wrapping_{op}")));
+        }
+    }
+    for (from, _) in CONVERTIBLE {
+        for (to, suffix) in CONVERTIBLE {
+            if from != to {
+                all.push((from.to_string(), format!("to_{suffix}")));
+            }
+        }
+    }
+    for (from, targets) in [
+        ("U16", &["u8"][..]),
+        ("U32", &["u8", "u16"][..]),
+        ("U64", &["u8", "u16", "u32"][..]),
+    ] {
+        for suffix in targets {
+            all.push((from.to_string(), format!("wrapping_to_{suffix}")));
+        }
+    }
+    all
+}
+
+/// The Lean model of Oska Core needs no change for these methods: the
+/// core IR export refuses every built-in it does not list, and each of
+/// them takes or gives a `U8`, `U16`, `U32` or `U64`, which it refuses
+/// wherever it appears, so no program it accepts can call one.
 #[test]
-fn no_oska_core_program_can_call_a_conversion() {
+fn no_oska_core_program_can_call_a_conversion_or_wrapping_method() {
     let export = |src: &str| {
         let report = oska_check::check_module(src);
         let program = report
@@ -117,12 +158,28 @@ fn no_oska_core_program_can_call_a_conversion() {
             .unwrap_or_else(|| panic!("{src} should check: {:#?}", report.diagnostics));
         oska_check::core_ir::export(&program)
     };
-    // Even one that starts and ends at `Int`.
-    let refusal = export("fn main() {\n    let a = 12\n    let b = a.to_u8().to_int()\n}")
-        .expect_err("a conversion is outside Oska Core");
-    assert!(
-        refusal.construct.contains("U8.to_int"),
-        "{}",
-        refusal.construct
-    );
+    let methods = every_method();
+    assert_eq!(methods.len(), 35);
+    for (ty, method) in methods {
+        // The receiver, made from an `Int` (`Int.to_u8` and the like are
+        // refused too, but the outer call first).
+        let receiver = if ty == "Int" {
+            "12".to_string()
+        } else {
+            format!("12.to_{}()", ty.to_lowercase())
+        };
+        let argument = if method.starts_with("wrapping_") && !method.contains("_to_") {
+            "1"
+        } else {
+            ""
+        };
+        let src = format!("fn main() {{\n    let b = {receiver}.{method}({argument})\n}}");
+        let refusal = export(&src).expect_err("outside Oska Core");
+        let name = format!("`{ty}.{method}`");
+        assert!(
+            refusal.construct.contains(&name),
+            "{src}: refused for {}, not {name}",
+            refusal.construct
+        );
+    }
 }
