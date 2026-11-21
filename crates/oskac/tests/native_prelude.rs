@@ -315,6 +315,221 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "Secret.new",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(k.expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(shown(k.rotl(1).expose() == 3))
+}"#,
+    ),
+    (
+        "Secret.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(shown(k.rotr(1).expose() == 3221225472))
+}"#,
+    ),
+    (
+        "Secret.ct_eq",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(shown(k.ct_eq(Secret.new(3)).expose()))
+}"#,
+    ),
+    (
+        "Secret.to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U8> = Secret.new(200)
+    io.println(k.to_u32().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.to_u64",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(k.to_u64().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.wrapping_to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(k.wrapping_to_u8().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.wrapping_to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U64> = Secret.new(4294967297)
+    io.println(k.wrapping_to_u32().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.and",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).and(Secret.new(false)).expose()))
+}"#,
+    ),
+    (
+        "Secret.or",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).or(Secret.new(false)).expose()))
+}"#,
+    ),
+    (
+        "Secret.xor",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).xor(Secret.new(true)).expose()))
+}"#,
+    ),
+    (
+        "Secret.not",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).not().expose()))
+}"#,
+    ),
+    (
+        "Secret.ct_select",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    let picked = Secret.new(false).ct_select(k, Secret.new(7))
+    io.println(picked.expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.len",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.len().to_string())
+}"#,
+    ),
+    (
+        "Secret.at",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.at(7).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.slice",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.slice(1, 3).expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.read_u32_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u32_be(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.read_u32_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u32_le(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.read_u64_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u64_be(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.read_u64_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u64_le(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.push",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    key.push(Secret.new(9))
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.append",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    key.append(Secret.new(Bytes.zeroed(1)))
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u32_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u32_be(k)
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u32_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u32_le(k)
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u64_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u64_be(k.to_u64())
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u64_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u64_le(k.to_u64())
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
         "Clock.now_millis",
         Run::Main,
         r#"fn main(io: Stdout, clock: Clock) -> Result<(), IoError> {

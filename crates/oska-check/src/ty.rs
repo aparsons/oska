@@ -121,6 +121,8 @@ pub const EQ: &str = "Eq";
 pub const FROM: &str = "From";
 /// `main`'s error type needs it.
 pub const DISPLAY: &str = "Display";
+/// A hash key's trait, which no secret implements.
+pub const HASH: &str = "Hash";
 /// A secret value: no `Display`, no `Eq`, no interpolation.
 pub const SECRET: &str = "Secret";
 /// The name of `Self`, inside a trait or `impl`.

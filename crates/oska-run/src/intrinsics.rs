@@ -24,6 +24,7 @@ use crate::interp::{Interpreter, Stream};
 use crate::memory;
 use crate::ops;
 use crate::panics::{codes, Panic};
+use crate::secrets;
 use crate::tasks;
 use crate::testing;
 use crate::traits;
@@ -124,6 +125,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         int_methods::INTRINSICS,
         data::INTRINSICS,
         bytes::INTRINSICS,
+        secrets::INTRINSICS,
         tasks::INTRINSICS,
         traits::INTRINSICS,
         testing::INTRINSICS,
@@ -408,27 +410,36 @@ fn secret_expose(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, P
     Ok(args[0].fields()[0].clone())
 }
 
-/// `Secret.constant_time_eq(self, other)`.
+/// `Secret.constant_time_eq(self, other)`, on secret text or bytes.
 fn secret_constant_time_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let secret = args[0].fields()[0].as_str();
-    Ok(Value::Bool(constant_time_eq(secret, text(&args, 1))))
+    let secret = &args[0].fields()[0];
+    Ok(Value::Bool(constant_time_eq(
+        contents(secret),
+        contents(&args[1]),
+    )))
 }
 
-/// `Secret.constant_time_eq_secret(self, other)`.
+/// `Secret.constant_time_eq_secret(self, other)`, on secret text or bytes.
 fn secret_constant_time_eq_secret(
     _: &mut dyn Host,
     args: Vec<Value>,
     _: Span,
 ) -> Result<Value, Panic> {
-    let a = args[0].fields()[0].as_str();
-    let b = args[1].fields()[0].as_str();
-    Ok(Value::Bool(constant_time_eq(a, b)))
+    let (a, b) = (&args[0].fields()[0], &args[1].fields()[0]);
+    Ok(Value::Bool(constant_time_eq(contents(a), contents(b))))
+}
+
+/// The bytes of a text or `Bytes` value.
+fn contents(value: &Value) -> &[u8] {
+    match value {
+        Value::Bytes(bytes) => bytes,
+        _ => value.as_str().as_bytes(),
+    }
 }
 
 /// Whether `a` and `b` are equal, in time that depends on their lengths
 /// but not on where they first differ.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let diff = a
         .iter()
         .zip(b)

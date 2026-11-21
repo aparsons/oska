@@ -304,6 +304,7 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
   - A `Secret` cannot be interpolated, nor can any value that holds one, such as a `List<Secret<String>>` or a struct with a `Secret` field.
   - A `Secret` cannot be compared with `==`, because that would leak timing information. Use `a.constant_time_eq(text)` instead, or `a.constant_time_eq_secret(b)` to compare two secrets without exposing either. A fix rewrites `==` to the right one.
   - The only way to read a secret's value is `.expose()`, and the exposed value is trusted.
+  - Secret integers (`Secret<U8>`, `Secret<U32>`, `Secret<U64>`), `Secret<Bool>` and `Secret<Bytes>` are made with `Secret.new(value)`, which is not an audit site. Code computes on them with wrapping `+ - *`, the bitwise operators, rotations, `ct_eq` and `ct_select`, and the checker refuses a secret that would decide a branch (`E0353`), a memory address (`E0354`), a variable-time instruction or a panic (`E0355`), or an ordering (`E0356`).
 - **Audit.**
   - Every trust assertion (`.assume_trusted()`) and every secret exposure (`.expose()`) is an **audit site**.
   - `oskac check --format=json` lists all audit sites, with their spans, in an `"audit"` array. The human-readable report lists them too.

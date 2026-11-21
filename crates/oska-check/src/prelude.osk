@@ -213,12 +213,28 @@ impl Env {
     pub fn secret(self, name: String) -> Secret<String>
 }
 
-// A secret value. It has no `Display` and no `Eq`, and cannot be
-// interpolated: compare it with `constant_time_eq`, and read it with
-// `expose`, which is an audit site.
+// A secret value. It has no `Display`, no `Eq` and no `Hash`, and cannot
+// be interpolated: compare it with `constant_time_eq` or `ct_eq`, and
+// read it with `expose`, which is an audit site.
+//
+// `Secret<U8>`, `Secret<U32>` and `Secret<U64>` are secret integers,
+// computed on without exposing them. `+ - *` wrap, and the bitwise and
+// shift operators work as on the public type; a public operand of the
+// same type, a literal included, gives a secret result. A secret cannot
+// decide a branch (`E0353`), an index, an offset, a length or a hash key
+// (`E0354`), a division, a remainder or a shift or rotation amount
+// (`E0355`), or an ordering (`E0356`), and `==` on one is `E0351`. So no
+// operation on a secret panics, or takes a path or reads memory, that
+// depends on its value. `Secret<Bool>` is the result of `ct_eq`, and
+// `Secret<Bytes>` holds key material.
 pub struct Secret<T> { value: T }
 
 impl<T> Secret<T> {
+    // `value`, made secret. Adding secrecy never weakens a guarantee, so
+    // this is not an audit site. It makes `Secret<U8>`, `Secret<U32>`,
+    // `Secret<U64>`, `Secret<Bool>` and `Secret<Bytes>` only (`E0223`);
+    // a `Secret<String>` comes from `Env.secret` (`E0271`).
+    pub fn new(value: T) -> Secret<T>
     // The secret's value. Every call is an audit site.
     pub fn expose(self) -> T
 }
@@ -229,6 +245,91 @@ impl Secret<String> {
     // Compare with another secret without leaking timing information,
     // and without exposing either.
     pub fn constant_time_eq_secret(self, other: Secret<String>) -> Bool
+}
+
+// A secret integer has the public type's rotations (by a public amount,
+// which panics with `P0008` out of range, as the public one does),
+// widening and wrapping narrowing, but no checked narrowing, which would
+// panic on a secret value.
+impl Secret<U8> {
+    pub fn rotl(self, n: Int) -> Secret<U8>
+    pub fn rotr(self, n: Int) -> Secret<U8>
+    // Whether the two are equal, as a secret.
+    pub fn ct_eq(self, other: Secret<U8>) -> Secret<Bool>
+    pub fn to_u32(self) -> Secret<U32>
+    pub fn to_u64(self) -> Secret<U64>
+}
+
+impl Secret<U32> {
+    pub fn rotl(self, n: Int) -> Secret<U32>
+    pub fn rotr(self, n: Int) -> Secret<U32>
+    pub fn ct_eq(self, other: Secret<U32>) -> Secret<Bool>
+    pub fn to_u64(self) -> Secret<U64>
+    pub fn wrapping_to_u8(self) -> Secret<U8>
+}
+
+impl Secret<U64> {
+    pub fn rotl(self, n: Int) -> Secret<U64>
+    pub fn rotr(self, n: Int) -> Secret<U64>
+    pub fn ct_eq(self, other: Secret<U64>) -> Secret<Bool>
+    pub fn wrapping_to_u8(self) -> Secret<U8>
+    pub fn wrapping_to_u32(self) -> Secret<U32>
+}
+
+// A secret condition. `&&`, `||` and `!` would branch on it (`E0353`):
+// combine conditions with `and`, `or`, `xor` and `not`, which evaluate
+// both operands.
+impl Secret<Bool> {
+    pub fn and(self, other: Secret<Bool>) -> Secret<Bool>
+    pub fn or(self, other: Secret<Bool>) -> Secret<Bool>
+    pub fn xor(self, other: Secret<Bool>) -> Secret<Bool>
+    pub fn not(self) -> Secret<Bool>
+    // `if_true` when the condition holds, otherwise `if_false`, without
+    // a branch: both are evaluated. `T` is `U8`, `U32`, `U64`, `Bool` or
+    // `Bytes`; two `Bytes` must have the same length, or it panics
+    // (`P0042`).
+    pub fn ct_select<T>(self, if_true: Secret<T>, if_false: Secret<T>) -> Secret<T>
+}
+
+// A secret buffer, such as a key. Its length, and every index and offset
+// into it, are public; the bytes and the integers read from them are
+// secret. Out of bounds, a method panics as `Bytes`'s does.
+// Like `Bytes`'s, each operation follows the trust of its inputs: a
+// secret of untrusted bytes gives untrusted results (#223).
+impl Secret<Bytes> {
+    #[follows_trust]
+    pub fn len(self) -> Int
+    #[follows_trust]
+    pub fn at(self, index: Int) -> Secret<U8>
+    #[follows_trust]
+    pub fn slice(self, start: Int, end: Int) -> Secret<Bytes>
+    #[follows_trust]
+    pub fn read_u32_be(self, offset: Int) -> Secret<U32>
+    #[follows_trust]
+    pub fn read_u32_le(self, offset: Int) -> Secret<U32>
+    #[follows_trust]
+    pub fn read_u64_be(self, offset: Int) -> Secret<U64>
+    #[follows_trust]
+    pub fn read_u64_le(self, offset: Int) -> Secret<U64>
+    #[follows_trust]
+    pub fn push(var self, byte: Secret<U8>)
+    #[follows_trust]
+    pub fn append(var self, other: Secret<Bytes>)
+    #[follows_trust]
+    pub fn push_u32_be(var self, value: Secret<U32>)
+    #[follows_trust]
+    pub fn push_u32_le(var self, value: Secret<U32>)
+    #[follows_trust]
+    pub fn push_u64_be(var self, value: Secret<U64>)
+    #[follows_trust]
+    pub fn push_u64_le(var self, value: Secret<U64>)
+    // Compare without leaking timing information: the time depends on
+    // the lengths only.
+    #[follows_trust]
+    pub fn constant_time_eq(self, other: Untrusted<Bytes>) -> Bool
+    // Compare with another secret, exposing neither.
+    #[follows_trust]
+    pub fn constant_time_eq_secret(self, other: Secret<Bytes>) -> Bool
 }
 
 #[capability]
