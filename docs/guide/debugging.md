@@ -73,7 +73,7 @@ Under the panic's line come its **frames**, the call stack that led to it, inner
 | Code | Panic |
 | --- | --- |
 | `P0001` | Integer overflow, or a `to_<type>()` conversion given a value that does not fit its target, such as `300.to_u8()`. All integer types are checked, and arithmetic never wraps: call `wrapping_add`, `wrapping_sub`, `wrapping_mul` or `wrapping_to_<type>()` where wrapping is meant. |
-| `P0002` | `List.at` with an index below 0 or not below the length. Use `get` when the index may be out of bounds. |
+| `P0002` | `List.at`, `Bytes.at` or `Bytes.set` with an index below 0 or not below the length. Use `get` when the index may be out of bounds. |
 | `P0003` | `todo()` reached. |
 | `P0004` | Division or remainder by zero. |
 | `P0005` | `spawn` on a scope that has already finished. |
@@ -83,6 +83,8 @@ Under the panic's line come its **frames**, the call stack that led to it, inner
 | `P0010` to `P0014` | A failed test assertion, `P0014` a missing or different snapshot. See [testing](testing.md). |
 | `P0020` | `Env.secret` asked for a variable that is not set. |
 | `P0021` | Calls nest too deep: runaway recursion. The program panics instead of overflowing the stack. |
+| `P0042` | A `Bytes` slice or endian read that runs past the end of the buffer, such as `read_u32_be(0)` on 3 bytes, or `Bytes.zeroed` with a negative length. Check `len()` first when the buffer may be short. |
+| `P0043` | A `Bytes` that would grow past 256 MiB. |
 
 The full table is in the [runtime notes](../runtime.md#panics).
 

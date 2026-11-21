@@ -130,7 +130,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | Code | Panic |
 | --- | --- |
 | `P0001` | Integer overflow: the result of `+`, `-`, `*`, `/`, or unary `-` does not fit its type, as with a `U8` `0 - 1` or an `I8` `-128 / -1`, or a conversion `to_<type>()` was given a value its target cannot hold, as with `300.to_u8()` or `(-1).to_u64()`; the message names the conversion, the value and the target's range. Spans the operation or call. |
-| `P0002` | Index out of bounds: `List.at` was given an index below 0 or not below the list's length. Spans the call. |
+| `P0002` | Index out of bounds: `List.at`, `Bytes.at` or `Bytes.set` was given an index below 0 or not below the length. Spans the call. |
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
 | `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended, and work never runs outside a scope. Spans the call. This is a second line of defence behind the checker (`E0292`), which already stops a handle from outliving its block: no checked program can reach this code, so it has no example. |
@@ -151,6 +151,8 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0039` | Time limit reached: the program was run with `oskac run --timeout=<ms>`, and has run for that many milliseconds of wall-clock time, counted from when it starts (after the check and the build). Waiting counts: a program that waits for a line of standard input stops at the deadline too. It stops within 100 ms of the deadline (the **tolerance**) on a machine that is not overloaded. On the interpreter the program panics at the step it has reached (it looks at the clock every 1024 steps, and while it waits), spanning that call or loop, or the read it waits in. Natively, `oskac` stops its own child process, that process only, and prints the report itself, with no place in the source (`error[P0039]: ...`, or a JSON object with no `path`), and exits with 101, never with the signal's `128 + n`; a line the stopped program was writing is not reported as its panic, and what it had printed to standard output but not yet written out (native standard output is buffered when it is not a terminal) is lost. A timeout is not deterministic: where the program stops differs from run to run. The message names the limit and its value. Without the flag a program has no time limit. See [Run limits](#run-limits). |
 | `P0040` | Memory limit reached: the program was run with `oskac run --max-memory=<bytes>`, and the value it was about to make would take the bytes of its values (texts, lists, structs, enum values and closures), net of those it let go of, past that many. The value is not made. It is a resource bound, like a timeout: each backend counts in its own way, so the two may stop at different points. The message names the limit and its value. On the interpreter it spans the expression or call that makes the value; natively it spans `main`'s body, since the runtime's allocator does not know which code asked. Without the flag a program has no memory limit. See [Run limits](#run-limits) for what each backend counts. |
 | `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
+| `P0042` | A `Bytes` range out of bounds: `slice(start, end)` with `start` below 0, `end` past the length, or `start` past `end`; an endian read (`read_u16_be` and the rest) whose bytes do not all lie inside the buffer; or `Bytes.zeroed` with a negative length. The message names the range or offset and the length. Spans the call. An index out of bounds in `at` or `set` is `P0002`, as in `List.at`. |
+| `P0043` | A `Bytes` would grow past 256 MiB: `push`, `append` or an endian push whose result would be longer, or `Bytes.zeroed` with a longer length. The runtime panics instead of running out of memory, and the buffer is not changed. The message names the length it would have had. Spans the call. |
 
 ### Panic examples
 
@@ -542,6 +544,36 @@ fn main(io: Stdout) {
         let _ = io.println("again")
         i = i + 1
     }
+}
+```
+
+#### `P0042`
+
+```oska error=P0042
+fn main() {
+    let header = Bytes.zeroed(3)
+    let length = header.read_u32_be(0)
+}
+```
+
+```oska fixed=P0042
+fn main() {
+    let header = Bytes.zeroed(4)
+    let length = header.read_u32_be(0)
+}
+```
+
+#### `P0043`
+
+```oska error=P0043
+fn main() {
+    let huge = Bytes.zeroed(300000000)
+}
+```
+
+```oska fixed=P0043
+fn main() {
+    let small = Bytes.zeroed(3000)
 }
 ```
 

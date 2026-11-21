@@ -67,6 +67,11 @@ pub mod codes {
     /// `String.repeat` would build a text longer than the interpreter
     /// allows.
     pub const TEXT_TOO_LONG: &str = "P0037";
+    /// A `Bytes` slice or endian read that does not lie wholly inside the
+    /// buffer, or a negative length for `Bytes.zeroed`.
+    pub const BYTES_OUT_OF_RANGE: &str = "P0042";
+    /// A `Bytes` would grow longer than the runtime allows (256 MiB).
+    pub const BYTES_TOO_LONG: &str = "P0043";
     /// The program would have taken more than `--max-steps` steps
     /// (`oska_check::limits`).
     pub const STEP_LIMIT: &str = oska_check::limits::codes::STEP_LIMIT;
@@ -107,6 +112,8 @@ pub mod codes {
         TIME_LIMIT,
         MEMORY_LIMIT,
         OUTPUT_LIMIT,
+        BYTES_OUT_OF_RANGE,
+        BYTES_TOO_LONG,
     ];
 }
 

@@ -71,6 +71,7 @@
 //! executable is byte for byte the one `oskac build` writes.
 
 mod bits;
+mod bytes;
 mod closures;
 mod data;
 mod debug;
@@ -159,6 +160,8 @@ mod panics {
     pub const SLICE_OUT_OF_BOUNDS: &str = "P0035";
     pub const NEGATIVE_REPEAT: &str = "P0036";
     pub const TEXT_TOO_LONG: &str = "P0037";
+    pub const BYTES_OUT_OF_RANGE: &str = "P0042";
+    pub const BYTES_TOO_LONG: &str = "P0043";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
@@ -1804,6 +1807,21 @@ impl<'l, 'p> Body<'l, 'p> {
         args: Vec<Temp>,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
+        // A call with the wrong number of arguments would leave a
+        // parameter unset, or pass one that is never read: refused, so a
+        // slip in the lowering never compiles.
+        if let Some(function) = self.lowering.rt.functions.get(name) {
+            if function.params.len() != args.len() {
+                return Err(self.refuse(
+                    span,
+                    &format!(
+                        "a call of `std.rt`'s `{name}` with {} arguments, not {}",
+                        args.len(),
+                        function.params.len()
+                    ),
+                ));
+            }
+        }
         self.call_function(Source::Runtime, name, Vec::new(), args, span)
     }
 
@@ -1924,7 +1942,17 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.check(check, result, &args, span)?;
                     result
                 }
-                None => return Err(self.refuse(span, &format!("`{name}`"))),
+                Some(Prelude::ByteRead { width, big }) => {
+                    let &[bytes, offset] = args.as_slice() else {
+                        return Err(self.refuse(span, &format!("`{name}`")));
+                    };
+                    self.byte_read(bytes, offset, width, big, span)?
+                }
+                // Called on a value, not a place: `mutating_call` handles
+                // a place, and only a place can be `var`.
+                Some(Prelude::Mutating(..)) | None => {
+                    return Err(self.refuse(span, &format!("`{name}`")))
+                }
             },
             Callee::Trait { trait_name, method } => {
                 return Err(self.refuse(
@@ -2111,8 +2139,96 @@ impl<'l, 'p> Body<'l, 'p> {
                     target: long,
                 });
             }
+            Check::Zeroed => {
+                let negative = self.panic_text(
+                    panics::BYTES_OUT_OF_RANGE,
+                    "panic_bytes_negative",
+                    args,
+                    span,
+                )?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: negative,
+                });
+                let long =
+                    self.panic_text(panics::BYTES_TOO_LONG, "panic_bytes_long", args, span)?;
+                let zero = self.constant(0);
+                self.push(Inst::Branch {
+                    cond: Cond::Lt,
+                    lhs: result,
+                    rhs: zero,
+                    target: long,
+                });
+            }
+            Check::BytesSlice | Check::BytesIndex | Check::BytesAppend => {
+                // `set`'s arguments are the bytes, the index and the byte:
+                // its report names only the first two.
+                let (code, function, args) = match check {
+                    Check::BytesSlice => (panics::BYTES_OUT_OF_RANGE, "panic_bytes_slice", args),
+                    Check::BytesIndex => {
+                        (panics::INDEX_OUT_OF_BOUNDS, "panic_bytes_index", &args[..2])
+                    }
+                    _ => (panics::BYTES_TOO_LONG, "panic_bytes_append", args),
+                };
+                let label = self.panic_text(code, function, args, span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
+            Check::BytesGrow(width) => {
+                let extra = self.constant(i64::from(width));
+                let label = self.panic_text(
+                    panics::BYTES_TOO_LONG,
+                    "panic_bytes_grow",
+                    &[args[0], extra],
+                    span,
+                )?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
         }
         Ok(())
+    }
+
+    /// `Bytes.at` (`width` 1) or an endian read of `width` bytes of the
+    /// buffer `bytes` at `offset`, most significant byte first when `big`:
+    /// a panic, `P0002` for `at` and `P0042` for a read, unless the bytes
+    /// all lie inside it.
+    fn byte_read(
+        &mut self,
+        bytes: Temp,
+        offset: Temp,
+        width: u8,
+        big: bool,
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let index = width == 1;
+        let width = self.constant(i64::from(width));
+        let readable = self.call_runtime("bytes_readable", vec![bytes, offset, width], NOWHERE)?;
+        let label = if index {
+            self.panic_text(
+                panics::INDEX_OUT_OF_BOUNDS,
+                "panic_bytes_index",
+                &[bytes, offset],
+                span,
+            )?
+        } else {
+            self.panic_text(
+                panics::BYTES_OUT_OF_RANGE,
+                "panic_bytes_read",
+                &[bytes, offset, width],
+                span,
+            )?
+        };
+        self.push(Inst::JumpIfZero {
+            cond: readable,
+            target: label,
+        });
+        let big = self.constant(i64::from(big));
+        self.call_runtime("bytes_read", vec![bytes, offset, width, big], NOWHERE)
     }
 
     /// A call of the platform library's function `import` with the

@@ -30,6 +30,7 @@ use oska_check::program::{
 use oska_syntax::{Diagnostic, Span};
 
 use super::{constant_word, Body, Instance, Receiver};
+use crate::intrinsics::{self, Prelude};
 use crate::ir::{BinOp, Cond, Inst, Temp, Width};
 use crate::layout::{self, Fields};
 use crate::NOWHERE;
@@ -326,6 +327,11 @@ impl Body<'_, '_> {
     ) -> Result<Temp, Diagnostic> {
         if matches!(callee, Callee::Intrinsic(name) if name == "List.push") {
             return self.list_push(receiver, args, span);
+        }
+        if let Callee::Intrinsic(name) = callee {
+            if let Some(Prelude::Mutating(function, check)) = intrinsics::prelude(name) {
+                return self.bytes_mutation(function, check, receiver, args, span);
+            }
         }
         let mut values = Vec::with_capacity(args.len() + 1);
         for arg in args {

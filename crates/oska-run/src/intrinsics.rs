@@ -14,6 +14,7 @@ use oska_check::builtins;
 use oska_check::limits;
 use oska_syntax::Span;
 
+use crate::bytes;
 use crate::confine::{self, Intent};
 use crate::data;
 use crate::host::{Host, RootHandle};
@@ -118,6 +119,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         INTRINSICS,
         int_methods::INTRINSICS,
         data::INTRINSICS,
+        bytes::INTRINSICS,
         tasks::INTRINSICS,
         traits::INTRINSICS,
         testing::INTRINSICS,
@@ -271,6 +273,11 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
                 debug(item, out);
             }
             out.push(']');
+        }
+        Value::Bytes(data) => {
+            out.push_str("Bytes(");
+            out.push_str(&bytes::hex(data));
+            out.push(')');
         }
         Value::Closure(_) => out.push_str("<closure>"),
         Value::Function(_) => out.push_str("<fn>"),

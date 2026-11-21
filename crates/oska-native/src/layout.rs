@@ -16,6 +16,9 @@
 //!   - an enum with fields: `[count][variant index][field 0]...`;
 //!   - a list: `[count][length][capacity][item 0][item 1]...`, room for
 //!     `capacity` items of which the first `length` are there;
+//!   - a `Bytes`: `[count][length][capacity][bytes...]`, room for
+//!     `capacity` bytes (a multiple of 8) of which the first `length` are
+//!     there, packed; it holds no references;
 //!   - a directory or file capability ([`is_confined`]): `std.rt`'s
 //!     `Root`, `[count][handle][path][name][why]`, which `std.rt`'s
 //!     `root_drop` releases, closing its handle;
@@ -86,7 +89,7 @@ pub fn is_counted(program: &Program, ty: &Type) -> bool {
     match ty {
         Type::String | Type::Fn { .. } => true,
         _ if is_confined(ty) => true,
-        Type::Named { name, .. } if name == builtins::LIST => true,
+        Type::Named { name, .. } if name == builtins::LIST || name == builtins::BYTES => true,
         Type::Named { name, .. } => {
             !builtins::is_capability(name)
                 && name != "Args"
@@ -222,9 +225,9 @@ pub fn fields(program: &Program, ty: &Type) -> Option<Fields> {
     let Type::Named { name, args } = ty else {
         return None;
     };
-    // The prelude declares `List` with a handle field; its objects are
-    // laid out as lists.
-    if name == builtins::LIST || is_task_type(name) {
+    // The prelude declares `List` and `Bytes` with a handle field; their
+    // objects are laid out as lists and as bytes.
+    if name == builtins::LIST || name == builtins::BYTES || is_task_type(name) {
         return None;
     }
     let decl = program.types.get(name)?;
