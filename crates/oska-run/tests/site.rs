@@ -184,7 +184,7 @@ fn a_hostile_file_name_is_escaped_where_it_is_linked() {
 // ---- What every page carries -------------------------------------------------------
 
 #[test]
-fn every_page_has_the_csp_and_pins_its_fonts_with_integrity() {
+fn every_page_has_the_csp_and_loads_nothing_from_another_origin() {
     let site = build_ok(&[]);
     for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
         assert!(
@@ -195,16 +195,12 @@ fn every_page_has_the_csp_and_pins_its_fonts_with_integrity() {
         );
         for link in page.match_indices("<link ").map(|(at, _)| &page[at..]) {
             let link = &link[..link.find('>').expect("a closed tag")];
-            if link.contains("https://") && !link.contains("rel=\"canonical\"") {
-                assert!(
-                    link.contains("https://cdn.jsdelivr.net/npm/@fontsource/"),
-                    "{link}"
-                );
-                assert!(link.contains("@5.3.0/"), "{link} is not pinned");
-                assert!(link.contains(" integrity=\"sha384-"), "{link}");
-                assert!(link.contains(" crossorigin=\"anonymous\""), "{link}");
-            }
+            assert!(
+                !link.contains("https://") || link.contains("rel=\"canonical\""),
+                "{name}: {link}"
+            );
         }
+        assert!(!page.contains("jsdelivr"), "{name}:\n{page}");
         assert!(page.contains("<link rel=\"stylesheet\" href=\"/style.css\">"));
     }
 }
@@ -388,6 +384,8 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to_file(\"site/favicon.svg\")",
         "read.restrict_to_file(\"Cargo.toml\")",
         "read.restrict_to_file(\"site/authority.txt\")",
+        "read.restrict_to_file(\"site/api.json\")",
+        "read.restrict_to_file(\"site/lastmod.txt\")",
         "restrict_to(Path.new(\"_site\"))",
     ] {
         assert!(
@@ -474,6 +472,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
         "  FsRead -> FileRead: restrict_to_file \"CHANGELOG.md\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"site/favicon.svg\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"site/lastmod.txt\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
         "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
     ] {
@@ -1245,6 +1244,16 @@ fn only_the_home_page_has_structured_data_and_it_describes_the_software() {
         product.get("additionalProperty").get("value").str(),
         "curl -fsSL https://oskalang.dev/install.sh | sh"
     );
+    assert_eq!(
+        product.get("downloadUrl").str(),
+        "https://github.com/aparsons/oska/releases/latest"
+    );
+    let help = product.get("softwareHelp");
+    assert_eq!(help.get("@type").str(), "CreativeWork");
+    assert_eq!(help.get("url").str(), "https://oskalang.dev/guide/");
+    // No fabricated rating or offer.
+    let text = &site["index.html"];
+    assert!(!text.contains("aggregateRating") && !text.contains("\"offers\""));
 }
 
 #[test]
@@ -1791,17 +1800,9 @@ fn every_link_in_every_real_page_goes_to_a_published_page_and_anchor() {
     assert!(checked > 1000, "only {checked} links were checked");
 }
 
-/// The only origin pages may load anything from: Fontsource, at the
-/// pinned versions the CSP names.
-const ASSET_ALLOWLIST: &[&str] = &[
-    "https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/",
-    "https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/",
-];
-
 #[test]
-fn every_external_asset_is_on_the_allowlist_pinned_with_sri_and_named_by_the_csp() {
+fn every_real_page_loads_nothing_from_another_origin_and_the_csp_names_none() {
     let site = real_site();
-    let mut assets = 0;
     for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
         let mut csp = None;
         for tag in tags_of(page) {
@@ -1810,52 +1811,30 @@ fn every_external_asset_is_on_the_allowlist_pinned_with_sri_and_named_by_the_csp
             }
             let rel = tag.attribute("rel");
             let loads = tag.element != "a" && rel != Some("canonical") && rel != Some("alternate");
-            let Some(url) = url_of(&tag).filter(|u| loads && u.contains("://")) else {
-                continue;
-            };
-            assets += 1;
-            let Some(origin) = ASSET_ALLOWLIST.iter().find(|ok| url.starts_with(**ok)) else {
-                panic!("{name} loads {url}, which is not on the allowlist");
-            };
-            let integrity = tag.attribute("integrity").unwrap_or("");
-            let digest = integrity.strip_prefix("sha384-").unwrap_or("");
-            assert!(
-                digest.len() == 64
-                    && digest
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/'),
-                "{name}: {url} has no sha384 integrity: `{integrity}`"
-            );
-            assert!(
-                tag.attribute("crossorigin").is_some(),
-                "{name}: {url} has no crossorigin"
-            );
-            assert!(
-                csp.as_deref().is_some_and(|c| c.contains(origin)),
-                "{name}: the CSP does not name the origin of {url}"
-            );
-        }
-        // The CSP names no origin the allowlist does not.
-        for source in csp.expect("a CSP").split_whitespace() {
-            let source = source.trim_end_matches(';');
-            if source.starts_with("https://") || source.starts_with("http://") {
-                assert!(
-                    ASSET_ALLOWLIST.contains(&source),
-                    "{name}: the CSP allows {source}"
-                );
+            if let Some(url) = url_of(&tag).filter(|u| loads && u.contains("://")) {
+                panic!("{name} loads {url} from another origin");
             }
         }
+        // Styles come only from the site, and no font is fetched: the
+        // CSP names no origin, and `font-src` falls back to 'none'.
+        let csp = csp.expect("a CSP");
+        assert!(
+            !csp.contains("://") && !csp.contains("font-src"),
+            "{name}: the CSP is {csp}"
+        );
+        assert!(csp.contains("style-src 'self';"), "{name}: {csp}");
+        assert!(!page.contains("jsdelivr"), "{name} names the font CDN");
     }
-    assert!(assets > 100, "only {assets} external assets were checked");
     // The stylesheet and the search script load nothing of their own:
-    // no import, no `url(`, and, past the comment that names the site,
-    // no absolute URL.
+    // no import, no `url(`, no web font, and, past the comment that names
+    // the site, no absolute URL.
     for file in ["style.css", "search.js"] {
         let text = &site[file];
         let code = text.split_once('\n').map_or("", |(_, rest)| rest);
         assert!(
             !text.contains("@import")
                 && !text.contains("url(")
+                && !text.contains("@font-face")
                 && !code.contains("http://")
                 && !code.contains("https://"),
             "{file} names another origin"
@@ -2110,6 +2089,37 @@ fn what_works_today_is_a_guide_listed_in_llms_txt() {
     );
 }
 
+// ---- The research index -----------------------------------------------------------------
+
+/// `docs/research/index.md` groups the notes by topic by hand, so a new
+/// note must be added to it: every research page has its own entry, a
+/// list item that starts with a link to it, under a topic heading.
+#[test]
+fn the_research_index_lists_every_note_under_a_topic() {
+    let site = real_site();
+    let index = &site["research/index.md"];
+    let notes: Vec<&String> = site
+        .keys()
+        .filter(|k| k.starts_with("research/") && k.ends_with(".md") && *k != "research/index.md")
+        .collect();
+    assert!(notes.len() > 10, "{notes:?}");
+    let first_topic = index.find("\n## ").expect("a topic heading");
+    let entries: Vec<(usize, &str)> = index
+        .match_indices("\n- [")
+        .map(|(at, _)| (at, index[at..].lines().nth(1).unwrap_or("")))
+        .collect();
+    for note in notes {
+        let name = note.trim_start_matches("research/");
+        let entry = entries.iter().find(|(_, line)| {
+            let target = line.split_once("](").map_or("", |(_, rest)| rest);
+            target.starts_with(&format!("{name})"))
+                || target.starts_with(&format!("/research/{name})"))
+        });
+        let (at, _) = entry.unwrap_or_else(|| panic!("research/index.md has no entry for {name}"));
+        assert!(*at > first_topic, "{name} is listed before any topic");
+    }
+}
+
 // ---- The real site: the corpus for agents (#189) ----------------------------------------
 
 #[test]
@@ -2117,7 +2127,11 @@ fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
     let site = real_site();
     let llms = &site["llms.txt"];
     let start = entry_urls(llms_group(llms, "Start here"));
-    assert_eq!(start.len(), 8, "{start:?}");
+    assert_eq!(start.len(), 9, "{start:?}");
+    assert!(
+        start.contains(&"guide/threat-model.md".to_string()),
+        "{start:?}"
+    );
     assert_eq!(start[0], "agent-setup.md");
     assert_eq!(start[start.len() - 1], "guide/what-works-today.md");
     for url in entry_urls(llms) {
@@ -2190,4 +2204,34 @@ fn the_dead_targets_the_site_review_found_now_resolve() {
             assert!(!site[copy].contains(dead), "{copy} still has {dead}");
         }
     }
+}
+
+// ---- The real site: the API reference (#294) --------------------------------------------
+
+/// The real site, built from the `std.sql` part of the real reference
+/// (`common::site::real_inputs`), has its page, with a heading at each
+/// item's anchor, and republishes the items in `api.json`. `oskac`'s own
+/// tests build it from the whole reference.
+#[test]
+fn the_real_site_publishes_the_reference_with_an_anchor_per_item() {
+    let site = real_site();
+    let input = common::site::real_inputs()["site/api.json"].clone();
+    let reference = oska_syntax::parse_json(&input).expect("the reference is JSON");
+    let items = reference
+        .get("items")
+        .and_then(oska_syntax::JsonValue::as_array)
+        .expect("an items array");
+    let page = &site["api/std-sql.html"];
+    for item in items {
+        let url = item.get("url").and_then(|u| u.as_str()).expect("a url");
+        if let Some((_, anchor)) = url.split_once('#') {
+            assert!(page.contains(&format!("<h2 id=\"{anchor}\">")), "{url}");
+        }
+    }
+    assert_eq!(
+        oska_syntax::parse_json(&site["api.json"]).expect("api.json is JSON"),
+        reference
+    );
+    assert!(site["reference.html"].contains("<a href=\"/api/\">API reference</a>"));
+    assert!(llms_group(&site["llms.txt"], "API reference").contains("/api/std-sql.md"));
 }

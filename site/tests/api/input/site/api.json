@@ -1,0 +1,9 @@
+{"items": [
+  {"module":"prelude","name":"prelude","kind":"module","signature":"","description":"The prelude: what every module sees without `use`.\n\nA second paragraph, which the index leaves out.","authority":"","runs":true,"url":"https://oskalang.dev/api/prelude.html"},
+  {"module":"prelude","name":"Eq for Option<T>","kind":"impl","signature":"impl<T> Eq for Option<T>","description":"Hostile: <script>alert(1)</script>, [a link](javascript:alert(1)), ``a `tick` span``, \"quotes\", a back\\slash, \u0041\u0062\u003C \/ a slash,\tand a tab.\n\n# Not a heading\n\n```\nan open fence <b>bold</b>\n## nor this","authority":"pure","runs":true,"url":"https://oskalang.dev/api/prelude.html#eq-for-optiont"},
+  {"module":"prelude","name":"List.push","kind":"method","signature":"pub fn push(var self, item: T)","description":"Add `item` at the end.","authority":"pure","runs":true,"url":"https://oskalang.dev/api/prelude.html#listpush"},
+  {"module":"prelude","name":"String.to_lowercase","kind":"method","signature":"pub fn to_lowercase(self) -> String","description":"Every letter in lower case: `\"ÀB\".to_lowercase()` is `\"àb\"`.","authority":"pure","runs":true,"url":"https://oskalang.dev/api/prelude.html#stringto_lowercase"},
+  {"module":"std.sql","name":"std.sql","kind":"module","signature":"","description":"The SQL sink. See <b>this</b>.","authority":"","runs":false,"url":"https://oskalang.dev/api/std-sql.html"},
+  {"module":"std.sql","name":"connect","kind":"fn","signature":"pub fn connect(net: NetConnect, url: String) -> Result<Db, SqlError>","description":"Connect to the database at `url`.","authority":"NetConnect (net)","runs":false,"url":"https://oskalang.dev/api/std-sql.html#connect"},
+  {"module":"std.sql","name":"Db.*query*","kind":"method","signature":"```</code></pre><script>alert(1)</script>","description":"","authority":"<img src=x onerror=alert(1)> _em_ `tick`","runs":false,"url":"https://oskalang.dev/api/std-sql.html#dbquery"}
+]}

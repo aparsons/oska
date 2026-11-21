@@ -14,6 +14,7 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest re
 
 - [Capabilities and authority](capabilities.md): how a program's effects are visible in its signatures.
 - [Untrusted data and secrets](untrusted-data.md): how Oska keeps injection and leaks out of programs.
+- [Threat model](threat-model.md): what Oska guarantees, where each guarantee stops, the supply chain, and what the site trusts.
 
 ## Working with the toolchain
 

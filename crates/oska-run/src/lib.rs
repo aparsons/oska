@@ -232,6 +232,19 @@ fn run_checked(
 /// The `std` modules the runtime implements.
 const IMPLEMENTED_MODULES: &[&str] = &[html::MODULE];
 
+/// Whether the runtime runs the `std` module at `path`, such as
+/// `std.html`: a program that imports one that it does not is refused
+/// (`E0371`). The API reference marks the others as checking only.
+pub fn runs_module(path: &str) -> bool {
+    IMPLEMENTED_MODULES.contains(&path)
+}
+
+/// Whether the built-in capability named `name` has a runtime: a program
+/// given one that has none is refused (`E0370`).
+pub fn runs_capability(name: &str) -> bool {
+    Capability::implemented(name)
+}
+
 /// The refusal for the first import of a `std` module that has no runtime
 /// yet, whether or not the program calls it.
 pub(crate) fn unimplemented_module(program: &Program) -> Option<Diagnostic> {

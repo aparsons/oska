@@ -44,6 +44,7 @@
 use oska_syntax::ast::Module;
 use oska_syntax::{json_escape, Diagnostic, Location, Span};
 
+pub mod api;
 mod authority;
 pub mod authority_diff;
 mod body;
@@ -569,8 +570,20 @@ impl FunctionAuthority {
     /// One line of the human-readable authority report, such as
     /// `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
     pub fn to_human(&self) -> String {
+        format!(
+            "{}fn {}: {}",
+            self.pub_marker(),
+            self.name,
+            self.authority_words()
+        )
+    }
+
+    /// What the function can reach, as its line of the report says it
+    /// after the name: `pure`, or each capability-bearing parameter with
+    /// what it supplies, as `Stdout (io), FsRead (fs)`.
+    pub fn authority_words(&self) -> String {
         if self.pure {
-            return format!("{}fn {}: pure", self.pub_marker(), self.name);
+            return "pure".to_string();
         }
         let sources: Vec<String> = self
             .via
@@ -585,12 +598,7 @@ impl FunctionAuthority {
                 }
             })
             .collect();
-        format!(
-            "{}fn {}: {}",
-            self.pub_marker(),
-            self.name,
-            sources.join(", ")
-        )
+        sources.join(", ")
     }
 
     fn pub_marker(&self) -> &'static str {

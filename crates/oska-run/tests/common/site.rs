@@ -24,14 +24,10 @@ pub const PAGES_WORKFLOW: &str = include_str!("../../../../.github/workflows/pag
 
 /// The Content Security Policy every page carries: nothing runs but the
 /// site's own search script, which may read only the site's own files,
-/// and styles and fonts come only from the site and the two font packages,
-/// at their pinned versions, on the CDN.
+/// and styles come only from the site. No font is fetched: the site uses
+/// the system's fonts, and `font-src` falls back to `default-src 'none'`.
 pub const CSP: &str = "default-src 'none'; script-src 'self'; connect-src 'self'; \
-    style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
-    https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; \
-    font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
-    https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; \
-    img-src 'self'; base-uri 'none'; form-action 'none'";
+    style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'";
 
 /// The favicon the tests' repositories hold.
 pub const FAVICON: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect width=\"8\" height=\"8\"/></svg>\n";
@@ -202,6 +198,13 @@ pub fn real_inputs() -> BTreeMap<String, String> {
         inputs.insert(file.to_string(), text);
     }
     inputs.insert("site/authority.txt".to_string(), generator_authority());
+    // The Pages workflow writes the whole reference with `oskac doc
+    // --format=json`, which this crate cannot run: these tests use the part
+    // of it that `oskac`'s own tests hold to the command's output, the
+    // `std.sql` module. `oskac`'s tests build the site from all of it.
+    let api = std::fs::read_to_string(root.join("crates/oskac/tests/golden/doc_std_sql.json"))
+        .expect("the std.sql reference golden file");
+    inputs.insert("site/api.json".to_string(), api);
     inputs
 }
 

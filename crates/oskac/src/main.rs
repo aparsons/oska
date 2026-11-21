@@ -21,6 +21,7 @@ macro_rules! outln {
 mod authority_gate;
 mod build;
 mod cache;
+mod doc;
 mod explain;
 mod fence;
 mod fix;
@@ -101,6 +102,11 @@ USAGE:
                                            does, with --release), and write
                                            each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac doc [module | item] [--format=json]
+                                           Print the API reference of the
+                                           prelude, std.html, std.sql and
+                                           std.proc, offline, or of one module
+                                           (std.sql) or item (List.push)
     oskac new <name> [--lib] [--no-agent-files] [--format=json]
                                            Lay out a new package in the
                                            directory <name>: oska.toml,
@@ -499,6 +505,9 @@ fn main() -> ExitCode {
             fix::command(rest.first().copied(), flags)
         }
         ["explain", code] => explain_code(code, flags),
+        ["doc", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
+            doc_command(rest.first().copied(), flags)
+        }
         ["new", name] if line.output.is_none() && line.program_args.is_empty() => {
             let options = new::Options {
                 lib: flags.lib,
@@ -1410,6 +1419,39 @@ fn explain_code(code: &str, Flags { json, .. }: Flags) -> ExitCode {
         eprintln!("{}", explain::unknown_to_human(code, suggestion));
     }
     ExitCode::from(2)
+}
+
+/// `oskac doc [filter]`: the API reference, or the part `filter` selects.
+/// An unknown module or item is a usage error (exit code 2).
+fn doc_command(filter: Option<&str>, Flags { json, .. }: Flags) -> ExitCode {
+    let entries = doc::entries();
+    let entries = match filter {
+        None => entries,
+        Some(filter) => match doc::select(entries, filter) {
+            Some(selected) => selected,
+            None => {
+                let message = format!(
+                    "the reference has no module or item named `{filter}`; \
+                     run `oskac doc` for the whole list"
+                );
+                if json {
+                    outln!(
+                        "{{\"error\":\"unknown item\",\"item\":\"{}\"}}",
+                        oska_syntax::json_escape(filter)
+                    );
+                } else {
+                    eprintln!("error: {message}");
+                }
+                return ExitCode::from(2);
+            }
+        },
+    };
+    if json {
+        out!("{}", doc::to_json(&entries));
+    } else {
+        out!("{}", doc::to_human(&entries));
+    }
+    ExitCode::SUCCESS
 }
 
 fn lex_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
