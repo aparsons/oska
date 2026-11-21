@@ -5,7 +5,8 @@
 //! ([`Instance::Debug`]), which handles recursive types, and so has a
 //! list type (`[1, 2]`). A range shows its bounds, `0..3`, a function
 //! value `<closure>` or `<fn>`, a task `<task>`, a scope `<scope>`, `Args`
-//! its arguments, and a capability that holds nothing what the
+//! its arguments, `Bytes` its hexadecimal digits, `Bytes(0aff)`, and a
+//! capability that holds nothing what the
 //! interpreter's Rust `{:?}` shows of it. A directory or file capability,
 //! whose text there holds an OS handle, is refused (`E0390`).
 //!
@@ -42,6 +43,9 @@ impl Body<'_, '_> {
             Type::Named { name, .. } if name == layout::SCOPE => Ok(self.text("<scope>")),
             Type::Named { name, .. } if name == builtins::ARGS => {
                 self.call_runtime("debug_args", vec![value], span)
+            }
+            Type::Named { name, .. } if name == builtins::BYTES => {
+                self.call_runtime("debug_bytes", vec![value], span)
             }
             Type::Named { name, .. } if builtins::is_capability(name) => {
                 match capability_text(name) {

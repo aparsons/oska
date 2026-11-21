@@ -40,6 +40,9 @@ pub mod codes {
     /// An `ensures` clause of the function that returned was false: the
     /// function broke its promise.
     pub const POSTCONDITION_VIOLATED: &str = "P0007";
+    /// A shift or rotation amount was below 0, or not below the width of
+    /// the integer type shifted.
+    pub const SHIFT_OUT_OF_RANGE: &str = "P0008";
     /// `t.assert(cond)` was given `false`: the test fails.
     pub const ASSERT_FAILED: &str = "P0010";
     /// `t.assert_eq(actual, expected)` was given two values that differ.
@@ -64,6 +67,11 @@ pub mod codes {
     /// `String.repeat` would build a text longer than the interpreter
     /// allows.
     pub const TEXT_TOO_LONG: &str = "P0037";
+    /// A `Bytes` slice or endian read that does not lie wholly inside the
+    /// buffer, or a negative length for `Bytes.zeroed`.
+    pub const BYTES_OUT_OF_RANGE: &str = "P0042";
+    /// A `Bytes` would grow longer than the runtime allows (256 MiB).
+    pub const BYTES_TOO_LONG: &str = "P0043";
     /// The program would have taken more than `--max-steps` steps
     /// (`oska_check::limits`).
     pub const STEP_LIMIT: &str = oska_check::limits::codes::STEP_LIMIT;
@@ -89,6 +97,7 @@ pub mod codes {
         SPAWN_ON_FINISHED_SCOPE,
         PRECONDITION_VIOLATED,
         POSTCONDITION_VIOLATED,
+        SHIFT_OUT_OF_RANGE,
         ASSERT_FAILED,
         ASSERT_EQ_FAILED,
         ASSERT_NE_FAILED,
@@ -103,6 +112,8 @@ pub mod codes {
         TIME_LIMIT,
         MEMORY_LIMIT,
         OUTPUT_LIMIT,
+        BYTES_OUT_OF_RANGE,
+        BYTES_TOO_LONG,
     ];
 }
 

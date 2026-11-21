@@ -444,14 +444,14 @@ mod real {
             &mut self,
             root: &RootHandle,
             names: &[String],
-        ) -> std::io::Result<String> {
+        ) -> std::io::Result<Vec<u8>> {
             self.real.read_file_beneath(root, names)
         }
         fn write_file_beneath(
             &mut self,
             root: &RootHandle,
             names: &[String],
-            contents: &str,
+            contents: &[u8],
         ) -> std::io::Result<()> {
             self.real.write_file_beneath(root, names, contents)
         }

@@ -12,6 +12,9 @@
 //!    implemented. Anything the backend cannot compile yet is refused
 //!    here, with `E0390`.
 //!    `optimize.rs` then cleans up the code and inlines small functions.
+//!    `constant_time.rs` checks the result: no branch and no memory
+//!    address depends on a secret, or the build fails with an internal
+//!    error (ADR 0012).
 //! 2. The target's code generator (`target.rs`): `aarch64.rs` or
 //!    `x86_64.rs`, with register allocation (`regalloc.rs`), instruction
 //!    selection and encoding.
@@ -28,6 +31,7 @@ use oska_syntax::{Diagnostic, Frame, Frames, SnapshotRecord, Span};
 pub use target::Target;
 
 mod aarch64;
+mod constant_time;
 mod elf;
 mod intrinsics;
 mod ir;
@@ -67,10 +71,14 @@ pub mod codes {
     pub const NOT_A_SIGNING_KEY: &str = "E0396";
     /// `oskac release` on a program whose name cannot name a release.
     pub const BAD_RELEASE_NAME: &str = "E0397";
+    /// The backend's own code would make a branch or a memory address
+    /// depend on a secret (`constant_time.rs`): an internal error, a bug
+    /// in the backend, never in the program.
+    pub const NOT_CONSTANT_TIME: &str = "E0398";
 
     /// The backend's own codes, in the order `docs/runtime.md` lists
     /// them. `E0371` is the interpreter's, shared.
-    pub const ALL: [&str; 8] = [
+    pub const ALL: [&str; 9] = [
         UNSUPPORTED,
         UNWRITABLE_OUTPUT,
         PROCESS_FAULT,
@@ -79,13 +87,14 @@ pub mod codes {
         BAD_VERSION,
         NOT_A_SIGNING_KEY,
         BAD_RELEASE_NAME,
+        NOT_CONSTANT_TIME,
     ];
 
     /// The `P`-codes native code panics with: the interpreter's.
     /// `P0039` is never the program's own: `oskac` stops a native program
     /// at its `--timeout` and reports it, and `P0014` is the test
     /// runner's, after a test has run (`oska_run::snapshots`).
-    pub const PANICS: [&str; 21] = [
+    pub const PANICS: [&str; 24] = [
         "P0001",
         "P0002",
         "P0003",
@@ -93,6 +102,7 @@ pub mod codes {
         "P0005",
         "P0006",
         "P0007",
+        "P0008",
         "P0010",
         "P0011",
         "P0012",
@@ -107,6 +117,8 @@ pub mod codes {
         oska_check::limits::codes::TIME_LIMIT,
         oska_check::limits::codes::MEMORY_LIMIT,
         oska_check::limits::codes::OUTPUT_LIMIT,
+        "P0042",
+        "P0043",
     ];
 }
 

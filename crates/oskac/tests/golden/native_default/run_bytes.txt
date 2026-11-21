@@ -1,0 +1,9 @@
+$ oskac run bytes.osk
+exit: 101
+--- stdout
+4f736b610102
+--- stderr
+[dbg] Bytes(736b)
+bytes.osk:6:13: error[P0042]: cannot read 4 bytes at offset 4 of a buffer of 6 bytes (bytes 169..185)
+    at main (bytes.osk:6:13)
+--- written

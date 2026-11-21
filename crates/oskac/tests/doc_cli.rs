@@ -215,6 +215,17 @@ fn declared_public(src: &str) -> Vec<String> {
     names
 }
 
+/// A method's name without its impl's type arguments, as
+/// `declared_public` names it: `Secret.rotl` for `Secret<U8>.rotl`.
+fn unqualified(name: &str) -> String {
+    match (name.find('<'), name.rfind(">.")) {
+        (Some(open), Some(close)) if open < close && !name.contains(" for ") => {
+            format!("{}{}", &name[..open], &name[close + 1..])
+        }
+        _ => name.to_string(),
+    }
+}
+
 #[test]
 fn every_public_item_of_the_prelude_and_std_is_listed() {
     let items = json_items(&[]);
@@ -232,7 +243,7 @@ fn every_public_item_of_the_prelude_and_std_is_listed() {
             assert!(
                 items
                     .iter()
-                    .any(|i| field(i, "module") == module && field(i, "name") == name),
+                    .any(|i| field(i, "module") == module && unqualified(field(i, "name")) == name),
                 "`{name}` of {module} should be in the reference"
             );
         }
@@ -272,6 +283,66 @@ fn every_item_has_every_field_and_a_unique_url() {
         assert!(!urls.contains(&url), "two items share {url}");
         urls.push(url);
     }
+}
+
+#[test]
+fn methods_that_impls_of_one_type_share_are_named_with_its_type_arguments() {
+    let items = fixture(
+        "pub struct Box<T> { value: T }\n\
+         impl<T> Box<T> {\n    \
+             // Shared by every box.\n    \
+             pub fn get(self) -> T\n\
+         }\n\
+         impl Box<Int> {\n    \
+             // An `Int` box's double.\n    \
+             pub fn double(self) -> Int\n    \
+             // An `Int` box's half.\n    \
+             pub fn half(self) -> Int\n\
+         }\n\
+         impl Box<Bool> {\n    \
+             // A `Bool` box's double.\n    \
+             pub fn double(self) -> Bool\n\
+         }\n",
+    );
+    let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "std.fixture",
+            "Box",
+            "Box.get",
+            "Box<Int>.double",
+            "Box.half",
+            "Box<Bool>.double"
+        ]
+    );
+    assert_eq!(named(&items, "Box<Int>.double").anchor(), "boxintdouble");
+    assert_eq!(named(&items, "Box<Bool>.double").anchor(), "boxbooldouble");
+    assert_eq!(named(&items, "Box.half").anchor(), "boxhalf");
+    assert_eq!(
+        named(&items, "Box<Bool>.double").description,
+        "A `Bool` box's double."
+    );
+    assert_eq!(
+        named(&items, "Box<Int>.double").unqualified_name(),
+        "Box.double"
+    );
+}
+
+#[test]
+fn a_filter_without_type_arguments_lists_every_impls_method() {
+    let items = json_items(&["Secret.rotl"]);
+    let names: Vec<&str> = items.iter().map(|i| field(i, "name")).collect();
+    assert_eq!(
+        names,
+        ["Secret<U8>.rotl", "Secret<U32>.rotl", "Secret<U64>.rotl"]
+    );
+    let one = json_items(&["Secret<U32>.rotl"]);
+    assert_eq!(one.len(), 1);
+    assert_eq!(
+        field(&one[0], "url"),
+        "https://oskalang.dev/api/prelude.html#secretu32rotl"
+    );
 }
 
 #[test]

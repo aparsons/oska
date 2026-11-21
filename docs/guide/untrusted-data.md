@@ -8,7 +8,7 @@ Text from outside the program is an **untrusted value**, written `Untrusted<Stri
 
 Where untrusted text comes from:
 
-- Anything read through a capability: `DirRead.read_to_string`, `FileRead.read_to_string`, `Stdin.read_line`, `Env.get`.
+- Anything read through a capability: `DirRead.read_to_string`, `FileRead.read_to_string`, `Stdin.read_line`, `Env.get`, and as bytes `DirRead.read_bytes` and `FileRead.read_bytes`.
 - **Program inputs**: `Args.get`.
 - The `message` of an `IoError`, `SqlError`, or `ProcError`.
 
@@ -33,6 +33,25 @@ Text operations keep the flag. If any text input is untrusted, every text in the
 - Interpolating an untrusted value makes the whole string untrusted.
 
 In your own code, a `String` parameter, field, or return type is trusted. Code that accepts raw input declares `Untrusted<String>`. User functions cannot be generic over trust.
+
+Bytes carry the same flag. `DirRead.read_bytes`, `FileRead.read_bytes` and `Connection.receive_bytes` give `Untrusted<Bytes>`, and `write_bytes` and `send_bytes` accept it. Untrusted bytes where trusted `Bytes` is required are `E0300`, as text is. Every `Bytes` operation keeps the flag: `slice`, `append`, `to_hex` and `to_text` of untrusted bytes are untrusted (`to_text()` gives `Option<Untrusted<String>>`), `to_bytes()` of untrusted text is `Untrusted<Bytes>`, and the integers that `at`, `len` and the endian reads such as `read_u32_be` give are trusted, so parsing a binary format needs no trust assertion until you vouch for the bytes themselves with `.assume_trusted()`. A validator for a binary record reads its integers freely, and vouches for the bytes only after checking them:
+
+```oska
+struct Frame { kind: U8, body: Bytes }
+
+fn parse_frame(raw: Untrusted<Bytes>) -> Option<Frame> {
+    if raw.len() < 3 {
+        return None
+    }
+    let size = raw.read_u16_be(1).to_int()
+    if raw.len() != 3 + size {
+        return None
+    }
+    Some(Frame(kind: raw.at(0), body: raw.slice(3, 3 + size).assume_trusted()))
+}
+```
+
+See [bytes and binary data](bytes.md) for a whole program.
 
 ## Validators and trust assertions
 
@@ -202,3 +221,5 @@ fn same(key: Secret<String>, offered: String) -> Bool {
 ```
 
 The fix attached to `E0351` rewrites `a == b` to `a.constant_time_eq(b)`, or to `a.constant_time_eq_secret(b)` when both sides are secrets.
+
+Secret integers, `Secret<Bool>` and `Secret<Bytes>`, which code computes on in constant time, are in [secrets and constant-time code](secrets.md).

@@ -134,6 +134,19 @@ pub struct PatternArg {
 pub enum UnaryOp {
     Neg,
     Not,
+    /// `~`, bitwise not.
+    BitNot,
+}
+
+impl UnaryOp {
+    /// The operator as written in source.
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Neg => "-",
+            Self::Not => "!",
+            Self::BitNot => "~",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +165,16 @@ pub enum BinaryOp {
     Mul,
     Div,
     Rem,
+    /// `&`, bitwise and.
+    BitAnd,
+    /// `|`, bitwise or.
+    BitOr,
+    /// `^`, bitwise exclusive or.
+    BitXor,
+    /// `<<`, shift left.
+    Shl,
+    /// `>>`, logical shift right.
+    Shr,
 }
 
 impl BinaryOp {
@@ -172,7 +195,26 @@ impl BinaryOp {
             Self::Mul => "*",
             Self::Div => "/",
             Self::Rem => "%",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
         }
+    }
+
+    /// Whether this is a bitwise or shift operator, which needs
+    /// parentheses where it meets a different binary operator (`E0108`).
+    pub fn is_bitwise(self) -> bool {
+        matches!(
+            self,
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr
+        )
+    }
+
+    /// Whether this is a shift, `<<` or `>>`.
+    pub fn is_shift(self) -> bool {
+        matches!(self, Self::Shl | Self::Shr)
     }
 }
 

@@ -59,6 +59,7 @@ use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
 
 pub(crate) mod lower;
+pub mod secrets;
 
 /// A checked program: its functions, keyed by qualified name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -310,6 +311,8 @@ pub enum ExprKind {
     Bool(bool),
     /// A binary operator. `int` is the operands' integer type for
     /// arithmetic (`+ - * / %`), whose result is checked against it, and
+    /// for the bitwise and shift operators (`& | ^ << >>`, on `U8`, `U32`
+    /// and `U64`, whose shift amount must be below the type's width), and
     /// `None` otherwise. `&&`, `||`, and `implies` evaluate `rhs` only
     /// when they need it. `==` and `!=` compare values of built-in types.
     Binary {
@@ -325,6 +328,27 @@ pub enum ExprKind {
     },
     /// `!`.
     Not(Box<Expr>),
+    /// `~`, bitwise not, on an integer of type `int`: `U8`, `U32` or
+    /// `U64`.
+    BitNot {
+        operand: Box<Expr>,
+        int: IntType,
+    },
+    /// A choice without a branch: `cond`, `if_true` and `if_false` are
+    /// all evaluated, in that order,
+    /// and the value is `if_true` when `cond` holds, otherwise
+    /// `if_false`. The two have one type: `Bool`, `U8`, `U32`, `U64` or
+    /// `Bytes`. Two `Bytes` of different lengths panic (`P0042`), which
+    /// depends on their public lengths only.
+    ///
+    /// The checker never makes one: a checked program calls
+    /// `Secret.ct_select`, and only [`secrets::expand`] turns that into a
+    /// `Select`, for a backend that runs secret operations as public ones.
+    Select {
+        cond: Box<Expr>,
+        if_true: Box<Expr>,
+        if_false: Box<Expr>,
+    },
     /// A local, by slot. Slots are numbered from 0 in each function's
     /// frame, in the order locals are bound: the binding parameters first.
     Local(usize),
@@ -837,6 +861,16 @@ impl IntType {
         self != IntType::Int
     }
 
+    /// The number of bits in a value of the type.
+    pub fn bits(self) -> u32 {
+        match self {
+            IntType::I8 | IntType::U8 => 8,
+            IntType::I16 | IntType::U16 => 16,
+            IntType::I32 | IntType::U32 => 32,
+            IntType::Int | IntType::I64 | IntType::U64 => 64,
+        }
+    }
+
     /// The smallest value of the type.
     pub fn min(self) -> i128 {
         match self {
@@ -931,7 +965,17 @@ pub fn walk<'p, B>(
             walk(lhs, visit)?;
             walk(rhs, visit)
         }
+        ExprKind::Select {
+            cond,
+            if_true,
+            if_false,
+        } => {
+            walk(cond, visit)?;
+            walk(if_true, visit)?;
+            walk(if_false, visit)
+        }
         ExprKind::Neg { operand, .. }
+        | ExprKind::BitNot { operand, .. }
         | ExprKind::Not(operand)
         | ExprKind::Scope(operand)
         | ExprKind::Field { base: operand, .. } => walk(operand, visit),

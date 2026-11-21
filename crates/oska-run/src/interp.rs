@@ -661,6 +661,11 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 Ok(ops::neg(operand, *int, expr.span)?)
             }
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
+            ExprKind::BitNot { operand, int } => Ok(ops::bit_not(self.eval(operand, frame)?, *int)),
+            ExprKind::Select { .. } => unreachable!(
+                "the checker never makes a `Select`: only `secrets::expand` does, for the \
+                 native backend, and the interpreter runs `Secret.ct_select` as an intrinsic"
+            ),
             ExprKind::Range { start, end } => {
                 let start = self.eval(start, frame)?;
                 let end = self.eval(end, frame)?;

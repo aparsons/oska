@@ -40,6 +40,9 @@ Things to notice:
 - `"best is {best}"` interpolates. A `{...}` hole holds only a name or a field path such as `{user.name}`. Compute anything else with `let` first.
 - Arguments can be labeled, as in `add(a: 3, b: 4)`. Labels are optional, and the checker verifies them against the parameter names.
 - `Int` is a 64-bit signed integer. Overflow is a **panic**, never a silent wrap.
+- `U8`, `U32` and `U64` have the bitwise operators `&`, `|`, `^` and `~`, the shifts `<<` and `>>`, and the rotations `x.rotl(n)` and `x.rotr(n)`. A shift or rotation by the type's width or more panics (`P0008`), and so does a rotation by a negative amount; a shift amount is unsigned, so it is never below 0. Where a bitwise or shift operator meets a different operator, parentheses are required (`E0108`): write `(x & mask) == 0`.
+- `+`, `-` and `*` never wrap. `U8`, `U32` and `U64` wrap only when asked: `x.wrapping_add(y)`, `x.wrapping_sub(y)` and `x.wrapping_mul(y)`.
+- Integer types convert only explicitly. `Int`, `U8`, `U16`, `U32` and `U64` convert to each other with `to_int()`, `to_u8()`, `to_u16()`, `to_u32()` and `to_u64()`, which panic (`P0001`) when the value does not fit: `b.to_int()` turns a byte into a length, `n.to_u8()` checks that a count fits a byte. `wrapping_to_u8()`, `wrapping_to_u16()` and `wrapping_to_u32()`, from a wider unsigned type, keep the low bits instead.
 - A module-level `const NAME: T = expr` is in scope in every function, method, and test of the module, with the type it declares. A wrong-typed initializer is a type error, as for `let`.
 
 ## Structs, methods, and mutation
@@ -269,6 +272,35 @@ Inside a method, a hole may start with `self`, as in `"{self.name}"`. `Bool` has
 Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `join`, `chars`, `slice`, `repeat`, and `parse_int`. `+` works only on numbers, so build strings by interpolation.
 
 Text also carries a trust flag: text from outside the program is an **untrusted value**. That is why a plain `String` parameter is a **structural position**. See [untrusted data and secrets](untrusted-data.md).
+
+## Bytes and secrets
+
+Binary data is **Bytes**, not text. `Bytes.from_hex`, `Bytes.zeroed(len)` and `"text".to_bytes()` make a buffer; `at`, `slice` and the endian reads such as `read_u32_be(offset)` read it, and `push`, `append` and the endian pushes such as `push_u16_be(value)` build one on a `var` binding. Bytes read through a capability are `Untrusted<Bytes>`, and keep the flag as text does. See [bytes and binary data](bytes.md).
+
+Key material is a **secret value**. `Secret.new(value)` makes a `Secret<U8>`, `Secret<U32>`, `Secret<U64>`, `Secret<Bool>` or `Secret<Bytes>`. A **secret integer** wraps on `+`, `-` and `*`, and has the bitwise operators and rotations, but the checker refuses it as a condition, an index, a divisor, a shift amount or an ordering, and the native backend checks that no branch or memory address depends on it. That is what **constant time** means here; [secrets and constant-time code](secrets.md#what-constant-time-means-here) lists what it does not cover. `ct_eq` compares into a `Secret<Bool>`, `ct_select` chooses without a branch, and `.expose()` is the only way out.
+
+```oska
+fn round(key: Secret<U32>, data: Bytes) -> Secret<U32> {
+    let word = data.read_u32_be(0)
+    ((key ^ word) + 1).rotl(8)
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    var data = Bytes.new()
+    data.push_u32_be(258)
+    let key: Secret<U32> = Secret.new(1)
+    let out = round(key, data).expose().to_int()
+    let hex = data.to_hex()
+    io.println("{hex} {out}")?
+    Ok(())
+}
+```
+
+```console cmd=run
+00000102 66560
+```
+
+See [secrets and constant-time code](secrets.md).
 
 ## Contracts
 

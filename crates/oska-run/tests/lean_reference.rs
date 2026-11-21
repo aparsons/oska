@@ -101,14 +101,20 @@ fn interpreted(outcome: &RunOutcome, world: &FakeWorld) -> String {
     if !outcome.stderr.is_empty() {
         shown.push_str(&format!("stderr {}\n", quoted(&outcome.stderr)));
     }
-    let mut files: Vec<(String, &String)> = world
+    // A program in Oska Core writes only text.
+    let mut files: Vec<(String, String)> = world
         .files
         .iter()
-        .map(|(path, text)| (shown_path(path), text))
+        .map(|(path, bytes)| {
+            (
+                shown_path(path),
+                String::from_utf8_lossy(bytes).into_owned(),
+            )
+        })
         .collect();
     files.sort();
     for (path, text) in files {
-        shown.push_str(&format!("file {} {}\n", quoted(&path), quoted(text)));
+        shown.push_str(&format!("file {} {}\n", quoted(&path), quoted(&text)));
     }
     let mut dirs: Vec<String> = world.dirs.iter().map(|d| shown_path(d)).collect();
     dirs.sort();

@@ -70,7 +70,7 @@ fn main() {
 
 ## Native builds
 
-`oskac build [path] [-o out] [--target <platform>|all] [--format=json]` checks a source file or package, as `oskac check` does, and compiles it with the native backend (`oska-native`) to a static executable for a target platform, on any host. `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64` (a Linux asset adds `-gnu` or `-musl` for its build, the glibc build or the musl build; the target names do not, and both builds write the same bytes). Every platform has a backend. A macOS executable is a Mach-O that imports only from `libSystem`, ad-hoc code-signed by `oskac` itself. A Windows executable is a PE32+ console program that imports only from `kernel32.dll`, `ntdll.dll` and `bcryptprimitives.dll`, loads at a randomized address, and never has writable code (ADR 0020). It runs the whole runtime the other platforms run, with file access confined race-free beneath an open handle, as on Linux and macOS. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`. It writes the file's stem, or the package directory's name, with `.exe` for Windows, in the current directory unless `-o` names the output. `--target all` writes one executable for each platform, named `<name>-<platform>` (with `.exe` for Windows), into the directory `-o` names, or the current one. It prints nothing on success, or `{"output":"<path>","diagnostics":[]}` with `--format=json` (`{"outputs":["<path>",...],"diagnostics":[]}` for `--target all`). A refused program prints its diagnostics as `oskac check` does, or `{"output":null,"diagnostics":[...]}`. The exit code is 0 on success, 1 for the checker's diagnostics or an output that cannot be written, and 2 for a program the backend cannot compile yet (`E0371`, `E0390`) or a `--target` it cannot build for (`E0393`, `E0394`). The same program built by the same `oskac` for the same platform gives the same bytes on every host.
+`oskac build [path] [-o out] [--target <platform>|all] [--format=json]` checks a source file or package, as `oskac check` does, and compiles it with the native backend (`oska-native`) to a static executable for a target platform, on any host. `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64` (a Linux asset adds `-gnu` or `-musl` for its build, the glibc build or the musl build; the target names do not, and both builds write the same bytes). Every platform has a backend. A macOS executable is a Mach-O that imports only from `libSystem`, ad-hoc code-signed by `oskac` itself. A Windows executable is a PE32+ console program that imports only from `kernel32.dll`, `ntdll.dll` and `bcryptprimitives.dll`, loads at a randomized address, and never has writable code (ADR 0020). It runs the whole runtime the other platforms run, with file access confined race-free beneath an open handle, as on Linux and macOS. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`. It writes the file's stem, or the package directory's name, with `.exe` for Windows, in the current directory unless `-o` names the output. `--target all` writes one executable for each platform, named `<name>-<platform>` (with `.exe` for Windows), into the directory `-o` names, or the current one. It prints nothing on success, or `{"output":"<path>","diagnostics":[]}` with `--format=json` (`{"outputs":["<path>",...],"diagnostics":[]}` for `--target all`). A refused program prints its diagnostics as `oskac check` does, or `{"output":null,"diagnostics":[...]}`. The exit code is 0 on success, 1 for the checker's diagnostics or an output that cannot be written, and 2 for a program the backend cannot compile yet (`E0371`, `E0390`) or could compile only by making a branch or an address depend on a secret (`E0398`, a bug in the backend) or a `--target` it cannot build for (`E0393`, `E0394`). The same program built by the same `oskac` for the same platform gives the same bytes on every host.
 
 `oskac release [path] --version <X.Y.Z> --key <ssh-key> [-o dir] [--format=json]` builds the same executables as `--target all` into one new directory (`<name>-v<X.Y.Z>` unless `-o` names it), writes a `SHA256SUMS` whose first line is `# <name>-release v<X.Y.Z>`, and signs it with `ssh-keygen -Y sign` in the namespace `<name>-release`, writing `SHA256SUMS.sig`: the format of `oskac`'s own releases. A missing or malformed version is refused with `E0395` (exit code 2) and a missing key, one that is not an SSH signing key, or a key `ssh-keygen` cannot sign with, with `E0396` (exit code 1), and a name that cannot name a release with `E0397`, before anything is written; the signature is checked with `ssh-keygen -Y check-novalidate` before the release counts as made, and a failed release removes its directory. See [`oskac release`](guide/cli-reference.md#oskac-release) and [Releasing an application](guide/releasing.md).
 
@@ -92,10 +92,11 @@ On every supported platform, Linux, macOS and Windows, `oskac run` and `oskac te
 | `E0395` | `oskac release` has no `--version`, or one that is not `X.Y.Z` or `X.Y.Z-<pre>`, as in `--version 1.2`. It is a usage error (exit code 2), refused before the program is read, and nothing is written. The fix is a version such as `--version 1.2.0`. The version is a property of the command line, not of a program, so it has no example. |
 | `E0396` | `oskac release` has no `--key`, or the file it names cannot be read or is not a private key file, in OpenSSH's format or PEM's (a public key is not one), or `ssh-keygen` could not sign with it or is not installed, or the signature it wrote does not check; the message then quotes what `ssh-keygen` said. Exit code 1. A key is checked before anything is built, and a failed signature removes the release's directory, so nothing unsigned is left. The fix is a key `ssh-keygen -t ed25519 -f <file>` makes. The key is a property of the command line, not of a program, so it has no example. |
 | `E0397` | `oskac release` on a program whose name, the file's stem or the package directory's name, cannot name a release: a release's name goes into its file names, the first line of `SHA256SUMS` and the signature's namespace, so it is only ASCII letters, digits, `.`, `-` and `_`, starting with a letter or digit. Exit code 1, before anything is built. The fix is to rename the file or the directory. The name is where the program is kept, not part of the program, so it has no example. |
+| `E0398` | An internal error: the native backend's own code for the program would make a conditional branch or a memory address depend on a secret, and the build stops before anything is written. After optimizing, the backend follows every secret through the code it is about to select: the value read out of a `Secret<U8>`, `Secret<U32>`, `Secret<U64>` or `Secret<Bool>`, each byte the runtime reads from a `Secret<Bytes>`, and every value computed from one, into the functions it is passed to and out of the ones that return it. None may be the condition of a branch, an operand of checked arithmetic (which branches on overflow), the address of a load, store or call, or an argument of an indirect call (ADR 0012). The checker's rules (`E0353` to `E0356`) keep a program from asking for any of these, so the error is a bug in `oskac`, never in the program: report it. A secret is not followed through memory: a value stored and loaded back is public to the check, which marks secrets again where they are read out of their `Secret`. Exit code 2, as for `E0390`. No program is meant to reach it, so it has no example. |
 
 ### Native build examples
 
-The refusal (`E0390`) has a program that is refused with exactly that code and the same program fixed. `E0391` has no example: the output path is part of the command line, not of a program. `E0392` has no example: it is a fault in the native backend, which no program is meant to reach. `E0393` has no example: the target platform is part of the command line, not of a program. `E0394` has no example: as for `E0393`, the target platform is part of the command line. `E0395` has no example: the release's version is part of the command line. `E0396` has no example: the signing key is part of the command line. `E0397` has no example: the release's name comes from where the program is kept.
+The refusal (`E0390`) has a program that is refused with exactly that code and the same program fixed. `E0391` has no example: the output path is part of the command line, not of a program. `E0392` has no example: it is a fault in the native backend, which no program is meant to reach. `E0393` has no example: the target platform is part of the command line, not of a program. `E0394` has no example: as for `E0393`, the target platform is part of the command line. `E0395` has no example: the release's version is part of the command line. `E0396` has no example: the signing key is part of the command line. `E0397` has no example: the release's name comes from where the program is kept. `E0398` has no example: it is a bug in the native backend, which no program is meant to reach.
 
 #### `E0390`
 
@@ -125,17 +126,18 @@ Output written before the panic stays written.
 
 A panic carries its call stack, `frames`, innermost first: the function running at the panic, at the panic's own span, then each running call, as the function it was made from at the call's span. Every call of a function, method or closure written in Oska is a frame (a prelude function's is not); `main`, or a test's body, named `test "name"`, is the outermost; a closure is named `<closure in f>` after the function it is written in, and a task's call is made from the function that spawned it. A broken `requires` clause (`P0006`) is the caller's: its frames start at the call. At most 20 frames are listed, and `frames_omitted` counts the rest. Native code and the interpreter report the same frames. The one exception is `P0021` when the interpreter's own host stack runs out before calls nest 50,000 deep, which can happen in a debug build of `oskac`: then its `frames_omitted` counts fewer frames left out. Without `--format=json` they are printed under the panic's line, one `    at function (path:line:column)` each, then `    ... n more frames`. Native code finds them in a call stack: each call it counts (`P0021`) stores its frame's place there, and the runtime walks it at a panic. Its `--max-memory` panic (`P0040`) spans `main`'s body and lists that one frame alone, and a `P0039` that `oskac` reports itself has no frames.
 
-Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmetic never wraps.
+Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmetic never wraps. Wrapping is a method a program calls by name: `wrapping_add`, `wrapping_sub` and `wrapping_mul` on `U8`, `U32` and `U64` keep the low bits of the result, and `wrapping_to_u8`, `wrapping_to_u16` and `wrapping_to_u32` keep a wider unsigned value's low bits. A checked conversion, `to_int`, `to_u8`, `to_u16`, `to_u32` or `to_u64` between `Int`, `U8`, `U16`, `U32` and `U64`, panics (`P0001`) when the value does not fit its target.
 
 | Code | Panic |
 | --- | --- |
-| `P0001` | Integer overflow: the result of `+`, `-`, `*`, `/`, or unary `-` does not fit its type, as with a `U8` `0 - 1` or an `I8` `-128 / -1`. Spans the operation. |
-| `P0002` | Index out of bounds: `List.at` was given an index below 0 or not below the list's length. Spans the call. |
+| `P0001` | Integer overflow: the result of `+`, `-`, `*`, `/`, or unary `-` does not fit its type, as with a `U8` `0 - 1` or an `I8` `-128 / -1`, or a conversion `to_<type>()` was given a value its target cannot hold, as with `300.to_u8()` or `(-1).to_u64()`; the message names the conversion, the value and the target's range. Spans the operation or call. |
+| `P0002` | Index out of bounds: `List.at`, `Bytes.at` or `Bytes.set` was given an index below 0 or not below the length. Spans the call. |
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
 | `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended, and work never runs outside a scope. Spans the call. This is a second line of defence behind the checker (`E0292`), which already stops a handle from outliving its block: no checked program can reach this code, so it has no example. |
 | `P0006` | Precondition violated: a `requires` clause of the function called is false, so the caller broke the contract. The message names the function and quotes the clause's condition. Spans the call. Every call evaluates the function's `requires` clauses, in every build, in the order written: after the arguments are evaluated and before the body runs. A clause sees the parameters and `self`. A panic while a clause is evaluated, such as an overflow, is reported as it is, not as `P0006`. |
 | `P0007` | Postcondition violated: an `ensures` clause of the function that returned is false, so the function broke its promise. The message names the function, quotes the clause's condition, and names the line and column of the return that broke it, counting columns in characters from 1. Spans the `ensures` clause. Every return evaluates the function's `ensures` clauses, in every build, in the order written, with `r` bound to the value being returned. That covers falling off the end of the body (the return is its last expression, or its closing brace), an early `return`, and an early exit through `?`, where `r` is the `Err` or `None` being returned. A clause sees the parameters and `self`; a method that changes `var self` shows its clauses the receiver it ends with. A contract that calls a function with contracts checks those too, and a panic while a clause is evaluated, such as an overflow, is reported as it is, not as `P0007`. |
+| `P0008` | Shift or rotation amount out of range: the amount of `<<` or `>>`, or of `rotl` or `rotr`, is below 0 or not below the width of the integer type shifted (8 for `U8`, 32 for `U32`, 64 for `U64`). The amount is never taken modulo the width, so the hardware's differing shift masking never shows: both backends check it first, on every target. The message names the operator, the amount and the range. Spans the operation or call. |
 | `P0010` | `t.assert(cond)` was given `false`. Fails the test (see [Tests](#tests)). Spans the call. |
 | `P0011` | `t.assert_eq(actual, expected)` was given two values that differ through `Eq`. The message shows both, as `dbg` would. Spans the call. |
 | `P0012` | `t.assert_ne(actual, other)` was given two equal values. Spans the call. |
@@ -150,6 +152,8 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0039` | Time limit reached: the program was run with `oskac run --timeout=<ms>`, and has run for that many milliseconds of wall-clock time, counted from when it starts (after the check and the build). Waiting counts: a program that waits for a line of standard input stops at the deadline too. It stops within 100 ms of the deadline (the **tolerance**) on a machine that is not overloaded. On the interpreter the program panics at the step it has reached (it looks at the clock every 1024 steps, and while it waits), spanning that call or loop, or the read it waits in. Natively, `oskac` stops its own child process, that process only, and prints the report itself, with no place in the source (`error[P0039]: ...`, or a JSON object with no `path`), and exits with 101, never with the signal's `128 + n`; a line the stopped program was writing is not reported as its panic, and what it had printed to standard output but not yet written out (native standard output is buffered when it is not a terminal) is lost. A timeout is not deterministic: where the program stops differs from run to run. The message names the limit and its value. Without the flag a program has no time limit. See [Run limits](#run-limits). |
 | `P0040` | Memory limit reached: the program was run with `oskac run --max-memory=<bytes>`, and the value it was about to make would take the bytes of its values (texts, lists, structs, enum values and closures), net of those it let go of, past that many. The value is not made. It is a resource bound, like a timeout: each backend counts in its own way, so the two may stop at different points. The message names the limit and its value. On the interpreter it spans the expression or call that makes the value; natively it spans `main`'s body, since the runtime's allocator does not know which code asked. Without the flag a program has no memory limit. See [Run limits](#run-limits) for what each backend counts. |
 | `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
+| `P0042` | A `Bytes` range out of bounds: `slice(start, end)` with `start` below 0, `end` past the length, or `start` past `end`; an endian read (`read_u16_be` and the rest) whose bytes do not all lie inside the buffer; `Bytes.zeroed` with a negative length; or `ct_select` between two `Secret<Bytes>` of different lengths. The message names the range or offset and the length, or both lengths. Spans the call. An index out of bounds in `at` or `set` is `P0002`, as in `List.at`. |
+| `P0043` | A `Bytes` would grow past 256 MiB: `push`, `append` or an endian push whose result would be longer, or `Bytes.zeroed` with a longer length. The runtime panics instead of running out of memory, and the buffer is not changed. The message names the length it would have had. Spans the call. Not yet checked where a whole buffer is made at once from outside: `String.to_bytes` and the capabilities' `read_bytes` (`DirRead`, `FileRead`) give a buffer of any length without this panic, and a file no memory holds is an `IoError` ("out of memory"). |
 
 ### Panic examples
 
@@ -268,6 +272,24 @@ fn absolute(x: Int) -> Int
 
 fn main() {
     let y = absolute(-1)
+}
+```
+
+#### `P0008`
+
+```oska error=P0008
+fn main() {
+    let x: U32 = 1
+    let n: U32 = 32
+    let y = x << n
+}
+```
+
+```oska fixed=P0008
+fn main() {
+    let x: U32 = 1
+    let n: U32 = 31
+    let y = x << n
 }
 ```
 
@@ -523,6 +545,36 @@ fn main(io: Stdout) {
         let _ = io.println("again")
         i = i + 1
     }
+}
+```
+
+#### `P0042`
+
+```oska error=P0042
+fn main() {
+    let header = Bytes.zeroed(3)
+    let length = header.read_u32_be(0)
+}
+```
+
+```oska fixed=P0042
+fn main() {
+    let header = Bytes.zeroed(4)
+    let length = header.read_u32_be(0)
+}
+```
+
+#### `P0043`
+
+```oska error=P0043
+fn main() {
+    let huge = Bytes.zeroed(300000000)
+}
+```
+
+```oska fixed=P0043
+fn main() {
+    let small = Bytes.zeroed(3000)
 }
 ```
 
