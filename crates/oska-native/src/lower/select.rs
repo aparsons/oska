@@ -9,13 +9,16 @@
 //! `std.rt`'s `bytes_select`, which gives the word 0 for buffers of
 //! different lengths, for the generated code to panic (`P0042`).
 //!
-//! The constant-time guarantee of native executables (that no secret
-//! value reaches a branch or an address after optimization) is #225's.
+//! The constant-time guarantee of native executables, that no secret
+//! value reaches a branch or an address after optimization, is
+//! `constant_time.rs`'s to check.
 
 use oska_check::program::{Callee, Expr, ExprKind, Type};
 use oska_syntax::Diagnostic;
 
 use super::Body;
+#[cfg(test)]
+use crate::ir::Inst;
 use crate::ir::{BinOp, Temp};
 
 impl Body<'_, '_> {
@@ -43,10 +46,47 @@ impl Body<'_, '_> {
         let pick = self.expr(cond)?;
         let a = self.expr(if_true)?;
         let b = self.expr(if_false)?;
+        #[cfg(test)]
+        if BRANCHY.with(std::cell::Cell::get) {
+            return Ok(self.branchy_select(pick, a, b));
+        }
         let zero = self.constant(0);
         let mask = self.binary_op(BinOp::Sub, zero, pick);
         let differ = self.binary_op(BinOp::Xor, a, b);
         let kept = self.binary_op(BinOp::And, differ, mask);
         Ok(self.binary_op(BinOp::Xor, b, kept))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether this thread's lowering is deliberately broken: a choice is
+    /// a branch on its condition, for the tests that show the guard
+    /// (`constant_time.rs`) refuses it.
+    pub(crate) static BRANCHY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+impl Body<'_, '_> {
+    /// The broken choice: `a` when `pick` is not 0, else `b`, by a branch.
+    fn branchy_select(&mut self, pick: Temp, a: Temp, b: Temp) -> Temp {
+        let result = self.temp();
+        let (otherwise, end) = (self.label(), self.label());
+        self.push(Inst::JumpIfZero {
+            cond: pick,
+            target: otherwise,
+        });
+        self.push(Inst::Copy {
+            dst: result,
+            src: a,
+        });
+        self.push(Inst::Jump(end));
+        self.push(Inst::Label(otherwise));
+        self.push(Inst::Copy {
+            dst: result,
+            src: b,
+        });
+        self.push(Inst::Label(end));
+        result
     }
 }

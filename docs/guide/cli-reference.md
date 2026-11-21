@@ -286,7 +286,7 @@ A bare `-` as the path makes `check` and `run` read one module from standard inp
 | --- | --- |
 | `0` | The executable was written. |
 | `1` | The checker refused the program, or the executable could not be written (`E0391`). |
-| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`), or `--target` names a platform it cannot build for (`E0393`, `E0394`). |
+| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`), the backend's code would depend on a secret (`E0398`, a bug in `oskac`), or `--target` names a platform it cannot build for (`E0393`, `E0394`). |
 
 See the [runtime notes](../runtime.md#native-builds) for the codes.
 
@@ -307,7 +307,7 @@ The first line puts the name and the version under the signature, so a signed re
 | --- | --- |
 | `0` | The release was written and signed. |
 | `1` | The checker refused the program, the directory could not be written or already exists (`E0391`), the key is missing, is not an SSH signing key, or could not sign (`E0396`), or the program's name cannot name a release (`E0397`). |
-| `2` | The version is missing or is not `X.Y.Z` (`E0395`), or the program uses something the native backend cannot compile yet (`E0371`, `E0390`). |
+| `2` | The version is missing or is not `X.Y.Z` (`E0395`), or the program uses something the native backend cannot compile yet (`E0371`, `E0390`), or the backend's code would depend on a secret (`E0398`, a bug in `oskac`). |
 
 ## `oskac fix`
 

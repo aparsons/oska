@@ -80,6 +80,8 @@ mod int_methods;
 mod lists;
 mod patterns;
 mod select;
+#[cfg(test)]
+pub(crate) use select::BRANCHY;
 mod tasks;
 mod tests;
 mod traits;
@@ -324,6 +326,8 @@ pub fn program(
         }
     }
     optimize::module(&mut lowering.functions);
+    // The code is final: no secret may decide a branch or an address.
+    crate::constant_time::verify(&lowering.functions)?;
     let stack = lowering.size_stack(entry);
     // The globals, then the step counter under `--max-steps`, then the
     // memory limit's report under `--max-memory` (which keeps the counter's
@@ -1944,11 +1948,11 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.check(check, result, &args, span)?;
                     result
                 }
-                Some(Prelude::ByteRead { width, big }) => {
+                Some(Prelude::ByteRead { width, big, secret }) => {
                     let &[bytes, offset] = args.as_slice() else {
                         return Err(self.refuse(span, &format!("`{name}`")));
                     };
-                    self.byte_read(bytes, offset, width, big, span)?
+                    self.byte_read(bytes, offset, width, big, secret, span)?
                 }
                 // Called on a value, not a place: `mutating_call` handles
                 // a place, and only a place can be `var`.
@@ -2213,6 +2217,7 @@ impl<'l, 'p> Body<'l, 'p> {
         offset: Temp,
         width: u8,
         big: bool,
+        secret: bool,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
         let index = width == 1;
@@ -2238,7 +2243,12 @@ impl<'l, 'p> Body<'l, 'p> {
             target: label,
         });
         let big = self.constant(i64::from(big));
-        self.call_runtime("bytes_read", vec![bytes, offset, width, big], NOWHERE)
+        let read = if secret {
+            "bytes_read_secret"
+        } else {
+            "bytes_read"
+        };
+        self.call_runtime(read, vec![bytes, offset, width, big], NOWHERE)
     }
 
     /// A call of the platform library's function `import` with the
@@ -2412,6 +2422,12 @@ impl<'l, 'p> Body<'l, 'p> {
             // A copy: the argument's reference, if it holds one, is
             // released after the call, and the word stays.
             Runtime::Identity => self.copy(arg(0)),
+            Runtime::Conceal => self.mark_secret(arg(0)),
+            Runtime::Expose => {
+                let dst = self.temp();
+                self.push(Inst::Expose { dst, src: arg(0) });
+                dst
+            }
             Runtime::Globals => {
                 let dst = self.temp();
                 self.push(Inst::Addr {
@@ -2616,6 +2632,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 if let Some(kind) =
                     secret_expansion(callee, |name| secrets::expand(name, args, &expr.ty, span))
                 {
+                    let kind = secret_bytes_read(kind);
                     return self.expr(&Expr {
                         kind,
                         ty: expr.ty.clone(),
@@ -3427,6 +3444,31 @@ fn describe(kind: &ExprKind) -> String {
         ExprKind::Unsupported(what) => what.clone(),
         _ => "this expression".to_string(),
     }
+}
+
+/// `kind`, a secret's operation as the public operation it is, with a
+/// read of `Bytes` in it (`Bytes.at`, `Bytes.read_u32_be` and the other
+/// endian reads) made the read of secret bytes
+/// ([`intrinsics::SECRET_BYTES`]), whose bytes are marked secret.
+fn secret_bytes_read(kind: ExprKind) -> ExprKind {
+    let ExprKind::Construct { ctor, mut fields } = kind else {
+        return kind;
+    };
+    if let [Expr {
+        kind: ExprKind::Call {
+            callee: Callee::Intrinsic(name),
+            ..
+        },
+        ..
+    }] = fields.as_mut_slice()
+    {
+        if let Some(method) = name.strip_prefix("Bytes.") {
+            if matches!(intrinsics::prelude(name), Some(Prelude::ByteRead { .. })) {
+                *name = format!("{}{method}", intrinsics::SECRET_BYTES);
+            }
+        }
+    }
+    ExprKind::Construct { ctor, fields }
 }
 
 /// A call of a secret's method, such as `Secret.rotl`, as the public
