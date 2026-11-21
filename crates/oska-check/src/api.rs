@@ -156,8 +156,11 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
         functions
             .iter()
             .find(|f| f.name == name)
-            .map(|f| (f.authority.clone(), f.authority_words()))
-            .unwrap_or_else(|| (Vec::new(), "pure".to_string()))
+            .map(|f| Reach {
+                capabilities: f.authority.clone(),
+                authority: f.authority_words(),
+            })
+            .unwrap_or_else(Reach::pure)
     };
     let mut out = vec![ApiItem {
         module: path.to_string(),
@@ -168,18 +171,15 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
         capabilities: Vec::new(),
         authority: String::new(),
     }];
-    let item =
-        |name: String, kind: Kind, signature: String, at: &Item, reach: (Vec<String>, String)| {
-            ApiItem {
-                module: path.to_string(),
-                name,
-                kind,
-                signature,
-                description: description(src, at.span.start),
-                capabilities: reach.0,
-                authority: reach.1,
-            }
-        };
+    let item = |name: String, kind: Kind, signature: String, at: &Item, reach: Reach| ApiItem {
+        module: path.to_string(),
+        name,
+        kind,
+        signature,
+        description: description(src, at.span.start),
+        capabilities: reach.capabilities,
+        authority: reach.authority,
+    };
     for it in &module.items {
         match &it.kind {
             ItemKind::Fn(f) if it.is_public() => {
@@ -237,7 +237,7 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
             }
             ItemKind::Trait(t) if it.is_public() => {
                 let sig = format!("pub trait {}{}", t.name.name, generics(src, &t.generics));
-                let none = (Vec::new(), "pure".to_string());
+                let none = Reach::pure();
                 out.push(item(t.name.name.clone(), Kind::Trait, sig, it, none));
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
@@ -255,7 +255,7 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
                     let target_text = text(src, imp.target.span.start, imp.target.span.end);
                     let name = one_line(&format!("{trait_text} for {target_text}"));
                     let sig = one_line(&format!("impl{} {name}", generics(src, &imp.generics)));
-                    let none = (Vec::new(), "pure".to_string());
+                    let none = Reach::pure();
                     out.push(item(name, Kind::Impl, sig, it, none));
                     continue;
                 }
@@ -276,9 +276,25 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
     out
 }
 
+/// What an item reaches: the capabilities, and the words for them.
+struct Reach {
+    capabilities: Vec<String>,
+    authority: String,
+}
+
+impl Reach {
+    /// Reaching nothing.
+    fn pure() -> Reach {
+        Reach {
+            capabilities: Vec::new(),
+            authority: "pure".to_string(),
+        }
+    }
+}
+
 /// What a value of the type `name` carries: the capabilities it reaches
 /// with its type parameters left open, and the words for them.
-fn type_reach(decls: &Decls, name: &str, params: &[GenericParam]) -> (Vec<String>, String) {
+fn type_reach(decls: &Decls, name: &str, params: &[GenericParam]) -> Reach {
     let args = params
         .iter()
         .map(|g| Ty::Param(g.name.name.clone()))
@@ -293,7 +309,10 @@ fn type_reach(decls: &Decls, name: &str, params: &[GenericParam]) -> (Vec<String
     } else {
         capabilities.join(", ")
     };
-    (capabilities, words)
+    Reach {
+        capabilities,
+        authority: words,
+    }
 }
 
 /// A function's signature: its source, attributes included, up to its

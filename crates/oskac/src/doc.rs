@@ -15,8 +15,27 @@ pub const SITE: &str = "https://oskalang.dev";
 /// One entry of the reference, with whether a program that uses it runs.
 pub struct Entry {
     pub item: ApiItem,
-    /// `None` when it runs, or the code `oskac run` refuses it with.
-    pub refused: Option<&'static str>,
+    /// `None` when it runs, or why `oskac run` refuses it.
+    pub refused: Option<Refusal>,
+}
+
+/// Why `oskac run` refuses a program that uses an item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Its `std` module has no runtime (`E0371`).
+    Module,
+    /// A capability it needs has no runtime (`E0370`).
+    Capability,
+}
+
+impl Refusal {
+    /// The code `oskac run` refuses with.
+    pub fn code(self) -> &'static str {
+        match self {
+            Refusal::Module => "E0371",
+            Refusal::Capability => "E0370",
+        }
+    }
 }
 
 impl Entry {
@@ -47,13 +66,13 @@ pub fn entries() -> Vec<Entry> {
         .into_iter()
         .map(|item| {
             let refused = if item.module != PRELUDE && !oska_run::runs_module(&item.module) {
-                Some("E0371")
+                Some(Refusal::Module)
             } else if item
                 .capabilities
                 .iter()
                 .any(|c| !oska_run::runs_capability(c))
             {
-                Some("E0370")
+                Some(Refusal::Capability)
             } else {
                 None
             };
@@ -126,12 +145,12 @@ pub fn to_human(entries: &[Entry]) -> String {
         out.push_str(&format!("\n## {} {}\n\n", item.kind.as_str(), item.name));
         out.push_str(&format!("    {}\n\n", item.signature));
         let mut facts = format!("Authority: {}.", item.authority);
-        if let Some(code) = entry.refused {
-            if code != "E0371" {
-                facts.push_str(&format!(
-                    " Checks only: `oskac run` refuses a program given it ({code})."
-                ));
-            }
+        // A module's refusal is said once, under its heading.
+        if entry.refused == Some(Refusal::Capability) {
+            facts.push_str(&format!(
+                " Checks only: `oskac run` refuses a program given it ({}).",
+                Refusal::Capability.code()
+            ));
         }
         out.push_str(&facts);
         out.push('\n');
@@ -148,7 +167,7 @@ fn modules_run(entries: &[Entry], module: &str) -> bool {
     entries
         .iter()
         .find(|e| e.item.module == module)
-        .map_or(true, |e| e.refused != Some("E0371"))
+        .map_or(true, |e| e.refused != Some(Refusal::Module))
 }
 
 /// The JSON form: `{"items": [...]}`, one object per item and per line,
