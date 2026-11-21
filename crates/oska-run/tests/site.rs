@@ -184,7 +184,7 @@ fn a_hostile_file_name_is_escaped_where_it_is_linked() {
 // ---- What every page carries -------------------------------------------------------
 
 #[test]
-fn every_page_has_the_csp_and_pins_its_fonts_with_integrity() {
+fn every_page_has_the_csp_and_loads_nothing_from_another_origin() {
     let site = build_ok(&[]);
     for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
         assert!(
@@ -195,16 +195,12 @@ fn every_page_has_the_csp_and_pins_its_fonts_with_integrity() {
         );
         for link in page.match_indices("<link ").map(|(at, _)| &page[at..]) {
             let link = &link[..link.find('>').expect("a closed tag")];
-            if link.contains("https://") && !link.contains("rel=\"canonical\"") {
-                assert!(
-                    link.contains("https://cdn.jsdelivr.net/npm/@fontsource/"),
-                    "{link}"
-                );
-                assert!(link.contains("@5.3.0/"), "{link} is not pinned");
-                assert!(link.contains(" integrity=\"sha384-"), "{link}");
-                assert!(link.contains(" crossorigin=\"anonymous\""), "{link}");
-            }
+            assert!(
+                !link.contains("https://") || link.contains("rel=\"canonical\""),
+                "{name}: {link}"
+            );
         }
+        assert!(!page.contains("jsdelivr"), "{name}:\n{page}");
         assert!(page.contains("<link rel=\"stylesheet\" href=\"/style.css\">"));
     }
 }
@@ -1791,17 +1787,9 @@ fn every_link_in_every_real_page_goes_to_a_published_page_and_anchor() {
     assert!(checked > 1000, "only {checked} links were checked");
 }
 
-/// The only origin pages may load anything from: Fontsource, at the
-/// pinned versions the CSP names.
-const ASSET_ALLOWLIST: &[&str] = &[
-    "https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/",
-    "https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/",
-];
-
 #[test]
-fn every_external_asset_is_on_the_allowlist_pinned_with_sri_and_named_by_the_csp() {
+fn every_real_page_loads_nothing_from_another_origin_and_the_csp_names_none() {
     let site = real_site();
-    let mut assets = 0;
     for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
         let mut csp = None;
         for tag in tags_of(page) {
@@ -1810,52 +1798,30 @@ fn every_external_asset_is_on_the_allowlist_pinned_with_sri_and_named_by_the_csp
             }
             let rel = tag.attribute("rel");
             let loads = tag.element != "a" && rel != Some("canonical") && rel != Some("alternate");
-            let Some(url) = url_of(&tag).filter(|u| loads && u.contains("://")) else {
-                continue;
-            };
-            assets += 1;
-            let Some(origin) = ASSET_ALLOWLIST.iter().find(|ok| url.starts_with(**ok)) else {
-                panic!("{name} loads {url}, which is not on the allowlist");
-            };
-            let integrity = tag.attribute("integrity").unwrap_or("");
-            let digest = integrity.strip_prefix("sha384-").unwrap_or("");
-            assert!(
-                digest.len() == 64
-                    && digest
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/'),
-                "{name}: {url} has no sha384 integrity: `{integrity}`"
-            );
-            assert!(
-                tag.attribute("crossorigin").is_some(),
-                "{name}: {url} has no crossorigin"
-            );
-            assert!(
-                csp.as_deref().is_some_and(|c| c.contains(origin)),
-                "{name}: the CSP does not name the origin of {url}"
-            );
-        }
-        // The CSP names no origin the allowlist does not.
-        for source in csp.expect("a CSP").split_whitespace() {
-            let source = source.trim_end_matches(';');
-            if source.starts_with("https://") || source.starts_with("http://") {
-                assert!(
-                    ASSET_ALLOWLIST.contains(&source),
-                    "{name}: the CSP allows {source}"
-                );
+            if let Some(url) = url_of(&tag).filter(|u| loads && u.contains("://")) {
+                panic!("{name} loads {url} from another origin");
             }
         }
+        // Styles come only from the site, and no font is fetched: the
+        // CSP names no origin, and `font-src` falls back to 'none'.
+        let csp = csp.expect("a CSP");
+        assert!(
+            !csp.contains("://") && !csp.contains("font-src"),
+            "{name}: the CSP is {csp}"
+        );
+        assert!(csp.contains("style-src 'self';"), "{name}: {csp}");
+        assert!(!page.contains("jsdelivr"), "{name} names the font CDN");
     }
-    assert!(assets > 100, "only {assets} external assets were checked");
     // The stylesheet and the search script load nothing of their own:
-    // no import, no `url(`, and, past the comment that names the site,
-    // no absolute URL.
+    // no import, no `url(`, no web font, and, past the comment that names
+    // the site, no absolute URL.
     for file in ["style.css", "search.js"] {
         let text = &site[file];
         let code = text.split_once('\n').map_or("", |(_, rest)| rest);
         assert!(
             !text.contains("@import")
                 && !text.contains("url(")
+                && !text.contains("@font-face")
                 && !code.contains("http://")
                 && !code.contains("https://"),
             "{file} names another origin"
@@ -2117,7 +2083,11 @@ fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
     let site = real_site();
     let llms = &site["llms.txt"];
     let start = entry_urls(llms_group(llms, "Start here"));
-    assert_eq!(start.len(), 8, "{start:?}");
+    assert_eq!(start.len(), 9, "{start:?}");
+    assert!(
+        start.contains(&"guide/threat-model.md".to_string()),
+        "{start:?}"
+    );
     assert_eq!(start[0], "agent-setup.md");
     assert_eq!(start[start.len() - 1], "guide/what-works-today.md");
     for url in entry_urls(llms) {

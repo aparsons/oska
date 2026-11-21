@@ -615,7 +615,7 @@ fn llms_full_omits(all: Site, pages: List<Page>) -> Untrusted<String> {
 // agent guide, the error codes, and what works today. A page the site does
 // not have is left out. `codes.json` is the error codes, all in one file.
 fn start_pages() -> List<String> {
-    ["agent-setup.html", "guide/quickstart.html", "guide/language-tour.html", "guide/capabilities.html", "guide/untrusted-data.html", "guide/agent-guide.html", "codes.json", "guide/what-works-today.html"]
+    ["agent-setup.html", "guide/quickstart.html", "guide/language-tour.html", "guide/capabilities.html", "guide/untrusted-data.html", "guide/threat-model.html", "guide/agent-guide.html", "codes.json", "guide/what-works-today.html"]
 }
 
 // The `## Start here` group of `llms.txt`, or nothing if no page of it
@@ -972,28 +972,11 @@ fn plain_text(text: Untrusted<String>) -> Untrusted<String> {
 // ---- The layout every page shares --------------------------------------------
 
 // The Content Security Policy: no script runs but the site's own search
-// script, which may fetch only the site's own files, and styles and fonts
-// load only from the site and the two pinned font packages on the CDN.
+// script, which may fetch only the site's own files, and styles load only
+// from the site. The site uses the system's own fonts, so it fetches no
+// font file, and `font-src` falls back to `default-src 'none'`.
 fn csp() -> String {
-    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; img-src 'self'; base-uri 'none'; form-action 'none'"
-}
-
-// The web fonts: Fontsource's CSS on jsDelivr, each at an exact version,
-// with Subresource Integrity, so a changed file is refused. The CSS loads
-// its font files from the same versioned path. To update one, change the
-// version and set `integrity` to the new file's
-// `openssl dgst -sha384 -binary | openssl base64 -A`.
-fn fonts() -> html.Html {
-    let inter_regular = font_stylesheet("inter", "latin-400.css", "zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6")
-    let inter_bold = font_stylesheet("inter", "latin-700.css", "qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH")
-    let mono_regular = font_stylesheet("jetbrains-mono", "latin-400.css", "rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu")
-    inter_regular.concat(inter_bold).concat(mono_regular)
-}
-
-// One stylesheet of the Fontsource package `package`, version 5.3.0 (the
-// version the CSP names), checked against its SHA-384 `integrity`.
-fn font_stylesheet(package: String, file: String, integrity: String) -> html.Html {
-    markup("<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@fontsource/{package}@5.3.0/{file}\" integrity=\"sha384-{integrity}\" crossorigin=\"anonymous\">\n")
+    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"
 }
 
 // The document around every page's body.
@@ -1007,7 +990,7 @@ fn layout(all: Site, page: Page) -> html.Html {
     let main = wrap("<main id=\"main-content\">\n", page.body, "</main>\n")
     let footer = site_footer(all)
     let data = if page.path == "index.html" { structured_data(all.version) } else { empty() }
-    head.concat(title).concat(description(page, name)).concat(about(page)).concat(data).concat(fonts()).concat(style).concat(banner(all.version)).concat(header).concat(main).concat(footer)
+    head.concat(title).concat(description(page, name)).concat(about(page)).concat(data).concat(style).concat(banner(all.version)).concat(header).concat(main).concat(footer)
 }
 
 // What the home page's title says Oska is. It is the home page's title
