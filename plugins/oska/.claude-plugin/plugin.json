@@ -1,0 +1,8 @@
+{
+  "name": "oska",
+  "version": "0.6.0",
+  "description": "Check Oska code with oskac after each edit and before the agent finishes.",
+  "author": {
+    "name": "Oska"
+  }
+}

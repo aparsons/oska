@@ -1,0 +1,10 @@
+.claude-plugin/marketplace.json: name
+.claude-plugin/marketplace.json: owner.name
+.claude-plugin/marketplace.json: metadata.description
+.claude-plugin/marketplace.json: plugins[].name
+.claude-plugin/marketplace.json: plugins[].source = ./plugins/oska
+.claude-plugin/marketplace.json: plugins[].description
+plugins/oska/.claude-plugin/plugin.json: name
+plugins/oska/.claude-plugin/plugin.json: version
+plugins/oska/.claude-plugin/plugin.json: description
+plugins/oska/.claude-plugin/plugin.json: author.name
