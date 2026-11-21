@@ -1,12 +1,11 @@
-//! Fewer short copies of text (#572): `String.join` pushes a part of one
-//! character as that character, `String.replace` with a replacement of the
-//! same length copies the text once and overwrites each match, `trim`,
-//! `slice` and a `replace` that finds nothing share the text they were
-//! given when it is unchanged, `Html.raw` and `TrustedHtml.new` share
-//! their markup, an `Int` or `String` hole is written straight into the
-//! interpolated text, and a struct or variant shares its type's name. A
-//! program sees the same text as before, and under `--max-memory` each
-//! text is still charged as a text of its own.
+//! Fewer short copies of text (#572): `String.replace` with a
+//! replacement of the same length copies the text once and overwrites
+//! each match, `trim`, `slice` and a `replace` that finds nothing share
+//! the text they were given when it is unchanged, `Html.raw` and
+//! `TrustedHtml.new` share their markup, an `Int` or `String` hole is
+//! written straight into the interpolated text, and a struct or variant
+//! shares its type's name. A program sees the same text as before, and
+//! under `--max-memory` each text is still charged as a text of its own.
 
 mod common;
 
@@ -200,5 +199,103 @@ fn under_max_memory_a_few_unchanged_texts_fit() {
     let src = keeps_unchanged("text.trim()").replace("while i < 14", "while i < 2");
     let outcome = run_metered(&src);
     assert!(outcome.panic.is_none(), "{outcome:#?}");
+    assert_eq!(outcome.stdout, "kept 2\n");
+}
+
+/// Keeps `rows` lists of `per_row` values of type `row_ty`, each made by
+/// `make` after `setup`, under `use std.html`.
+fn keeps(rows: u32, per_row: u32, row_ty: &str, setup: &str, make: &str) -> String {
+    format!(
+        "use std.html\n\
+         fn main(io: Stdout) {{\n    \
+         {setup}\n    \
+         var kept: List<List<{row_ty}>> = []\n    \
+         var i = 0\n    \
+         while i < {rows} {{\n        \
+         var row: List<{row_ty}> = []\n        \
+         var j = 0\n        \
+         while j < {per_row} {{\n            \
+         row.push({make})\n            \
+         j = j + 1\n        \
+         }}\n        \
+         kept.push(row)\n        \
+         i = i + 1\n    \
+         }}\n    \
+         let n = kept.len()\n    \
+         let _ = io.println(\"kept {{n}}\")\n}}\n"
+    )
+}
+
+fn assert_over_the_limit(src: &str, what: &str) {
+    let outcome = run_metered(src);
+    let Some(panic) = &outcome.panic else {
+        panic!("{what} passes 1 MiB when each text is charged: {outcome:#?}");
+    };
+    assert_eq!(panic.code, codes::MEMORY_LIMIT, "{what}: {panic:#?}");
+    assert_eq!(outcome.stdout, "", "{what}");
+}
+
+/// 1,000 markup values over one 2,000-byte text: about 2 MB when each
+/// value's markup is charged as a text of its own, past 1 MiB; about
+/// 0.2 MB if only the values holding it were charged.
+#[test]
+fn under_max_memory_raw_and_trusted_markup_is_charged_as_a_text() {
+    let setup = "let text = \"a\".repeat(2000)\n    \
+                 let trusted = html.TrustedHtml.new(text)";
+    assert_over_the_limit(
+        &keeps(
+            1,
+            1000,
+            "html.TrustedHtml",
+            setup,
+            "html.TrustedHtml.new(text)",
+        ),
+        "TrustedHtml.new",
+    );
+    assert_over_the_limit(
+        &keeps(1, 1000, "html.Html", setup, "html.Html.raw(trusted)"),
+        "Html.raw",
+    );
+    let fits = keeps(1, 100, "html.Html", setup, "html.Html.raw(trusted)");
+    let outcome = run_metered(&fits);
+    assert!(outcome.panic.is_none(), "100 fit: {outcome:#?}");
+    assert_eq!(outcome.stdout, "kept 1\n");
+}
+
+/// Interpolations of a `String` hole, 1,000 of a 2,000-byte text, and of
+/// an `Int` hole, 14,000 of a 19-digit integer: each past 1 MiB when
+/// every interpolated text is charged as a text of its own, and under it
+/// if only the lists were.
+#[test]
+fn under_max_memory_interpolated_holes_are_charged_as_a_text() {
+    assert_over_the_limit(
+        &keeps(
+            1,
+            1000,
+            "String",
+            "let text = \"a\".repeat(2000)",
+            "\"{text}\"",
+        ),
+        "a String hole",
+    );
+    assert_over_the_limit(
+        &keeps(
+            14,
+            1000,
+            "String",
+            "let big = 1000000000000000000",
+            "\"{big}\"",
+        ),
+        "an Int hole",
+    );
+    let fits = keeps(
+        2,
+        1000,
+        "String",
+        "let big = 1000000000000000000",
+        "\"{big}\"",
+    );
+    let outcome = run_metered(&fits);
+    assert!(outcome.panic.is_none(), "2,000 fit: {outcome:#?}");
     assert_eq!(outcome.stdout, "kept 2\n");
 }

@@ -148,6 +148,9 @@ pub struct Interpreter<'p, 'h> {
     pub(crate) ascii_texts: crate::data::AsciiTexts,
     /// The texts of the string literals evaluated so far, each made once.
     literals: memory::Literals,
+    /// Keeps the type and variant names values share for the run
+    /// ([`memory::shared_name`]).
+    _names: memory::Names,
 }
 
 /// What calls have looked up so far, so that each is looked up once, and
@@ -244,6 +247,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             calls_seen: Box::default(),
             ascii_texts: crate::data::AsciiTexts::default(),
             literals: memory::Literals::default(),
+            _names: memory::Names::start(),
         }
     }
 

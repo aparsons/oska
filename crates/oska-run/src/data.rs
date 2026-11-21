@@ -192,25 +192,22 @@ fn string_replace(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value
     if from.is_empty() {
         return Ok(args[0].clone());
     }
-    let found = if memory::metered() {
-        text.matches(from).count()
-    } else {
-        0
-    };
-    if !memory::metered() {
-        let mut matches = text.match_indices(from).peekable();
-        // Without a match the text is shared, not copied (#572).
-        if matches.peek().is_none() {
-            return Ok(args[0].clone());
-        }
-        if from.len() == to.len() {
-            return memory::text_of_len(text.len(), span, || {
-                replaced_in_place(text, matches.map(|(at, _)| at), to)
-            });
-        }
+    if memory::metered() {
+        // Charged at the replaced text's length before it is built.
+        let found = text.matches(from).count();
+        let len = (text.len() - found * from.len()).saturating_add(found.saturating_mul(to.len()));
+        return memory::text_of_len(len, span, || text.replace(from, to));
     }
-    let len = (text.len() - found * from.len()).saturating_add(found.saturating_mul(to.len()));
-    memory::text_of_len(len, span, || text.replace(from, to))
+    let mut matches = text.match_indices(from).peekable();
+    // Without a match the text is shared, not copied (#572).
+    if matches.peek().is_none() {
+        return Ok(args[0].clone());
+    }
+    if from.len() == to.len() {
+        let replaced = replaced_in_place(text, matches.map(|(at, _)| at), to);
+        return memory::text(&replaced, span);
+    }
+    memory::text(&text.replace(from, to), span)
 }
 
 /// `text` with the match at each of `starts` replaced by `to`, which is
@@ -228,35 +225,11 @@ fn replaced_in_place(text: &str, starts: impl Iterator<Item = usize>, to: &str) 
 
 /// `String.join(self, parts)`: `parts` with `self` between each two.
 fn string_join(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
-    let parts = args[1].as_list();
+    let parts: Vec<&str> = args[1].as_list().iter().map(Value::as_str).collect();
     let separator = args[0].as_str();
-    let len = parts.iter().map(|part| part.as_str().len()).sum::<usize>()
+    let len = parts.iter().map(|part| part.len()).sum::<usize>()
         + separator.len() * parts.len().saturating_sub(1);
-    memory::text_of_len(len, span, || {
-        let mut joined = String::with_capacity(len);
-        for (i, part) in parts.iter().enumerate() {
-            if i > 0 {
-                push_piece(&mut joined, separator);
-            }
-            push_piece(&mut joined, part.as_str());
-        }
-        joined
-    })
-}
-
-/// Push `piece` onto `text`. A piece of one character, such as each
-/// text `String.chars` makes, is pushed as that character: copying it as
-/// a slice costs a call to `memcpy` for one to four bytes, which on
-/// musl's x86_64 `memcpy` takes longer than a copy of 64 bytes (#572).
-/// An empty piece pushes nothing.
-#[inline]
-fn push_piece(text: &mut String, piece: &str) {
-    let mut chars = piece.chars();
-    match (chars.next(), chars.next()) {
-        (None, _) => {}
-        (Some(c), None) => text.push(c),
-        (Some(_), Some(_)) => text.push_str(piece),
-    }
+    memory::text_of_len(len, span, || parts.join(separator))
 }
 
 /// `String.chars(self)`: each character as a text of its own.

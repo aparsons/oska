@@ -155,14 +155,18 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
 /// and kept in its [`IntrinsicName`], so a call site that runs many times
 /// looks its name up once (#502).
 pub fn resolved(name: &IntrinsicName) -> Intrinsic {
-    let index = index();
-    let at = name.resolve_with(|name| {
-        *index
+    index().all[resolved_at(name) as usize]
+}
+
+/// Where the intrinsic the call site `name` names is in the [`Index`],
+/// looked up on the first call and kept in `name`.
+fn resolved_at(name: &IntrinsicName) -> u32 {
+    name.resolve_with(|name| {
+        *index()
             .by_name
             .get(name)
             .expect("`crate::run` refuses a call to a missing intrinsic")
-    });
-    index.all[at as usize]
+    })
 }
 
 /// The prelude `Display` implementations an interpolation hole can show
@@ -187,12 +191,7 @@ pub(crate) fn display_in_place(name: &IntrinsicName) -> Option<InPlace> {
             index.by_name.get("String.to_string").copied(),
         ]
     });
-    let at = name.resolve_with(|name| {
-        *index
-            .by_name
-            .get(name)
-            .expect("`crate::run` refuses a call to a missing intrinsic")
-    });
+    let at = resolved_at(name);
     if Some(at) == int {
         Some(InPlace::Int)
     } else if Some(at) == text {

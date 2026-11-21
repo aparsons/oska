@@ -379,6 +379,33 @@ fn text_metered(text: &str, span: Span) -> Result<Value, Panic> {
     Ok(Value::Str(text))
 }
 
+/// Texts kept by the address of the `&str` they were made from, each
+/// made once and then shared: the string literals of [`Literals`] and the
+/// type and variant names of [`shared_name`].
+///
+/// The address only finds the text: a text whose bytes differ (an
+/// address reused for another text) is made again, so the text given is
+/// always the one asked for.
+#[derive(Default)]
+struct AddressTexts {
+    texts: HashMap<usize, Rc<str>, BuildHasherDefault<AddressHasher>>,
+}
+
+impl AddressTexts {
+    /// `text`, shared.
+    #[inline]
+    fn shared(&mut self, text: &str) -> Rc<str> {
+        let kept = self
+            .texts
+            .entry(text.as_ptr() as usize)
+            .or_insert_with(|| Rc::from(text));
+        if **kept != *text {
+            *kept = Rc::from(text);
+        }
+        Rc::clone(kept)
+    }
+}
+
 /// The texts of the string literals a run has evaluated, each made once
 /// (#500): evaluating a literal again shares its text instead of copying
 /// it into a new one. Under `--max-memory` each evaluation still makes
@@ -387,72 +414,76 @@ fn text_metered(text: &str, span: Span) -> Result<Value, Panic> {
 #[derive(Default)]
 pub(crate) struct Literals {
     /// Each literal's text, by the address of the literal in the program.
-    texts: HashMap<usize, Rc<str>, BuildHasherDefault<AddressHasher>>,
+    texts: AddressTexts,
 }
 
 impl Literals {
     /// The string literal `literal` as a text value, made at `span`.
-    ///
-    /// The address only finds the text: a text whose bytes differ from
-    /// `literal` (an address the program reused for another literal) is
-    /// made again, so the value is always `literal`'s.
     #[inline]
     pub(crate) fn text(&mut self, literal: &str, span: Span) -> Result<Value, Panic> {
         if metered() {
             return text_metered(literal, span);
         }
-        let text = self
-            .texts
-            .entry(literal.as_ptr() as usize)
-            .or_insert_with(|| Rc::from(literal));
-        if **text != *literal {
-            *text = Rc::from(literal);
-        }
-        Ok(Value::Str(Rc::clone(text)))
+        Ok(Value::Str(self.texts.shared(literal)))
     }
 }
 
-/// The most names [`shared_name`] keeps for a thread. The names it is
-/// given are the program's and the prelude's type and variant names, so
-/// a run keeps far fewer; past this, a name is copied as before.
-const SHARED_NAMES: usize = 4096;
-
 thread_local! {
-    /// Each type and variant name [`shared_name`] has made, by its
-    /// address, as [`Literals`] keeps texts.
-    static NAMES: RefCell<HashMap<usize, Rc<str>, BuildHasherDefault<AddressHasher>>> =
-        RefCell::default();
+    /// The type and variant names [`shared_name`] has made on this
+    /// thread, while a run is under way here ([`Names`]).
+    static NAMES: RefCell<Option<AddressTexts>> = const { RefCell::new(None) };
 }
 
-/// The type or variant name `name` as an `Rc<str>`, made once for each
-/// thread and then shared (#572): a struct or variant value holds its
-/// type's name, and making a value would otherwise copy it. Like
-/// [`Literals::text`], the address only finds the name: one whose bytes
-/// differ is made again. Nothing is charged for a name under
-/// `--max-memory` by its `Rc`, only by its length, so sharing it changes
-/// no charge.
-pub(crate) fn shared_name(name: &str) -> Rc<str> {
-    NAMES.with(|names| {
-        let mut names = names.borrow_mut();
-        let key = name.as_ptr() as usize;
-        if let Some(kept) = names.get_mut(&key) {
-            if **kept != *name {
-                *kept = Rc::from(name);
+/// The names [`shared_name`] shares, for as long as one run's
+/// [`crate::interp::Interpreter`] lives on this thread: the first one on
+/// a thread starts them, and when the last one ends they are let go of,
+/// so a host that runs many programs on one thread keeps none between
+/// runs.
+pub(crate) struct Names {
+    /// Whether this one started them, and so ends them.
+    first: bool,
+}
+
+impl Names {
+    pub(crate) fn start() -> Names {
+        NAMES.with(|names| {
+            let mut names = names.borrow_mut();
+            let first = names.is_none();
+            if first {
+                *names = Some(AddressTexts::default());
             }
-            return Rc::clone(kept);
-        }
-        let made: Rc<str> = Rc::from(name);
-        if names.len() < SHARED_NAMES {
-            names.insert(key, Rc::clone(&made));
-        }
-        made
-    })
+            Names { first }
+        })
+    }
 }
 
-/// Hashes the addresses that key [`Literals`]: one multiply, where the
+impl Drop for Names {
+    fn drop(&mut self) {
+        if self.first {
+            // A thread being torn down may have let go of them already.
+            let _ = NAMES.try_with(|names| names.borrow_mut().take());
+        }
+    }
+}
+
+/// The type or variant name `name` as an `Rc<str>`, made once in a run
+/// and then shared (#572): a struct or variant value holds its type's
+/// name, and making a value would otherwise copy it. Outside a run
+/// ([`Names`]) each name is made anew. Nothing is charged for a name
+/// under `--max-memory` by its `Rc`, only by its length, so sharing it
+/// changes no charge.
+pub(crate) fn shared_name(name: &str) -> Rc<str> {
+    NAMES
+        .try_with(|names| names.borrow_mut().as_mut().map(|names| names.shared(name)))
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| Rc::from(name))
+}
+
+/// Hashes the addresses that key [`AddressTexts`]: one multiply, where the
 /// standard hasher would hash eight bytes with SipHash on every literal.
 #[derive(Default)]
-pub(crate) struct AddressHasher(u64);
+struct AddressHasher(u64);
 
 impl Hasher for AddressHasher {
     fn write(&mut self, bytes: &[u8]) {
@@ -742,4 +773,34 @@ fn moved(before: usize, items: &Rc<Vec<Value>>, actual: u64, charged: u64) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{shared_name, Names};
+    use std::rc::Rc;
+
+    #[test]
+    fn names_are_shared_only_while_a_run_is_under_way() {
+        const NAME: &str = "Point";
+        let outside = (shared_name(NAME), shared_name(NAME));
+        assert!(!Rc::ptr_eq(&outside.0, &outside.1), "no run: made anew");
+
+        let run = Names::start();
+        let nested = Names::start();
+        let (first, second) = (shared_name(NAME), shared_name(NAME));
+        assert!(Rc::ptr_eq(&first, &second), "in a run: shared");
+        drop(nested);
+        assert!(
+            Rc::ptr_eq(&first, &shared_name(NAME)),
+            "the outer run keeps them"
+        );
+        drop(run);
+        // Only the values hold the name now: the thread let go of it.
+        assert_eq!(Rc::strong_count(&first), 2);
+        assert!(
+            !Rc::ptr_eq(&first, &shared_name(NAME)),
+            "after the run: made anew"
+        );
+    }
 }
