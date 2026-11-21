@@ -12,6 +12,7 @@ v0.7.0 ships two Linux builds of `oskac`, so it runs on any Linux, and publishes
 - **The receipt and `oskac self info` name the Linux build.** The receipt gains `linux_build` and `libc_forced`, and `oskac self info` gains `linux_build`.
 - **The image `ghcr.io/aparsons/oskac`** holds only `oskac`, runs as a non-root user, and is covered by the release signature. See [Run oskac in a container](docs/guide/install.md#run-oskac-in-a-container).
 - **`oskac doc` prints the API reference** of the prelude, `std.html`, `std.sql` and `std.proc`: each public item's signature, authority, description, and whether it runs or only checks. Give it a module (`std.sql`) or an item (`List.push`) to see just that, and `--format=json` for tools. The same reference is on oskalang.dev at `/api/`, with `/api.json` for agents. See [`oskac doc`](docs/guide/cli-reference.md#oskac-doc).
+- **A Claude Code plugin.** `/plugin marketplace add aparsons/oska`, then `/plugin install oska@oska`, turns on the post-edit check and the Stop gate in every project and adds the loop as the `oska` skill, in place of copying the hook settings. See [the Claude Code plugin](docs/guide/agent-guide.md#the-claude-code-plugin).
 
 ## v0.6.0
 

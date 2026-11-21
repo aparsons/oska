@@ -41,6 +41,20 @@ const AGENT_FILES: [&str; 4] = [
     "oska-check.sh",
 ];
 
+/// The text of every file an agent reads: [`AGENT_FILES`], then every
+/// file of the Claude Code plugin, each with its name.
+fn agent_texts() -> Vec<(String, String)> {
+    let mut texts: Vec<(String, String)> = AGENT_FILES
+        .iter()
+        .map(|name| (name.to_string(), setup_file(name)))
+        .collect();
+    for file in plugin_files() {
+        let text = read(&repo_root().join(&file));
+        texts.push((file, text));
+    }
+    texts
+}
+
 fn oskac(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_oskac"))
         .args(args)
@@ -99,8 +113,8 @@ fn every_flag_the_agent_files_mention_exists_in_the_tool_they_are_for() {
     let ps1 = read(&repo_root().join("scripts/install/install.ps1"));
     assert!(oskac_flags.contains("--format") && installer_flags.contains("--json"));
     let mut checked = BTreeSet::new();
-    for name in AGENT_FILES {
-        for line in setup_file(name).lines() {
+    for (name, text) in agent_texts() {
+        for line in text.lines() {
             for flag in flags_in(line) {
                 // A line that runs the installer uses its flags, one that
                 // runs `oskac` uses `oskac`'s; any other line, either's.
@@ -161,8 +175,18 @@ fn every_oskac_command_the_agent_files_mention_exists() {
     let commands = oskac_commands();
     assert!(commands.contains("check") && commands.contains("explain"));
     let mut seen = BTreeSet::new();
-    for name in AGENT_FILES {
-        for code in code_lines(&setup_file(name)) {
+    for (name, text) in agent_texts() {
+        // In a JSON file, the code is the hooks' commands.
+        let lines = if name.ends_with(".json") {
+            text.lines()
+                .filter(|line| line.contains("\"command\""))
+                .map(str::to_string)
+                .collect()
+        } else {
+            code_lines(&text)
+        };
+        for code in lines {
+            let code = code.replace('"', " ");
             let words: Vec<&str> = code.split_whitespace().collect();
             for (at, word) in words.iter().enumerate() {
                 if *word != "oskac" && !word.ends_with("/oskac") {
@@ -328,8 +352,7 @@ fn nothing_is_piped_to_a_shell_but_the_official_installer() {
 
 #[test]
 fn the_agent_files_name_no_host_but_oskalang_dev_and_no_privileged_command() {
-    for name in AGENT_FILES {
-        let text = setup_file(name);
+    for (name, text) in agent_texts() {
         let mut rest = text.as_str();
         while let Some(at) = rest.find("http") {
             let url = &rest[at..];
@@ -1000,4 +1023,394 @@ fn the_hook_script_reads_only_its_input_and_the_file_and_sends_nothing() {
         assert!(!script.contains(word), "the hook script contains `{word}`");
     }
     assert!(script.starts_with("#!/bin/sh\n"));
+}
+
+// ---- The Claude Code plugin (spec #206) -------------------------------------------------------
+
+/// The marketplace file at the repository root, from which
+/// `/plugin marketplace add aparsons/oska` reads the plugin list.
+const MARKETPLACE: &str = ".claude-plugin/marketplace.json";
+
+/// The plugin's directory, from the repository root.
+const PLUGIN_DIR: &str = "plugins/oska";
+
+/// Every file of the plugin, as `/`-separated paths from the repository
+/// root, sorted, with the marketplace file first.
+fn plugin_files() -> Vec<String> {
+    fn walk(root: &Path, relative: &str, out: &mut Vec<String>) {
+        let mut names: Vec<_> = std::fs::read_dir(root.join(relative))
+            .unwrap_or_else(|e| panic!("cannot list {relative}: {e}"))
+            .map(|e| e.expect("a directory entry").file_name())
+            .collect();
+        names.sort();
+        for name in names {
+            let path = format!("{relative}/{}", name.to_string_lossy());
+            if root.join(&path).is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = vec![MARKETPLACE.to_string()];
+    walk(&repo_root(), PLUGIN_DIR, &mut files);
+    files
+}
+
+/// `text` with Windows line ends made Unix ones, for a clone that checks
+/// files out with CRLF.
+fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+fn repo_json(relative: &str) -> Json {
+    Json::parse(&read(&repo_root().join(relative)))
+}
+
+/// The workspace version in `Cargo.toml`, such as `0.6.0`.
+fn workspace_version() -> String {
+    read(&repo_root().join("Cargo.toml"))
+        .split("[workspace.package]")
+        .nth(1)
+        .expect("Cargo.toml has a [workspace.package] table")
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("version = "))
+        .expect("[workspace.package] names a version")
+        .trim_matches('"')
+        .to_string()
+}
+
+#[test]
+fn the_marketplace_lists_exactly_the_oska_plugin_from_this_repository() {
+    let marketplace = repo_json(MARKETPLACE);
+    // `/plugin install oska@oska`: the plugin `oska` from the marketplace `oska`.
+    assert_eq!(string(marketplace.get("name")), "oska");
+    assert!(!string(marketplace.get("owner").and_then(|o| o.get("name"))).is_empty());
+    let Some(Json::Arr(plugins)) = marketplace.get("plugins") else {
+        panic!("a `plugins` list");
+    };
+    assert_eq!(plugins.len(), 1, "exactly one plugin");
+    let entry = &plugins[0];
+    assert_eq!(string(entry.get("name")), "oska");
+    assert!(!string(entry.get("description")).is_empty());
+    // A path in this repository, never another repository or a URL: the
+    // plugin comes from the same signed repository as the release.
+    assert_eq!(string(entry.get("source")), format!("./{PLUGIN_DIR}"));
+    assert!(repo_root()
+        .join(PLUGIN_DIR)
+        .join(".claude-plugin/plugin.json")
+        .is_file());
+}
+
+#[test]
+fn the_plugin_manifest_names_oska_at_the_workspace_version() {
+    let manifest = repo_json(&format!("{PLUGIN_DIR}/.claude-plugin/plugin.json"));
+    assert_eq!(string(manifest.get("name")), "oska");
+    // The release process bumps both (docs/agents/release.md), so a user
+    // can tell which `oskac` the plugin's guidance describes.
+    assert_eq!(
+        string(manifest.get("version")),
+        workspace_version(),
+        "set `version` in {PLUGIN_DIR}/.claude-plugin/plugin.json to the workspace version"
+    );
+    assert!(!string(manifest.get("description")).is_empty());
+    assert!(!string(manifest.get("author").and_then(|a| a.get("name"))).is_empty());
+    let marketplace = repo_json(MARKETPLACE);
+    let Some(Json::Arr(plugins)) = marketplace.get("plugins") else {
+        panic!("a `plugins` list");
+    };
+    assert_eq!(
+        plugins[0].get("description"),
+        manifest.get("description"),
+        "one description in both files"
+    );
+}
+
+/// The key paths of `json` (`a.b[].c`), each with its value when it is a
+/// string that decides what runs or where the plugin comes from.
+fn key_paths(json: &Json, prefix: &str, out: &mut Vec<String>) {
+    match json {
+        Json::Obj(fields) => {
+            for (key, value) in fields {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                match value {
+                    Json::Str(s)
+                        if ["source", "matcher", "type", "command"].contains(&key.as_str()) =>
+                    {
+                        out.push(format!("{path} = {s}"));
+                    }
+                    Json::Obj(_) | Json::Arr(_) => key_paths(value, &path, out),
+                    _ => out.push(path),
+                }
+            }
+        }
+        Json::Arr(items) => items
+            .iter()
+            .for_each(|item| key_paths(item, &format!("{prefix}[]"), out)),
+        _ => out.push(prefix.to_string()),
+    }
+}
+
+/// What the plugin is allowed to do, one line per key of each JSON file,
+/// with the values that decide what runs. A change to it, such as a new
+/// hook or a new kind of key, shows in the reviewed diff of the fixture.
+fn plugin_authority() -> String {
+    let mut out = String::new();
+    for file in plugin_files() {
+        if file.ends_with(".json") {
+            let mut paths = Vec::new();
+            key_paths(&repo_json(&file), "", &mut paths);
+            for path in paths {
+                out.push_str(&format!("{file}: {path}\n"));
+            }
+        } else {
+            // A skill's front matter keys, such as `paths`.
+            out.push_str(&format!("{file}\n"));
+            let text = lf(&read(&repo_root().join(&file)));
+            if let Some(front) = text
+                .strip_prefix("---\n")
+                .and_then(|rest| rest.split_once("\n---\n"))
+            {
+                for line in front.0.lines() {
+                    let key = line.split(':').next().unwrap_or(line);
+                    out.push_str(&format!("{file}: {key}\n"));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_plugin_authority_matches_its_reviewed_fixture() {
+    let fixture = repo_root().join("crates/oskac/tests/fixtures/plugin-authority.txt");
+    let actual = plugin_authority();
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        std::fs::write(&fixture, &actual).expect("should write the fixture");
+    }
+    assert_eq!(
+        lf(&read(&fixture)),
+        actual,
+        "the plugin's files or keys changed; review the change, then rerun with \
+         UPDATE_GOLDEN=1 cargo test -p oskac --test agent_setup and commit the fixture"
+    );
+}
+
+#[test]
+fn the_plugin_grants_no_claude_code_permission_and_holds_no_program() {
+    let allowed: BTreeSet<&str> = [
+        // The marketplace.
+        "name",
+        "owner",
+        "metadata",
+        "description",
+        "plugins",
+        "source",
+        // plugin.json.
+        "version",
+        "author",
+        // The hooks.
+        "hooks",
+        "PostToolUse",
+        "Stop",
+        "matcher",
+        "type",
+        "command",
+        "timeout",
+    ]
+    .into();
+    for file in plugin_files() {
+        // Text and JSON only: nothing a reviewer cannot read, nothing to run.
+        assert!(
+            file.ends_with(".json") || file.ends_with(".md"),
+            "{file} is not JSON or Markdown"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(repo_root().join(&file))
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0, "{file} is executable");
+        }
+        let text = read(&repo_root().join(&file));
+        assert!(!text.starts_with("#!"), "{file} is a script");
+        if file.ends_with(".json") {
+            let mut all = Vec::new();
+            keys(&Json::parse(&text), &mut all);
+            for key in &all {
+                assert!(
+                    allowed.contains(key.as_str()),
+                    "{file}: key `{key}` is not allowed in the plugin"
+                );
+            }
+        }
+        // Nothing fetches or sends data, and no file reaches into the
+        // plugin's own directory for a program to run.
+        for word in ["curl", "wget", "CLAUDE_PLUGIN_ROOT", "allowed-tools"] {
+            assert!(!text.contains(word), "{file} mentions `{word}`");
+        }
+        if file.ends_with(".json") {
+            for word in [
+                "permissions",
+                "allowedTools",
+                "\"allow\"",
+                "\"deny\"",
+                "\"env\"",
+                "mcpServers",
+                "lspServers",
+                "agents",
+                "bypass",
+                "apiKey",
+            ] {
+                assert!(!text.contains(word), "{file} mentions `{word}`");
+            }
+        }
+    }
+}
+
+// ---- The plugin's `oska` skill (#211) ---------------------------------------------------------
+
+/// The skill, in the plugin's default skills directory.
+const SKILL: &str = "plugins/oska/skills/oska/SKILL.md";
+
+/// When the skill applies, in the words an agent matches a task against.
+/// Every enabled plugin's skill descriptions sit in the agent's context on
+/// every turn, so it stays short.
+const SKILL_DESCRIPTION: &str = "Check, fix, run and test Oska code with oskac. \
+Use when writing or changing Oska code, in .osk files or oska.toml.";
+
+/// The skill as the generator writes it: front matter in the Agent Skills
+/// format, then the `AGENTS.md` template unchanged, which stays the one
+/// hand-written copy of the guidance. `paths` loads the skill on its own
+/// only for Oska files; an agent that does not know the key ignores it.
+fn generated_skill() -> String {
+    format!(
+        "---\nname: oska\ndescription: {SKILL_DESCRIPTION}\npaths: [\"**/*.osk\", \"**/oska.toml\"]\n---\n\n{}",
+        lf(&setup_file("AGENTS.template.md"))
+    )
+}
+
+#[test]
+fn the_skill_is_the_agents_template_with_front_matter() {
+    let path = repo_root().join(SKILL);
+    let expected = generated_skill();
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        std::fs::create_dir_all(path.parent().expect("a directory")).expect("should create it");
+        std::fs::write(&path, &expected).expect("should write the skill");
+    }
+    assert!(
+        lf(&read(&path)) == expected,
+        "{SKILL} differs from site/agent-setup/AGENTS.template.md with its front matter; \
+         edit the template, not the skill, then regenerate it with \
+         UPDATE_GOLDEN=1 cargo test -p oskac --test agent_setup and commit both"
+    );
+}
+
+#[test]
+fn the_skill_follows_the_agent_skills_format() {
+    let skill = lf(&read(&repo_root().join(SKILL)));
+    let front = skill
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .expect("front matter between `---` lines")
+        .0;
+    let field = |key: &str| {
+        front
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+            .unwrap_or_else(|| panic!("a `{key}` field"))
+    };
+    // The name: lowercase letters, digits and hyphens, the directory's name.
+    let name = field("name");
+    assert_eq!(name, "oska");
+    assert!(name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+    assert!(SKILL.ends_with(&format!("/{name}/SKILL.md")));
+    // The description: within the format's 1024 characters, and short
+    // enough to cost little on every turn.
+    let description = field("description");
+    assert!(
+        description.len() <= 200,
+        "a {}-character description",
+        description.len()
+    );
+    // A plain YAML scalar: a `: ` or ` #` inside it would end it early.
+    assert!(!description.contains(": ") && !description.contains(" #"));
+    for word in ["Oska", ".osk", "oska.toml"] {
+        assert!(description.contains(word), "the description names {word}");
+    }
+    assert!(skill.lines().count() < 500, "a body of reasonable length");
+    // The only model-invocable skill: its standing cost is one description.
+    let skills_dir = repo_root().join("plugins/oska/skills");
+    let skills: Vec<_> = std::fs::read_dir(&skills_dir)
+        .expect("a skills directory")
+        .collect();
+    assert_eq!(skills.len(), 1, "one skill in the plugin");
+    // The front matter names no host and no Claude Code feature but `paths`,
+    // so the body is the vendor-neutral template and nothing more.
+    assert!(!front.contains("http") && !front.to_lowercase().contains("claude"));
+}
+
+// ---- The plugin's hooks and how to install it (#212) ----------------------------------------
+
+#[test]
+fn the_plugin_hooks_are_the_published_hook_settings() {
+    // Both files have the same `{"hooks": {...}}` shape, so the plugin and
+    // the settings a project copies run the same events, matchers and
+    // commands: `oskac hook claude --event=post-edit` and `--event=stop`.
+    let plugin = repo_json("plugins/oska/hooks/hooks.json");
+    let published = Json::parse(&setup_file("claude-settings.json"));
+    assert!(
+        plugin == published,
+        "plugins/oska/hooks/hooks.json differs from site/agent-setup/claude-settings.json; \
+         change both together"
+    );
+    assert_eq!(
+        string(only_hook(&plugin, "PostToolUse").1.get("command")),
+        "oskac hook claude --event=post-edit"
+    );
+    assert_eq!(
+        string(only_hook(&plugin, "Stop").1.get("command")),
+        "oskac hook claude --event=stop"
+    );
+}
+
+/// The two commands a Claude Code user types to install the plugin.
+const PLUGIN_INSTALL: [&str; 2] = [
+    "/plugin marketplace add aparsons/oska",
+    "/plugin install oska@oska",
+];
+
+#[test]
+fn the_guide_the_prompt_the_site_and_llms_txt_say_how_to_install_the_plugin() {
+    // The names in the commands are the names in the files.
+    assert_eq!(string(repo_json(MARKETPLACE).get("name")), "oska");
+    let site = built_site();
+    let texts = [
+        ("prompt.md", setup_file("prompt.md")),
+        (
+            "docs/guide/agent-guide.md",
+            read(&repo_root().join("docs/guide/agent-guide.md")),
+        ),
+        ("agent-setup.html", site["agent-setup.html"].clone()),
+        ("llms.txt", site["llms.txt"].clone()),
+        ("CHANGELOG.md", read(&repo_root().join("CHANGELOG.md"))),
+    ];
+    for (name, text) in &texts {
+        for command in PLUGIN_INSTALL {
+            assert!(text.contains(command), "{name} should say `{command}`");
+        }
+    }
+    // The guide's section, which the site page and llms.txt link.
+    assert!(site["guide/agent-guide.html"].contains("id=\"the-claude-code-plugin\""));
+    // The prompt leaves the install to the person: an agent does not
+    // change their Claude Code setup on its own.
+    assert!(setup_file("prompt.md").contains("Do not install it for me."));
 }

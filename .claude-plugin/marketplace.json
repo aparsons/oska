@@ -1,0 +1,16 @@
+{
+  "name": "oska",
+  "owner": {
+    "name": "Oska"
+  },
+  "metadata": {
+    "description": "The Oska language's own plugin for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "oska",
+      "source": "./plugins/oska",
+      "description": "Check Oska code with oskac after each edit and before the agent finishes."
+    }
+  ]
+}
