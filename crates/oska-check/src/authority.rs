@@ -72,15 +72,15 @@ fn reach(ty: &Ty, decls: &Decls, bounded: &[String], expanding: &mut Vec<String>
             };
             match decl.kind {
                 DeclKind::Capability => Reach {
-                    capabilities: vec![name.clone()],
+                    capabilities: vec![name.to_string()],
                     generics: Vec::new(),
                     bearing: true,
                 },
                 DeclKind::Primitive | DeclKind::Trait => Reach::default(),
                 DeclKind::Data => {
                     let mut total = Reach::default();
-                    if !expanding.contains(name) {
-                        expanding.push(name.clone());
+                    if !expanding.iter().any(|e| e == name) {
+                        expanding.push(name.to_string());
                         let lower = Lower::in_scope(decls, decl.in_prelude)
                             .with_generic_names(&decl.generics);
                         let subst: Vec<(String, Ty)> = decl
@@ -102,9 +102,9 @@ fn reach(ty: &Ty, decls: &Decls, bounded: &[String], expanding: &mut Vec<String>
                 }
             }
         }
-        Ty::Param(name) if bounded.contains(name) => Reach {
+        Ty::Param(name) if bounded.iter().any(|b| b == name) => Reach {
             capabilities: Vec::new(),
-            generics: vec![name.clone()],
+            generics: vec![name.to_string()],
             bearing: true,
         },
         Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => Reach::default(),
@@ -145,14 +145,14 @@ pub fn report(
                 // checker, so a receiver reaches whatever an impl's does.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param(SELF.to_string()))
+                    .with_self(Ty::Param(SELF.into()))
                     .with_bound(Bound {
                         param: SELF.to_string(),
                         trait_name: t.name.name.clone(),
                         args: t
                             .generics
                             .iter()
-                            .map(|g| Ty::Param(g.name.name.clone()))
+                            .map(|g| Ty::Param(g.name.name.as_str().into()))
                             .collect(),
                     });
                 for method in &t.methods {

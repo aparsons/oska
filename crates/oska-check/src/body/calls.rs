@@ -233,7 +233,7 @@ impl Body<'_, '_, '_> {
             // The receiver's type may be known only once the arguments
             // are checked, so the runtime finds the impl by its tag.
             callable.target =
-                self.trait_callee(&Ty::Param(ty::SELF.to_string()), trait_name, &name.name);
+                self.trait_callee(&Ty::Param(ty::SELF.into()), trait_name, &name.name);
         }
         // `Self` is a type argument here, so the result follows its trust.
         self.follow_type_arg(&mut callable, self_ty.clone());
@@ -399,7 +399,7 @@ impl Body<'_, '_, '_> {
                 .bounds
                 .iter()
                 .map(|b| {
-                    let ty = Ty::Param(b.param.clone()).substitute(&subst);
+                    let ty = Ty::Param(b.param.as_str().into()).substitute(&subst);
                     let bound = Bound {
                         args: b.args.iter().map(|a| a.substitute(&subst)).collect(),
                         ..b.clone()
@@ -596,7 +596,7 @@ impl Body<'_, '_, '_> {
     /// which only its bounds provide. When they don't (`E0260`) and one
     /// trait has the method, the fix adds that trait as a bound.
     pub(super) fn bound_method(&mut self, param: &str, name: &Ident) -> Option<FnSig> {
-        let self_ty = Ty::Param(param.to_string());
+        let self_ty = Ty::Param(param.into());
         let mut found: Vec<FnSig> = Vec::new();
         for bound in self.lower.bounds.iter().filter(|b| b.param == param) {
             let Some(info) = self.items.traits.get(&bound.trait_name) else {

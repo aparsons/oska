@@ -247,7 +247,7 @@ impl Infer {
         match self.shallow(ty) {
             Ty::Named(name, args, trust) => {
                 self.trust_flow(trust, into);
-                if holders.contains(&name) {
+                if holders.contains(name.as_str()) {
                     self.trust_flow(Trust::Untrusted, into);
                 }
                 for arg in &args {
