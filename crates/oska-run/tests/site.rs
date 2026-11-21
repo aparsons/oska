@@ -2088,6 +2088,37 @@ fn what_works_today_is_a_guide_listed_in_llms_txt() {
     );
 }
 
+// ---- The research index -----------------------------------------------------------------
+
+/// `docs/research/index.md` groups the notes by topic by hand, so a new
+/// note must be added to it: every research page has its own entry, a
+/// list item that starts with a link to it, under a topic heading.
+#[test]
+fn the_research_index_lists_every_note_under_a_topic() {
+    let site = real_site();
+    let index = &site["research/index.md"];
+    let notes: Vec<&String> = site
+        .keys()
+        .filter(|k| k.starts_with("research/") && k.ends_with(".md") && *k != "research/index.md")
+        .collect();
+    assert!(notes.len() > 10, "{notes:?}");
+    let first_topic = index.find("\n## ").expect("a topic heading");
+    let entries: Vec<(usize, &str)> = index
+        .match_indices("\n- [")
+        .map(|(at, _)| (at, index[at..].lines().nth(1).unwrap_or("")))
+        .collect();
+    for note in notes {
+        let name = note.trim_start_matches("research/");
+        let entry = entries.iter().find(|(_, line)| {
+            let target = line.split_once("](").map_or("", |(_, rest)| rest);
+            target.starts_with(&format!("{name})"))
+                || target.starts_with(&format!("/research/{name})"))
+        });
+        let (at, _) = entry.unwrap_or_else(|| panic!("research/index.md has no entry for {name}"));
+        assert!(*at > first_topic, "{name} is listed before any topic");
+    }
+}
+
 // ---- The real site: the corpus for agents (#189) ----------------------------------------
 
 #[test]
