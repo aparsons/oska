@@ -1109,7 +1109,9 @@ fn key_paths(json: &Json, prefix: &str, out: &mut Vec<String>) {
                     format!("{prefix}.{key}")
                 };
                 match value {
-                    Json::Str(s) if ["source", "matcher", "command"].contains(&key.as_str()) => {
+                    Json::Str(s)
+                        if ["source", "matcher", "type", "command"].contains(&key.as_str()) =>
+                    {
                         out.push(format!("{path} = {s}"));
                     }
                     Json::Obj(_) | Json::Arr(_) => key_paths(value, &path, out),
@@ -1314,4 +1316,61 @@ fn the_skill_follows_the_agent_skills_format() {
     // The front matter names no host and no Claude Code feature but `paths`,
     // so the body is the vendor-neutral template and nothing more.
     assert!(!front.contains("http") && !front.to_lowercase().contains("claude"));
+}
+
+// ---- The plugin's hooks and how to install it (#212) ----------------------------------------
+
+#[test]
+fn the_plugin_hooks_are_the_published_hook_settings() {
+    // Both files have the same `{"hooks": {...}}` shape, so the plugin and
+    // the settings a project copies run the same events, matchers and
+    // commands: `oskac hook claude --event=post-edit` and `--event=stop`.
+    let plugin = repo_json("plugins/oska/hooks/hooks.json");
+    let published = Json::parse(&setup_file("claude-settings.json"));
+    assert!(
+        plugin == published,
+        "plugins/oska/hooks/hooks.json differs from site/agent-setup/claude-settings.json; \
+         change both together"
+    );
+    assert_eq!(
+        string(only_hook(&plugin, "PostToolUse").1.get("command")),
+        "oskac hook claude --event=post-edit"
+    );
+    assert_eq!(
+        string(only_hook(&plugin, "Stop").1.get("command")),
+        "oskac hook claude --event=stop"
+    );
+}
+
+/// The two commands a Claude Code user types to install the plugin.
+const PLUGIN_INSTALL: [&str; 2] = [
+    "/plugin marketplace add aparsons/oska",
+    "/plugin install oska@oska",
+];
+
+#[test]
+fn the_guide_the_prompt_the_site_and_llms_txt_say_how_to_install_the_plugin() {
+    // The names in the commands are the names in the files.
+    assert_eq!(string(repo_json(MARKETPLACE).get("name")), "oska");
+    let site = built_site();
+    let texts = [
+        ("prompt.md", setup_file("prompt.md")),
+        (
+            "docs/guide/agent-guide.md",
+            read(&repo_root().join("docs/guide/agent-guide.md")),
+        ),
+        ("agent-setup.html", site["agent-setup.html"].clone()),
+        ("llms.txt", site["llms.txt"].clone()),
+        ("CHANGELOG.md", read(&repo_root().join("CHANGELOG.md"))),
+    ];
+    for (name, text) in &texts {
+        for command in PLUGIN_INSTALL {
+            assert!(text.contains(command), "{name} should say `{command}`");
+        }
+    }
+    // The guide's section, which the site page and llms.txt link.
+    assert!(site["guide/agent-guide.html"].contains("id=\"the-claude-code-plugin\""));
+    // The prompt leaves the install to the person: an agent does not
+    // change their Claude Code setup on its own.
+    assert!(setup_file("prompt.md").contains("Do not install it for me."));
 }
