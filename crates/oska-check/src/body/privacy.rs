@@ -6,7 +6,10 @@
 //! it resolves a field, a method or a constructor. Each is reported as a
 //! private item is (`E0206`), with a fix in the declaring file.
 //!
-//! A single file is one module, so nothing here applies to it.
+//! A single file is one module, so nothing here applies to it, except
+//! across the `std` modules of Oska source it imports, which are linked in
+//! as modules of their own. Their private parts get no fix: a program
+//! cannot edit `std`.
 
 use oska_syntax::ast::Visibility;
 use oska_syntax::{Diagnostic, Edit, Span};
@@ -37,6 +40,14 @@ impl Body<'_, '_, '_> {
     /// Report the use at `span` of `what`, private to `module`, with a fix
     /// that inserts `marker` at `at`.
     fn private(&mut self, what: &str, module: &str, marker: &str, at: usize, span: Span) {
+        if link::is_std_module(module) {
+            self.out.diagnostics.push(Diagnostic::new(
+                codes::PRIVATE_ITEM,
+                format!("{what} is private to `{module}`"),
+                span,
+            ));
+            return;
+        }
         let shown = marker.trim_end();
         let diagnostic = Diagnostic::new(
             codes::PRIVATE_ITEM,
@@ -128,6 +139,17 @@ impl Body<'_, '_, '_> {
         let Some(module) = self.foreign(declared.start) else {
             return true;
         };
+        if link::is_std_module(&module) {
+            self.out.diagnostics.push(Diagnostic::new(
+                codes::PRIVATE_ITEM,
+                format!(
+                    "`{type_name}` has fields private to `{module}`, so only that module can \
+                     build it or match its fields"
+                ),
+                span,
+            ));
+            return false;
+        }
         let diagnostic = Diagnostic::new(
             codes::PRIVATE_ITEM,
             format!(

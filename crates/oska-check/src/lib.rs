@@ -668,15 +668,14 @@ pub fn check_module(src: &str) -> CheckReport {
 }
 
 /// Check `src` as a module. A parse error is reported as the only
-/// diagnostic, with no functions.
+/// diagnostic, with no functions. A module that imports a `std` module of
+/// Oska source, such as `std.sha2`, is checked with it linked in, as
+/// [`check_file`] checks it; its own spans stay offsets into `src`.
 pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
-    match oska_syntax::parse_module(src) {
-        Ok(module) => check_parsed(src, &module, options, link::Modules::default()),
-        Err(err) => CheckReport {
-            diagnostics: vec![err],
-            ..CheckReport::default()
-        },
+    if package::imports_std_source(src) {
+        return package::check_package_unfixed(&Package::single_file("", src), options);
     }
+    package::check_one(src, options)
 }
 
 /// Check `module`, parsed from `src`, whose spans are offsets into `src`:
@@ -689,6 +688,12 @@ pub(crate) fn check_parsed(
     modules: link::Modules,
 ) -> CheckReport {
     check_source(src, module, options, modules, false)
+}
+
+/// The source of the `std` module of Oska source at `path`, such as
+/// `std.sha2`: what a program that imports it has linked in.
+pub fn std_module_source(path: &str) -> Option<&'static str> {
+    prelude::std_source(path).map(|m| m.source)
 }
 
 /// Check the toolchain's own `std.rt` source, the one text that may name

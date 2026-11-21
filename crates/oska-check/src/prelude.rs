@@ -13,16 +13,32 @@ pub const PRIMITIVES: &[&str] = &[
     "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Bool", "String",
 ];
 
-/// A `std.*` module: prelude declarations, written in prelude mode like
-/// `prelude.osk`, that a module sees only once it imports them with `use`.
-/// Add a module with an entry here and a `std/*.osk` file; add items to
-/// one by appending declarations to its file.
+/// A `std.*` module, which a module sees only once it imports it with
+/// `use`. Add a module with an entry here and a `std/*.osk` file.
 pub struct StdModule {
     /// The path written after `use`, such as `std.sql`.
     pub path: &'static str,
     pub source: &'static str,
+    /// Whether its file is declarations or Oska source.
+    pub kind: StdKind,
     /// The sink literal this module provides, if it is a sink module.
     pub sink_literal: Option<SinkLiteral>,
+}
+
+/// What a `std` module's file holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdKind {
+    /// Prelude declarations, written in prelude mode like `prelude.osk`,
+    /// whose runtime, if any, is the toolchain's own (`std.html`'s
+    /// intrinsics). Add items by appending declarations to its file.
+    Declarations,
+    /// Oska source, with bodies, checked under the rules for user code.
+    /// A program that imports one, directly or through another, has it
+    /// linked in as a module of its own (`link.rs`), so both backends run
+    /// it as Oska, with no intrinsics and no `E0371`. Its items are
+    /// private unless `pub`, and its own `use std.…` imports resolve the
+    /// same way.
+    Source,
 }
 
 /// A sink literal's tag and the type of a literal with that tag: with
@@ -38,6 +54,7 @@ pub static STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "std.sql",
         source: include_str!("std/sql.osk"),
+        kind: StdKind::Declarations,
         sink_literal: Some(SinkLiteral {
             tag: "sql",
             ty: "SqlLiteral",
@@ -46,11 +63,19 @@ pub static STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "std.proc",
         source: include_str!("std/proc.osk"),
+        kind: StdKind::Declarations,
         sink_literal: None,
     },
     StdModule {
         path: "std.html",
         source: include_str!("std/html.osk"),
+        kind: StdKind::Declarations,
+        sink_literal: None,
+    },
+    StdModule {
+        path: "std.sha2",
+        source: include_str!("std/sha2.osk"),
+        kind: StdKind::Source,
         sink_literal: None,
     },
 ];
@@ -58,6 +83,11 @@ pub static STD_MODULES: &[StdModule] = &[
 /// The `std.*` module at `path`.
 pub fn std_module(path: &str) -> Option<&'static StdModule> {
     STD_MODULES.iter().find(|m| m.path == path)
+}
+
+/// The `std` module of Oska source at `path`, if there is one.
+pub fn std_source(path: &str) -> Option<&'static StdModule> {
+    std_module(path).filter(|m| m.kind == StdKind::Source)
 }
 
 /// The module whose sink literal has `tag`.
@@ -116,6 +146,12 @@ impl StdModule {
     /// not.
     pub fn declared(&self) -> Vec<&'static str> {
         self.module().items.iter().filter_map(item_name).collect()
+    }
+
+    /// The file a report names for the module's code: `std/sha2.osk` for
+    /// `std.sha2`, under the toolchain's `std` directory.
+    pub fn file(&self) -> String {
+        format!("std/{}.osk", self.name())
     }
 
     /// The name a plain `use` binds: the path's last segment, as `sql`
