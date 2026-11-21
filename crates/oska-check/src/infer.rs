@@ -59,7 +59,7 @@ mod flags;
 use std::collections::HashSet;
 
 use crate::ty::{Cap, Trust, Ty};
-use flags::{Flag, Flags};
+use flags::{Flag, Flags, Mark};
 
 /// Why a value cannot flow where a type is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,10 +123,28 @@ struct Rules {
 pub struct Infer {
     /// The solution of each variable, by index.
     solutions: Vec<Option<Ty>>,
+    /// The variables solved since the open [`Trial`], while one is open,
+    /// so that the trial can be undone.
+    solved: Vec<u32>,
+    /// Whether a [`Trial`] is open.
+    trying: bool,
     /// The trust variables.
     trust: Flags,
     /// The capability variables.
     caps: Flags,
+}
+
+/// The state an [`Infer`] returns to when a trial in [`Infer::flow`] is
+/// undone. Unification only ever adds: it solves an unsolved variable,
+/// adds flag variables and edges, and raises or pins flag variables. So
+/// the trial logs what it solved (and each [`Flags`] store logs its own
+/// changes), and undoing it reverts exactly those, without copying the
+/// whole context first.
+#[derive(Debug, Clone, Copy)]
+struct Trial {
+    solutions: usize,
+    trust: Mark,
+    caps: Mark,
 }
 
 fn trust_flag(trust: Trust) -> Flag {
@@ -358,6 +376,44 @@ impl Infer {
         self.flow(actual, expected).is_ok()
     }
 
+    /// Start a trial: from here on, every change can be undone.
+    fn begin_trial(&mut self) -> Trial {
+        debug_assert!(!self.trying, "a trial is already open");
+        self.trying = true;
+        Trial {
+            solutions: self.solutions.len(),
+            trust: self.trust.mark(),
+            caps: self.caps.mark(),
+        }
+    }
+
+    /// Undo every change made since `trial` began. The trial stays open.
+    fn undo_trial(&mut self, trial: Trial) {
+        for v in self.solved.drain(..) {
+            self.solutions[v as usize] = None;
+        }
+        self.solutions.truncate(trial.solutions);
+        self.trust.undo_to(trial.trust);
+        self.caps.undo_to(trial.caps);
+    }
+
+    /// Keep every change made since `trial` began, and close it.
+    fn end_trial(&mut self, trial: Trial) {
+        self.solved.clear();
+        self.trying = false;
+        self.trust.keep(trial.trust);
+        self.caps.keep(trial.caps);
+    }
+
+    /// Solve the unsolved variable `v` to `ty`.
+    fn solve(&mut self, v: u32, ty: Ty) {
+        debug_assert!(self.solutions[v as usize].is_none());
+        self.solutions[v as usize] = Some(ty);
+        if self.trying {
+            self.solved.push(v);
+        }
+    }
+
     /// [`Infer::unify`], saying why it failed.
     pub fn flow(&mut self, actual: &Ty, expected: &Ty) -> Result<(), Mismatch> {
         let attempts = [
@@ -394,18 +450,22 @@ impl Infer {
                 Some(Mismatch::TrustLost),
             ),
         ];
-        let saved = self.clone();
+        let trial = self.begin_trial();
+        let mut result = Err(Mismatch::Types);
         for (rules, mismatch) in attempts {
             let ok = self.unify_inner(actual, expected, Polarity::Positive, rules);
             if ok && mismatch.is_none() {
-                return Ok(());
+                result = Ok(());
+                break;
             }
-            *self = saved.clone();
+            self.undo_trial(trial);
             if let (true, Some(mismatch)) = (ok, mismatch) {
-                return Err(mismatch);
+                result = Err(mismatch);
+                break;
             }
         }
-        Err(Mismatch::Types)
+        self.end_trial(trial);
+        result
     }
 
     fn unify_inner(&mut self, a: &Ty, b: &Ty, polarity: Polarity, rules: Rules) -> bool {
@@ -419,7 +479,7 @@ impl Infer {
                     return false;
                 }
                 let solution = self.generalize(other);
-                self.solutions[*v as usize] = Some(solution.clone());
+                self.solve(*v, solution.clone());
                 self.unify_inner(&solution, other, polarity, rules)
             }
             (other, Ty::Var(v)) => {
@@ -427,7 +487,7 @@ impl Infer {
                     return false;
                 }
                 let solution = self.generalize(other);
-                self.solutions[*v as usize] = Some(solution.clone());
+                self.solve(*v, solution.clone());
                 self.unify_inner(other, &solution, polarity, rules)
             }
             (Ty::Named(n1, a1, t1), Ty::Named(n2, a2, t2)) => {
@@ -520,5 +580,83 @@ mod tests {
             Err(Mismatch::CapLost)
         );
         assert_eq!(infer.flow(&plain, &Ty::Unit), Err(Mismatch::Types));
+    }
+
+    /// Types with every kind of flag and variable, for the trial tests:
+    /// each alone, and each as the first field of a pair whose second
+    /// field is an `Int` or a `Bool`, so that a flow between two pairs
+    /// can change a flag or solve a variable and then fail.
+    fn mixed_types(infer: &mut Infer) -> Vec<Ty> {
+        let text = |trust| Ty::string().with_trust(trust);
+        let fns = |cap| Ty::list(func(cap, vec![]));
+        let mut fields = vec![
+            Ty::int(),
+            text(Trust::Trusted),
+            text(Trust::Untrusted),
+            fns(Cap::Plain),
+            fns(Cap::Bearing),
+        ];
+        for _ in 0..2 {
+            let var = infer.fresh();
+            let trust = infer.fresh_trust();
+            let cap = infer.fresh_cap();
+            fields.push(Ty::list(var.clone()));
+            fields.push(text(trust));
+            fields.push(fns(cap));
+            fields.push(func(cap, vec![var.clone()]));
+            fields.push(var);
+        }
+        let mut types = fields.clone();
+        for field in fields {
+            for second in [Ty::int(), Ty::bool()] {
+                types.push(Ty::generic("Pair", vec![field.clone(), second]));
+            }
+        }
+        types
+    }
+
+    #[test]
+    fn a_failed_flow_leaves_the_context_as_it_was() {
+        // Every type flowed into every other, in a fresh context and in
+        // one that earlier flows have already joined (so that variables
+        // are solved and flags linked). Each flow that fails must leave
+        // the context exactly as it was.
+        let mut failed = 0;
+        for setup in [0, 1, 2] {
+            let mut fresh = Infer::default();
+            let types = mixed_types(&mut fresh);
+            for (i, setup_ty) in types.iter().enumerate().take(setup * 6) {
+                let _ = fresh.flow(setup_ty, &types[(i * 7 + setup) % types.len()]);
+            }
+            for a in &types {
+                for b in &types {
+                    let mut infer = fresh.clone();
+                    let before = format!("{infer:?}");
+                    if infer.flow(a, b).is_err() {
+                        failed += 1;
+                        assert_eq!(format!("{infer:?}"), before, "flow {a:?} into {b:?}");
+                    }
+                }
+            }
+        }
+        assert!(failed > 1000, "only {failed} flows failed");
+    }
+
+    #[test]
+    fn a_flow_keeps_what_it_solved_when_it_succeeds() {
+        let mut infer = Infer::default();
+        let var = infer.fresh();
+        let trust = infer.fresh_trust();
+        let pair = Ty::generic("Pair", vec![Ty::string().with_trust(trust), var.clone()]);
+        let untrusted = Ty::generic(
+            "Pair",
+            vec![Ty::string().with_trust(Trust::Untrusted), Ty::int()],
+        );
+        assert_eq!(infer.flow(&untrusted, &pair), Ok(()));
+        assert_eq!(infer.resolve(&var), Ty::int());
+        assert_eq!(
+            infer.resolve(&Ty::string().with_trust(trust)),
+            Ty::string().with_trust(Trust::Untrusted)
+        );
     }
 }
