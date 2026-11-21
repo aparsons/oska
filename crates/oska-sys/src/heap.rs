@@ -28,10 +28,10 @@
 //!   block freed on another thread simply joins that thread's list, as
 //!   every block of a class is interchangeable. Only when a list is empty
 //!   (`alloc`) or holds twice its class's [`batch`] (`dealloc`) does the
-//!   thread lock the shared pool ([`with_pool`]), to take or give back one batch of
-//!   blocks, or to carve a new batch from the current region. So the
-//!   lock is taken at most once per [`batch`] calls, and memory freed on
-//!   one thread is reused on another.
+//!   thread lock the shared pool ([`with_pool`]), to take or give back
+//!   one batch of blocks, or to carve a new batch from the current
+//!   region. So the lock is taken at most once per [`batch`] calls, and
+//!   memory freed on one thread is reused on another.
 //! - **What a thread's exit leaves.** The thread-local cache has no
 //!   destructor (registering one may allocate, inside the allocator), so
 //!   the blocks on an exiting thread's lists are not reused. That is at
@@ -57,9 +57,9 @@
 //! index is bounded by construction. The shared pool's lock is a flag
 //! ([`with_pool`]), not `std::sync::Mutex`, so taking it never allocates
 //! or panics, and nothing allocates through this allocator while
-//! holding it. A request that cannot be served
-//! (the system allocator refusing a region or a large block) returns
-//! null, as `GlobalAlloc` asks.
+//! holding it. A request that cannot be served (the system allocator
+//! refusing a region or a large block) returns null, as `GlobalAlloc`
+//! asks.
 //!
 //! A child made by `fork` gets a copy of the lock as it was; if another
 //! thread held it then, the child must not allocate before `exec`.
