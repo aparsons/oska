@@ -140,8 +140,9 @@ pub struct Interpreter<'p, 'h> {
     /// keeps the interpreter as small as it was.
     deadline: Option<Box<Deadline>>,
     /// Each function of the program called so far, by name, with the
-    /// room its arguments' `Vec` is given ([`room`]).
-    functions: HashMap<&'p str, (&'p Function, usize)>,
+    /// room its arguments' `Vec` is given ([`room`]). Boxed, so that the
+    /// interpreter stays as small as it was.
+    functions: Box<HashMap<&'p str, (&'p Function, usize)>>,
 }
 
 /// The name of a frame of a panic's call stack: a function's, borrowed
@@ -206,7 +207,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             output_written: 0,
             fuel: u64::MAX,
             deadline: None,
-            functions: HashMap::new(),
+            functions: Box::default(),
         }
     }
 
@@ -803,8 +804,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
         if let Callee::Function(name) = callee {
-            let (function, room) = self.function(name);
-            let values = self.eval_into(Vec::with_capacity(room.max(args.len())), args, frame)?;
+            let (function, values) = self.function_args(name, 0, args, frame)?;
             return Ok(self.call_function(function, values, span)?);
         }
         let values = self.eval_all(args, frame)?;
@@ -825,15 +825,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
         let args = match callee {
-            // Room for the frame, which the receiver takes no slot of.
-            Callee::Function(name) => {
-                let (_, room) = self.function(name);
-                self.eval_into(
-                    Vec::with_capacity(room.saturating_sub(1).max(args.len())),
-                    args,
-                    frame,
-                )?
-            }
+            // The receiver is not among `args`, and takes no slot.
+            Callee::Function(name) => self.function_args(name, 1, args, frame)?.1,
             _ => self.eval_all(args, frame)?,
         };
         let before = metered_place(receiver).then(|| field_path(receiver, frame));
@@ -968,20 +961,32 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// list or struct literal's, which `--max-memory` charges by its
     /// capacity.
     fn eval_all(&mut self, exprs: &[Expr], frame: &mut Frame) -> Result<Vec<Value>, Unwind> {
-        self.eval_into(Vec::with_capacity(exprs.len()), exprs, frame)
-    }
-
-    /// Each of `exprs`, in order, pushed onto `values`.
-    fn eval_into(
-        &mut self,
-        mut values: Vec<Value>,
-        exprs: &[Expr],
-        frame: &mut Frame,
-    ) -> Result<Vec<Value>, Unwind> {
+        let mut values = Vec::with_capacity(exprs.len());
         for expr in exprs {
             values.push(self.eval(expr, frame)?);
         }
         Ok(values)
+    }
+
+    /// The program function `name`, and the values of the arguments
+    /// `exprs` of a call of it, in a `Vec` with room for its frame
+    /// ([`room`]), less `taken`: the slots of the room that are not
+    /// among `exprs`, `1` for a mutating method's receiver. Out of line,
+    /// so a call of an intrinsic does not carry it.
+    #[inline(never)]
+    fn function_args(
+        &mut self,
+        name: &str,
+        taken: usize,
+        exprs: &[Expr],
+        frame: &mut Frame,
+    ) -> Result<(&'p Function, Vec<Value>), Unwind> {
+        let (function, room) = self.function(name);
+        let mut values = Vec::with_capacity(room.saturating_sub(taken).max(exprs.len()));
+        for expr in exprs {
+            values.push(self.eval(expr, frame)?);
+        }
+        Ok((function, values))
     }
 
     /// A block: its statements, then its value. Its slots are popped
