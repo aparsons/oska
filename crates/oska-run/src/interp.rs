@@ -144,6 +144,8 @@ pub struct Interpreter<'p, 'h> {
     /// build's `lists` benchmark about 12% slower, with the same
     /// instructions (ticket #505).
     functions: Box<Called<'p>>,
+    /// The texts `String.chars` gives ASCII characters, shared (#501).
+    pub(crate) ascii_texts: crate::data::AsciiTexts,
 }
 
 /// Each function of the program called so far, by name, with the room a
@@ -215,6 +217,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             fuel: u64::MAX,
             deadline: None,
             functions: Box::default(),
+            ascii_texts: crate::data::AsciiTexts::default(),
         }
     }
 
