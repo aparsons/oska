@@ -137,6 +137,8 @@ pub struct Interpreter<'p, 'h> {
     /// Under `--timeout`, its deadline. Boxed, so that a run without it
     /// keeps the interpreter as small as it was.
     deadline: Option<Box<Deadline>>,
+    /// The texts of the string literals evaluated so far, each made once.
+    literals: memory::Literals,
 }
 
 /// The name of a frame of a panic's call stack: a function's, borrowed
@@ -201,6 +203,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             output_written: 0,
             fuel: u64::MAX,
             deadline: None,
+            literals: memory::Literals::default(),
         }
     }
 
@@ -650,7 +653,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     #[inline(never)]
     fn eval_other(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, Unwind> {
         match &expr.kind {
-            ExprKind::Str(text) => Ok(memory::text(text, expr.span)?),
+            ExprKind::Str(text) => Ok(self.literals.text(text, expr.span)?),
             ExprKind::Interpolated(parts) => self.interpolated(parts, expr.span, frame),
             ExprKind::SelfValue => Ok(frame
                 .receiver
