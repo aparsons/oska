@@ -351,6 +351,15 @@ fn site_inputs() -> Vec<(String, String)> {
         "site/authority.txt".to_string(),
         String::from_utf8(authority.stdout).expect("the report is UTF-8"),
     ));
+    let reference = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["doc", "--format=json"])
+        .output()
+        .expect("oskac doc should run");
+    assert!(reference.status.success(), "{reference:?}");
+    files.push((
+        "site/api.json".to_string(),
+        String::from_utf8(reference.stdout).expect("the reference is UTF-8"),
+    ));
     files
 }
 
@@ -366,6 +375,8 @@ fn the_site_generator_builds_the_real_site_byte_for_byte() {
     for page in [
         "_site/index.html",
         "_site/authority.html",
+        "_site/api/prelude.html",
+        "_site/api.json",
         "_site/llms-full.txt",
     ] {
         assert!(
