@@ -146,6 +146,8 @@ pub struct Interpreter<'p, 'h> {
     functions: Box<Called<'p>>,
     /// The texts `String.chars` gives ASCII characters, shared (#501).
     pub(crate) ascii_texts: crate::data::AsciiTexts,
+    /// The texts of the string literals evaluated so far, each made once.
+    literals: memory::Literals,
 }
 
 /// Each function of the program called so far, by name, with the room a
@@ -218,6 +220,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             deadline: None,
             functions: Box::default(),
             ascii_texts: crate::data::AsciiTexts::default(),
+            literals: memory::Literals::default(),
         }
     }
 
@@ -668,7 +671,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     #[inline(never)]
     fn eval_other(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, Unwind> {
         match &expr.kind {
-            ExprKind::Str(text) => Ok(memory::text(text, expr.span)?),
+            ExprKind::Str(text) => Ok(self.literals.text(text, expr.span)?),
             ExprKind::Interpolated(parts) => self.interpolated(parts, expr.span, frame),
             ExprKind::SelfValue => Ok(frame
                 .receiver

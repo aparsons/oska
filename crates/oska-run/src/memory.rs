@@ -31,6 +31,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::{Rc, Weak};
 
 use oska_check::limits::Limit;
@@ -226,6 +227,63 @@ fn text_metered(text: &str, span: Span) -> Result<Value, Panic> {
     let text: Rc<str> = Rc::from(text);
     record(Held::Text(Rc::downgrade(&text)), bytes);
     Ok(Value::Str(text))
+}
+
+/// The texts of the string literals a run has evaluated, each made once
+/// (#500): evaluating a literal again shares its text instead of copying
+/// it into a new one. Under `--max-memory` each evaluation still makes
+/// and charges its own text ([`text`]), so a metered run is charged, and
+/// gets bytes back, exactly as when every evaluation copied.
+#[derive(Default)]
+pub(crate) struct Literals {
+    /// Each literal's text, by the address of the literal in the program.
+    texts: HashMap<usize, Rc<str>, BuildHasherDefault<AddressHasher>>,
+}
+
+impl Literals {
+    /// The string literal `literal` as a text value, made at `span`.
+    ///
+    /// The address only finds the text: a text whose bytes differ from
+    /// `literal` (an address the program reused for another literal) is
+    /// made again, so the value is always `literal`'s.
+    #[inline]
+    pub(crate) fn text(&mut self, literal: &str, span: Span) -> Result<Value, Panic> {
+        if metered() {
+            return text_metered(literal, span);
+        }
+        let text = self
+            .texts
+            .entry(literal.as_ptr() as usize)
+            .or_insert_with(|| Rc::from(literal));
+        if **text != *literal {
+            *text = Rc::from(literal);
+        }
+        Ok(Value::Str(Rc::clone(text)))
+    }
+}
+
+/// Hashes the addresses that key [`Literals`]: one multiply, where the
+/// standard hasher would hash eight bytes with SipHash on every literal.
+#[derive(Default)]
+struct AddressHasher(u64);
+
+impl Hasher for AddressHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(byte);
+        }
+    }
+
+    fn write_usize(&mut self, address: usize) {
+        self.0 = address as u64;
+    }
+
+    fn finish(&self) -> u64 {
+        // Fibonacci hashing, folded so that the low bits, which pick the
+        // bucket, depend on every bit of the address.
+        let mixed = self.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        mixed ^ (mixed >> 32)
+    }
 }
 
 /// The text `make` builds, of `len` bytes, made at `span`: charged
