@@ -693,3 +693,59 @@ fn attack_a_secret_through_a_trait_method_is_still_refused() {
         "`if` condition",
     );
 }
+
+// ---- Trust on secret bytes (#223) --------------------------------------------
+
+#[test]
+fn secret_bytes_compare_with_untrusted_bytes() {
+    assert_ok(
+        "fn f(key: Secret<Bytes>, mac: Untrusted<Bytes>) -> Bool {\n    key.constant_time_eq(mac)\n}",
+    );
+    assert_ok("fn f(key: Secret<Bytes>, mac: Bytes) -> Bool {\n    key.constant_time_eq(mac)\n}");
+}
+
+#[test]
+fn secret_bytes_methods_follow_trust_like_bytes() {
+    // A secret of untrusted bytes is computed on like any secret.
+    assert_ok(
+        "fn f(raw: Untrusted<Bytes>, more: Secret<Bytes>) -> Secret<U32> {\n\
+         \x20   var k = Secret.new(raw)\n\
+         \x20   k.append(more)\n\
+         \x20   k.push(Secret.new(1))\n\
+         \x20   let s = k.slice(0, 4)\n\
+         \x20   let _ = k.at(0)\n\
+         \x20   let _ = k.len()\n\
+         \x20   let _ = k.constant_time_eq_secret(more)\n\
+         \x20   s.read_u32_be(0)\n\
+         }",
+    );
+}
+
+#[test]
+fn attack_a_slice_of_untrusted_secret_bytes_stays_untrusted() {
+    assert_errors(
+        "fn f(raw: Untrusted<Bytes>) -> Secret<Bytes> {\n    let k = Secret.new(raw)\n    k.slice(0, 4)\n}",
+        &[("E0300", "k.slice(0, 4)")],
+    );
+}
+
+#[test]
+fn attack_untrusted_secret_bytes_appended_make_the_buffer_untrusted() {
+    assert_errors(
+        "fn f(raw: Untrusted<Bytes>) -> Secret<Bytes> {\n\
+         \x20   var k = Secret.new(Bytes.new())\n\
+         \x20   k.append(Secret.new(raw))\n\
+         \x20   k\n\
+         }",
+        &[("E0300", "k")],
+    );
+}
+
+#[test]
+fn attack_untrusted_secret_bytes_exposed_are_untrusted() {
+    assert_errors(
+        "fn keep(b: Bytes) {\n}\n\
+         fn f(raw: Untrusted<Bytes>) {\n    let k = Secret.new(raw)\n    keep(k.slice(0, 1).expose())\n}",
+        &[("E0300", "k.slice(0, 1).expose()")],
+    );
+}

@@ -294,24 +294,41 @@ impl Secret<Bool> {
 // A secret buffer, such as a key. Its length, and every index and offset
 // into it, are public; the bytes and the integers read from them are
 // secret. Out of bounds, a method panics as `Bytes`'s does.
+// Like `Bytes`'s, each operation follows the trust of its inputs: a
+// secret of untrusted bytes gives untrusted results (#223).
 impl Secret<Bytes> {
+    #[follows_trust]
     pub fn len(self) -> Int
+    #[follows_trust]
     pub fn at(self, index: Int) -> Secret<U8>
+    #[follows_trust]
     pub fn slice(self, start: Int, end: Int) -> Secret<Bytes>
+    #[follows_trust]
     pub fn read_u32_be(self, offset: Int) -> Secret<U32>
+    #[follows_trust]
     pub fn read_u32_le(self, offset: Int) -> Secret<U32>
+    #[follows_trust]
     pub fn read_u64_be(self, offset: Int) -> Secret<U64>
+    #[follows_trust]
     pub fn read_u64_le(self, offset: Int) -> Secret<U64>
+    #[follows_trust]
     pub fn push(var self, byte: Secret<U8>)
+    #[follows_trust]
     pub fn append(var self, other: Secret<Bytes>)
+    #[follows_trust]
     pub fn push_u32_be(var self, value: Secret<U32>)
+    #[follows_trust]
     pub fn push_u32_le(var self, value: Secret<U32>)
+    #[follows_trust]
     pub fn push_u64_be(var self, value: Secret<U64>)
+    #[follows_trust]
     pub fn push_u64_le(var self, value: Secret<U64>)
     // Compare without leaking timing information: the time depends on
     // the lengths only.
-    pub fn constant_time_eq(self, other: Bytes) -> Bool
+    #[follows_trust]
+    pub fn constant_time_eq(self, other: Untrusted<Bytes>) -> Bool
     // Compare with another secret, exposing neither.
+    #[follows_trust]
     pub fn constant_time_eq_secret(self, other: Secret<Bytes>) -> Bool
 }
 
