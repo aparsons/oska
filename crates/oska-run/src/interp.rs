@@ -20,13 +20,15 @@
 //! checker's locals: push exactly where the checker binds.
 
 use std::cell::Cell;
+use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use oska_check::builtins::{self, TraitMethod};
 use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
-    self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
+    self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt, Visit,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Frame as StackFrame, Frames, Span, MAX_FRAMES};
@@ -137,6 +139,9 @@ pub struct Interpreter<'p, 'h> {
     /// Under `--timeout`, its deadline. Boxed, so that a run without it
     /// keeps the interpreter as small as it was.
     deadline: Option<Box<Deadline>>,
+    /// Each function of the program called so far, by name, with the
+    /// room its arguments' `Vec` is given ([`room`]).
+    functions: HashMap<&'p str, (&'p Function, usize)>,
 }
 
 /// The name of a frame of a panic's call stack: a function's, borrowed
@@ -201,6 +206,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             output_written: 0,
             fuel: u64::MAX,
             deadline: None,
+            functions: HashMap::new(),
         }
     }
 
@@ -464,12 +470,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     pub fn call(
         &mut self,
         function: &Function,
-        args: Vec<Value>,
+        mut args: Vec<Value>,
         span: Span,
     ) -> Result<Value, Panic> {
-        let mut args = args.into_iter();
-        let receiver = if function.receiver { args.next() } else { None };
-        let (value, _) = self.call_with(function, receiver, args.collect(), span)?;
+        // Taken out of the arguments' own `Vec`, which then becomes the
+        // frame (`call_with`): one `Vec` per call.
+        let receiver = function.receiver.then(|| args.remove(0));
+        let (value, _) = self.call_with(function, receiver, args, span)?;
         Ok(value)
     }
 
@@ -795,6 +802,11 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         span: Span,
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
+        if let Callee::Function(name) = callee {
+            let (function, room) = self.function(name);
+            let values = self.eval_into(Vec::with_capacity(room.max(args.len())), args, frame)?;
+            return Ok(self.call_function(function, values, span)?);
+        }
         let values = self.eval_all(args, frame)?;
         Ok(self.call_callee(callee, values, span)?)
     }
@@ -812,7 +824,18 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         span: Span,
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
-        let args = self.eval_all(args, frame)?;
+        let args = match callee {
+            // Room for the frame, which the receiver takes no slot of.
+            Callee::Function(name) => {
+                let (_, room) = self.function(name);
+                self.eval_into(
+                    Vec::with_capacity(room.saturating_sub(1).max(args.len())),
+                    args,
+                    frame,
+                )?
+            }
+            _ => self.eval_all(args, frame)?,
+        };
         let before = metered_place(receiver).then(|| field_path(receiver, frame));
         let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
         let value = self.call_mutating(callee, &mut taken, args, span);
@@ -941,9 +964,20 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         })
     }
 
-    /// Each of `exprs`, in order.
+    /// Each of `exprs`, in order, in a `Vec` of exactly their number: a
+    /// list or struct literal's, which `--max-memory` charges by its
+    /// capacity.
     fn eval_all(&mut self, exprs: &[Expr], frame: &mut Frame) -> Result<Vec<Value>, Unwind> {
-        let mut values = Vec::with_capacity(exprs.len());
+        self.eval_into(Vec::with_capacity(exprs.len()), exprs, frame)
+    }
+
+    /// Each of `exprs`, in order, pushed onto `values`.
+    fn eval_into(
+        &mut self,
+        mut values: Vec<Value>,
+        exprs: &[Expr],
+        frame: &mut Frame,
+    ) -> Result<Vec<Value>, Unwind> {
         for expr in exprs {
             values.push(self.eval(expr, frame)?);
         }
@@ -1102,12 +1136,20 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         }
     }
 
-    /// The function the program defines as `name`.
-    fn function(&self, name: &str) -> &'p Function {
-        self.program
+    /// The function the program defines as `name`, with the room a call
+    /// gives its arguments ([`room`]).
+    fn function(&mut self, name: &str) -> (&'p Function, usize) {
+        if let Some(&found) = self.functions.get(name) {
+            return found;
+        }
+        let (name, function) = self
+            .program
             .functions
-            .get(name)
-            .expect("`crate::run` refuses a call to a function the program lacks")
+            .get_key_value(name)
+            .expect("`crate::run` refuses a call to a function the program lacks");
+        let found = (function, room(function));
+        self.functions.insert(name, found);
+        found
     }
 
     /// Call `callee` with `args`, the receiver first for a method. Only a
@@ -1120,12 +1162,10 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     ) -> Result<Value, Panic> {
         match callee {
             Callee::Function(name) => {
-                let function = self.function(name);
-                self.enter(FrameName::Program(&function.name), span)?;
-                let result = self.call(function, args, span);
-                let result = result.map_err(|panic| self.stamped(panic));
-                self.leave();
-                result
+                let (function, room) = self.function(name);
+                let mut args = args;
+                args.reserve_exact(room.saturating_sub(args.len()));
+                self.call_function(function, args, span)
             }
             Callee::Intrinsic(name) => match intrinsic(name) {
                 Intrinsic::Plain(run) => run(self.host, args, span),
@@ -1143,6 +1183,21 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 self.call_callee(&callee, args, span)
             }
         }
+    }
+
+    /// Call the program's `function` with `args`, the receiver first for
+    /// a method, made at `span`.
+    fn call_function(
+        &mut self,
+        function: &'p Function,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Panic> {
+        self.enter(FrameName::Program(&function.name), span)?;
+        let result = self.call(function, args, span);
+        let result = result.map_err(|panic| self.stamped(panic));
+        self.leave();
+        result
     }
 
     /// The implementation `callee` reaches for `receiver`: a trait's
@@ -1196,11 +1251,15 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         // The slots the body never reads stay `()`: the numbering is the
         // checker's, so the captured ones and the arguments land where
         // the body looks for them.
-        let mut slots = vec![Value::Unit; closure.code.height];
+        let mut slots = Vec::with_capacity(closure.code.height + args.len());
+        slots.resize(closure.code.height, Value::Unit);
         for (&slot, value) in closure.code.captures.iter().zip(&closure.captured) {
             slots[slot] = value.clone();
         }
-        slots.extend(binding(closure.code.params.iter().map(|p| p.binds), args));
+        slots.append(&mut binding(
+            closure.code.params.iter().map(|p| p.binds),
+            args,
+        ));
         let mut frame = Frame {
             slots,
             receiver: closure.receiver.clone(),
@@ -1231,7 +1290,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     ) -> Result<Value, Panic> {
         match callee {
             Callee::Function(name) => {
-                let function = self.function(name);
+                let (function, room) = self.function(name);
+                let mut args = args;
+                args.reserve_exact(room.saturating_sub(1 + args.len()));
                 let taken = std::mem::replace(receiver, Value::Unit);
                 self.enter(FrameName::Program(&function.name), span)?;
                 let result = self.call_with(function, Some(taken), args, span);
@@ -1410,15 +1471,43 @@ fn place_ref<'f>(place: &Place, frame: &'f Frame) -> &'f Value {
 }
 
 /// The arguments that take slots: each of `args` whose parameter
-/// `binds`. Kept out of line, so the frame of a call does not hold the
-/// iterator.
+/// `binds`, kept in `args`' own `Vec` (no second one per call). Kept out
+/// of line, so the frame of a call does not hold the iterator.
 #[inline(never)]
-fn binding(binds: impl Iterator<Item = bool>, args: Vec<Value>) -> Vec<Value> {
-    binds
-        .zip(args)
-        .filter(|(binds, _)| *binds)
-        .map(|(_, arg)| arg)
-        .collect()
+fn binding(mut binds: impl Iterator<Item = bool>, mut args: Vec<Value>) -> Vec<Value> {
+    // `retain` visits the arguments in order, one parameter each; an
+    // argument past the last parameter takes no slot.
+    args.retain(|_| binds.next().unwrap_or(false));
+    args
+}
+
+/// The room a call of `function` gives its arguments' `Vec`, which
+/// becomes its frame ([`Interpreter::call`]): the receiver, for a method,
+/// then the slots its body reads. A frame grows one `let` at a time, so
+/// without the room it would grow by `realloc`.
+///
+/// The slots are the highest one the body reads, outside its closures
+/// (which number their own). A slot bound and never read is not counted:
+/// a frame that reaches it grows once, as it would have.
+fn room(function: &Function) -> usize {
+    let mut slots = function.params.iter().filter(|p| p.binds).count();
+    // The spans of the closures around the expression visited now:
+    // `walk` visits an expression before what is inside it.
+    let mut closures: Vec<Span> = Vec::new();
+    let _ = program::walk(&function.body, &mut |visit| {
+        if let Visit::Expr(expr) = visit {
+            while closures.last().is_some_and(|c| c.end <= expr.span.start) {
+                closures.pop();
+            }
+            match expr.kind {
+                ExprKind::Closure(_) => closures.push(expr.span),
+                ExprKind::Local(slot) if closures.is_empty() => slots = slots.max(slot + 1),
+                _ => {}
+            }
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    usize::from(function.receiver) + slots
 }
 
 /// Where a function's body returns when it falls off its end: its tail
