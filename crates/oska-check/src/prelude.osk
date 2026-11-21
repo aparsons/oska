@@ -1,14 +1,14 @@
-// The Oska prelude: declarations every module sees without `use`.
+// The prelude: what every module sees without `use`. It has the built-in
+// capabilities, `Option`, `Result`, `List` and the methods of `String`,
+// the types tests and structured concurrency use, and the core traits.
+// The primitive types (`Int`, the sized integers `I8` to `U64`, `Bool`,
+// `String`) and `()` are built into the language.
 //
-// It is parsed in prelude mode, so functions may omit their bodies (the
-// runtime implements them) and `#[capability]` marks a built-in
-// capability. A capability's fields are private, so code outside the
-// prelude cannot construct one.
-//
-// The primitive types (`Int`, the sized integers, `Bool`, `String`) and
-// `()` are built into the checker, not declared here.
-//
-// Grow this file only as the examples and the tests need it.
+// A capability is a value that grants authority, such as `Stdout` or
+// `FsRead`. Only `main` receives the built-in ones, as parameters, and no
+// code can construct one: a function can reach only the capabilities it
+// is passed. Most of them narrow to a smaller capability, never a larger
+// one (ADR 0008).
 //
 // Trust (ADR 0006): a `String` parameter or result is trusted text, a
 // **structural position**. `Untrusted<String>` is untrusted text: sources
@@ -22,8 +22,17 @@
 // trusted. Without the attribute, `String` means trusted everywhere, the
 // receiver included.
 
+// For maintainers: this file is parsed in prelude mode, so functions may
+// omit their bodies (the runtime implements them) and `#[capability]`
+// marks a built-in capability, whose fields are private. Grow it only as
+// the examples and the tests need it. The comment block directly above a
+// `pub` item is its description in the API reference (`oskac doc` and
+// oskalang.dev/api/), so write it for a reader of the API.
+
 // ---- Built-in capabilities -------------------------------------------
 
+// Standard input. `main` declares it to read lines that the user or
+// another program sends.
 #[capability]
 pub struct Stdin { handle: Int }
 
@@ -32,17 +41,22 @@ impl Stdin {
     pub fn read_line(self) -> Result<Option<Untrusted<String>>, IoError>
 }
 
+// Standard output.
 #[capability]
 pub struct Stdout { handle: Int }
 
 impl Stdout {
+    // Write `line` and a line break. Any text may be written: output is a
+    // data position.
     pub fn println(self, line: Untrusted<String>) -> Result<(), IoError>
 }
 
+// Standard error, for messages about the program's own run.
 #[capability]
 pub struct Stderr { handle: Int }
 
 impl Stderr {
+    // Write `line` and a line break.
     pub fn println(self, line: Untrusted<String>) -> Result<(), IoError>
 }
 
@@ -61,25 +75,36 @@ impl Stderr {
 pub struct Fs { handle: Int }
 
 impl Fs {
+    // The directory capability for `dir` and everything beneath it.
     pub fn restrict_to(self, dir: String) -> Dir
+    // The same reach, for reading only.
     pub fn read_only(self) -> FsRead
+    // The same reach, for writing only.
     pub fn write_only(self) -> FsWrite
 }
 
+// Read access to the filesystem, as `main` declares it. Narrow it with
+// `restrict_to` or `restrict_to_file` before reading.
 #[capability]
 pub struct FsRead { handle: Int }
 
 impl FsRead {
+    // The read-only directory capability for `dir`, a trusted path, and
+    // everything beneath it.
     pub fn restrict_to(self, dir: String) -> DirRead
     // The file capability for the one file at `file`, which must be
     // trusted text. See `FileRead`.
     pub fn restrict_to_file(self, file: String) -> FileRead
 }
 
+// Write access to the filesystem, as `main` declares it. Narrow it with
+// `restrict_to` or `restrict_to_file` before writing.
 #[capability]
 pub struct FsWrite { handle: Int }
 
 impl FsWrite {
+    // The write-only directory capability for `dir`, a trusted path, and
+    // everything beneath it.
     pub fn restrict_to(self, dir: String) -> DirWrite
     // The file capability for the one file at `file`, which must be
     // trusted text. See `FileWrite`.
@@ -101,19 +126,26 @@ impl FsWrite {
 pub struct Dir { handle: Int }
 
 impl Dir {
+    // The capability for the subdirectory at `dir`, beneath this root.
     pub fn restrict_to(self, dir: Path) -> Dir
+    // The same directory, for reading only.
     pub fn read_only(self) -> DirRead
+    // The same directory, for writing only.
     pub fn write_only(self) -> DirWrite
 }
 
+// A directory capability that only reads. See `Dir`.
 #[capability]
 pub struct DirRead { handle: Int }
 
 impl DirRead {
+    // The capability for the subdirectory at `dir`, beneath this root.
     pub fn restrict_to(self, dir: Path) -> DirRead
     // The file capability for the file at `file` beneath the root, which
     // may be named by untrusted text through `Path.from`. See `FileRead`.
     pub fn restrict_to_file(self, file: Path) -> FileRead
+    // The whole file at `path`, as text. What a file holds comes from
+    // outside the program, so it is untrusted.
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
     // The names of the entries of the directory at `path` (`"."` is the
     // root itself), sorted so the order is the same on every host. A name
@@ -121,10 +153,12 @@ impl DirRead {
     pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
 }
 
+// A directory capability that only writes. See `Dir`.
 #[capability]
 pub struct DirWrite { handle: Int }
 
 impl DirWrite {
+    // The capability for the subdirectory at `dir`, beneath this root.
     pub fn restrict_to(self, dir: Path) -> DirWrite
     // The file capability for the file at `file` beneath the root, which
     // may be named by untrusted text through `Path.from`. See `FileWrite`.
@@ -149,9 +183,12 @@ impl DirWrite {
 pub struct FileRead { handle: Int }
 
 impl FileRead {
+    // The whole file, as text. What a file holds comes from outside the
+    // program, so it is untrusted.
     pub fn read_to_string(self) -> Result<Untrusted<String>, IoError>
 }
 
+// A file capability that only writes. See `FileRead`.
 #[capability]
 pub struct FileWrite { handle: Int }
 
@@ -160,14 +197,19 @@ impl FileWrite {
     pub fn write(self, contents: Untrusted<String>) -> Result<(), IoError>
 }
 
+// Network access, as `main` declares it. It has no runtime yet: a
+// program that is given it checks, but `oskac run` refuses it (`E0370`).
 #[capability]
 pub struct Net { handle: Int }
 
 impl Net {
+    // The capability to open connections, and nothing else.
     pub fn connect_only(self) -> NetConnect
+    // The capability to accept connections, and nothing else.
     pub fn listen_only(self) -> NetListen
 }
 
+// The capability to open network connections. No runtime yet, like `Net`.
 #[capability]
 pub struct NetConnect { handle: Int }
 
@@ -188,9 +230,12 @@ impl Connection {
     pub fn receive(self) -> Result<Untrusted<String>, IoError>
 }
 
+// The capability to accept network connections. It has no methods yet,
+// and no runtime, like `Net`.
 #[capability]
 pub struct NetListen { handle: Int }
 
+// The process environment: its variables and its secrets.
 #[capability]
 pub struct Env { handle: Int }
 
@@ -219,6 +264,7 @@ impl Secret<String> {
     pub fn constant_time_eq_secret(self, other: Secret<String>) -> Bool
 }
 
+// The wall clock. A test's `t.clock` is fixed.
 #[capability]
 pub struct Clock { handle: Int }
 
@@ -227,6 +273,8 @@ impl Clock {
     pub fn now_millis(self) -> Int
 }
 
+// A source of random numbers. A test's `t.random` is seeded, so a test
+// gets the same numbers on every run.
 #[capability]
 pub struct Random { handle: Int }
 
@@ -235,9 +283,14 @@ impl Random {
     pub fn next_int(self) -> Int
 }
 
+// Channels and `select`, for concurrency that is not deterministic. It
+// has no methods and no runtime yet (`E0370`). `scope` and `spawn` need
+// no capability.
 #[capability]
 pub struct Sched { handle: Int }
 
+// The capability to start processes, which `std.proc` takes. It has no
+// runtime yet (`E0370`).
 #[capability]
 pub struct Spawn { handle: Int }
 
@@ -256,9 +309,13 @@ pub cap struct TestContext {
 }
 
 impl TestContext {
+    // Fail the test unless `cond` is true.
     pub fn assert(self, cond: Bool)
+    // Fail the test unless `actual` equals `expected`.
     pub fn assert_eq<T: Eq>(self, actual: T, expected: T)
+    // Fail the test if `actual` equals `other`.
     pub fn assert_ne<T: Eq>(self, actual: T, other: T)
+    // Fail the test with `message`.
     pub fn fail(self, message: String)
     // Compare `value`, rendered as `dbg` renders it, with its stored
     // snapshot, `snapshots/<test-file>/<test-name>.snap`. The test runner
@@ -273,48 +330,67 @@ impl TestContext {
 
 // ---- Core types --------------------------------------------------------
 
+// A value that may be missing: `Some(value)`, or `None`.
 pub enum Option<T> {
     Some(T),
     None,
 }
 
 impl<T> Option<T> {
+    // `Ok` with the value, or `Err(err)` when there is none, ready for
+    // `?`.
     pub fn ok_or<E>(self, err: E) -> Result<T, E>
+    // Whether there is a value.
     pub fn is_some(self) -> Bool
     // The value, or `default` when there is none.
     pub fn unwrap_or(self, default: T) -> T
 }
 
+// The outcome of an operation that can fail: `Ok(value)`, or `Err(error)`.
+// `?` returns an `Err` from the enclosing function.
 pub enum Result<T, E> {
     Ok(T),
     Err(E),
 }
 
 impl<T, E> Result<T, E> {
+    // Whether it is `Ok`.
     pub fn is_ok(self) -> Bool
     // The `Ok` value, or `default` for an `Err`.
     pub fn unwrap_or(self, default: T) -> T
 }
 
-// A growable list. Its representation is built in.
+// A growable list. `[a, b, c]` makes one, and `for item in list` visits
+// its items in order.
 pub struct List<T> { handle: Int }
 
 impl<T> List<T> {
+    // An empty list.
     pub fn new() -> List<T>
+    // Add `item` at the end. The list must be a `var`.
     pub fn push(var self, item: T)
+    // The number of items.
     pub fn len(self) -> Int
+    // The number of items, the same as `len`.
     pub fn count(self) -> Int
+    // The item at `index`, from 0, or `None` when the index is out of
+    // bounds.
     pub fn get(self, index: Int) -> Option<T>
     // The item at `index`. An index out of bounds is a bug: it panics
     // (`P0002`). Use `get` when the index may be out of bounds.
     pub fn at(self, index: Int) -> T
+    // A new list of `f` applied to each item, in order.
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
 }
 
 // `start..end`, which excludes `end`.
 pub struct Range<T> { pub start: T, pub end: T }
 
+// Methods of text. Each follows trust (see the prelude's description): it
+// accepts trusted or untrusted text, and its text result is untrusted
+// when any text it was given is.
 impl String {
+    // The lines, without their line breaks.
     #[follows_trust]
     pub fn lines(self) -> List<String>
     // The number of characters (Unicode code points).
@@ -329,10 +405,13 @@ impl String {
     // The pieces between occurrences of `separator`.
     #[follows_trust]
     pub fn split(self, separator: String) -> List<String>
+    // Whether `needle` occurs in it.
     #[follows_trust]
     pub fn contains(self, needle: String) -> Bool
+    // Whether it starts with `prefix`.
     #[follows_trust]
     pub fn starts_with(self, prefix: String) -> Bool
+    // Whether it ends with `suffix`.
     #[follows_trust]
     pub fn ends_with(self, suffix: String) -> Bool
     // Every occurrence of `from` replaced by `to`. An empty `from`
@@ -371,10 +450,15 @@ impl Untrusted<String> {
     pub fn assume_trusted(self) -> String
 }
 
+// A path, relative to a directory capability's root. A directory
+// capability refuses one that would leave its root.
 pub struct Path { raw: String }
 
 impl Path {
+    // A path from trusted text, such as a literal.
     pub fn new(raw: String) -> Path
+    // A path from untrusted text, such as a name a user typed. It is safe
+    // because the directory capability it is given to confines it.
     pub fn from(raw: Untrusted<String>) -> Path
 }
 
@@ -382,6 +466,9 @@ impl Path {
 pub struct Args { handle: Int }
 
 impl Args {
+    // The argument at `index`, or `None`. Index 0 is the program's own
+    // path.
+    // An argument comes from outside the program, so it is untrusted.
     pub fn get(self, index: Int) -> Option<Untrusted<String>>
 }
 
@@ -399,9 +486,9 @@ impl Display for IoError {
 // so a scope is plain data.
 pub struct Scope { handle: Int }
 
-// A spawned task may perform effects, so it is a `cap fn`; a pure closure
-// fits too.
 impl Scope {
+    // Start `task` in parallel, inside this scope. A spawned task may
+    // perform effects, so it is a `cap fn`; a pure closure fits too.
     pub fn spawn<T>(self, task: cap fn() -> T) -> Task<T>
 }
 
@@ -409,6 +496,7 @@ impl Scope {
 pub struct Task<T> { handle: Int }
 
 impl<T> Task<T> {
+    // Wait for the task to finish, and return its result.
     pub fn join(self) -> T
 }
 
@@ -424,12 +512,13 @@ pub fn todo<T>() -> T
 
 // ---- Core traits -------------------------------------------------------
 
+// Equality: `==` and `!=` need `Eq`. `()` is `Eq` without an impl.
 pub trait Eq {
+    // Whether `self` equals `other`.
     #[follows_trust]
     fn eq(self, other: Self) -> Bool
 }
 
-// `==` and `!=` need `Eq`. `()` is `Eq` without an impl.
 impl Eq for Int { fn eq(self, other: Int) -> Bool }
 impl Eq for I8 { fn eq(self, other: I8) -> Bool }
 impl Eq for I16 { fn eq(self, other: I16) -> Bool }
@@ -447,12 +536,16 @@ impl<T: Eq> Eq for Option<T> { fn eq(self, other: Option<T>) -> Bool }
 impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Bool }
 impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
 
+// A value that can be hashed.
 pub trait Hash {
+    // A hash of the value.
     #[follows_trust]
     fn hash(self) -> Int
 }
 
+// A value with a text form, which `"{value}"` interpolation uses.
 pub trait Display {
+    // The value as text.
     #[follows_trust]
     fn to_string(self) -> String
 }
@@ -465,6 +558,9 @@ impl Display for Int {
     fn to_string(self) -> String
 }
 
+// A conversion from `T`. `?` uses it to turn one error type into
+// another.
 pub trait From<T> {
+    // The value made from `value`.
     fn from(value: T) -> Self
 }
