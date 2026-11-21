@@ -1,7 +1,6 @@
 /* The stylesheet of https://oskalang.dev. `site/build.osk` copies it to
-   `_site/style.css`. Fonts come from the pinned Fontsource CSS each page
-   links, with system fonts behind them. No inline styles: the CSP allows
-   none. The only script is `search.js`, which adds the search box and the
+   `_site/style.css`. Text uses the system's own fonts, so no page loads
+   anything from another origin. No inline styles: the CSP allows none. The only script is `search.js`, which adds the search box and the
    Copy button. */
 
 :root {
@@ -36,7 +35,7 @@
 }
 
 html {
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 100%;
   line-height: 1.6;
   color: var(--text);
@@ -233,7 +232,7 @@ li > p {
 
 code,
 pre {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.875em;
 }
 
