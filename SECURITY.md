@@ -1,6 +1,6 @@
 # Security policy
 
-Oska is a secure-by-default language: a program can reach only the authority its `main` is handed, and untrusted values cannot reach a structural position of a sink. A way around either is a vulnerability, and so is a way to make the installers or the site do something they should not. Please report it privately.
+Oska is a secure-by-default language: a program can reach only the authority its `main` is handed, and untrusted values cannot reach a structural position of a sink. A way around either is a vulnerability, and so is a way to make the installers or the site do something they should not. Please report it privately. The [threat model](docs/guide/threat-model.md) says what Oska guarantees and where each guarantee stops.
 
 ## Reporting a vulnerability
 
@@ -38,7 +38,7 @@ In scope:
 Out of scope:
 
 - Features the docs say are not built yet, such as the standard library modules that check but do not run.
-- Vulnerabilities in GitHub, GitHub Pages or the font CDN themselves.
+- Vulnerabilities in GitHub or GitHub Pages themselves.
 - Missing response headers that GitHub Pages cannot set.
 
 ## Verifying a release

@@ -635,6 +635,23 @@ if step "skill lint" --no-slot --fast-when '.claude/skills/*' --fast-when 'scrip
   bash scripts/skill-lint/test.sh
 fi
 
+if step "claude plugin validate" --no-slot --fast-when '.claude-plugin/*' --fast-when 'plugins/*'; then
+  # The Claude Code marketplace at the root and the `oska` plugin it lists
+  # (spec #206), checked by Claude Code's own validator. Warnings fail too.
+  # The JSON-shape tests in crates/oskac/tests/agent_setup.rs run everywhere;
+  # this step adds the real validator where `claude` is installed.
+  if command -v claude >/dev/null 2>&1; then
+    claude plugin validate --strict .
+    claude plugin validate --strict plugins/oska
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: claude is not installed, and CI must validate the plugin" >&2
+      exit 1
+    fi
+    skip_step "claude not installed; plugin validation skipped (CI runs it; the agent_setup JSON-shape tests still ran)"
+  fi
+fi
+
 if step "workflow guard tests" --fast-when 'scripts/workflow-guard/*'; then
   bash scripts/workflow-guard/test.sh
 fi
