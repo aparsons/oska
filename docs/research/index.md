@@ -29,6 +29,10 @@ Each note answers one question, with its sources and the date it was written. A 
 - [Installing, updating and uninstalling Oska](2026-11-install-update-uninstall.md) (2026-11-12): what the installers did at v0.3.0, the gaps (nothing announced a new release, and the unsigned `latest.json` chose the release), and what would close them.
 - [A review of oskalang.dev](2026-11-site-review.md) (2026-11-12): the site as a person and an agent see it, with ranked fixes. Specs [#183](https://github.com/aparsons/oska/issues/183) and [#288](https://github.com/aparsons/oska/issues/288) came from it.
 
+## Security and compliance
+
+- [FIPS 140-3 and a FIPS mode for Oska](2026-11-fips-140-3.md) (2026-11-21): FIPS 140-3 validates a cryptographic module, not a language, and Oska has no certificate. It covers what Oska can honestly claim in a self-assessment and three ways to offer a FIPS mode. Spec [#569](https://github.com/aparsons/oska/issues/569) came from it.
+
 ## How the project itself is built
 
 These notes are about this repository's development process, not about the language.
