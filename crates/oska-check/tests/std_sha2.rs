@@ -225,7 +225,7 @@ fn every_function_is_pure_and_the_module_has_no_audit_site() {
 
 #[test]
 fn the_module_checks_cleanly_under_the_rules_for_user_code() {
-    let source = oska_check::std_module_source("std.sha2").expect("std.sha2 is Oska source");
+    let source = include_str!("../src/std/sha2.osk");
     let report = check(source);
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     assert!(report.audit.is_empty(), "{:#?}", report.audit);

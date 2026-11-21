@@ -10,7 +10,7 @@
 
 use std::sync::OnceLock;
 
-use oska_syntax::ast::ItemKind;
+use oska_syntax::ast::{ItemKind, Module};
 use oska_syntax::{Diagnostic, Frame, LineIndex, Location, Span};
 
 use crate::manifest::is_snake_case;
@@ -166,23 +166,27 @@ pub(crate) fn linked_modules(modules: &[ModuleSource]) -> Vec<&ModuleSource> {
     linked
 }
 
-/// Whether `source` imports a `std` module of Oska source.
-pub(crate) fn imports_std_source(source: &str) -> bool {
-    std_source_imports(source)
+/// Whether `module` imports a `std` module of Oska source.
+pub(crate) fn imports_std_source(module: &Module) -> bool {
+    module_std_imports(module)
         .iter()
         .any(|path| std_source_file(path).is_some())
 }
 
 /// The path of every `std.…` module `source`'s `use`s name.
 fn std_source_imports(source: &str) -> Vec<String> {
-    let Ok(module) = oska_syntax::parse_module(source) else {
-        return Vec::new();
-    };
+    oska_syntax::parse_module(source)
+        .map(|module| module_std_imports(&module))
+        .unwrap_or_default()
+}
+
+/// The path of every `std.…` module `module`'s `use`s name.
+fn module_std_imports(module: &Module) -> Vec<String> {
     module
         .items
         .iter()
         .filter_map(|item| match &item.kind {
-            ItemKind::Use(u) if u.path.first().is_some_and(|s| s.name == "std") => Some(
+            ItemKind::Use(u) if u.path.first().is_some_and(|s| s.name == link::STD) => Some(
                 u.path
                     .iter()
                     .map(|s| s.name.as_str())
@@ -210,7 +214,6 @@ fn std_source_file(path: &str) -> Option<&'static ModuleSource> {
             })
             .collect()
     });
-    prelude::std_source(path)?;
     files.iter().find(|f| f.module == path)
 }
 

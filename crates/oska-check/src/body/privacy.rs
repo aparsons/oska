@@ -37,15 +37,19 @@ impl Body<'_, '_, '_> {
         declared.marker_at(self.src)
     }
 
+    /// Report a use at `span` of something private to a `std` module,
+    /// which `message` names. It has no fix: a program cannot edit `std`.
+    fn private_to_std(&mut self, message: String, span: Span) {
+        self.out
+            .diagnostics
+            .push(Diagnostic::new(codes::PRIVATE_ITEM, message, span));
+    }
+
     /// Report the use at `span` of `what`, private to `module`, with a fix
     /// that inserts `marker` at `at`.
     fn private(&mut self, what: &str, module: &str, marker: &str, at: usize, span: Span) {
         if link::is_std_module(module) {
-            self.out.diagnostics.push(Diagnostic::new(
-                codes::PRIVATE_ITEM,
-                format!("{what} is private to `{module}`"),
-                span,
-            ));
+            self.private_to_std(format!("{what} is private to `{module}`"), span);
             return;
         }
         let shown = marker.trim_end();
@@ -140,14 +144,13 @@ impl Body<'_, '_, '_> {
             return true;
         };
         if link::is_std_module(&module) {
-            self.out.diagnostics.push(Diagnostic::new(
-                codes::PRIVATE_ITEM,
+            self.private_to_std(
                 format!(
                     "`{type_name}` has fields private to `{module}`, so only that module can \
                      build it or match its fields"
                 ),
                 span,
-            ));
+            );
             return false;
         }
         let diagnostic = Diagnostic::new(

@@ -133,3 +133,54 @@ fn main(io: Stdout) -> Result<(), IoError> {
          secret matches\n"
     );
 }
+
+/// A program using `sha256_secret` builds for every target with
+/// `--target all`: the secret-marking invariant holds on each, with no
+/// internal error (`E0398`), and two builds on this host write the same
+/// bytes. That every host writes the same bytes is CI's
+/// `cross-build-compare`, whose corpus holds `fixtures/sha2_fips.osk`.
+#[test]
+fn the_secret_hash_builds_for_every_target_the_same_twice() {
+    let src = r#"use std.sha2
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let key = Secret.new("key material".to_bytes())
+    let tag = sha2.sha256_secret(key)
+    let same = tag.constant_time_eq_secret(sha2.sha256_secret(key))
+    io.println(if same { "same" } else { "different" })
+}
+"#;
+    let dir = Scratch::new("oska-sha2", "all");
+    std::fs::write(dir.join("tag.osk"), src).expect("write the program");
+    let mut builds = Vec::new();
+    for out in ["first", "second"] {
+        std::fs::create_dir(dir.join(out)).expect("make the output directory");
+        let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args(["build", "tag.osk", "--target", "all", "-o", out])
+            // A cache of each build's own, so the second is built afresh.
+            .env("OSKA_CACHE_DIR", dir.join(format!("cache-{out}")))
+            .current_dir(&dir)
+            .output()
+            .expect("oskac runs");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{output:?}");
+        assert!(!stderr.contains("E0398"), "{stderr}");
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir.join(out))
+            .expect("the output directory")
+            .map(|e| {
+                let path = e.expect("an entry").path();
+                let name = path
+                    .file_name()
+                    .expect("a name")
+                    .to_string_lossy()
+                    .into_owned();
+                (name, std::fs::read(&path).expect("an executable"))
+            })
+            .collect();
+        files.sort();
+        builds.push(files);
+    }
+    let names: Vec<&str> = builds[0].iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names.len(), 5, "one executable per target: {names:?}");
+    assert!(builds[0] == builds[1], "two builds differ: {names:?}");
+}

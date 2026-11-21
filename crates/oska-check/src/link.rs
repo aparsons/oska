@@ -780,12 +780,10 @@ impl Linker {
             self.diagnostics.push(diagnostic);
             return None;
         };
-        // From outside `std`, a `std` module's items are visible only
-        // when they are `pub`, and it is not code a fix may edit.
-        if std_target
-            && declared.visibility != Visibility::Public
-            && !is_std_module(&self.paths[index])
-        {
+        // From any other module, another `std` module's included, a `std`
+        // module's items are visible only when they are `pub`, and it is
+        // not code a fix may edit.
+        if std_target && declared.visibility != Visibility::Public && target != index {
             let diagnostic = Diagnostic::new(
                 codes::PRIVATE_ITEM,
                 format!(
@@ -1477,6 +1475,39 @@ mod tests {
             cycles[0].contains("`std.alpha` imports `std.beta` imports `std.alpha`"),
             "{}",
             cycles[0]
+        );
+    }
+
+    /// One `std` module uses another's `pub` items only, as any other
+    /// module does: a private item or a `pub(pkg)` one is refused, with no
+    /// fix.
+    #[test]
+    fn a_std_module_cannot_use_anothers_private_items() {
+        let found = linked(&[
+            ("main", "use std.alpha\nfn main() {\n    alpha.a()\n}"),
+            (
+                "std.alpha",
+                "use std.beta\npub fn a() {\n    beta.hidden()\n    beta.shared()\n}",
+            ),
+            ("std.beta", "fn hidden() { }\npub(pkg) fn shared() { }"),
+        ]);
+        let private: Vec<&str> = found
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == codes::PRIVATE_ITEM && d.fix.is_none())
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(private.len(), 2, "{:#?}", found.diagnostics);
+        assert_eq!(found.diagnostics.len(), 2, "{:#?}", found.diagnostics);
+        assert!(
+            private[0].contains("`hidden` is private to `std.beta`"),
+            "{}",
+            private[0]
+        );
+        assert!(
+            private[1].contains("`shared` is private to `std.beta`"),
+            "{}",
+            private[1]
         );
     }
 

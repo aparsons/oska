@@ -85,11 +85,6 @@ pub fn std_module(path: &str) -> Option<&'static StdModule> {
     STD_MODULES.iter().find(|m| m.path == path)
 }
 
-/// The `std` module of Oska source at `path`, if there is one.
-pub fn std_source(path: &str) -> Option<&'static StdModule> {
-    std_module(path).filter(|m| m.kind == StdKind::Source)
-}
-
 /// The module whose sink literal has `tag`.
 pub fn sink_module(tag: &str) -> Option<&'static StdModule> {
     STD_MODULES
