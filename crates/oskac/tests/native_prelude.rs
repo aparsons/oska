@@ -538,6 +538,71 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "Budget.limit",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    let small = budget.limit(100, 2)
+    io.println(shown(small.remaining().calls == Some(2)))
+}"#,
+    ),
+    (
+        "Budget.remaining",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    io.println(shown(budget.remaining().tokens.is_some()))
+}"#,
+    ),
+    (
+        "Budget.spent",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    let spent = budget.spent()
+    let tokens = spent.tokens
+    let calls = spent.calls
+    io.println("{tokens} {calls}")
+}"#,
+    ),
+    (
+        "Budget.reserve",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    io.println(shown(budget.limit(10, 1).reserve(20).is_ok()))
+}"#,
+    ),
+    (
+        "Reservation.debit",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    match budget.reserve(20) {
+        Ok(r) => r.debit(30, 0, 0, 0)
+        Err(_) => {}
+    }
+    io.println(shown(budget.spent().tokens == 30))
+}"#,
+    ),
+    (
+        "Reservation.release",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    let small = budget.limit(10, 1)
+    match small.reserve(10) {
+        Ok(r) => r.release()
+        Err(_) => {}
+    }
+    io.println(shown(small.remaining().calls == Some(1)))
+}"#,
+    ),
+    (
+        "OverBudget.to_string",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    match budget.limit(10, 1).reserve(20) {
+        Ok(_) => io.println("reserved")
+        Err(e) => io.println(e.to_string())
+    }
+}"#,
+    ),
+    (
         "Random.next_int",
         Run::Main,
         r#"fn main(io: Stdout, random: Random) -> Result<(), IoError> {

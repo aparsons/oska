@@ -140,6 +140,21 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`Budget`",
+        Probe::Program(
+            "fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {\n    \
+             let small = budget.limit(100, 1)\n    \
+             let shown = match small.reserve(500) {\n        \
+             Ok(r) => {\n            \
+             r.release()\n            \
+             \"reserved\"\n        \
+             }\n        \
+             Err(e) => e.to_string()\n    \
+             }\n    \
+             io.println(shown)\n}\n",
+        ),
+    ),
+    (
         "Files: `Fs`, `FsRead`, `FsWrite`, and the directory and file capabilities",
         Probe::Program(
             "fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {\n    \

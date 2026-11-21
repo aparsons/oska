@@ -521,9 +521,10 @@ fn broken_pipe(result: Int) -> Bool {
 //   48      on Windows, the word a call puts its count in (`win_write`);
 //   49      on Windows, the console area, or 0 (see "The Windows console");
 //   50      the call stack ("The call stack");
-//   51      under `--max-steps` only, the steps left (`oska-native`'s
+//   51      the root budget's counters, made on first use ("Budgets");
+//   52      under `--max-steps` only, the steps left (`oska-native`'s
 //           `STEPS_WORD`);
-//   52      under `--max-memory` only, the report of its panic
+//   53      under `--max-memory` only, the report of its panic
 //           ("Memory limit").
 //
 // Every object the allocator gives out is preceded by a header word: its
@@ -3903,6 +3904,248 @@ pub fn random_next_int(random: Random) -> Int {
     rt_mem_shr(rt_mem_xor(z, rt_mem_shr(z, 31)), 1)
 }
 
+// ---- Budgets ---------------------------------------------------------------
+//
+// A `Budget` is a word: 0 for the root, `main`'s or a test's `t.budget`,
+// and otherwise the address of its node. A node is
+// `[count][parent][tokens' limit][calls' limit][tokens spent][calls spent]
+// [tokens reserved][calls reserved]`, its parent's node or 0 for the
+// root's, and a limit of -1 for none. The root's node is made on first use
+// (word 51): unlimited in a program, 100000 tokens and 100 calls in a test
+// executable, as the interpreter's (`oska-run`'s `budget.rs`). Copies of a
+// budget share its node, so they draw from the same counters. Nodes are
+// never freed: a budget is a capability, which the generated code does
+// not count.
+//
+// A `Reservation` is the object `Hold`, `[count][node][tokens][open]`, laid
+// out as the prelude's `Reservation { handle, tokens, open }`, whose
+// private fields only `std.rt` reads (`oska-native`'s test
+// `a_reservation_is_laid_out_as_std_rt_s_hold` keeps the two alike).
+// `open` is written in place, so every copy sees it settled.
+
+struct Hold {
+    node: Int,
+    tokens: Int,
+    open: Bool,
+}
+
+// The node of the budget `budget`.
+fn budget_node(budget: Int) -> Int {
+    if budget != 0 {
+        return budget
+    }
+    let root = rt_mem_load64(global(51))
+    if root != 0 {
+        return root
+    }
+    var tokens = -1
+    var calls = -1
+    if rt_mem_test_host() != 0 {
+        tokens = 100000
+        calls = 100
+    }
+    let node = budget_new(0, tokens, calls)
+    rt_mem_store64(global(51), node)
+    node
+}
+
+// A new node under `parent`, with the limits `tokens` and `calls`.
+fn budget_new(parent: Int, tokens: Int, calls: Int) -> Int {
+    let node = alloc(64)
+    rt_mem_store64(rt_mem_add(node, 8), parent)
+    rt_mem_store64(rt_mem_add(node, 16), tokens)
+    rt_mem_store64(rt_mem_add(node, 24), calls)
+    var at = 32
+    while at < 64 {
+        rt_mem_store64(rt_mem_add(node, at), 0)
+        at = at + 8
+    }
+    node
+}
+
+fn budget_word(node: Int, offset: Int) -> Int {
+    rt_mem_load64(rt_mem_add(node, offset))
+}
+
+// Add `n`, at least 0, to the word at `offset`, stopping at the largest
+// `Int`.
+fn budget_add(node: Int, offset: Int, n: Int) {
+    let was = budget_word(node, offset)
+    var sum = 9223372036854775807
+    if was <= sum - n {
+        sum = was + n
+    }
+    rt_mem_store64(rt_mem_add(node, offset), sum)
+}
+
+// Take `n`, at least 0, from the word at `offset`, stopping at 0: an
+// unlimited budget's reservations stop at the largest `Int`, so they may
+// add up to less than is returned.
+fn budget_take(node: Int, offset: Int, n: Int) {
+    let was = budget_word(node, offset)
+    var rest = 0
+    if was > n {
+        rest = was - n
+    }
+    rt_mem_store64(rt_mem_add(node, offset), rest)
+}
+
+// What `node` itself has left of the amount whose limit is at `limit`
+// (16 tokens, 24 calls; spent 16 bytes on, reserved 32): -1 for no limit,
+// and never below 0.
+fn budget_own_left(node: Int, limit: Int) -> Int {
+    let most = budget_word(node, limit)
+    if most < 0 {
+        return -1
+    }
+    let left = most - budget_word(node, limit + 16)
+    if left <= 0 {
+        return 0
+    }
+    let rest = left - budget_word(node, limit + 32)
+    if rest < 0 {
+        return 0
+    }
+    rest
+}
+
+// The least that `node` or any node above it has left of the amount at
+// `limit`: -1 when none has a limit.
+fn budget_left(node: Int, limit: Int) -> Int {
+    var least = -1
+    var at = node
+    while at != 0 {
+        let left = budget_own_left(at, limit)
+        if left >= 0 && (least < 0 || left < least) {
+            least = left
+        }
+        at = budget_word(at, 8)
+    }
+    least
+}
+
+// `asked`, at least 0, and no more than `left` unless that is -1.
+fn budget_clamp(asked: Int, left: Int) -> Int {
+    var n = asked
+    if n < 0 {
+        n = 0
+    }
+    if left >= 0 && left < n {
+        n = left
+    }
+    n
+}
+
+fn budget_amount(n: Int) -> Option<Int> {
+    if n < 0 {
+        return None
+    }
+    Some(n)
+}
+
+fn budget_allowance(node: Int) -> Allowance {
+    let tokens = budget_amount(budget_left(node, 16))
+    let calls = budget_amount(budget_left(node, 24))
+    Allowance(tokens: tokens, calls: calls)
+}
+
+// `Budget.limit`: a child node, clamped to what `budget` has left.
+pub fn budget_limit(budget: Int, tokens: Int, calls: Int) -> Int {
+    let node = budget_node(budget)
+    budget_new(node, budget_clamp(tokens, budget_left(node, 16)), budget_clamp(calls, budget_left(node, 24)))
+}
+
+// `Budget.remaining`.
+pub fn budget_remaining(budget: Int) -> Allowance {
+    budget_allowance(budget_node(budget))
+}
+
+// `Budget.spent`.
+pub fn budget_spent(budget: Int) -> Spending {
+    let node = budget_node(budget)
+    Spending(tokens: budget_word(node, 32), calls: budget_word(node, 40))
+}
+
+// `Budget.reserve`: `tokens` and one call reserved on `budget`'s node and
+// every node above it, or `OverBudget` when any has less left.
+pub fn budget_reserve(budget: Int, tokens: Int) -> Result<Hold, OverBudget> {
+    let node = budget_node(budget)
+    let asked = budget_clamp(tokens, -1)
+    let tokens_left = budget_left(node, 16)
+    let calls_left = budget_left(node, 24)
+    // A budget with no tokens left refuses even a reservation of none:
+    // otherwise every call could overshoot it again.
+    if (tokens_left >= 0 && (tokens_left < asked || tokens_left == 0)) || calls_left == 0 {
+        return Err(OverBudget(asked: asked, left: budget_allowance(node)))
+    }
+    var at = node
+    while at != 0 {
+        budget_add(at, 48, asked)
+        budget_add(at, 56, 1)
+        at = budget_word(at, 8)
+    }
+    Ok(Hold(node: node, tokens: asked, open: true))
+}
+
+// `Reservation.debit`: every count, each at least 0, spent as tokens,
+// stopping at the largest `Int`.
+pub fn reservation_debit(hold: Int, input: Int, output: Int, cache_creation: Int, cache_read: Int) {
+    var used = budget_sum(budget_clamp(input, -1), budget_clamp(output, -1))
+    used = budget_sum(used, budget_clamp(cache_creation, -1))
+    used = budget_sum(used, budget_clamp(cache_read, -1))
+    budget_settle(hold, used, true)
+}
+
+// `a + b`, both at least 0, stopping at the largest `Int`.
+fn budget_sum(a: Int, b: Int) -> Int {
+    let most = 9223372036854775807
+    if a > most - b {
+        return most
+    }
+    a + b
+}
+
+// `Reservation.release`.
+pub fn reservation_release(hold: Int) {
+    budget_settle(hold, 0, false)
+}
+
+// Settle the reservation `hold`, once: return what it reserved and, when
+// `spend`, spend `used` tokens and the call, on its node and every node
+// above it.
+fn budget_settle(hold: Int, used: Int, spend: Bool) {
+    if budget_word(hold, 24) == 0 {
+        return
+    }
+    rt_mem_store64(rt_mem_add(hold, 24), 0)
+    let reserved = budget_word(hold, 16)
+    var at = budget_word(hold, 8)
+    while at != 0 {
+        budget_take(at, 48, reserved)
+        budget_take(at, 56, 1)
+        if spend {
+            budget_add(at, 32, used)
+            budget_add(at, 40, 1)
+        }
+        at = budget_word(at, 8)
+    }
+}
+
+fn budget_amount_text(n: Option<Int>) -> String {
+    match n {
+        Some(n) => "{n}"
+        None => "unlimited"
+    }
+}
+
+// `OverBudget.to_string`, as the interpreter's.
+pub fn over_budget_to_string(e: OverBudget) -> String {
+    let asked = e.asked
+    let tokens = budget_amount_text(e.left.tokens)
+    let calls = budget_amount_text(e.left.calls)
+    "over budget: asked for {asked} tokens and 1 call, with {tokens} tokens and {calls} calls left"
+}
+
 // ---- Debugging -------------------------------------------------------------
 
 // `dbg`'s line: standard output first, then `[dbg] `, `text` and a
@@ -7014,7 +7257,7 @@ pub fn on_exception(pointers: Int) -> Int {
 // `alloc`, `try_alloc` and `free`, in the generated code and in `std.rt`
 // alike, calls `counted_alloc`, `counted_try_alloc` or `counted_free` in
 // its place; theirs alone are not redirected. Word 39 holds the bytes the
-// program may still allocate, and word 52 the report of the panic
+// program may still allocate, and word 53 the report of the panic
 // (`P0040`), or 0 before `memory_limit_start`. Once counting has
 // started, each block is counted, header included, before it is
 // allocated, and marked as counted (256 added to its header word, which
@@ -7040,7 +7283,7 @@ fn limit_reached() -> Int {
 // (`P0040`). Before this, nothing is checked.
 pub fn memory_limit_start(limit: Int, report: String) {
     rt_mem_store64(global(39), limit)
-    rt_mem_store64(global(52), rt_mem_text(report))
+    rt_mem_store64(global(53), rt_mem_text(report))
 }
 
 // The bytes of the block `alloc` gives an object of `size` bytes, header
@@ -7074,7 +7317,7 @@ fn spend_memory(bytes: Int) {
     let left = rt_mem_sub(rt_mem_load64(global(39)), bytes)
     if left < 0 {
         rt_mem_store64(global(39), limit_reached())
-        let _ = write_text(report_fd(), rt_mem_as_text(rt_mem_load64(global(52))))
+        let _ = write_text(report_fd(), rt_mem_as_text(rt_mem_load64(global(53))))
         panic_end_alone()
     }
     rt_mem_store64(global(39), left)
@@ -7089,7 +7332,7 @@ fn mark_counted(object: Int) {
 // Whether counting has started (`memory_limit_start`): until then a
 // block is neither counted nor marked.
 fn counting() -> Bool {
-    rt_mem_load64(global(52)) != 0
+    rt_mem_load64(global(53)) != 0
 }
 
 pub fn counted_alloc(size: Int) -> Int {

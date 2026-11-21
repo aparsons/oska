@@ -24,6 +24,7 @@ Inside a test, `t` holds deterministic stand-in capabilities, so a test needs no
 | `t.clock` | A `Clock` fixed at the Unix epoch: `now_millis()` is `0` |
 | `t.random` | A `Random` with the same fixed seed in every test |
 | `t.stdout` | A recording `Stdout`. `t.printed()` returns one entry per `println`, without its line break. |
+| `t.budget` | A `Budget` of 100000 tokens and 100 calls, the same in every test. `t.budget.spent()` reads what the test spent, and `t.budget.limit(tokens, calls)` gives a smaller one to test what happens over budget. |
 
 Each test gets a fresh `t` on a fresh in-memory host, so nothing one test does is visible to another.
 

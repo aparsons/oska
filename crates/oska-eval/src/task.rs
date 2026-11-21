@@ -62,6 +62,7 @@ const CAPABILITIES: &[&str] = &[
     "Env",
     "Clock",
     "Random",
+    "Budget",
     "Net",
     "NetConnect",
     "NetListen",
