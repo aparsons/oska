@@ -97,8 +97,8 @@ pub const INT: &str = "Int";
 pub const STRING: &str = "String";
 /// The syntax for untrusted text, as in `Untrusted<String>`.
 pub const UNTRUSTED: &str = "Untrusted";
-/// The types that carry a trust flag.
-const TEXT: &[&str] = &[STRING];
+/// The types that carry a trust flag: text, and bytes (#223).
+const TEXT: &[&str] = &[STRING, crate::builtins::BYTES];
 
 /// Whether the type named `name` carries a trust flag.
 pub fn is_text_name(name: &str) -> bool {

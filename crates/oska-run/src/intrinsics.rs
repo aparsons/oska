@@ -58,6 +58,7 @@ pub const INTRINSICS: Table = &[
     ("Dir.restrict_to", Plain(dir_restrict_to)),
     ("Dir.write_only", Plain(fs_write_only)),
     ("DirRead.list_dir", Plain(fs_list_dir)),
+    ("DirRead.read_bytes", Plain(fs_read_bytes)),
     ("DirRead.read_to_string", Plain(fs_read_to_string)),
     ("DirRead.restrict_to", Plain(dir_restrict_to)),
     ("DirRead.restrict_to_file", Plain(dir_restrict_to_file)),
@@ -65,10 +66,13 @@ pub const INTRINSICS: Table = &[
     ("DirWrite.restrict_to", Plain(dir_restrict_to)),
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.write", Plain(fs_write)),
+    ("DirWrite.write_bytes", Plain(fs_write_bytes)),
     ("Env.get", Plain(env_get)),
     ("Env.secret", HigherOrder(env_secret)),
+    ("FileRead.read_bytes", Plain(file_read_bytes)),
     ("FileRead.read_to_string", Plain(file_read_to_string)),
     ("FileWrite.write", Plain(file_write)),
+    ("FileWrite.write_bytes", Plain(file_write_bytes)),
     ("Fs.read_only", Plain(fs_read_only)),
     ("Fs.restrict_to", Plain(fs_restrict_to)),
     ("Fs.write_only", Plain(fs_write_only)),
@@ -162,13 +166,38 @@ fn io_failure(err: &io::Error, span: Span) -> Result<Value, Panic> {
     )?))
 }
 
-/// The text read from outside, or the failure, counted under
-/// `--max-memory` once read, at `span`.
-fn io_text(result: io::Result<String>, span: Span) -> Result<Value, Panic> {
+/// The text of the bytes read from outside, or the failure, counted
+/// under `--max-memory` once read, at `span`. Bytes that are not UTF-8
+/// are a failure, worded as Rust's `read_to_string` words it.
+fn io_text(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
+    let result = result.and_then(|bytes| {
+        String::from_utf8(bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })
+    });
     match result {
         Ok(text) => Ok(Value::ok(memory::text(&text, span)?)),
         Err(err) => io_failure(&err, span),
     }
+}
+
+/// The bytes read from outside, as they are, or the failure, counted
+/// under `--max-memory` once read, at `span`.
+fn io_bytes(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
+    match result {
+        Ok(bytes) => Ok(Value::ok(memory::bytes_of_len(bytes.len(), span, || {
+            bytes
+        })?)),
+        Err(err) => io_failure(&err, span),
+    }
+}
+
+/// The bytes of the `Bytes` argument at `index`.
+fn bytes_arg(args: &[Value], index: usize) -> &[u8] {
+    args[index].as_bytes()
 }
 
 // ---- Standard streams --------------------------------------------------
@@ -594,8 +623,20 @@ fn root_for(fs: &FsCap, intent: Intent) -> io::Result<&RootHandle> {
 /// `DirRead.read_to_string(self, path)`: the path is walked beneath the
 /// root's handle (`confine.rs`).
 fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    io_text(fs_read(host, &args), span)
+}
+
+/// `DirRead.read_bytes(self, path)`: read as `read_to_string` reads, but
+/// the bytes as they are.
+fn fs_read_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    io_bytes(fs_read(host, &args), span)
+}
+
+/// The bytes of the file a `DirRead` (`args[0]`) reaches at the path
+/// `args[1]`.
+fn fs_read(host: &mut dyn Host, args: &[Value]) -> io::Result<Vec<u8>> {
     let raw = args[1].fields()[0].as_str();
-    let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
+    root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
         if names.is_empty() {
             return Err(io::Error::new(
@@ -604,8 +645,7 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Resul
             ));
         }
         host.read_file_beneath(root, &names)
-    });
-    io_text(result, span)
+    })
 }
 
 /// `DirRead.list_dir(self, path)`: the names of the entries of the
@@ -632,13 +672,22 @@ fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Valu
 /// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
 /// and is walked beneath the root's handle.
 fn fs_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let contents = text(&args, 2);
+    io_unit(fs_put(host, &args, text(&args, 2).as_bytes()), span)
+}
+
+/// `DirWrite.write_bytes(self, path, contents)`: `write` with bytes.
+fn fs_write_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    io_unit(fs_put(host, &args, bytes_arg(&args, 2)), span)
+}
+
+/// Write `contents` to the file a `DirWrite` (`args[0]`) reaches at the
+/// path `args[1]`.
+fn fs_put(host: &mut dyn Host, args: &[Value], contents: &[u8]) -> io::Result<()> {
     let raw = args[1].fields()[0].as_str();
-    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+    root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
         host.write_file_beneath(root, &names, contents)
-    });
-    io_unit(result, span)
+    })
 }
 
 /// `DirWrite.create_dir(self, path)`: confined like a write, so `path`
@@ -659,11 +708,24 @@ fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Res
     io_text(result, span)
 }
 
+/// `FileRead.read_bytes(self)`: the file's bytes, as they are.
+fn file_read_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
+    io_bytes(result, span)
+}
+
 /// `FileWrite.write(self, contents)`: creates the file, or replaces what
 /// it holds, opened by its name beneath the parent directory's handle.
 fn file_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let result =
-        file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], text(&args, 1)));
+    let contents = text(&args, 1).as_bytes();
+    let result = file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], contents));
+    io_unit(result, span)
+}
+
+/// `FileWrite.write_bytes(self, contents)`: `write` with bytes.
+fn file_write_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    let contents = bytes_arg(&args, 1);
+    let result = file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], contents));
     io_unit(result, span)
 }
 

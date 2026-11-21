@@ -242,6 +242,38 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "DirRead.read_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    let bytes = read.restrict_to(".").read_bytes(Path.new("main.osk"))?
+    io.println(bytes.slice(0, 7).to_hex())
+}"#,
+    ),
+    (
+        "FileRead.read_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    match read.restrict_to_file("missing.bin").read_bytes() {
+        Ok(bytes) => io.println(bytes.to_hex())
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "DirWrite.write_bytes",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to(".").write_bytes(Path.new("out.bin"), Bytes.zeroed(3))
+}"#,
+    ),
+    (
+        "FileWrite.write_bytes",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to_file("file.bin").write_bytes(Bytes.from_hex("80ff").unwrap_or(Bytes.new()))
+}"#,
+    ),
+    (
         "Env.get",
         Run::WithInput(""),
         r#"fn main(io: Stdout, env: Env) -> Result<(), IoError> {
@@ -561,6 +593,15 @@ const CALLS: &[(&str, Run, &str)] = &[
     let n = "-42".parse_int().unwrap_or(0)
     let bad = shown("4x".parse_int().is_some())
     io.println("{n} {bad}")
+}"#,
+    ),
+    (
+        "Bytes.assume_trusted",
+        Run::WithInput("typed\n"),
+        r#"fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
+    let line = input.read_line()?.unwrap_or("")
+    let trusted: Bytes = line.to_bytes().assume_trusted()
+    io.println(trusted.to_hex())
 }"#,
     ),
     (

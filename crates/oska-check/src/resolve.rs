@@ -10,8 +10,8 @@ use crate::prelude;
 use crate::suggest;
 use crate::ty;
 
-/// `E0320` for `ty` when it is `Untrusted<T>` and `T` is a type that is
-/// not text. Trust is a flag on text only (ADR 0006), so such a type
+/// `E0320` for `ty` when it is `Untrusted<T>` and `T` is neither text nor
+/// `Bytes`. Trust is a flag on text and bytes only (ADR 0006), so such a type
 /// means nothing; text inside a container is written
 /// `List<Untrusted<String>>`. `known` says whether a name is a type in
 /// scope: an unknown argument is reported as unknown instead.
@@ -34,9 +34,10 @@ pub fn untrusted_not_text(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Dia
     }
     Some(Diagnostic::new(
         codes::UNTRUSTED_NOT_TEXT,
-        "`Untrusted<...>` marks text only, such as `Untrusted<String>`: trust is a flag \
-         on text, and other types are always trusted; for text inside a container, \
-         write it inside, as in `List<Untrusted<String>>`",
+        "`Untrusted<...>` marks text and bytes only, `Untrusted<String>` or \
+         `Untrusted<Bytes>`: trust is a flag on text and bytes, and other types are \
+         always trusted; for text inside a container, write it inside, as in \
+         `List<Untrusted<String>>`",
         ty.span,
     ))
 }

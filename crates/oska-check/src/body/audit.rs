@@ -26,6 +26,11 @@ const AUDITED: &[Audited] = &[
         kind: AuditKind::TrustAssertion,
     },
     Audited {
+        type_name: crate::builtins::BYTES,
+        method: "assume_trusted",
+        kind: AuditKind::TrustAssertion,
+    },
+    Audited {
         type_name: ty::SECRET,
         method: "expose",
         kind: AuditKind::SecretExposure,

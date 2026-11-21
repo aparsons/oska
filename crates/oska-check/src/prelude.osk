@@ -13,14 +13,15 @@
 // Trust (ADR 0006): a `String` parameter or result is trusted text, a
 // **structural position**. `Untrusted<String>` is untrusted text: sources
 // return it, and a **data position** declares it, which also accepts
-// trusted text.
+// trusted text. `Bytes` carries the same flag (#223): `Untrusted<Bytes>`
+// is bytes from outside the program, under the same rules.
 //
-// A text operation marked `#[follows_trust]` is trust-polymorphic: its
-// receiver and every `String` in its parameters accept text of either
-// trust, and every `String` in its result is untrusted when any of them
-// is untrusted. Results that are not text, such as `Int` or `Bool`, are
-// trusted. Without the attribute, `String` means trusted everywhere, the
-// receiver included.
+// An operation marked `#[follows_trust]` is trust-polymorphic: its
+// receiver and every `String` and `Bytes` in its parameters accept values
+// of either trust, and every `String` and `Bytes` in its result is
+// untrusted when any of them is untrusted. Results that carry no flag,
+// such as `Int` or `Bool`, are trusted. Without the attribute, `String`
+// and `Bytes` mean trusted everywhere, the receiver included.
 
 // ---- Built-in capabilities -------------------------------------------
 
@@ -115,6 +116,8 @@ impl DirRead {
     // may be named by untrusted text through `Path.from`. See `FileRead`.
     pub fn restrict_to_file(self, file: Path) -> FileRead
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
+    // The bytes of the file at `path`, as they are, UTF-8 or not.
+    pub fn read_bytes(self, path: Path) -> Result<Untrusted<Bytes>, IoError>
     // The names of the entries of the directory at `path` (`"."` is the
     // root itself), sorted so the order is the same on every host. A name
     // comes from outside the program, so it is untrusted.
@@ -132,6 +135,8 @@ impl DirWrite {
     // Create the file at `path`, or replace what it holds, with
     // `contents`. A symlink at `path` is never followed.
     pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
+    // `write` with bytes: the file holds exactly `contents`.
+    pub fn write_bytes(self, path: Path, contents: Untrusted<Bytes>) -> Result<(), IoError>
     // Create the directory at `path`; its parent must exist. A directory
     // already there is kept, with everything in it, and anything else
     // there is an error. A symlink at `path` is never followed.
@@ -150,6 +155,8 @@ pub struct FileRead { handle: Int }
 
 impl FileRead {
     pub fn read_to_string(self) -> Result<Untrusted<String>, IoError>
+    // The file's bytes, as they are, UTF-8 or not.
+    pub fn read_bytes(self) -> Result<Untrusted<Bytes>, IoError>
 }
 
 #[capability]
@@ -158,6 +165,8 @@ pub struct FileWrite { handle: Int }
 impl FileWrite {
     // Create the file, or replace what it holds, with `contents`.
     pub fn write(self, contents: Untrusted<String>) -> Result<(), IoError>
+    // `write` with bytes: the file holds exactly `contents`.
+    pub fn write_bytes(self, contents: Untrusted<Bytes>) -> Result<(), IoError>
 }
 
 #[capability]
@@ -186,6 +195,9 @@ impl Connection {
     pub fn send(self, body: Untrusted<String>) -> Result<(), IoError>
     // What the host sent back: text from outside the program.
     pub fn receive(self) -> Result<Untrusted<String>, IoError>
+    // `send` and `receive` with bytes.
+    pub fn send_bytes(self, body: Untrusted<Bytes>) -> Result<(), IoError>
+    pub fn receive_bytes(self) -> Result<Untrusted<Bytes>, IoError>
 }
 
 #[capability]
@@ -316,6 +328,10 @@ impl<T> List<T> {
 // copies one that is shared first, so appending in a loop is not
 // quadratic. Its representation is built in.
 //
+// Every method follows trust: bytes or text it gives are untrusted when
+// the receiver or a `Bytes` or `String` argument is, and the integers it
+// reads are trusted, as `len` of untrusted text is (#223).
+//
 // An index out of bounds in `at` or `set` panics (`P0002`), as in
 // `List.at`. A slice or an endian read that does not lie wholly inside
 // the buffer panics (`P0042`), and so does a negative length for
@@ -324,45 +340,69 @@ pub struct Bytes { handle: Int }
 
 impl Bytes {
     // An empty buffer.
+    #[follows_trust]
     pub fn new() -> Bytes
     // A buffer of `len` zero bytes.
+    #[follows_trust]
     pub fn zeroed(len: Int) -> Bytes
     // The bytes that `text` spells in hexadecimal, two digits a byte, in
     // either case; `None` when it spells none.
+    #[follows_trust]
     pub fn from_hex(text: String) -> Option<Bytes>
     // The number of bytes.
+    #[follows_trust]
     pub fn len(self) -> Int
     // The byte at `index`, or `None` when the index is out of bounds.
+    #[follows_trust]
     pub fn get(self, index: Int) -> Option<U8>
     // The byte at `index`.
+    #[follows_trust]
     pub fn at(self, index: Int) -> U8
     // The bytes from `start` up to, but excluding, `end`.
+    #[follows_trust]
     pub fn slice(self, start: Int, end: Int) -> Bytes
     // The integer stored at byte `offset`, its most significant byte
     // first (`_be`, big-endian, the network's order) or last (`_le`).
+    #[follows_trust]
     pub fn read_u16_be(self, offset: Int) -> U16
+    #[follows_trust]
     pub fn read_u16_le(self, offset: Int) -> U16
+    #[follows_trust]
     pub fn read_u32_be(self, offset: Int) -> U32
+    #[follows_trust]
     pub fn read_u32_le(self, offset: Int) -> U32
+    #[follows_trust]
     pub fn read_u64_be(self, offset: Int) -> U64
+    #[follows_trust]
     pub fn read_u64_le(self, offset: Int) -> U64
     // Two lower-case hexadecimal digits a byte.
+    #[follows_trust]
     pub fn to_hex(self) -> String
     // The text the bytes encode in UTF-8, or `None` when they are not
     // UTF-8.
+    #[follows_trust]
     pub fn to_text(self) -> Option<String>
     // `byte` added at the end.
+    #[follows_trust]
     pub fn push(var self, byte: U8)
     // The byte at `index` replaced by `byte`.
+    #[follows_trust]
     pub fn set(var self, index: Int, byte: U8)
     // `other`'s bytes added at the end.
+    #[follows_trust]
     pub fn append(var self, other: Bytes)
     // `value`'s bytes added at the end, in big- or little-endian order.
+    #[follows_trust]
     pub fn push_u16_be(var self, value: U16)
+    #[follows_trust]
     pub fn push_u16_le(var self, value: U16)
+    #[follows_trust]
     pub fn push_u32_be(var self, value: U32)
+    #[follows_trust]
     pub fn push_u32_le(var self, value: U32)
+    #[follows_trust]
     pub fn push_u64_be(var self, value: U64)
+    #[follows_trust]
     pub fn push_u64_le(var self, value: U64)
 }
 
@@ -419,6 +459,7 @@ impl String {
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>
     // Its UTF-8 encoding.
+    #[follows_trust]
     pub fn to_bytes(self) -> Bytes
 }
 
@@ -426,6 +467,12 @@ impl Untrusted<String> {
     // A trust assertion: a validator vouches for text it has checked.
     // Every call is an audit site.
     pub fn assume_trusted(self) -> String
+}
+
+impl Untrusted<Bytes> {
+    // A trust assertion: a validator vouches for bytes it has checked.
+    // Every call is an audit site.
+    pub fn assume_trusted(self) -> Bytes
 }
 
 pub struct Path { raw: String }
