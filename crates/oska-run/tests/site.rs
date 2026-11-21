@@ -384,6 +384,7 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to_file(\"site/favicon.svg\")",
         "read.restrict_to_file(\"Cargo.toml\")",
         "read.restrict_to_file(\"site/authority.txt\")",
+        "read.restrict_to_file(\"site/lastmod.txt\")",
         "restrict_to(Path.new(\"_site\"))",
     ] {
         assert!(
@@ -470,6 +471,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
         "  FsRead -> FileRead: restrict_to_file \"CHANGELOG.md\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"site/favicon.svg\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"site/lastmod.txt\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
         "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
     ] {
@@ -935,6 +937,63 @@ fn canonical_path(html: &str) -> String {
 }
 
 #[test]
+fn the_sitemap_dates_each_page_with_a_source_file_from_lastmod_txt() {
+    let mut repo = agent_repo();
+    repo.push((
+        "site/lastmod.txt",
+        "2026-11-03 docs/index.md\n\
+         2026-01-09 GLOSSARY.md\n\
+         2026-1-09 docs/design.md\n\
+         tomorrow docs/guide/capabilities.md\n\
+         2026-13-01 docs/guide/agent-guide.md\n",
+    ));
+    let site = build_ok(&repo);
+    let sitemap = &site["sitemap.xml"];
+    assert!(
+        sitemap
+            .contains("<url><loc>https://oskalang.dev/</loc><lastmod>2026-11-03</lastmod></url>\n"),
+        "{sitemap}"
+    );
+    assert!(
+        sitemap
+            .contains("<loc>https://oskalang.dev/glossary.html</loc><lastmod>2026-01-09</lastmod>"),
+        "{sitemap}"
+    );
+    // A malformed date is skipped, and a page made from no one file, such
+    // as the reference page, has no date.
+    assert_eq!(sitemap.matches("<lastmod>").count(), 2, "{sitemap}");
+    assert!(sitemap.contains("<url><loc>https://oskalang.dev/reference.html</loc></url>\n"));
+}
+
+#[test]
+fn without_lastmod_txt_the_sitemap_has_no_dates() {
+    let site = build_ok(&agent_repo());
+    assert!(
+        !site["sitemap.xml"].contains("<lastmod>"),
+        "{}",
+        site["sitemap.xml"]
+    );
+}
+
+/// The dates are git's: the workflow fetches the whole history, so a file's
+/// last commit is its own, and writes `lastmod.txt` before the build.
+#[test]
+fn the_pages_workflow_writes_lastmod_txt_from_git_before_the_build() {
+    let write = "> site/lastmod.txt";
+    let run = "./target/release/oskac run site/build.osk";
+    let at_write = PAGES_WORKFLOW
+        .find(write)
+        .unwrap_or_else(|| panic!("pages.yml does not write site/lastmod.txt"));
+    let at_run = PAGES_WORKFLOW.find(run).expect("pages.yml builds the site");
+    assert!(at_write < at_run, "lastmod.txt is written after the build");
+    assert!(
+        PAGES_WORKFLOW.contains("fetch-depth: 0"),
+        "a shallow clone has no dates"
+    );
+    assert!(PAGES_WORKFLOW.contains("git log -1 --format=%cs"));
+}
+
+#[test]
 fn the_sitemap_lists_every_page_by_its_canonical_url() {
     let site = build_ok(&agent_repo());
     let sitemap = &site["sitemap.xml"];
@@ -1241,6 +1300,16 @@ fn only_the_home_page_has_structured_data_and_it_describes_the_software() {
         product.get("additionalProperty").get("value").str(),
         "curl -fsSL https://oskalang.dev/install.sh | sh"
     );
+    assert_eq!(
+        product.get("downloadUrl").str(),
+        "https://github.com/aparsons/oska/releases/latest"
+    );
+    let help = product.get("softwareHelp");
+    assert_eq!(help.get("@type").str(), "CreativeWork");
+    assert_eq!(help.get("url").str(), "https://oskalang.dev/guide/");
+    // No fabricated rating or offer.
+    let text = &site["index.html"];
+    assert!(!text.contains("aggregateRating") && !text.contains("\"offers\""));
 }
 
 #[test]
