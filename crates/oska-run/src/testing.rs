@@ -571,7 +571,7 @@ impl Host for TestHost<'_> {
         self.world().open_file_beneath(root, names)
     }
 
-    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<u8>> {
         self.world().read_file_beneath(root, names)
     }
 
@@ -579,7 +579,7 @@ impl Host for TestHost<'_> {
         &mut self,
         root: &RootHandle,
         names: &[String],
-        contents: &str,
+        contents: &[u8],
     ) -> io::Result<()> {
         self.world().write_file_beneath(root, names, contents)
     }

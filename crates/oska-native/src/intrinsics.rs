@@ -37,6 +37,21 @@ pub enum Prelude {
     /// 0 (or, for [`Check::Repeat`], also -1) in place of its result when
     /// the call is a bug, for the generated code to panic as `check` says.
     Checked(&'static str, Check),
+    /// `Bytes.at` (`width` 1, panicking with `P0002`) or an endian read
+    /// of `width` bytes: `std.rt`'s `bytes_readable` first, which gives
+    /// 0 when the bytes do not all lie inside the buffer, for the
+    /// generated code to panic, then `bytes_read`.
+    ///
+    /// A `secret` one, `Secret<Bytes>`'s, calls `bytes_read_secret`
+    /// instead, which marks each byte it reads secret
+    /// (`constant_time.rs`); `Bytes`' own gives public bytes.
+    ByteRead { width: u8, big: bool, secret: bool },
+    /// A mutating method of `Bytes`: a call of the `std.rt` function of
+    /// this name with the receiver's object (and the place's reference to
+    /// it) and the other arguments, which gives the object the place
+    /// holds afterwards, or the word 0, changing nothing, for the
+    /// generated code to panic as `check` says.
+    Mutating(&'static str, Check),
 }
 
 /// The panics a [`Prelude::Checked`] call may end in.
@@ -48,6 +63,18 @@ pub enum Check {
     Repeat,
     /// `Env.secret`: `P0020` on the word 0.
     Secret,
+    /// `Bytes.zeroed`: `P0042` on the word 0, `P0043` on -1.
+    Zeroed,
+    /// `Bytes.slice`: `P0042` on the word 0.
+    BytesSlice,
+    /// `Bytes.set`: `P0002` on the word 0.
+    BytesIndex,
+    /// A `Bytes` push of this many bytes: `P0043` on the word 0.
+    BytesGrow(u8),
+    /// `Bytes.append`: `P0043` on the word 0.
+    BytesAppend,
+    /// `ct_select` between two `Bytes`: `P0042` on the word 0.
+    BytesSelect,
 }
 
 /// The prelude intrinsics the native backend implements, by the name the
@@ -67,6 +94,17 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     (
         "Secret.constant_time_eq_secret",
         Prelude::Runtime("secret_constant_time_eq_secret"),
+    ),
+    // Not the prelude's: what the checked program lowers `Secret<Bytes>`'s
+    // comparisons and `ct_select` to (`oska-check`'s `lower/secrets.rs`,
+    // and `ExprKind::Select` here).
+    (
+        "Bytes.constant_time_eq",
+        Prelude::Runtime("bytes_constant_time_eq"),
+    ),
+    (
+        "Bytes.ct_select",
+        Prelude::Checked("bytes_select", Check::BytesSelect),
     ),
     ("Clock.now_millis", Prelude::Runtime("clock_now_millis")),
     ("Random.next_int", Prelude::Runtime("random_next_int")),
@@ -138,15 +176,132 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         "DirRead.read_to_string",
         Prelude::Runtime("dir_read_to_string"),
     ),
+    ("DirRead.read_bytes", Prelude::Runtime("dir_read_bytes")),
     ("DirRead.list_dir", Prelude::Runtime("dir_list_dir")),
     ("DirWrite.write", Prelude::Runtime("dir_write")),
+    ("DirWrite.write_bytes", Prelude::Runtime("dir_write_bytes")),
     ("DirWrite.create_dir", Prelude::Runtime("dir_create_dir")),
     (
         "FileRead.read_to_string",
         Prelude::Runtime("file_read_to_string"),
     ),
+    ("FileRead.read_bytes", Prelude::Runtime("file_read_bytes")),
     ("FileWrite.write", Prelude::Runtime("file_write")),
+    (
+        "FileWrite.write_bytes",
+        Prelude::Runtime("file_write_bytes"),
+    ),
     ("TestContext.printed", Prelude::Runtime("test_printed")),
+    ("Bytes.new", Prelude::Runtime("bytes_new")),
+    (
+        "Bytes.zeroed",
+        Prelude::Checked("bytes_zeroed", Check::Zeroed),
+    ),
+    ("Bytes.from_hex", Prelude::Runtime("bytes_from_hex")),
+    ("Bytes.len", Prelude::Runtime("bytes_len")),
+    ("Bytes.get", Prelude::Runtime("bytes_get")),
+    (
+        "Bytes.at",
+        Prelude::ByteRead {
+            width: 1,
+            big: true,
+            secret: false,
+        },
+    ),
+    (
+        "Bytes.slice",
+        Prelude::Checked("bytes_slice", Check::BytesSlice),
+    ),
+    (
+        "Bytes.read_u16_be",
+        Prelude::ByteRead {
+            width: 2,
+            big: true,
+            secret: false,
+        },
+    ),
+    (
+        "Bytes.read_u16_le",
+        Prelude::ByteRead {
+            width: 2,
+            big: false,
+            secret: false,
+        },
+    ),
+    (
+        "Bytes.read_u32_be",
+        Prelude::ByteRead {
+            width: 4,
+            big: true,
+            secret: false,
+        },
+    ),
+    (
+        "Bytes.read_u32_le",
+        Prelude::ByteRead {
+            width: 4,
+            big: false,
+            secret: false,
+        },
+    ),
+    (
+        "Bytes.read_u64_be",
+        Prelude::ByteRead {
+            width: 8,
+            big: true,
+            secret: false,
+        },
+    ),
+    (
+        "Bytes.read_u64_le",
+        Prelude::ByteRead {
+            width: 8,
+            big: false,
+            secret: false,
+        },
+    ),
+    ("Bytes.to_hex", Prelude::Runtime("bytes_to_hex")),
+    ("Bytes.to_text", Prelude::Runtime("bytes_to_text")),
+    ("Bytes.eq", Prelude::Runtime("bytes_eq")),
+    ("Bytes.hash", Prelude::Runtime("bytes_hash")),
+    ("String.to_bytes", Prelude::Runtime("string_to_bytes")),
+    ("Bytes.assume_trusted", Prelude::Identity),
+    (
+        "Bytes.push",
+        Prelude::Mutating("bytes_push", Check::BytesGrow(1)),
+    ),
+    (
+        "Bytes.set",
+        Prelude::Mutating("bytes_set", Check::BytesIndex),
+    ),
+    (
+        "Bytes.append",
+        Prelude::Mutating("bytes_append", Check::BytesAppend),
+    ),
+    (
+        "Bytes.push_u16_be",
+        Prelude::Mutating("bytes_push_u16_be", Check::BytesGrow(2)),
+    ),
+    (
+        "Bytes.push_u16_le",
+        Prelude::Mutating("bytes_push_u16_le", Check::BytesGrow(2)),
+    ),
+    (
+        "Bytes.push_u32_be",
+        Prelude::Mutating("bytes_push_u32_be", Check::BytesGrow(4)),
+    ),
+    (
+        "Bytes.push_u32_le",
+        Prelude::Mutating("bytes_push_u32_le", Check::BytesGrow(4)),
+    ),
+    (
+        "Bytes.push_u64_be",
+        Prelude::Mutating("bytes_push_u64_be", Check::BytesGrow(8)),
+    ),
+    (
+        "Bytes.push_u64_le",
+        Prelude::Mutating("bytes_push_u64_le", Check::BytesGrow(8)),
+    ),
 ];
 
 /// `name` without the module a `std` function is called by when the
@@ -161,8 +316,24 @@ pub fn unqualified(name: &str) -> &str {
 /// The implementation of the prelude intrinsic `name`, if there is one.
 pub fn prelude(name: &str) -> Option<Prelude> {
     let name = unqualified(name);
+    if let Some(method) = name.strip_prefix(SECRET_BYTES) {
+        return match prelude(&format!("Bytes.{method}")) {
+            Some(Prelude::ByteRead { width, big, .. }) => Some(Prelude::ByteRead {
+                width,
+                big,
+                secret: true,
+            }),
+            _ => None,
+        };
+    }
     PRELUDE.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
 }
+
+/// What the lowering prefixes a read of `Secret<Bytes>` with, in place of
+/// `Bytes.`, once the checked program's call of it (such as `Secret.at`)
+/// is the public read of the bytes inside (`SecretBytes.at` for
+/// `Bytes.at`): a [`Prelude::ByteRead`] that is `secret`.
+pub const SECRET_BYTES: &str = "SecretBytes.";
 
 /// How a `std.rt` intrinsic is lowered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +361,13 @@ pub enum Runtime {
     /// `std.rt`'s table of what differs between target platforms, the
     /// target platform's ([`Platform::table`]).
     PlatformTable,
+    /// Its one argument, marked secret (`Inst::Secret`): a byte read from
+    /// secret bytes, which no branch or address may then depend on
+    /// (`constant_time.rs`).
+    Conceal,
+    /// Its one argument, made public on purpose (`Inst::Expose`): the
+    /// result of a constant-time comparison.
+    Expose,
 }
 
 /// An operating-system call, which the `std.rt` intrinsic of its name
@@ -1080,6 +1258,8 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_add", Runtime::Binary(BinOp::Add)),
     ("rt_mem_sub", Runtime::Binary(BinOp::Sub)),
     ("rt_mem_mul", Runtime::Binary(BinOp::Mul)),
+    ("rt_mem_conceal", Runtime::Conceal),
+    ("rt_mem_expose", Runtime::Expose),
     ("rt_mem_text", Runtime::Identity),
     ("rt_mem_as_text", Runtime::Identity),
     ("rt_mem_secret", Runtime::Identity),
@@ -1089,6 +1269,8 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_path", Runtime::Identity),
     ("rt_mem_list", Runtime::Identity),
     ("rt_mem_as_list", Runtime::Identity),
+    ("rt_mem_bytes", Runtime::Identity),
+    ("rt_mem_as_bytes", Runtime::Identity),
     ("rt_mem_as_root", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
     ("rt_mem_depth", Runtime::Depth),
@@ -1806,7 +1988,12 @@ mod tests {
     /// The `std.rt` function a prelude intrinsic calls, if it calls one.
     fn runtime_function(implementation: Prelude) -> Option<&'static str> {
         match implementation {
-            Prelude::Runtime(f) | Prelude::WriteLine(f) | Prelude::Checked(f, _) => Some(f),
+            Prelude::Runtime(f)
+            | Prelude::WriteLine(f)
+            | Prelude::Checked(f, _)
+            | Prelude::Mutating(f, _) => Some(f),
+            Prelude::ByteRead { secret: false, .. } => Some("bytes_read"),
+            Prelude::ByteRead { secret: true, .. } => Some("bytes_read_secret"),
             Prelude::Identity | Prelude::Field(_) => None,
         }
     }
@@ -1926,6 +2113,26 @@ mod tests {
             std::collections::BTreeSet::from(["dbg_write", "main_failed"]),
             "the lowering writes output only through these, which it counts"
         );
+    }
+
+    /// A `Bytes` read fails closed on its own: the generated code panics
+    /// when `bytes_readable` says the bytes do not all lie inside the
+    /// buffer, and `bytes_read` checks again rather than trust that it
+    /// did, so no call of it can read past the buffer.
+    #[test]
+    fn the_std_rt_function_of_every_bytes_read_checks_its_own_bounds() {
+        let calls = rt_calls();
+        for (name, implementation) in PRELUDE {
+            if let Prelude::ByteRead { .. } = implementation {
+                let function = runtime_function(*implementation).expect("a function");
+                assert!(
+                    calls
+                        .get(function)
+                        .is_some_and(|called| called.iter().any(|c| c == "bytes_readable")),
+                    "`{name}` reads through `{function}`, which does not check its bounds"
+                );
+            }
+        }
     }
 
     #[test]

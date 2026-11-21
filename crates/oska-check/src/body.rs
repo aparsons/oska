@@ -77,6 +77,8 @@ mod results;
 mod secrets;
 mod sinks;
 
+use secrets::Operands;
+
 /// What checking bodies finds: diagnostics, the audit sites a reviewer
 /// must see (`body/audit.rs`), and what each name and call resolved to,
 /// from which the checked program is lowered (`program/lower.rs`).
@@ -325,6 +327,14 @@ struct Callable {
     /// its signature's generics, for the checked program. Unlike
     /// `type_args`, it holds nothing else.
     instance: Vec<Ty>,
+    /// For a body-less prelude or `std` function: its name. Its `Int`
+    /// parameters are known by name (see [`Body::argument`]), which a
+    /// module's own function of the same name does not share.
+    intrinsic: Option<String>,
+    /// The type of the first argument, when it was checked already: a
+    /// qualified call of a method with one `impl` per type argument, as
+    /// `Secret.rotl(k, 3)`, checks its receiver to choose the `impl`.
+    checked_first: Option<Ty>,
 }
 
 /// What `base.name` names when `base` is not a value.
@@ -407,6 +417,9 @@ enum Deferred {
     Equality,
     /// An interpolation hole: the `Display` implementation of its type.
     Display,
+    /// `Secret.new`: the secret it makes, which must be one of the types
+    /// code may make a secret of.
+    SecretNew,
 }
 
 /// A `scope` block being checked, and what it may have stored outside
@@ -554,6 +567,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Deferred::Display => self
                     .trait_callee(&ty, ty::DISPLAY, "to_string")
                     .map(Resolution::Display),
+                Deferred::SecretNew => {
+                    self.secret_made(&ty, span);
+                    None
+                }
             };
             if let Some(resolution) = resolution {
                 // A `Display` or `Eq` impl may be generic.
@@ -636,6 +653,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let outer = std::mem::replace(&mut self.in_contract, true);
         let ty = self.infer(cond);
         self.in_contract = outer;
+        if self.is_secret(&ty) {
+            self.secret_branch(&format!("a `{keyword}` condition"), cond.span, None);
+            return;
+        }
         if !self.infer.unify(&ty, &Ty::bool()) {
             let ty = self.infer.resolve(&ty);
             self.error(
@@ -824,15 +845,25 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ),
                 span,
             ),
-            Mismatch::TrustLost => self.error(
-                codes::UNTRUSTED_TEXT,
-                format!(
-                    "expected `{expected}`, found `{actual}`: untrusted text cannot be used \
-                     where trusted text is required; check it with a validator, or vouch for \
-                     it with `.assume_trusted()`"
-                ),
-                span,
-            ),
+            Mismatch::TrustLost => {
+                // Bytes are named as bytes, and anything else as text.
+                let untrusted = actual.untrusted_names();
+                let bytes = !untrusted.is_empty()
+                    && untrusted.iter().all(|name| *name == crate::builtins::BYTES);
+                let (what, are) = match bytes {
+                    true => ("bytes", "are"),
+                    false => ("text", "is"),
+                };
+                self.error(
+                    codes::UNTRUSTED_TEXT,
+                    format!(
+                        "expected `{expected}`, found `{actual}`: untrusted {what} cannot be \
+                         used where trusted {what} {are} required; check it with a validator, \
+                         or vouch for it with `.assume_trusted()`"
+                    ),
+                    span,
+                )
+            }
             Mismatch::Types => self.error(
                 codes::MISMATCH,
                 format!("expected `{expected}`, found `{actual}`"),
@@ -891,7 +922,17 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Try(operand) => self.try_expr(expr, operand),
             ExprKind::Range { start, end } => {
                 let ty = self.infer(start);
-                let ty = self.check(end, &ty);
+                if self.is_secret(&ty) {
+                    self.secret_branch("a range bound", start.span, None);
+                    self.infer(end);
+                    return Ty::Error;
+                }
+                let end_ty = self.expr(end, Some(&ty));
+                if self.is_secret(&end_ty) {
+                    self.secret_branch("a range bound", end.span, None);
+                    return Ty::Error;
+                }
+                let ty = self.expect(&end_ty, &ty, end.span);
                 let ty = self.infer.shallow(&ty);
                 if !ty.is_error() && !ty.is_integer() {
                     self.error(
@@ -920,7 +961,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 then_block,
                 else_branch,
             } => {
-                self.check(cond, &Ty::bool());
+                self.condition(cond, "an `if` condition");
                 let Some(else_branch) = else_branch else {
                     // Without `else` the value is `()`, and the block's own
                     // value is discarded.
@@ -1410,7 +1451,21 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     fn unary(&mut self, expr: &Expr, op: UnaryOp, operand: &Expr, expected: Option<&Ty>) -> Ty {
         match op {
-            UnaryOp::Not => self.check(operand, &Ty::bool()),
+            UnaryOp::Not => self.negation(expr, operand),
+            UnaryOp::BitNot => {
+                let expected = expected.filter(|e| {
+                    self.infer.shallow(e).is_integer() || self.secret_inner(e).is_some()
+                });
+                let ty = self.expr(operand, expected);
+                if let Some(ty) = self.secret_bit_not(expr, &ty) {
+                    return ty;
+                }
+                if !self.require_bits("~", &ty, expr.span) {
+                    return Ty::Error;
+                }
+                self.defer(expr.span, &ty, Deferred::Int);
+                ty
+            }
             UnaryOp::Neg => {
                 if let ExprKind::Int(text) = &operand.kind {
                     let ty = self.literal_type(expected);
@@ -1445,11 +1500,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         expected: Option<&Ty>,
     ) -> Ty {
         match op {
-            BinaryOp::And | BinaryOp::Or | BinaryOp::Implies => {
-                self.check(lhs, &Ty::bool());
-                self.check(rhs, &Ty::bool());
-                Ty::bool()
-            }
+            BinaryOp::And | BinaryOp::Or | BinaryOp::Implies => self.logical(expr, op, lhs, rhs),
             BinaryOp::Eq | BinaryOp::Ne => {
                 if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
                     self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
@@ -1469,10 +1520,58 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 let ty = self.numeric_operands(expr, op, lhs, rhs, expected);
-                self.defer(expr.span, &ty, Deferred::Int);
+                if !self.is_secret(&ty) {
+                    self.defer(expr.span, &ty, Deferred::Int);
+                }
                 ty
             }
+            // A shift's amount has its left operand's type, as the other
+            // bitwise operators' right operand does.
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let (first, second) = match self.secret_operands(expr, op, lhs, rhs, expected) {
+                    Operands::Public { first, second } => (first, second),
+                    Operands::Secret(ty) => return ty,
+                    Operands::Error => return Ty::Error,
+                };
+                if !self.require_bits(op.text(), &first, expr.span) {
+                    return Ty::Error;
+                }
+                let (_, second_expr) = literal_last(lhs, rhs);
+                self.expect(&second, &first, second_expr.span);
+                self.defer(expr.span, &first, Deferred::Int);
+                first
+            }
         }
+    }
+
+    /// Report the bitwise or shift operator `op` on a type other than
+    /// `U8`, `U32` and `U64`. Returns whether `ty` is acceptable.
+    fn require_bits(&mut self, op: &str, ty: &Ty, span: Span) -> bool {
+        let ty = self.infer.resolve(ty);
+        if ty.is_error() || ty == Ty::Never || ty.has_bitwise_operators() {
+            return true;
+        }
+        if let Ty::Var(_) = ty {
+            self.error(
+                codes::CANNOT_INFER,
+                format!("the operands' type must be known to use `{op}`"),
+                span,
+            );
+            return false;
+        }
+        self.error(
+            codes::BAD_OPERAND,
+            format!(
+                "`{op}` is not defined for `{ty}`; the bitwise and shift operators \
+                 are defined for `U8`, `U32` and `U64` only"
+            ),
+            span,
+        );
+        false
     }
 
     /// The operands of an arithmetic or comparison operator: numbers of
@@ -1485,17 +1584,19 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         rhs: &Expr,
         expected: Option<&Ty>,
     ) -> Ty {
-        let expected = expected.filter(|e| self.infer.shallow(e).is_integer());
-        let (first, second) = literal_last(lhs, rhs);
+        let (first, second) = match self.secret_operands(expr, op, lhs, rhs, expected) {
+            Operands::Public { first, second } => (first, second),
+            Operands::Secret(ty) => return ty,
+            Operands::Error => return Ty::Error,
+        };
         // Report a non-number before comparing the operands, so that
         // `s + 1` is one error about `+`.
-        let ty = self.expr(first, expected);
-        if !self.require_number(op, &ty, expr.span) {
-            self.infer(second);
+        if !self.require_number(op, &first, expr.span) {
             return Ty::Error;
         }
-        self.check(second, &ty);
-        ty
+        let (_, second_expr) = literal_last(lhs, rhs);
+        self.expect(&second, &first, second_expr.span);
+        first
     }
 
     /// Report `op` on a non-number. Returns whether `ty` is acceptable.
@@ -1549,8 +1650,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let second_ty = self.expr(second, expected);
         let second_secret = self.is_secret(&second_ty);
         match (first_secret, second_secret) {
-            (true, _) => self.secret_compared(expr, op, first, second, second_secret),
-            (false, true) => self.secret_compared(expr, op, second, first, false),
+            (true, _) => self.secret_compared(expr, op, (first, &first_ty), second, second_secret),
+            (false, true) => self.secret_compared(expr, op, (second, &second_ty), first, false),
             (false, false) => {
                 // Comparing inspects text without passing it on, so the
                 // operands may differ in trust.
@@ -2065,7 +2166,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.locals.truncate(height);
             }
             StmtKind::While { cond, body } => {
-                self.check(cond, &Ty::bool());
+                self.condition(cond, "a `while` condition");
                 self.loop_body(body);
             }
             StmtKind::Expr(expr) => self.expr_stmt(expr),

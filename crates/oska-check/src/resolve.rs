@@ -10,12 +10,12 @@ use crate::prelude;
 use crate::suggest;
 use crate::ty;
 
-/// `E0320` for `ty` when it is `Untrusted<T>` and `T` is a type that is
-/// not text. Trust is a flag on text only (ADR 0006), so such a type
+/// `E0320` for `ty` when it is `Untrusted<T>` and `T` is neither text nor
+/// `Bytes`. Trust is a flag on text and bytes only (ADR 0006), so such a type
 /// means nothing; text inside a container is written
 /// `List<Untrusted<String>>`. `known` says whether a name is a type in
 /// scope: an unknown argument is reported as unknown instead.
-pub fn untrusted_not_text(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Diagnostic> {
+pub fn untrusted_without_trust_flag(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Diagnostic> {
     let TypeKind::Path { segments, args } = &ty.kind else {
         return None;
     };
@@ -27,16 +27,19 @@ pub fn untrusted_not_text(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Dia
     }
     if let TypeKind::Path { segments, .. } = &arg.kind {
         match segments.as_slice() {
-            [name] if ty::is_text_name(&name.name) || name.name == ty::UNTRUSTED => return None,
+            [name] if ty::carries_trust_flag(&name.name) || name.name == ty::UNTRUSTED => {
+                return None
+            }
             [name] if !known(&name.name) => return None,
             _ => {}
         }
     }
     Some(Diagnostic::new(
-        codes::UNTRUSTED_NOT_TEXT,
-        "`Untrusted<...>` marks text only, such as `Untrusted<String>`: trust is a flag \
-         on text, and other types are always trusted; for text inside a container, \
-         write it inside, as in `List<Untrusted<String>>`",
+        codes::UNTRUSTED_WITHOUT_TRUST_FLAG,
+        "`Untrusted<...>` marks text and bytes only, `Untrusted<String>` or \
+         `Untrusted<Bytes>`: trust is a flag on text and bytes, and other types are \
+         always trusted; for text inside a container, write it inside, as in \
+         `List<Untrusted<String>>`",
         ty.span,
     ))
 }
@@ -203,7 +206,7 @@ impl Resolver<'_, '_> {
                 self.path(segments, Expect::Type);
                 let known =
                     |name: &str| self.is_type_variable(name) || self.decls.get(name).is_some();
-                if let Some(diagnostic) = untrusted_not_text(ty, &known) {
+                if let Some(diagnostic) = untrusted_without_trust_flag(ty, &known) {
                     self.diagnostics.push(diagnostic);
                 }
                 for arg in args {

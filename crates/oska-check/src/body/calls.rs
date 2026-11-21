@@ -6,7 +6,8 @@
 use oska_syntax::ast::{Arg, Expr, ExprKind, Ident};
 use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
-use super::{Body, Callable, Labels, QualifiedPath};
+use super::secrets::Position;
+use super::{Body, Callable, Deferred, Labels, QualifiedPath};
 use crate::codes;
 use crate::collect::DeclKind;
 use crate::items::{Bound, FieldsInfo, FnSig, Receiver, Shape};
@@ -63,6 +64,8 @@ impl Body<'_, '_, '_> {
                             target: None,
                             construct: None,
                             instance: Vec::new(),
+                            intrinsic: None,
+                            checked_first: None,
                         })
                     }
                     Ty::Error => None,
@@ -182,7 +185,8 @@ impl Body<'_, '_, '_> {
         if self.removed_qualified_method(type_name, &name.name, args, span) {
             return None;
         }
-        if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
+        let (sig, checked_first) = self.qualified_method(type_name, &name.name, args);
+        if let Some(sig) = sig {
             if !self.method_visible(&sig, type_name, name.span) {
                 return None;
             }
@@ -201,6 +205,11 @@ impl Body<'_, '_, '_> {
                 let self_ty = sig.self_ty.clone().unwrap_or(Ty::Error);
                 self.follow_held_trust(&mut callable, type_name, &self_ty);
                 callable.params.insert(0, (None, self_ty));
+                callable.checked_first = checked_first;
+            }
+            if type_name == ty::SECRET && sig.intrinsic && name.name == "new" {
+                // What the secret is made of is known once the call is checked.
+                self.defer(span, &callable.ret, Deferred::SecretNew);
             }
             return Some(callable);
         }
@@ -211,6 +220,30 @@ impl Body<'_, '_, '_> {
         let message = format!("`{type_name}` has no variant or function `{}`", name.name);
         self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
         None
+    }
+
+    /// The method `name` of `type_name` called qualified, with `args`:
+    /// its own `impl`'s first, then its traits'. When the type has one
+    /// `impl` per type argument, as `Secret` does, the first argument,
+    /// the receiver, chooses, so it is checked here and its type
+    /// returned.
+    fn qualified_method(
+        &mut self,
+        type_name: &str,
+        name: &str,
+        args: &[Arg],
+    ) -> (Option<FnSig>, Option<Ty>) {
+        let inherent = self.items.inherent_methods(type_name, name);
+        let chosen = inherent.len() > 1 && inherent.iter().all(|s| s.receiver.is_method());
+        let (true, Some(first)) = (chosen, args.first()) else {
+            return (self.items.method(type_name, name).cloned(), None);
+        };
+        let inherent: Vec<FnSig> = inherent.into_iter().cloned().collect();
+        let receiver = self.infer(&first.value);
+        let resolved = self.infer.resolve(&receiver);
+        let inherent: Vec<&FnSig> = inherent.iter().collect();
+        let sig = choose_impl(&inherent, &resolved).or(inherent.first().copied());
+        (sig.cloned(), Some(receiver))
     }
 
     /// `Trait.method`: the trait's method called qualified, as in
@@ -342,6 +375,8 @@ impl Body<'_, '_, '_> {
             target: None,
             construct: Some(construct),
             instance: Vec::new(),
+            intrinsic: None,
+            checked_first: None,
         }
     }
 
@@ -418,6 +453,8 @@ impl Body<'_, '_, '_> {
             type_args: subst.into_iter().map(|(_, t)| t).collect(),
             target: None,
             construct: None,
+            intrinsic: sig.intrinsic.then(|| sig.name.clone()),
+            checked_first: None,
         }
     }
 
@@ -527,14 +564,21 @@ impl Body<'_, '_, '_> {
         if let Ty::Param(_) = receiver {
             // A bound's method on a generic parameter: the parameter may
             // stand for untrusted text, so text in the result is untrusted.
-            self.follow_type_arg(&mut callable, receiver);
+            self.follow_type_arg(&mut callable, receiver.clone());
         }
         match sig.receiver {
             // A mutating method writes its arguments into its receiver.
             Receiver::VarSelf => {
                 self.mentioning(base, |body| body.apply(callable, args, expected, span))
             }
-            _ => self.apply(callable, args, expected, span),
+            _ => {
+                let ret = self.apply(callable, args, expected, span);
+                let prelude = sig.trait_name.is_none() && sig.intrinsic;
+                if prelude && type_name == ty::SECRET && name.name == "ct_select" {
+                    self.ct_select_type(&ret, span);
+                }
+                ret
+            }
         }
     }
 
@@ -571,7 +615,11 @@ impl Body<'_, '_, '_> {
         type_name: &str,
         name: &Ident,
     ) -> Option<FnSig> {
-        if let Some(sig) = self.items.inherent_method(type_name, &name.name) {
+        let inherent = self.items.inherent_methods(type_name, &name.name);
+        // One `impl` per type argument, as in `impl Secret<U32>`: the
+        // receiver's type arguments choose.
+        let resolved = self.infer.resolve(receiver);
+        if let Some(sig) = choose_impl(&inherent, &resolved) {
             return Some(sig.clone());
         }
         let found = self.items.trait_methods_named(type_name, &name.name);
@@ -584,6 +632,27 @@ impl Body<'_, '_, '_> {
             }
         }
         if self.secret_method(receiver, name) {
+            return None;
+        }
+        if !inherent.is_empty() {
+            // The method is there, on other type arguments only.
+            let owners: Vec<String> = inherent
+                .iter()
+                .filter_map(|sig| sig.self_ty.as_ref().map(|t| format!("`{t}`")))
+                .collect();
+            let owners = match owners.split_last() {
+                Some((last, [])) => last.clone(),
+                Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                None => String::new(),
+            };
+            self.error(
+                codes::NO_MEMBER,
+                format!(
+                    "`{receiver}` has no method `{}`: `{}` is a method of {owners} only",
+                    name.name, name.name
+                ),
+                name.span,
+            );
             return None;
         }
         let candidates = self.items.method_names(type_name);
@@ -696,7 +765,13 @@ impl Body<'_, '_, '_> {
             let ty = match callable.params.get(i) {
                 Some((param, ty)) => {
                     self.label(arg, param.as_deref(), callable.labels);
-                    self.check(&arg.value, ty)
+                    match (i, &callable.checked_first) {
+                        (0, Some(first)) => self.expect(first, ty, arg.value.span),
+                        _ => {
+                            let position = Position::of(callable.intrinsic.as_deref(), param);
+                            self.argument(&arg.value, ty, position)
+                        }
+                    }
                 }
                 None => self.infer(&arg.value),
             };
@@ -810,5 +885,44 @@ impl Callable {
             params: self.params.into_iter().map(|(_, t)| t).collect(),
             ret: Box::new(self.ret),
         }
+    }
+}
+
+/// The `impl`, among `inherent`, whose `Self` the type `receiver` is: the
+/// one whose type arguments have the same heads, where its own are not
+/// generic parameters. A receiver whose type arguments are not known yet
+/// fits an only `impl`.
+fn choose_impl<'s>(inherent: &[&'s FnSig], receiver: &Ty) -> Option<&'s FnSig> {
+    let fits = |sig: &&FnSig, strict: bool| match &sig.self_ty {
+        Some(self_ty) => same_heads(self_ty, receiver, strict),
+        None => !strict,
+    };
+    if let Some(sig) = inherent.iter().find(|sig| fits(sig, true)) {
+        return Some(sig);
+    }
+    match inherent {
+        [sig] if fits(sig, false) => Some(sig),
+        _ => None,
+    }
+}
+
+/// Whether `receiver` can be the `Self` of an `impl` for `self_ty`: their
+/// type arguments have the same heads, where `self_ty`'s is not a generic
+/// parameter. Unless `strict`, a type argument of `receiver` that is not
+/// known yet fits any.
+fn same_heads(self_ty: &Ty, receiver: &Ty, strict: bool) -> bool {
+    match (self_ty, receiver) {
+        (Ty::Named(a, a_args, _), Ty::Named(b, b_args, _)) => {
+            a == b
+                && a_args.len() == b_args.len()
+                && a_args.iter().zip(b_args).all(|(a, b)| match (a, b) {
+                    (Ty::Param(_), _) => true,
+                    (_, Ty::Var(_) | Ty::Error | Ty::Never) => !strict,
+                    _ => a.head().is_some() && a.head() == b.head(),
+                })
+        }
+        // Not a type with arguments, as `Unit` or a function type: one
+        // `impl` at most.
+        _ => !strict,
     }
 }

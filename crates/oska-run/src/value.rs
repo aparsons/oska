@@ -41,6 +41,8 @@ pub enum Value {
     Function(Rc<Callee>),
     /// A `List`'s items.
     List(Rc<Vec<Value>>),
+    /// A `Bytes`' bytes, changed through [`Rc::make_mut`] as a list is.
+    Bytes(Rc<Vec<u8>>),
     /// An instance of a struct, by type name, with its fields in
     /// declaration order.
     Struct {
@@ -256,6 +258,7 @@ impl Value {
             Value::Closure(_) => "closure",
             Value::Function(_) => "fn",
             Value::List(_) => builtins::LIST,
+            Value::Bytes(_) => builtins::BYTES,
             Value::Struct { ty, .. } | Value::Variant { ty, .. } => ty,
             Value::Capability(capability) => capability.type_name(),
             Value::Args(_) => builtins::ARGS,
@@ -364,6 +367,14 @@ impl Value {
         match self {
             Value::List(items) => items,
             other => unreachable!("the checker guarantees a list, found {other:?}"),
+        }
+    }
+
+    /// The bytes of the `Bytes` the checker guarantees this is.
+    pub fn as_bytes(&self) -> &Rc<Vec<u8>> {
+        match self {
+            Value::Bytes(bytes) => bytes,
+            other => unreachable!("the checker guarantees bytes, found {other:?}"),
         }
     }
 

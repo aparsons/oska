@@ -281,10 +281,11 @@ struct Run {
 /// One entry of a filesystem tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Entry {
-    File(String),
+    /// A regular file, with its bytes.
+    File(Vec<u8>),
     Dir,
     Link(String),
-    /// Anything else, or a file that is not UTF-8.
+    /// Anything else.
     Other,
 }
 
@@ -569,12 +570,8 @@ fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Entry>) {
             tree.insert(name.clone(), Entry::Dir);
             read_tree(&path, &format!("{name}/"), tree);
         } else {
-            let text = kind
-                .is_file()
-                .then(|| std::fs::read(&path).ok())
-                .flatten()
-                .and_then(|bytes| String::from_utf8(bytes).ok());
-            tree.insert(name, text.map_or(Entry::Other, Entry::File));
+            let bytes = kind.is_file().then(|| std::fs::read(&path).ok()).flatten();
+            tree.insert(name, bytes.map_or(Entry::Other, Entry::File));
         }
     }
 }

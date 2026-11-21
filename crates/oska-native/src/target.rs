@@ -153,6 +153,18 @@ impl Target {
         }
     }
 
+    /// For each function of `module`, for each of its instructions, what
+    /// this target's machine code for it does that a secret must not
+    /// decide (`constant_time.rs`'s tests).
+    #[cfg(test)]
+    pub(crate) fn trace(self, module: &Module) -> Vec<Vec<Selected>> {
+        match self {
+            Target::LinuxAarch64 | Target::MacosAarch64 => aarch64::trace(module),
+            Target::LinuxX86_64 | Target::MacosX86_64 => x86_64::trace(module, false),
+            Target::WindowsX86_64 => x86_64::trace(module, true),
+        }
+    }
+
     /// Select and encode `module`'s instructions for this target. Fails
     /// only when the code is too large for the target's branches.
     pub(crate) fn emit(self, module: &Module) -> Result<Box<dyn Code>, String> {
@@ -287,4 +299,18 @@ pub trait Code {
     /// Its bytes, placed as `layout` says, with every reference to data
     /// and to code resolved.
     fn link(&self, layout: &Layout) -> Vec<u8>;
+}
+
+/// The machine code of one instruction of the backend's code, as the
+/// constant-time tests see it ([`Target::trace`]).
+#[cfg(test)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Selected {
+    /// Conditional branches.
+    pub conditional_branches: usize,
+    /// Loads and stores addressed by the stack or frame pointer: stack
+    /// slots and saved registers, whose addresses depend on no value.
+    pub stack_accesses: usize,
+    /// Any other load or store.
+    pub other_accesses: usize,
 }

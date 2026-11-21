@@ -50,11 +50,11 @@ use fence::{FenceLine, Fences};
 /// path, `E0393` and `E0394` a `--target`, and `E0395`, `E0396` and
 /// `E0397` `oskac release`'s version, key and name, which are no part of
 /// a program, and
-/// `E0392` a fault in the native backend, which no program is meant to
-/// reach.
-const UNREACHABLE: [&str; 11] = [
-    "E0170", "E0360", "E0391", "E0392", "E0393", "E0394", "E0395", "E0396", "E0397", "E0411",
-    "P0005",
+/// `E0392` a fault in the native backend and `E0398` a bug in it, which no
+/// program is meant to reach.
+const UNREACHABLE: [&str; 12] = [
+    "E0170", "E0360", "E0391", "E0392", "E0393", "E0394", "E0395", "E0396", "E0397", "E0398",
+    "E0411", "P0005",
 ];
 
 /// How the meaning of a code with no example ends, after the reason why.

@@ -424,7 +424,7 @@ impl TraitInfo {
 fn holds(ty: &Ty, holders: &HashSet<String>) -> bool {
     match ty {
         Ty::Named(name, args, trust) => {
-            (ty.is_text() && *trust == Trust::Untrusted)
+            (ty.carries_trust_flag() && *trust == Trust::Untrusted)
                 || holders.contains(name.as_str())
                 || args.iter().any(|a| holds(a, holders))
         }
@@ -697,6 +697,19 @@ impl Items {
             .get(type_name)?
             .iter()
             .find(|s| s.name == name)
+    }
+
+    /// Every one of the type's own methods or associated functions named
+    /// `name`: more than one only where the prelude declares a method in
+    /// several `impl`s of one generic type for different type arguments,
+    /// such as `rotl` on `Secret<U8>` and `Secret<U32>`.
+    pub fn inherent_methods(&self, type_name: &str, name: &str) -> Vec<&FnSig> {
+        self.inherent
+            .get(type_name)
+            .into_iter()
+            .flatten()
+            .filter(|s| s.name == name)
+            .collect()
     }
 
     /// The methods named `name` that the type's traits provide, one per
@@ -972,7 +985,9 @@ impl<'d, 'a> Lower<'d, 'a> {
                     // Trust is a flag on text, not a type (ADR 0006).
                     return match args.as_slice() {
                         [arg] => match self.ty(arg) {
-                            text if text.is_text() => text.with_trust(Trust::Untrusted),
+                            flagged if flagged.carries_trust_flag() => {
+                                flagged.with_trust(Trust::Untrusted)
+                            }
                             _ => Ty::Error,
                         },
                         _ => Ty::Error,

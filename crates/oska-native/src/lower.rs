@@ -70,12 +70,18 @@
 //! method used as a value is none. Nothing in `std.rt` is a step. Without the flag none of this is generated, so the
 //! executable is byte for byte the one `oskac build` writes.
 
+mod bits;
+mod bytes;
 mod closures;
 mod data;
 mod debug;
 mod html;
+mod int_methods;
 mod lists;
 mod patterns;
+mod select;
+#[cfg(test)]
+pub(crate) use select::BRANCHY;
 mod tasks;
 mod tests;
 mod traits;
@@ -85,7 +91,8 @@ use std::collections::{BTreeMap, HashMap};
 use oska_check::builtins;
 use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
-    trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
+    secrets, trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, IntrinsicName,
+    Part, Program, Stmt, Type,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Frame, Span, MAX_FRAMES};
@@ -157,6 +164,8 @@ mod panics {
     pub const SLICE_OUT_OF_BOUNDS: &str = "P0035";
     pub const NEGATIVE_REPEAT: &str = "P0036";
     pub const TEXT_TOO_LONG: &str = "P0037";
+    pub const BYTES_OUT_OF_RANGE: &str = "P0042";
+    pub const BYTES_TOO_LONG: &str = "P0043";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
@@ -167,6 +176,7 @@ mod panics {
     pub const NOT_WRITTEN: &str = "reached `todo()`: this code is not written yet";
     pub const PRECONDITION_VIOLATED: &str = "P0006";
     pub const POSTCONDITION_VIOLATED: &str = "P0007";
+    pub const SHIFT_OUT_OF_RANGE: &str = "P0008";
     pub const ASSERT_FAILED: &str = "P0010";
     pub const ASSERT_EQ_FAILED: &str = "P0011";
     pub const ASSERT_NE_FAILED: &str = "P0012";
@@ -316,6 +326,8 @@ pub fn program(
         }
     }
     optimize::module(&mut lowering.functions);
+    // The code is final: no secret may decide a branch or an address.
+    crate::constant_time::verify(&lowering.functions)?;
     let stack = lowering.size_stack(entry);
     // The globals, then the step counter under `--max-steps`, then the
     // memory limit's report under `--max-memory` (which keeps the counter's
@@ -1801,6 +1813,21 @@ impl<'l, 'p> Body<'l, 'p> {
         args: Vec<Temp>,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
+        // A call with the wrong number of arguments would leave a
+        // parameter unset, or pass one that is never read: refused, so a
+        // slip in the lowering never compiles.
+        if let Some(function) = self.lowering.rt.functions.get(name) {
+            if function.params.len() != args.len() {
+                return Err(self.refuse(
+                    span,
+                    &format!(
+                        "a call of `std.rt`'s `{name}` with {} arguments, not {}",
+                        args.len(),
+                        function.params.len()
+                    ),
+                ));
+            }
+        }
         self.call_function(Source::Runtime, name, Vec::new(), args, span)
     }
 
@@ -1921,7 +1948,17 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.check(check, result, &args, span)?;
                     result
                 }
-                None => return Err(self.refuse(span, &format!("`{name}`"))),
+                Some(Prelude::ByteRead { width, big, secret }) => {
+                    let &[bytes, offset] = args.as_slice() else {
+                        return Err(self.refuse(span, &format!("`{name}`")));
+                    };
+                    self.byte_read(bytes, offset, width, big, secret, span)?
+                }
+                // Called on a value, not a place: `mutating_call` handles
+                // a place, and only a place can be `var`.
+                Some(Prelude::Mutating(..)) | None => {
+                    return Err(self.refuse(span, &format!("`{name}`")))
+                }
             },
             Callee::Trait { trait_name, method } => {
                 return Err(self.refuse(
@@ -2108,8 +2145,110 @@ impl<'l, 'p> Body<'l, 'p> {
                     target: long,
                 });
             }
+            Check::Zeroed => {
+                let negative = self.panic_text(
+                    panics::BYTES_OUT_OF_RANGE,
+                    "panic_bytes_negative",
+                    args,
+                    span,
+                )?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: negative,
+                });
+                let long =
+                    self.panic_text(panics::BYTES_TOO_LONG, "panic_bytes_long", args, span)?;
+                let zero = self.constant(0);
+                self.push(Inst::Branch {
+                    cond: Cond::Lt,
+                    lhs: result,
+                    rhs: zero,
+                    target: long,
+                });
+            }
+            Check::BytesSelect => {
+                let label =
+                    self.panic_text(panics::BYTES_OUT_OF_RANGE, "panic_bytes_select", args, span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
+            Check::BytesSlice | Check::BytesIndex | Check::BytesAppend => {
+                // `set`'s arguments are the bytes, the index and the byte:
+                // its report names only the first two.
+                let (code, function, args) = match check {
+                    Check::BytesSlice => (panics::BYTES_OUT_OF_RANGE, "panic_bytes_slice", args),
+                    Check::BytesIndex => {
+                        (panics::INDEX_OUT_OF_BOUNDS, "panic_bytes_index", &args[..2])
+                    }
+                    _ => (panics::BYTES_TOO_LONG, "panic_bytes_append", args),
+                };
+                let label = self.panic_text(code, function, args, span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
+            Check::BytesGrow(width) => {
+                let extra = self.constant(i64::from(width));
+                let label = self.panic_text(
+                    panics::BYTES_TOO_LONG,
+                    "panic_bytes_grow",
+                    &[args[0], extra],
+                    span,
+                )?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
         }
         Ok(())
+    }
+
+    /// `Bytes.at` (`width` 1) or an endian read of `width` bytes of the
+    /// buffer `bytes` at `offset`, most significant byte first when `big`:
+    /// a panic, `P0002` for `at` and `P0042` for a read, unless the bytes
+    /// all lie inside it.
+    fn byte_read(
+        &mut self,
+        bytes: Temp,
+        offset: Temp,
+        width: u8,
+        big: bool,
+        secret: bool,
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let index = width == 1;
+        let width = self.constant(i64::from(width));
+        let readable = self.call_runtime("bytes_readable", vec![bytes, offset, width], NOWHERE)?;
+        let label = if index {
+            self.panic_text(
+                panics::INDEX_OUT_OF_BOUNDS,
+                "panic_bytes_index",
+                &[bytes, offset],
+                span,
+            )?
+        } else {
+            self.panic_text(
+                panics::BYTES_OUT_OF_RANGE,
+                "panic_bytes_read",
+                &[bytes, offset, width],
+                span,
+            )?
+        };
+        self.push(Inst::JumpIfZero {
+            cond: readable,
+            target: label,
+        });
+        let big = self.constant(i64::from(big));
+        let read = if secret {
+            "bytes_read_secret"
+        } else {
+            "bytes_read"
+        };
+        self.call_runtime(read, vec![bytes, offset, width, big], NOWHERE)
     }
 
     /// A call of the platform library's function `import` with the
@@ -2283,6 +2422,12 @@ impl<'l, 'p> Body<'l, 'p> {
             // A copy: the argument's reference, if it holds one, is
             // released after the call, and the word stays.
             Runtime::Identity => self.copy(arg(0)),
+            Runtime::Conceal => self.mark_secret(arg(0)),
+            Runtime::Expose => {
+                let dst = self.temp();
+                self.push(Inst::Expose { dst, src: arg(0) });
+                dst
+            }
             Runtime::Globals => {
                 let dst = self.temp();
                 self.push(Inst::Addr {
@@ -2462,6 +2607,12 @@ impl<'l, 'p> Body<'l, 'p> {
                 Ok(self.binary_op(BinOp::Xor, value, one))
             }
             ExprKind::Neg { operand, int } => self.negate(operand, *int, span),
+            ExprKind::BitNot { operand, int } => self.bit_not(operand, *int),
+            ExprKind::Select {
+                cond,
+                if_true,
+                if_false,
+            } => self.select(expr, cond, if_true, if_false),
             ExprKind::Binary { op, lhs, rhs, int } => self.binary(*op, lhs, rhs, *int, span),
             ExprKind::Interpolated(parts) => self.interpolated(parts),
             ExprKind::Construct { ctor, fields } => self.construct(expr, ctor, fields),
@@ -2478,6 +2629,16 @@ impl<'l, 'p> Body<'l, 'p> {
                 type_args,
                 args,
             } => {
+                if let Some(kind) =
+                    secret_expansion(callee, |name| secrets::expand(name, args, &expr.ty, span))
+                {
+                    let kind = secret_bytes_read(kind);
+                    return self.expr(&Expr {
+                        kind,
+                        ty: expr.ty.clone(),
+                        span,
+                    });
+                }
                 if let Some(word) = self.borrowed_word(callee, args) {
                     return Ok(word);
                 }
@@ -2498,6 +2659,12 @@ impl<'l, 'p> Body<'l, 'p> {
                         return Ok(value);
                     }
                     if let Some(value) = self.eq_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.rotation_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.int_method_intrinsic(name, args, &values, span)? {
                         return Ok(value);
                     }
                     if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {
@@ -2529,7 +2696,16 @@ impl<'l, 'p> Body<'l, 'p> {
                 type_args,
                 receiver,
                 args,
-            } => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
+            } => match secret_expansion(callee, |name| {
+                secrets::expand_mutating(name, receiver, args)
+            }) {
+                Some(kind) => self.expr(&Expr {
+                    kind,
+                    ty: expr.ty.clone(),
+                    span,
+                }),
+                None => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
+            },
             ExprKind::Try {
                 operand,
                 convert,
@@ -2646,6 +2822,14 @@ impl<'l, 'p> Body<'l, 'p> {
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
                 Some(int),
             ) => self.arithmetic(op, lhs, rhs, int, span),
+            (
+                BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr,
+                Some(int),
+            ) => self.bitwise(op, lhs, rhs, int, span),
             (
                 BinaryOp::Eq
                 | BinaryOp::Ne
@@ -3259,6 +3443,46 @@ fn describe(kind: &ExprKind) -> String {
         ExprKind::Match { .. } => "`match`".to_string(),
         ExprKind::Unsupported(what) => what.clone(),
         _ => "this expression".to_string(),
+    }
+}
+
+/// `kind`, a secret's operation as the public operation it is, with a
+/// read of `Bytes` in it (`Bytes.at`, `Bytes.read_u32_be` and the other
+/// endian reads) made the read of secret bytes
+/// ([`intrinsics::SECRET_BYTES`]), whose bytes are marked secret.
+fn secret_bytes_read(kind: ExprKind) -> ExprKind {
+    let ExprKind::Construct { ctor, mut fields } = kind else {
+        return kind;
+    };
+    if let [Expr {
+        kind: ExprKind::Call {
+            callee: Callee::Intrinsic(name),
+            ..
+        },
+        ..
+    }] = fields.as_mut_slice()
+    {
+        if let Some(method) = name.strip_prefix("Bytes.") {
+            if matches!(intrinsics::prelude(name), Some(Prelude::ByteRead { .. })) {
+                *name = IntrinsicName::new(format!("{}{method}", intrinsics::SECRET_BYTES));
+            }
+        }
+    }
+    ExprKind::Construct { ctor, fields }
+}
+
+/// A call of a secret's method, such as `Secret.rotl`, as the public
+/// operations on the values inside its secrets, which `expand` gives from
+/// the intrinsic's name (`oska-check`'s `program/secrets.rs`); `None` for
+/// any other call, and for a secret intrinsic implemented here, such as
+/// `Secret.expose`.
+fn secret_expansion(
+    callee: &Callee,
+    expand: impl FnOnce(&str) -> Option<ExprKind>,
+) -> Option<ExprKind> {
+    match callee {
+        Callee::Intrinsic(name) if name.starts_with("Secret.") => expand(name),
+        _ => None,
     }
 }
 

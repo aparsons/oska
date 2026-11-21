@@ -6,7 +6,9 @@
 #   scripts/cross-build/manifest.sh OSKAC [repo-root] > manifest.txt
 #
 # OSKAC is the `oskac` binary to build with. The corpus is the examples,
-# the CLI's fixture programs and packages, and the site generator. CI's
+# the CLI's fixture programs and packages, the ChaCha20 and SHA-256
+# fixtures over public and secret words (Bytes and secret integers), and
+# the site generator. CI's
 # `cross-build` job runs this on aarch64 and x86_64 Linux runners and on an
 # Apple silicon and an Intel Mac, and requires the manifests to be identical: the backend's output depends
 # only on the program and the target, never on the host.
@@ -45,7 +47,8 @@ expected=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$root/$list")
 # file, or a package directory.
 corpus() {
   cd "$root"
-  for file in examples/*.osk crates/oskac/tests/fixtures/*.osk site/build.osk; do
+  for file in examples/*.osk crates/oskac/tests/fixtures/*.osk \
+    crates/oskac/tests/fixtures/secret_crypto/*.osk site/build.osk; do
     printf '%s\n' "$file"
   done
   for manifest in examples/*/oska.toml crates/oskac/tests/fixtures/packages/*/oska.toml; do
