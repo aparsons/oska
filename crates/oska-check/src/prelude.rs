@@ -13,16 +13,25 @@ pub const PRIMITIVES: &[&str] = &[
     "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Bool", "String",
 ];
 
-/// A `std.*` module: prelude declarations, written in prelude mode like
-/// `prelude.osk`, that a module sees only once it imports them with `use`.
-/// Add a module with an entry here and a `std/*.osk` file; add items to
-/// one by appending declarations to its file.
+/// A `std.*` module, which a module sees only once it imports it with
+/// `use`. Add a module with an entry here and a `std/*.osk` file.
+///
+/// Most are prelude declarations, written in prelude mode like
+/// `prelude.osk`, whose functions the runtime implements. A module
+/// [`written in Oska`](StdModule::written_in_oska), such as `std.json`, is
+/// ordinary Oska source instead: a program that imports it is checked and
+/// run with the module's text as one more module of the program
+/// (`link.rs`), so the checker, both backends and the differential suite
+/// cover it as they cover user code.
 pub struct StdModule {
     /// The path written after `use`, such as `std.sql`.
     pub path: &'static str,
     pub source: &'static str,
     /// The sink literal this module provides, if it is a sink module.
     pub sink_literal: Option<SinkLiteral>,
+    /// The module is Oska source with bodies, parsed as user code, not
+    /// prelude declarations.
+    pub written_in_oska: bool,
 }
 
 /// A sink literal's tag and the type of a literal with that tag: with
@@ -42,18 +51,46 @@ pub static STD_MODULES: &[StdModule] = &[
             tag: "sql",
             ty: "SqlLiteral",
         }),
+        written_in_oska: false,
     },
     StdModule {
         path: "std.proc",
         source: include_str!("std/proc.osk"),
         sink_literal: None,
+        written_in_oska: false,
     },
     StdModule {
         path: "std.html",
         source: include_str!("std/html.osk"),
         sink_literal: None,
+        written_in_oska: false,
+    },
+    StdModule {
+        path: "std.json",
+        source: include_str!("std/json.osk"),
+        sink_literal: None,
+        written_in_oska: true,
     },
 ];
+
+/// The `std` modules written in Oska that `module` imports, in the order
+/// of their first `use`.
+pub fn oska_std_imports(module: &Module) -> Vec<&'static StdModule> {
+    let mut found: Vec<&'static StdModule> = Vec::new();
+    for item in &module.items {
+        let ItemKind::Use(u) = &item.kind else {
+            continue;
+        };
+        let path: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
+        let Some(std) = std_module(&path.join(".")) else {
+            continue;
+        };
+        if std.written_in_oska && !found.iter().any(|m| m.path == std.path) {
+            found.push(std);
+        }
+    }
+    found
+}
 
 /// The `std.*` module at `path`.
 pub fn std_module(path: &str) -> Option<&'static StdModule> {

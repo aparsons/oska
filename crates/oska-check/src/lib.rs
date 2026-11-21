@@ -671,6 +671,11 @@ pub fn check_module(src: &str) -> CheckReport {
 /// diagnostic, with no functions.
 pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     match oska_syntax::parse_module(src) {
+        // A `std` module written in Oska is checked with the file, as one
+        // more module of the program (`link.rs`).
+        Ok(module) if !prelude::oska_std_imports(&module).is_empty() => {
+            package::check_single_with_std(src, options)
+        }
         Ok(module) => check_parsed(src, &module, options, link::Modules::default()),
         Err(err) => CheckReport {
             diagnostics: vec![err],

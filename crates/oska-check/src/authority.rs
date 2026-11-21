@@ -149,7 +149,13 @@ fn entries(
     with_signatures: bool,
 ) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
-    for item in &module.items {
+    // A `std` module written in Oska is the toolchain's code: the report
+    // is about the program's.
+    for item in module
+        .items
+        .iter()
+        .filter(|i| !modules.in_std(i.span.start))
+    {
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = modules.function_name(item.span.start, None, &f.name.name);
