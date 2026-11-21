@@ -32,28 +32,27 @@
 //!   one batch of blocks, or to carve a new batch from the current
 //!   region. So the lock is taken at most once per [`batch`] calls, and
 //!   memory freed on one thread is reused on another.
-//! - **A thread's exit gives its lists back.** `oskac test` runs each
-//!   test block on a thread of its own, so a program can start and end
-//!   thousands of threads. When a block first joins a thread's lists,
-//!   the thread arms an exit hook ([`exit_hook`]): a `pthread` key on
-//!   Unix, a fiber-local slot on Windows, each with a destructor the C
-//!   library or the system calls as the thread ends. The hook moves
-//!   every list of the thread into the shared pool's loose lists
-//!   ([`flush`]), which `take_batch` draws on as it does on whole
-//!   batches. `std`'s `thread_local!` destructors are not used: one
-//!   registers itself by pushing onto a `Vec`, which allocates, and if
-//!   that happened inside this allocator while another thread-local was
-//!   registering, `std` would abort. Arming a key or a slot allocates
-//!   nothing through this allocator. A block that joins a thread's list
-//!   after the hook ran (another thread-local's destructor freeing a
-//!   value) arms it again on Unix, and the C library runs it again, up
-//!   to its limit of rounds (4 on musl, glibc and macOS). Only blocks
-//!   freed after the last round (on Windows, after the hook ran) stay on
-//!   the thread's lists unused: a few, at most what a thread's last
-//!   destructors free. A thread whose hook could not be armed (the
-//!   system out of keys), or, on Windows, that found the pool's lock
-//!   taken for [`exit_hook`]'s whole wait, strands its lists: under
-//!   twice a batch per class, so under 8 KiB per class.
+//! - **A thread's exit gives its lists back, on Linux.** `oskac test`
+//!   runs each test block on a thread of its own, so a program can start
+//!   and end thousands of threads. On Linux, when a block first joins a
+//!   thread's lists, the thread arms an exit hook ([`exit_hook`]): a
+//!   `pthread` key with a destructor the C library calls as the thread
+//!   ends. The hook moves every list of the thread into the shared
+//!   pool's loose lists ([`flush`]), which `take_batch` draws on as it
+//!   does on whole batches. `std`'s `thread_local!` destructors are not
+//!   used: one registers itself by pushing onto a `Vec`, which
+//!   allocates, and if that happened inside this allocator while another
+//!   thread-local was registering, `std` would abort. Arming the key
+//!   allocates nothing through this allocator. A block that joins a
+//!   thread's list after the hook ran (another thread-local's destructor
+//!   freeing a value) arms it again, and the C library runs it again, up
+//!   to its limit of rounds (4 on musl and glibc). Only blocks freed
+//!   after the last round stay on the thread's lists unused: a few, at
+//!   most what a thread's last destructors free. A thread whose hook
+//!   could not be armed (the system out of keys) strands its lists:
+//!   under twice a batch per class, so under 8 KiB per class. Off Linux,
+//!   where only tests install this allocator, there is no hook, and
+//!   every ending thread strands its lists that way.
 //! - **Memory follows each class's peak.** A freed block stays in its
 //!   class for the life of the process; it is never split, merged or
 //!   handed to another class. So the heap holds, for each class, the
@@ -244,42 +243,17 @@ static SHARED: Shared = Shared {
 /// not: nothing in it allocates through this allocator. It must not
 /// panic either, which would leave the lock held; nothing in it does.
 fn with_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
-    while !try_lock() {
-        std::hint::spin_loop();
-        std::thread::yield_now();
-    }
-    locked(f)
-}
-
-/// As [`with_pool`], but gives up, returning `None` without running `f`,
-/// if the lock is still taken after `tries` tries.
-#[cfg_attr(not(windows), allow(dead_code))] // only Windows' exit hook gives up
-fn try_with_pool<R>(tries: usize, f: impl FnOnce(&mut Pool) -> R) -> Option<R> {
-    for _ in 0..tries {
-        if try_lock() {
-            return Some(locked(f));
-        }
-        std::hint::spin_loop();
-        std::thread::yield_now();
-    }
-    None
-}
-
-/// Sets the pool's lock if no thread holds it, and says whether it did.
-fn try_lock() -> bool {
-    SHARED
+    while SHARED
         .busy
         .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .is_ok()
-}
-
-/// Runs `f` on the pool, then clears its lock. Called only by
-/// [`with_pool`] and [`try_with_pool`], right after this thread set the
-/// lock ([`try_lock`]).
-fn locked<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
-    // SAFETY: this thread set `busy` (see the callers), so until it clears
-    // it below no other thread reaches `pool` (see `Shared`'s `Sync`),
-    // and this is the only reference to it.
+        .is_err()
+    {
+        std::hint::spin_loop();
+        std::thread::yield_now();
+    }
+    // SAFETY: this thread set `busy`, so until it clears it below no
+    // other thread reaches `pool` (see `Shared`'s `Sync`), and this is
+    // the only reference to it.
     let pool = unsafe { &mut *SHARED.pool.get() };
     let result = f(pool);
     SHARED.busy.store(false, Ordering::Release);
@@ -527,13 +501,17 @@ impl Cache {
 /// The exit hook ([`exit_hook`]) of an ending thread, the caller: moves
 /// every list of its cache into the shared pool's loose lists, and marks
 /// the hook as run, so a block that joins a list afterwards arms it
-/// again where the system allows ([`exit_hook::REARMS`]).
+/// again.
+#[cfg(target_os = "linux")]
 fn flush() {
     let _ = CACHE.try_with(|cache| {
         // Nothing below allocates, so no block joins a list while this
         // runs.
-        cache.armed.set(!exit_hook::REARMS);
-        exit_hook::with_pool_at_exit(|pool| {
+        cache.armed.set(false);
+        // An ending thread runs while every other thread runs too, and
+        // the C library does not call the hook when the process exits,
+        // so whoever holds the lock leaves it.
+        with_pool(|pool| {
             for class in 0..CLASSES {
                 let first = cache.heads[class].replace(ptr::null_mut());
                 cache.counts[class].set(0);
@@ -565,6 +543,7 @@ fn flush() {
 /// The number of a thread's exit hook, made once for the process by
 /// `make` (which returns `None` if the system has none to give), kept in
 /// [`HOOK_KEY`]: `None` if it could not be made.
+#[cfg(target_os = "linux")]
 fn hook_key(make: fn() -> Option<usize>) -> Option<usize> {
     loop {
         match HOOK_KEY.compare_exchange(NO_KEY, MAKING_KEY, Ordering::Acquire, Ordering::Acquire) {
@@ -584,37 +563,38 @@ fn hook_key(make: fn() -> Option<usize>) -> Option<usize> {
 }
 
 /// [`HOOK_KEY`] before the key is made.
+#[cfg(target_os = "linux")]
 const NO_KEY: usize = 0;
 /// [`HOOK_KEY`] while one thread makes the key.
+#[cfg(target_os = "linux")]
 const MAKING_KEY: usize = 1;
 /// [`HOOK_KEY`] when the system gave no key.
+#[cfg(target_os = "linux")]
 const NO_HOOK: usize = 2;
 /// [`HOOK_KEY`] holds the key plus this, once it is made.
+#[cfg(target_os = "linux")]
 const FIRST_KEY: usize = 3;
 
 /// The state of the process's exit-hook key ([`hook_key`]).
+#[cfg(target_os = "linux")]
 static HOOK_KEY: AtomicUsize = AtomicUsize::new(NO_KEY);
 
-/// A thread's exit hook on Unix: a `pthread` key whose destructor
+/// A thread's exit hook on Linux: a `pthread` key whose destructor
 /// ([`flush`]) the C library calls as a thread that set it ends, and
 /// again, up to `PTHREAD_DESTRUCTOR_ITERATIONS` (4) rounds, if the
 /// thread set it again meanwhile. The C library never calls this
 /// allocator, so neither call here allocates through it. Not called when
 /// the process exits, so it never waits for a lock that a thread ended
 /// by `exit` held.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 mod exit_hook {
-    use super::{hook_key, with_pool, Pool};
+    use super::hook_key;
     use std::ffi::c_void;
     use std::os::raw::c_int;
     use std::ptr::NonNull;
 
-    /// `pthread_key_t`.
-    #[cfg(target_os = "linux")]
+    /// `pthread_key_t`, on glibc and musl.
     type Key = std::os::raw::c_uint;
-    /// `pthread_key_t`.
-    #[cfg(target_os = "macos")]
-    type Key = std::os::raw::c_ulong;
 
     extern "C" {
         /// `int pthread_key_create(pthread_key_t *key, void
@@ -627,9 +607,6 @@ mod exit_hook {
         /// *value)`.
         fn pthread_setspecific(key: Key, value: *const c_void) -> c_int;
     }
-
-    /// The hook runs again if the thread arms it while it runs.
-    pub const REARMS: bool = true;
 
     /// Makes the process's key, with [`run`] as its destructor.
     fn make() -> Option<usize> {
@@ -659,80 +636,19 @@ mod exit_hook {
     extern "C" fn run(_marker: *mut c_void) {
         super::flush();
     }
-
-    /// Runs `f` on the shared pool, waiting for its lock: an ending thread
-    /// on Unix runs while every other thread runs too, so whoever holds
-    /// the lock leaves it.
-    pub fn with_pool_at_exit(f: impl FnOnce(&mut Pool)) {
-        with_pool(f);
-    }
 }
 
-/// A thread's exit hook on Windows: a fiber-local slot whose callback
-/// ([`flush`]) the system calls as a thread that set it ends. The system
-/// may call it while the process exits too, after it has ended every
-/// other thread, perhaps one that held the pool's lock; so this hook
-/// gives up after a while instead of waiting for the lock, and leaves the
-/// thread's lists unused. It is not armed again once it has run.
-#[cfg(windows)]
+/// No exit hook off Linux, where only tests install this allocator (the
+/// musl build of `oskac` is the one that ships with it): an ending
+/// thread's lists stay unused there. On macOS a `pthread` key's
+/// destructor was tried and freed nothing: the likely cause is that
+/// dyld's thread-local storage, which holds the cache, is torn down by
+/// its own `pthread` key destructor, made before this one and so run
+/// first, leaving this one an empty cache.
+#[cfg(not(target_os = "linux"))]
 mod exit_hook {
-    use super::{hook_key, try_with_pool, Pool};
-    use std::ffi::c_void;
-    use std::ptr::NonNull;
-
-    // Linked by name, with no import library: `kernel32` is in every
-    // Windows process.
-    #[link(name = "kernel32", kind = "raw-dylib")]
-    extern "system" {
-        /// `DWORD FlsAlloc(PFLS_CALLBACK_FUNCTION callback)`.
-        #[link_name = "FlsAlloc"]
-        fn fls_alloc(callback: Option<extern "system" fn(*const c_void)>) -> u32;
-        /// `BOOL FlsSetValue(DWORD index, PVOID value)`.
-        #[link_name = "FlsSetValue"]
-        fn fls_set_value(index: u32, value: *const c_void) -> i32;
-    }
-
-    /// `FLS_OUT_OF_INDEXES`, `FlsAlloc`'s failure.
-    const FLS_OUT_OF_INDEXES: u32 = u32::MAX;
-
-    /// How many times an ending thread tries the pool's lock.
-    const TRIES: usize = 10_000;
-
-    /// The hook is not armed again once it has run.
-    pub const REARMS: bool = false;
-
-    /// Makes the process's slot, with [`run`] as its callback.
-    fn make() -> Option<usize> {
-        // SAFETY: `run` may be called with any value.
-        let index = unsafe { fls_alloc(Some(run)) };
-        if index == FLS_OUT_OF_INDEXES {
-            None
-        } else {
-            usize::try_from(index).ok()
-        }
-    }
-
-    /// Arms the calling thread's hook: sets its value of the slot to a
-    /// marker, never read, only not null, as the callback runs only for a
-    /// thread whose value is not null.
-    pub fn arm() {
-        let Some(index) = hook_key(make).and_then(|index| u32::try_from(index).ok()) else {
-            return;
-        };
-        // SAFETY: `index` was made by `FlsAlloc` and never freed.
-        let _ = unsafe { fls_set_value(index, NonNull::<c_void>::dangling().as_ptr()) };
-    }
-
-    /// The slot's callback.
-    extern "system" fn run(_marker: *const c_void) {
-        super::flush();
-    }
-
-    /// Runs `f` on the shared pool if its lock comes free within
-    /// [`TRIES`] tries, and otherwise does nothing.
-    pub fn with_pool_at_exit(f: impl FnOnce(&mut Pool)) {
-        let _ = try_with_pool(TRIES, f);
-    }
+    /// Does nothing.
+    pub fn arm() {}
 }
 
 /// The allocator of the musl build of `oskac` (ADR 0009): size classes

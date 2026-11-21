@@ -7,6 +7,13 @@
 //!
 //! A file of its own, so that this test binary's process runs nothing
 //! else: [`SizeClassAlloc::regions`] counts for the whole process.
+//!
+//! Linux only: the exit hook that gives an ending thread's lists back
+//! exists only there, as only the musl build of `oskac`, a Linux build,
+//! ships with this allocator (`heap.rs`, "A thread's exit gives its
+//! lists back, on Linux").
+
+#![cfg(target_os = "linux")]
 
 use oska_sys::SizeClassAlloc;
 
