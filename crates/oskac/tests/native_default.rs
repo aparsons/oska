@@ -54,6 +54,16 @@ const PANICS: &str = "fn main(io: Stdout, err: Stderr) -> Result<(), IoError> {\
 
 /// A program the native backend refuses (`E0390`): `dbg` of a directory
 /// capability, whose interpreter text holds an OS handle.
+/// A `Bytes` program (ticket #222): what it prints, `dbg` of a `Bytes`,
+/// and the report of a read past its end (`P0042`).
+const BYTES: &str = "fn main(io: Stdout) -> Result<(), IoError> {\n    \
+                     var b = \"Oska\".to_bytes()\n    \
+                     b.push_u16_be(258)\n    \
+                     io.println(b.to_hex())?\n    \
+                     let _ = dbg(b.slice(1, 3))\n    \
+                     let n = b.read_u32_le(4)\n    \
+                     io.println(\"unreached\")\n}\n";
+
 const UNSUPPORTED: &str = "fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {\n    \
                            let d = dbg(fs.restrict_to(\"/\"))\n    io.println(\"ran\")\n}\n";
 
@@ -220,6 +230,17 @@ fn a_package_is_run_as_its_directory() {
         ("greeter/src/main.osk", ARGS),
     ];
     assert_golden("run_package", &files, &["run", "greeter", "--", "x"]);
+}
+
+#[test]
+fn a_bytes_program_prints_and_panics_as_the_interpreter_does() {
+    let files = [("bytes.osk", BYTES)];
+    assert_golden("run_bytes", &files, &["run", "bytes.osk"]);
+    assert_golden(
+        "run_bytes_interpret",
+        &files,
+        &["run", "--interpret", "bytes.osk"],
+    );
 }
 
 #[test]

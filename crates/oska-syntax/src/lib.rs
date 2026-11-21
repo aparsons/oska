@@ -216,8 +216,15 @@ pub enum Punct {
     Ge,
     AndAnd,
     OrOr,
-    /// `|`, which delimits closure parameters (`|r| ...`).
+    /// `|`, which delimits closure parameters (`|r| ...`) in prefix
+    /// position and is bitwise or in infix position.
     Pipe,
+    /// `&`, bitwise and.
+    Amp,
+    /// `^`, bitwise exclusive or.
+    Caret,
+    /// `~`, bitwise not.
+    Tilde,
     /// `#`, which starts an attribute (`#[integration]`).
     Hash,
     /// `@`. Oska has no `@` syntax; it is lexed only so the parser can
@@ -258,6 +265,9 @@ impl Punct {
             Self::AndAnd => "&&",
             Self::OrOr => "||",
             Self::Pipe => "|",
+            Self::Amp => "&",
+            Self::Caret => "^",
+            Self::Tilde => "~",
             Self::Hash => "#",
             Self::At => "@",
         }
@@ -1213,6 +1223,9 @@ impl Lexer<'_> {
             ('<', _) => (Punct::Lt, false),
             ('>', _) => (Punct::Gt, false),
             ('|', _) => (Punct::Pipe, false),
+            ('&', _) => (Punct::Amp, false),
+            ('^', _) => (Punct::Caret, false),
+            ('~', _) => (Punct::Tilde, false),
             ('#', _) => (Punct::Hash, false),
             ('@', _) => (Punct::At, false),
             _ => {

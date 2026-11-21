@@ -1,0 +1,132 @@
+// ChaCha20 (RFC 8439) over public words: the quarter round of
+// section 2.1.1 and the block function of section 2.3.2, against their
+// test vectors.
+
+struct Quad { a: U32, b: U32, c: U32, d: U32 }
+
+struct State { x0: U32, x1: U32, x2: U32, x3: U32, x4: U32, x5: U32, x6: U32, x7: U32, x8: U32, x9: U32, x10: U32, x11: U32, x12: U32, x13: U32, x14: U32, x15: U32 }
+
+fn quarter(q: Quad) -> Quad {
+    var a = q.a
+    var b = q.b
+    var c = q.c
+    var d = q.d
+    a = a.wrapping_add(b)
+    d = (d ^ a).rotl(16)
+    c = c.wrapping_add(d)
+    b = (b ^ c).rotl(12)
+    a = a.wrapping_add(b)
+    d = (d ^ a).rotl(8)
+    c = c.wrapping_add(d)
+    b = (b ^ c).rotl(7)
+    Quad(a: a, b: b, c: c, d: d)
+}
+
+fn double_round(s: State) -> State {
+    var x0 = s.x0
+    var x1 = s.x1
+    var x2 = s.x2
+    var x3 = s.x3
+    var x4 = s.x4
+    var x5 = s.x5
+    var x6 = s.x6
+    var x7 = s.x7
+    var x8 = s.x8
+    var x9 = s.x9
+    var x10 = s.x10
+    var x11 = s.x11
+    var x12 = s.x12
+    var x13 = s.x13
+    var x14 = s.x14
+    var x15 = s.x15
+    let q04812 = quarter(Quad(a: x0, b: x4, c: x8, d: x12))
+    x0 = q04812.a
+    x4 = q04812.b
+    x8 = q04812.c
+    x12 = q04812.d
+    let q15913 = quarter(Quad(a: x1, b: x5, c: x9, d: x13))
+    x1 = q15913.a
+    x5 = q15913.b
+    x9 = q15913.c
+    x13 = q15913.d
+    let q261014 = quarter(Quad(a: x2, b: x6, c: x10, d: x14))
+    x2 = q261014.a
+    x6 = q261014.b
+    x10 = q261014.c
+    x14 = q261014.d
+    let q371115 = quarter(Quad(a: x3, b: x7, c: x11, d: x15))
+    x3 = q371115.a
+    x7 = q371115.b
+    x11 = q371115.c
+    x15 = q371115.d
+    let q051015 = quarter(Quad(a: x0, b: x5, c: x10, d: x15))
+    x0 = q051015.a
+    x5 = q051015.b
+    x10 = q051015.c
+    x15 = q051015.d
+    let q161112 = quarter(Quad(a: x1, b: x6, c: x11, d: x12))
+    x1 = q161112.a
+    x6 = q161112.b
+    x11 = q161112.c
+    x12 = q161112.d
+    let q27813 = quarter(Quad(a: x2, b: x7, c: x8, d: x13))
+    x2 = q27813.a
+    x7 = q27813.b
+    x8 = q27813.c
+    x13 = q27813.d
+    let q34914 = quarter(Quad(a: x3, b: x4, c: x9, d: x14))
+    x3 = q34914.a
+    x4 = q34914.b
+    x9 = q34914.c
+    x14 = q34914.d
+    State(x0: x0, x1: x1, x2: x2, x3: x3, x4: x4, x5: x5, x6: x6, x7: x7, x8: x8, x9: x9, x10: x10, x11: x11, x12: x12, x13: x13, x14: x14, x15: x15)
+}
+
+fn block(key: Bytes, counter: U32, nonce: Bytes) -> Bytes {
+    let start = State(x0: 1634760805, x1: 857760878, x2: 2036477234, x3: 1797285236, x4: key.read_u32_le(0), x5: key.read_u32_le(4), x6: key.read_u32_le(8), x7: key.read_u32_le(12), x8: key.read_u32_le(16), x9: key.read_u32_le(20), x10: key.read_u32_le(24), x11: key.read_u32_le(28), x12: counter, x13: nonce.read_u32_le(0), x14: nonce.read_u32_le(4), x15: nonce.read_u32_le(8))
+    var s = start
+    for _ in 0..10 {
+        s = double_round(s)
+    }
+    var out = Bytes.new()
+    out.push_u32_le(s.x0.wrapping_add(start.x0))
+    out.push_u32_le(s.x1.wrapping_add(start.x1))
+    out.push_u32_le(s.x2.wrapping_add(start.x2))
+    out.push_u32_le(s.x3.wrapping_add(start.x3))
+    out.push_u32_le(s.x4.wrapping_add(start.x4))
+    out.push_u32_le(s.x5.wrapping_add(start.x5))
+    out.push_u32_le(s.x6.wrapping_add(start.x6))
+    out.push_u32_le(s.x7.wrapping_add(start.x7))
+    out.push_u32_le(s.x8.wrapping_add(start.x8))
+    out.push_u32_le(s.x9.wrapping_add(start.x9))
+    out.push_u32_le(s.x10.wrapping_add(start.x10))
+    out.push_u32_le(s.x11.wrapping_add(start.x11))
+    out.push_u32_le(s.x12.wrapping_add(start.x12))
+    out.push_u32_le(s.x13.wrapping_add(start.x13))
+    out.push_u32_le(s.x14.wrapping_add(start.x14))
+    out.push_u32_le(s.x15.wrapping_add(start.x15))
+    out
+}
+
+fn word(stdout: Stdout, w: U32) {
+    var b = Bytes.new()
+    b.push_u32_be(w)
+    let text = b.to_hex()
+    let _ = stdout.println(text)
+}
+
+fn main(stdout: Stdout) {
+    let q = quarter(Quad(a: 286331153, b: 16909060, c: 2609737539, d: 19088743))
+    word(stdout, q.a)
+    word(stdout, q.b)
+    word(stdout, q.c)
+    word(stdout, q.d)
+    var key = Bytes.new()
+    for i in 0..32 {
+        key.push(i.to_u8())
+    }
+    let nonce = Bytes.from_hex("000000090000004a00000000").unwrap_or(Bytes.new())
+    let out = block(key, 1, nonce)
+    let text = out.to_hex()
+    let _ = stdout.println(text)
+}

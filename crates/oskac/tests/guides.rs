@@ -36,13 +36,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// The guides the ticket asks for, relative to `docs/guide`.
-const REQUIRED_PAGES: [&str; 12] = [
+const REQUIRED_PAGES: [&str; 14] = [
     "index.md",
     "install.md",
     "quickstart.md",
     "language-tour.md",
     "capabilities.md",
     "untrusted-data.md",
+    "bytes.md",
+    "secrets.md",
     "testing.md",
     "debugging.md",
     "troubleshooting.md",

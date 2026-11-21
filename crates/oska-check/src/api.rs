@@ -68,6 +68,9 @@ pub struct ApiItem {
     pub module: String,
     /// The item's name: `len` for a function, `List.push` for a method,
     /// `Eq for Int` for a trait impl, and the module's path for a module.
+    /// A method that impls of one type with different type arguments
+    /// share is named with its impl's type as written, as `Secret<U8>.rotl`
+    /// and `Secret<U32>.rotl`, so that each has an anchor of its own.
     pub name: String,
     pub kind: Kind,
     /// The declaration as written, on one line, without a body or private
@@ -103,6 +106,20 @@ impl ApiItem {
             }
         }
         out
+    }
+
+    /// The name without a method's type arguments: `Secret.rotl` for
+    /// `Secret<U8>.rotl`. Any other name is unchanged.
+    pub fn unqualified_name(&self) -> String {
+        if self.kind != Kind::Method {
+            return self.name.clone();
+        }
+        match (self.name.find('<'), self.name.rfind(">.")) {
+            (Some(open), Some(close)) if open < close => {
+                format!("{}{}", &self.name[..open], &self.name[close + 1..])
+            }
+            _ => self.name.clone(),
+        }
     }
 }
 
@@ -180,6 +197,9 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
         capabilities: reach.capabilities,
         authority: reach.authority,
     };
+    // Each inherent method's index in `out` and its impl's type as
+    // written, to tell apart a method that impls of one type share.
+    let mut methods: Vec<(usize, String)> = Vec::new();
     for it in &module.items {
         match &it.kind {
             ItemKind::Fn(f) if it.is_public() => {
@@ -265,6 +285,8 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
                             let name = format!("{target}.{}", f.name.name);
                             let reach = authority_of(&name);
                             let sig = fn_signature(src, method, f);
+                            let written = text(src, imp.target.span.start, imp.target.span.end);
+                            methods.push((out.len(), one_line(written)));
                             out.push(item(name, Kind::Method, sig, method, reach));
                         }
                     }
@@ -273,7 +295,29 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
             _ => {}
         }
     }
+    qualify_shared_methods(&mut out, &methods);
     out
+}
+
+/// Names each method that impls of one type with different type arguments
+/// share with its impl's type as written: `Secret<U8>.rotl` and
+/// `Secret<U32>.rotl` rather than `Secret.rotl` twice. Every other name,
+/// and so its anchor, is left as it is.
+fn qualify_shared_methods(out: &mut [ApiItem], methods: &[(usize, String)]) {
+    let shared: Vec<bool> = methods
+        .iter()
+        .map(|(i, written)| {
+            methods
+                .iter()
+                .any(|(j, other)| out[*j].name == out[*i].name && other != written)
+        })
+        .collect();
+    for ((i, written), shared) in methods.iter().zip(shared) {
+        if shared {
+            let method = out[*i].name.rsplit('.').next().unwrap_or("").to_string();
+            out[*i].name = format!("{written}.{method}");
+        }
+    }
 }
 
 /// What an item reaches: the capabilities, and the words for them.

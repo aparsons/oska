@@ -25,6 +25,7 @@ A program is one `.osk` file, or a package: an `oska.toml` (`[package]` with a `
 - Do not widen authority to make an error go away: do not add capabilities to `main`, and do not call `.assume_trusted()` or `.expose()` without saying why. Prefer a narrower capability, such as `fs.read_only()` or `fs.restrict_to("dir")`.
 - Anything from files, arguments, standard input, or the environment is `Untrusted`. Check it before you use it.
 - Never write a secret into a source file, a test, or a log.
+- Binary data is `Bytes`, not `String`. Keep key material in a `Secret` (`Secret<Bytes>`, `Secret<U32>`): compare it with `ct_eq` or `constant_time_eq` and choose with `ct_select`, because the checker refuses a secret as a condition, an index, a divisor, a shift amount or an ordering.
 - Do not refresh a committed baseline to make the gate pass without telling the user why. Updating it is the approval of a wider authority, and that is the user's decision.
 - Say in your summary when the authority report changed.
 
@@ -34,5 +35,6 @@ A program is one `.osk` file, or a package: an `oska.toml` (`[package]` with a `
 - Every error code, with an example and its fix: https://oskalang.dev/codes.json, or one code at https://oskalang.dev/codes/E0300.
 - Agent guide: https://oskalang.dev/guide/agent-guide.md.
 - Packages and modules: https://oskalang.dev/guide/packages.md.
+- Binary data and key material: https://oskalang.dev/guide/bytes.md and https://oskalang.dev/guide/secrets.md.
 - How this `oskac` was installed: `oskac self info --format=json` (offline; it reads the install receipt).
 - Whether an update exists: run the installer with `--check --json` (it installs nothing). To update Oska, run the installer again: https://oskalang.dev/install.sh or https://oskalang.dev/install.ps1.

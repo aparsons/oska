@@ -15,6 +15,8 @@
 //! and the trait's generics as parameters; lowering them into an impl
 //! substitutes the impl's types.
 
+mod secrets;
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -669,6 +671,13 @@ impl Lowering<'_> {
                     },
                     _ => self.unsupported(expr.span, "`-` on this type"),
                 },
+                (UnaryOp::BitNot, _) => match self.resolutions.get(&expr.span) {
+                    Some(Resolution::Int(int)) => ExprKind::BitNot {
+                        operand: self.boxed(operand),
+                        int: *int,
+                    },
+                    _ => self.unsupported(expr.span, "`~` on this type"),
+                },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
             ast::ExprKind::Closure { params, body } => match self.resolutions.get(&expr.span) {
@@ -785,9 +794,10 @@ impl Lowering<'_> {
                 self.unsupported(expr.span, &format!("a `{tag}\"...\"` literal"))
             }
         };
+        let ty = self.type_at(expr.span);
         Expr {
-            kind,
-            ty: self.type_at(expr.span),
+            kind: self.secret(kind, &ty, expr.span),
+            ty,
             span: expr.span,
         }
     }
@@ -917,12 +927,19 @@ impl Lowering<'_> {
             }));
         }
         let int = match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                match resolved {
-                    Some(Resolution::Int(int)) => Some(*int),
-                    _ => return self.unsupported(span, &format!("`{}` on this type", op.text())),
-                }
-            }
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Rem
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => match resolved {
+                Some(Resolution::Int(int)) => Some(*int),
+                _ => return self.unsupported(span, &format!("`{}` on this type", op.text())),
+            },
             BinaryOp::Eq | BinaryOp::Ne if resolved != Some(&Resolution::Equality) => {
                 return self.unsupported(span, &format!("`{}` on this type", op.text()));
             }

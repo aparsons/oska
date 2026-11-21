@@ -32,7 +32,7 @@ fn refusals(root: &RootHandle, walked: &[String]) -> Vec<String> {
     };
     vec![
         message(host.read_file_beneath(root, walked).map(drop)),
-        message(host.write_file_beneath(root, walked, "text")),
+        message(host.write_file_beneath(root, walked, b"text")),
         message(host.create_dir_beneath(root, walked)),
         message(host.list_dir_beneath(root, walked).map(drop)),
         message(host.open_beneath(root, walked).map(drop)),

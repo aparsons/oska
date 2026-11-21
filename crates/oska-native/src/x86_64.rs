@@ -42,6 +42,8 @@
 //! executable needs no relocation: [`Text::link`] patches the addresses
 //! of data ([`Fixup`]) once the file has been laid out.
 
+#[cfg(test)]
+mod decode;
 mod encode;
 
 use encode::{
@@ -185,6 +187,10 @@ struct Emitter {
     windows: bool,
     /// Whether the function being emitted is [`Module::callback`].
     callback: bool,
+    /// For each function emitted, the bytes each of its instructions
+    /// became (`trace`).
+    #[cfg(test)]
+    ranges: Vec<Vec<std::ops::Range<usize>>>,
 }
 
 impl Emitter {
@@ -250,7 +256,11 @@ impl Emitter {
         }
         let mut labels = vec![0usize; function.labels as usize];
         self.jumps.clear();
+        #[cfg(test)]
+        self.ranges.push(Vec::new());
         for inst in &function.insts {
+            #[cfg(test)]
+            let start = self.asm.bytes.len();
             match inst {
                 Inst::Label(label) => {
                     if let Some(at) = labels.get_mut(*label as usize) {
@@ -258,6 +268,10 @@ impl Emitter {
                     }
                 }
                 other => self.inst(other),
+            }
+            #[cfg(test)]
+            if let Some(ranges) = self.ranges.last_mut() {
+                ranges.push(start..self.asm.bytes.len());
             }
         }
         for &(at, label) in &self.jumps {
@@ -445,7 +459,9 @@ impl Emitter {
                 self.asm.constant(r, *value);
                 self.write(*dst, r);
             }
-            Inst::Copy { dst, src } => {
+            // Secrets' marks and exposures are the optimizer's and the guard's
+            // (`constant_time.rs`): here it is a copy.
+            Inst::Copy { dst, src } | Inst::Secret { dst, src } | Inst::Expose { dst, src } => {
                 let s = self.read(*src, RAX);
                 self.write(*dst, s);
             }
@@ -919,4 +935,34 @@ fn condition(cond: Cond) -> u8 {
         Cond::Above => A,
         Cond::AboveEq => AE,
     }
+}
+
+/// For each function of `module`, for each of its instructions, what its
+/// machine code does that a secret must not decide: its conditional
+/// jumps and its memory operands, by whether `rsp` or `rbp` addresses
+/// them, decoded from the bytes (`decode.rs`).
+#[cfg(test)]
+pub(crate) fn trace(module: &Module, windows: bool) -> Vec<Vec<crate::target::Selected>> {
+    let mut emitter = Emitter {
+        extra_args: module.extra_args,
+        windows,
+        ..Emitter::default()
+    };
+    for (id, function) in module.functions.iter().enumerate() {
+        emitter.callback = module.callback == Some(id);
+        emitter
+            .function(function)
+            .expect("the code should be emitted");
+    }
+    let bytes = &emitter.asm.bytes;
+    emitter
+        .ranges
+        .iter()
+        .map(|function| {
+            function
+                .iter()
+                .map(|range| decode::selected(&bytes[range.clone()]))
+                .collect()
+        })
+        .collect()
 }

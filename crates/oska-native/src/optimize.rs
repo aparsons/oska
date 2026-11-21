@@ -21,7 +21,13 @@
 //!   labels renumbered and each `Return` a jump to its end. In rounds, so
 //!   a function that became small enough is inlined in turn. A function
 //!   that counts call depth, makes a system or indirect call, or has cold
-//!   blocks is never inlined.
+//!   blocks is never inlined, nor one that marks a secret.
+//!
+//! **Secrets.** No pass removes or folds an [`Inst::Secret`] mark but as
+//! dead code, whose result nothing reads; none turns a choice into a
+//! branch or arithmetic into a table lookup; and a function that marks a
+//! secret is never inlined, so a mark stays where `constant_time.rs`
+//! expects it. That module checks the result.
 //! - **Temporaries.** Those the code no longer uses are dropped and the
 //!   rest renumbered, since each costs a stack slot in its frame and the
 //!   stack is reserved for the deepest calls of the largest frame.
@@ -136,6 +142,11 @@ fn inlinable(f: &Function) -> Option<Inlining> {
                 | Inst::Arith { .. }
                 | Inst::ArithImm { .. }
                 | Inst::EntrySp { .. }
+                // A mark stays in the function that makes it
+                // (`constant_time.rs`): `bytes_read` marks the bytes it
+                // reads, and inlined into a caller of `Bytes.at` on public
+                // bytes, its mark would make that caller's byte secret.
+                | Inst::Secret { .. }
         )
     });
     if !simple {
@@ -564,6 +575,8 @@ fn pure(inst: &Inst) -> bool {
         inst,
         Inst::Const { .. }
             | Inst::Copy { .. }
+            | Inst::Secret { .. }
+            | Inst::Expose { .. }
             | Inst::Addr { .. }
             | Inst::Binary { .. }
             | Inst::BinaryImm { .. }
@@ -585,6 +598,8 @@ fn rename_def(inst: &mut Inst, to: Temp) {
     match inst {
         Inst::Const { dst, .. }
         | Inst::Copy { dst, .. }
+        | Inst::Secret { dst, .. }
+        | Inst::Expose { dst, .. }
         | Inst::Addr { dst, .. }
         | Inst::Binary { dst, .. }
         | Inst::BinaryImm { dst, .. }
@@ -622,7 +637,7 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
         }
     };
     match inst {
-        Inst::Copy { src, .. } => swap(src),
+        Inst::Copy { src, .. } | Inst::Secret { src, .. } | Inst::Expose { src, .. } => swap(src),
         Inst::Binary { lhs, rhs, .. }
         | Inst::Compare { lhs, rhs, .. }
         | Inst::Arith { lhs, rhs, .. }
@@ -662,5 +677,261 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
         | Inst::Jump(_)
         | Inst::Enter { .. }
         | Inst::Leave => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{module, Code};
+    use crate::constant_time::secrets;
+    use crate::ir::{BinOp, Cond, Function, Inst, Width};
+
+    /// In a loop over the public bound `t1`: `t3`, a secret read from the
+    /// `Secret` at the parameter `t0`, copied, added to a constant, and
+    /// made the condition of a choice (`ct_select`'s mask sequence)
+    /// between itself and the sum, stored back through an address one
+    /// addition away, next to a dead constant. Something for every pass
+    /// to do, a choice it could make a branch, and a loop it must leave.
+    fn secret_code() -> Function {
+        Function {
+            name: "f".to_string(),
+            params: 2,
+            temps: 20,
+            labels: 2,
+            insts: vec![
+                Inst::Const { dst: 2, value: 0 },
+                Inst::Const { dst: 9, value: 0 },
+                Inst::Label(0),
+                Inst::Branch {
+                    cond: Cond::Ge,
+                    lhs: 2,
+                    rhs: 1,
+                    target: 1,
+                },
+                Inst::Load {
+                    width: Width::W64,
+                    dst: 4,
+                    base: 0,
+                    offset: 8,
+                },
+                Inst::Secret { dst: 3, src: 4 },
+                Inst::Copy { dst: 5, src: 3 },
+                Inst::Const { dst: 6, value: 5 },
+                Inst::Binary {
+                    op: BinOp::Add,
+                    dst: 7,
+                    lhs: 5,
+                    rhs: 6,
+                },
+                // The choice: `mask = 0 - pick`, then
+                // `b ^ ((a ^ b) & mask)`.
+                Inst::Const { dst: 8, value: 1 },
+                Inst::Binary {
+                    op: BinOp::And,
+                    dst: 10,
+                    lhs: 3,
+                    rhs: 8,
+                },
+                Inst::Binary {
+                    op: BinOp::Sub,
+                    dst: 11,
+                    lhs: 9,
+                    rhs: 10,
+                },
+                Inst::Binary {
+                    op: BinOp::Xor,
+                    dst: 12,
+                    lhs: 7,
+                    rhs: 3,
+                },
+                Inst::Binary {
+                    op: BinOp::And,
+                    dst: 13,
+                    lhs: 12,
+                    rhs: 11,
+                },
+                Inst::Binary {
+                    op: BinOp::Xor,
+                    dst: 14,
+                    lhs: 3,
+                    rhs: 13,
+                },
+                Inst::BinaryImm {
+                    op: BinOp::Add,
+                    dst: 15,
+                    lhs: 0,
+                    imm: 8,
+                },
+                Inst::Store {
+                    width: Width::W64,
+                    base: 15,
+                    offset: 0,
+                    src: 14,
+                },
+                Inst::Copy { dst: 16, src: 14 },
+                Inst::Const { dst: 17, value: 0 },
+                Inst::BinaryImm {
+                    op: BinOp::Add,
+                    dst: 2,
+                    lhs: 2,
+                    imm: 1,
+                },
+                Inst::Jump(0),
+                Inst::Label(1),
+                Inst::Return(16),
+            ],
+            cold: 23,
+        }
+    }
+
+    /// The mark is still there, the value stored and the value returned
+    /// are still secret, the guard finds no secret branch or address, and
+    /// nothing branches but the loop.
+    fn assert_marked(f: &Function, pass: &str) {
+        let marks = f
+            .insts
+            .iter()
+            .filter(|i| matches!(i, Inst::Secret { .. }))
+            .count();
+        assert_eq!(marks, 1, "{pass}: {:?}", f.insts);
+        let marked = secrets(std::slice::from_ref(f))
+            .unwrap_or_else(|leak| panic!("{pass}: {leak:?}"))
+            .remove(0);
+        for inst in &f.insts {
+            let read = match inst {
+                Inst::Store { src, .. } => *src,
+                Inst::Return(value) => *value,
+                _ => continue,
+            };
+            assert!(marked[read as usize], "{pass}: {inst:?} in {:?}", f.insts);
+        }
+        // Only the loop's own branch and jump: the choice is no branch.
+        let branches = f.insts.iter().filter(|i| i.target().is_some()).count();
+        assert_eq!(branches, 2, "{pass}: {:?}", f.insts);
+    }
+
+    #[test]
+    fn each_pass_leaves_a_secret_marked() {
+        type Pass = fn(&mut Code);
+        let passes: [(&str, Pass); 5] = [
+            ("propagate_copies", Code::propagate_copies),
+            ("coalesce_copies", Code::coalesce_copies),
+            ("immediates", Code::immediates),
+            ("fold_offsets", Code::fold_offsets),
+            ("remove_dead", Code::remove_dead),
+        ];
+        for (name, pass) in passes {
+            let mut f = secret_code();
+            let mut code = Code::new(&f);
+            pass(&mut code);
+            code.write_back(&mut f);
+            assert_marked(&f, name);
+        }
+        let mut f = secret_code();
+        super::function(&mut f);
+        assert_marked(&f, "all of them");
+    }
+
+    /// A function that marks a secret is never inlined, so its mark stays
+    /// its own; one that computes on a secret argument is, and what it
+    /// computes from the caller's secret stays secret there.
+    #[test]
+    fn inlining_keeps_marks_where_they_are_made() {
+        let caller = Function {
+            name: "caller".to_string(),
+            params: 1,
+            temps: 5,
+            labels: 0,
+            insts: vec![
+                Inst::Load {
+                    width: Width::W64,
+                    dst: 3,
+                    base: 0,
+                    offset: 8,
+                },
+                Inst::Secret { dst: 4, src: 3 },
+                Inst::Call {
+                    dst: 1,
+                    callee: 1,
+                    args: vec![0],
+                },
+                Inst::Call {
+                    dst: 2,
+                    callee: 2,
+                    args: vec![4],
+                },
+                Inst::Store {
+                    width: Width::W64,
+                    base: 0,
+                    offset: 8,
+                    src: 2,
+                },
+                Inst::Return(1),
+            ],
+            cold: 6,
+        };
+        let marks = Function {
+            name: "marks".to_string(),
+            params: 1,
+            temps: 3,
+            labels: 0,
+            insts: vec![
+                Inst::Load {
+                    width: Width::W8,
+                    dst: 1,
+                    base: 0,
+                    offset: 24,
+                },
+                Inst::Secret { dst: 2, src: 1 },
+                Inst::Return(2),
+            ],
+            cold: 3,
+        };
+        let computes = Function {
+            name: "computes".to_string(),
+            params: 1,
+            temps: 2,
+            labels: 0,
+            insts: vec![
+                Inst::BinaryImm {
+                    op: BinOp::Shl,
+                    dst: 1,
+                    lhs: 0,
+                    imm: 3,
+                },
+                Inst::Return(1),
+            ],
+            cold: 2,
+        };
+        let mut functions = [caller, marks, computes];
+        module(&mut functions);
+        let caller = &functions[0];
+        assert!(
+            caller
+                .insts
+                .iter()
+                .any(|i| matches!(i, Inst::Call { callee: 1, .. })),
+            "the marking function is called, not inlined: {:?}",
+            caller.insts
+        );
+        assert!(
+            !caller
+                .insts
+                .iter()
+                .any(|i| matches!(i, Inst::Call { callee: 2, .. })),
+            "the computing function is inlined: {:?}",
+            caller.insts
+        );
+        let marked = secrets(&functions).expect("the code is constant-time");
+        let stored = caller.insts.iter().find_map(|i| match i {
+            Inst::Store { src, .. } => Some(*src),
+            _ => None,
+        });
+        assert!(
+            stored.is_some_and(|t| marked[0][t as usize]),
+            "{:?}",
+            functions[0].insts
+        );
+        assert!(marked[1][2], "the mark is in its own function");
     }
 }

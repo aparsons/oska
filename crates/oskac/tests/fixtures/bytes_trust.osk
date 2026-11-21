@@ -1,0 +1,13 @@
+// Bytes read through a capability are `Untrusted<Bytes>`, and stay
+// untrusted through a slice. `remember` takes trusted `Bytes`, so passing
+// them is `E0300`.
+
+fn remember(key: Bytes) -> Int {
+    key.len()
+}
+
+fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    let raw = read.restrict_to_file("key.bin").read_bytes()?
+    let n = remember(raw.slice(0, 16))
+    io.println("{n}")
+}

@@ -242,6 +242,38 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "DirRead.read_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    let bytes = read.restrict_to(".").read_bytes(Path.new("main.osk"))?
+    io.println(bytes.slice(0, 7).to_hex())
+}"#,
+    ),
+    (
+        "FileRead.read_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    match read.restrict_to_file("missing.bin").read_bytes() {
+        Ok(bytes) => io.println(bytes.to_hex())
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "DirWrite.write_bytes",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to(".").write_bytes(Path.new("out.bin"), Bytes.zeroed(3))
+}"#,
+    ),
+    (
+        "FileWrite.write_bytes",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to_file("file.bin").write_bytes(Bytes.from_hex("80ff").unwrap_or(Bytes.new()))
+}"#,
+    ),
+    (
         "Env.get",
         Run::WithInput(""),
         r#"fn main(io: Stdout, env: Env) -> Result<(), IoError> {
@@ -280,6 +312,221 @@ const CALLS: &[(&str, Run, &str)] = &[
         r#"fn main(io: Stdout, env: Env) -> Result<(), IoError> {
     let same = env.secret("NAME").constant_time_eq_secret(env.secret("NAME"))
     io.println(shown(same))
+}"#,
+    ),
+    (
+        "Secret.new",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(k.expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(shown(k.rotl(1).expose() == 3))
+}"#,
+    ),
+    (
+        "Secret.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(shown(k.rotr(1).expose() == 3221225472))
+}"#,
+    ),
+    (
+        "Secret.ct_eq",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(shown(k.ct_eq(Secret.new(3)).expose()))
+}"#,
+    ),
+    (
+        "Secret.to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U8> = Secret.new(200)
+    io.println(k.to_u32().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.to_u64",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(k.to_u64().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.wrapping_to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    io.println(k.wrapping_to_u8().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.wrapping_to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U64> = Secret.new(4294967297)
+    io.println(k.wrapping_to_u32().expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.and",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).and(Secret.new(false)).expose()))
+}"#,
+    ),
+    (
+        "Secret.or",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).or(Secret.new(false)).expose()))
+}"#,
+    ),
+    (
+        "Secret.xor",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).xor(Secret.new(true)).expose()))
+}"#,
+    ),
+    (
+        "Secret.not",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(shown(Secret.new(true).not().expose()))
+}"#,
+    ),
+    (
+        "Secret.ct_select",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let k: Secret<U32> = Secret.new(2147483649)
+    let picked = Secret.new(false).ct_select(k, Secret.new(7))
+    io.println(picked.expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.len",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.len().to_string())
+}"#,
+    ),
+    (
+        "Secret.at",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.at(7).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.slice",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.slice(1, 3).expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.read_u32_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u32_be(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.read_u32_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u32_le(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.read_u64_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u64_be(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.read_u64_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    io.println(key.read_u64_le(0).expose().to_int().to_string())
+}"#,
+    ),
+    (
+        "Secret.push",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    key.push(Secret.new(9))
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.append",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    key.append(Secret.new(Bytes.zeroed(1)))
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u32_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u32_be(k)
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u32_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u32_le(k)
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u64_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u64_be(k.to_u64())
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
+        "Secret.push_u64_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var key = Secret.new(Bytes.from_hex("0102030405060708").unwrap_or(Bytes.new()))
+    let k: Secret<U32> = Secret.new(2147483649)
+    key.push_u64_le(k.to_u64())
+    io.println(key.expose().to_hex())
 }"#,
     ),
     (
@@ -564,6 +811,15 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "Bytes.assume_trusted",
+        Run::WithInput("typed\n"),
+        r#"fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
+    let line = input.read_line()?.unwrap_or("")
+    let trusted: Bytes = line.to_bytes().assume_trusted()
+    io.println(trusted.to_hex())
+}"#,
+    ),
+    (
         "String.assume_trusted",
         Run::WithInput("typed\n"),
         r#"fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
@@ -800,6 +1056,580 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {
     io.println("text".to_string())
+}"#,
+    ),
+    (
+        "U8.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 129
+    io.println(shown(x.rotl(1) == 3))
+}"#,
+    ),
+    (
+        "U8.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 129
+    io.println(shown(x.rotr(1) == 192))
+}"#,
+    ),
+    (
+        "U32.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 2147483649
+    io.println(shown(x.rotl(1) == 3))
+}"#,
+    ),
+    (
+        "U32.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 2147483649
+    io.println(shown(x.rotr(1) == 3221225472))
+}"#,
+    ),
+    (
+        "U64.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 9223372036854775809
+    io.println(shown(x.rotl(1) == 3))
+}"#,
+    ),
+    (
+        "U64.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 9223372036854775809
+    io.println(shown(x.rotr(1) == 13835058055282163712))
+}"#,
+    ),
+    (
+        "U8.wrapping_add",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 255
+    io.println(shown(x.wrapping_add(2) == 1))
+}"#,
+    ),
+    (
+        "U8.wrapping_sub",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 1
+    io.println(shown(x.wrapping_sub(2) == 255))
+}"#,
+    ),
+    (
+        "U8.wrapping_mul",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 255
+    io.println(shown(x.wrapping_mul(3) == 253))
+}"#,
+    ),
+    (
+        "U32.wrapping_add",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 4294967295
+    io.println(shown(x.wrapping_add(2) == 1))
+}"#,
+    ),
+    (
+        "U32.wrapping_sub",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 1
+    io.println(shown(x.wrapping_sub(2) == 4294967295))
+}"#,
+    ),
+    (
+        "U32.wrapping_mul",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 4294967295
+    io.println(shown(x.wrapping_mul(3) == 4294967293))
+}"#,
+    ),
+    (
+        "U64.wrapping_add",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551615
+    io.println(shown(x.wrapping_add(2) == 1))
+}"#,
+    ),
+    (
+        "U64.wrapping_sub",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 1
+    io.println(shown(x.wrapping_sub(2) == 18446744073709551615))
+}"#,
+    ),
+    (
+        "U64.wrapping_mul",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551615
+    io.println(shown(x.wrapping_mul(3) == 18446744073709551613))
+}"#,
+    ),
+    (
+        "Int.to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: Int = 200
+    io.println(shown(x.to_u8() == 200))
+}"#,
+    ),
+    (
+        "Int.to_u16",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: Int = 200
+    io.println(shown(x.to_u16() == 200))
+}"#,
+    ),
+    (
+        "Int.to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: Int = 200
+    io.println(shown(x.to_u32() == 200))
+}"#,
+    ),
+    (
+        "Int.to_u64",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: Int = 200
+    io.println(shown(x.to_u64() == 200))
+}"#,
+    ),
+    (
+        "U8.to_int",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 200
+    io.println(shown(x.to_int() == 200))
+}"#,
+    ),
+    (
+        "U8.to_u16",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 200
+    io.println(shown(x.to_u16() == 200))
+}"#,
+    ),
+    (
+        "U8.to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 200
+    io.println(shown(x.to_u32() == 200))
+}"#,
+    ),
+    (
+        "U8.to_u64",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 200
+    io.println(shown(x.to_u64() == 200))
+}"#,
+    ),
+    (
+        "U16.to_int",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 200
+    io.println(shown(x.to_int() == 200))
+}"#,
+    ),
+    (
+        "U16.to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 200
+    io.println(shown(x.to_u8() == 200))
+}"#,
+    ),
+    (
+        "U16.to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 200
+    io.println(shown(x.to_u32() == 200))
+}"#,
+    ),
+    (
+        "U16.to_u64",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 200
+    io.println(shown(x.to_u64() == 200))
+}"#,
+    ),
+    (
+        "U16.wrapping_to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 65534
+    io.println(shown(x.wrapping_to_u8() == 254))
+}"#,
+    ),
+    (
+        "U32.to_int",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 200
+    io.println(shown(x.to_int() == 200))
+}"#,
+    ),
+    (
+        "U32.to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 200
+    io.println(shown(x.to_u8() == 200))
+}"#,
+    ),
+    (
+        "U32.to_u16",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 200
+    io.println(shown(x.to_u16() == 200))
+}"#,
+    ),
+    (
+        "U32.to_u64",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 200
+    io.println(shown(x.to_u64() == 200))
+}"#,
+    ),
+    (
+        "U32.wrapping_to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 4294967294
+    io.println(shown(x.wrapping_to_u8() == 254))
+}"#,
+    ),
+    (
+        "U32.wrapping_to_u16",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 4294967294
+    io.println(shown(x.wrapping_to_u16() == 65534))
+}"#,
+    ),
+    (
+        "U64.to_int",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 200
+    io.println(shown(x.to_int() == 200))
+}"#,
+    ),
+    (
+        "U64.to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 200
+    io.println(shown(x.to_u8() == 200))
+}"#,
+    ),
+    (
+        "U64.to_u16",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 200
+    io.println(shown(x.to_u16() == 200))
+}"#,
+    ),
+    (
+        "U64.to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 200
+    io.println(shown(x.to_u32() == 200))
+}"#,
+    ),
+    (
+        "U64.wrapping_to_u8",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551614
+    io.println(shown(x.wrapping_to_u8() == 254))
+}"#,
+    ),
+    (
+        "U64.wrapping_to_u16",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551614
+    io.println(shown(x.wrapping_to_u16() == 65534))
+}"#,
+    ),
+    (
+        "U64.wrapping_to_u32",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551614
+    io.println(shown(x.wrapping_to_u32() == 4294967294))
+}"#,
+    ),
+    (
+        "Bytes.new",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(Bytes.new().to_hex())
+}"#,
+    ),
+    (
+        "Bytes.zeroed",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(Bytes.zeroed(3).to_hex())
+}"#,
+    ),
+    (
+        "Bytes.from_hex",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(shown(Bytes.from_hex("0aF0").is_some()))
+}"#,
+    ),
+    (
+        "Bytes.len",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    let n = b.len()
+    io.println("{n}")
+}"#,
+    ),
+    (
+        "Bytes.get",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(shown(b.get(3) == Some(255) && b.get(4) == None))
+}"#,
+    ),
+    (
+        "Bytes.at",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.at(2).to_int().to_string())
+}"#,
+    ),
+    (
+        "Bytes.slice",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.slice(1, 3).to_hex())
+}"#,
+    ),
+    (
+        "Bytes.read_u16_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.read_u16_be(2).to_int().to_string())
+}"#,
+    ),
+    (
+        "Bytes.read_u16_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.read_u16_le(2).to_int().to_string())
+}"#,
+    ),
+    (
+        "Bytes.read_u32_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.read_u32_be(0).to_int().to_string())
+}"#,
+    ),
+    (
+        "Bytes.read_u32_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.read_u32_le(0).to_int().to_string())
+}"#,
+    ),
+    (
+        "Bytes.read_u64_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    let c = b.slice(0, 4)
+    var d = b
+    d.append(c)
+    io.println(shown(d.read_u64_be(0) == 72797561085403391))
+}"#,
+    ),
+    (
+        "Bytes.read_u64_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var d = b
+    d.append(b)
+    io.println(shown(d.read_u64_le(0) == 18419724683552227841))
+}"#,
+    ),
+    (
+        "Bytes.to_hex",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.to_text",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println("hé".to_bytes().to_text().unwrap_or("not UTF-8"))
+}"#,
+    ),
+    (
+        "Bytes.push",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = b
+    c.push(9)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.set",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = b
+    c.set(0, 9)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.append",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = b
+    c.append(b)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.push_u16_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = Bytes.new()
+    let v: U16 = 258
+    c.push_u16_be(v)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.push_u16_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = Bytes.new()
+    let v: U16 = 258
+    c.push_u16_le(v)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.push_u32_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = Bytes.new()
+    let v: U32 = 16909060
+    c.push_u32_be(v)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.push_u32_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = Bytes.new()
+    let v: U32 = 16909060
+    c.push_u32_le(v)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.push_u64_be",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = Bytes.new()
+    let v: U64 = 72623859790382856
+    c.push_u64_be(v)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.push_u64_le",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    var c = Bytes.new()
+    let v: U64 = 72623859790382856
+    c.push_u64_le(v)
+    io.println(c.to_hex())
+}"#,
+    ),
+    (
+        "Bytes.eq",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(shown(b == b.slice(0, 4) && b != Bytes.new()))
+}"#,
+    ),
+    (
+        "Bytes.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println(b.hash().to_string())
+}"#,
+    ),
+    (
+        "String.to_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
+    io.println("hé".to_bytes().to_hex())
 }"#,
     ),
     (

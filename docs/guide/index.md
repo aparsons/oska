@@ -14,6 +14,8 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest re
 
 - [Capabilities and authority](capabilities.md): how a program's effects are visible in its signatures.
 - [Untrusted data and secrets](untrusted-data.md): how Oska keeps injection and leaks out of programs.
+- [Bytes and binary data](bytes.md): `Bytes`, endian reads and writes, the bitwise and wrapping integer operations, and untrusted bytes.
+- [Secrets and constant-time code](secrets.md): secret integers, `Secret<Bytes>`, `ct_eq` and `ct_select`, and what the checker refuses.
 - [Threat model](threat-model.md): what Oska guarantees, where each guarantee stops, the supply chain, and what the site trusts.
 
 ## Working with the toolchain

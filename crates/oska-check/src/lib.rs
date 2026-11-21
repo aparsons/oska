@@ -171,12 +171,16 @@ pub(crate) mod codes {
     pub const SINK_NOT_IMPORTED: &str = "E0310";
     pub const UNKNOWN_SINK_TAG: &str = "E0311";
     pub const NOT_EXPORTED: &str = "E0312";
-    pub const UNTRUSTED_NOT_TEXT: &str = "E0320";
+    pub const UNTRUSTED_WITHOUT_TRUST_FLAG: &str = "E0320";
     pub const QUALIFIED_ONLY: &str = "E0340";
     pub const TEXT_AS_SINK_LITERAL: &str = "E0341";
     pub const SECRET_INTERPOLATED: &str = "E0350";
     pub const SECRET_COMPARED: &str = "E0351";
     pub const SECRET_DISPLAYED: &str = "E0352";
+    pub const SECRET_BRANCH: &str = "E0353";
+    pub const SECRET_ADDRESS: &str = "E0354";
+    pub const SECRET_VARIABLE_TIME: &str = "E0355";
+    pub const SECRET_ORDERED: &str = "E0356";
     pub const PRIVATE_TO_MODULE: &str = "E0360";
     pub const MANIFEST_SYNTAX: &str = "E0400";
     pub const MANIFEST_UNSUPPORTED: &str = "E0401";

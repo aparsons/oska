@@ -12,7 +12,7 @@ use crate::ast::{
     Arg, Attribute, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind, Field,
     Fields, FnDecl, GenericParam, Ident, ImplDecl, Item, ItemKind, MatchArm, Module, Param,
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
-    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant, Visibility,
+    TestDecl, TraitDecl, Type, TypeKind, UseDecl, Variant, Visibility,
 };
 use crate::{join, json_escape, Span};
 
@@ -472,13 +472,7 @@ fn expr(e: &Expr) -> Json {
             .field("callee", expr(callee))
             .field("args", list(args, arg)),
         ExprKind::Unary { op, operand } => Node::new("UnaryExpr", span)
-            .field(
-                "op",
-                str_json(match op {
-                    UnaryOp::Neg => "-",
-                    UnaryOp::Not => "!",
-                }),
-            )
+            .field("op", str_json(op.text()))
             .field("operand", expr(operand)),
         ExprKind::Binary { op, lhs, rhs } => Node::new("BinaryExpr", span)
             .field("op", str_json(op.text()))

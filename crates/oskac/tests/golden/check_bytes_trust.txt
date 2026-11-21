@@ -1,0 +1,4 @@
+crates/oskac/tests/fixtures/bytes_trust.osk:11:22: error[E0300]: expected `Bytes`, found `Untrusted<Bytes>`: untrusted bytes cannot be used where trusted bytes are required; check it with a validator, or vouch for it with `.assume_trusted()` (bytes 355..371)
+fn remember: pure
+fn main: Stdout (io), FsRead (read)
+  crates/oskac/tests/fixtures/bytes_trust.osk:10:15: FsRead -> FileRead: restrict_to_file "key.bin" (bytes 287..319)
