@@ -7,6 +7,7 @@
 //! method's receiver is its first argument.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -130,17 +131,62 @@ fn tables() -> [Table; 6] {
     ]
 }
 
+/// Every intrinsic by name.
+type Index = HashMap<&'static str, Intrinsic, BuildHasherDefault<NameHasher>>;
+
 /// Every intrinsic by name, made once: where two tables share a name, the
 /// first table's.
-fn index() -> &'static HashMap<&'static str, Intrinsic> {
-    static INDEX: OnceLock<HashMap<&'static str, Intrinsic>> = OnceLock::new();
+fn index() -> &'static Index {
+    static INDEX: OnceLock<Index> = OnceLock::new();
     INDEX.get_or_init(|| {
-        let mut index = HashMap::new();
+        let mut index = Index::default();
         for (name, intrinsic) in tables().into_iter().flatten() {
             index.entry(*name).or_insert(*intrinsic);
         }
         index
     })
+}
+
+/// The hash of [`Index`], a word at a time in the manner of rustc's
+/// FxHash: the default hasher took most of [`lookup`]'s time. Names are
+/// short, and the index holds only the prelude's names and never grows,
+/// so a name chosen to collide costs a longer probe on one lookup, not a
+/// flood: no protection against collisions is needed.
+#[derive(Default)]
+struct NameHasher(u64);
+
+impl NameHasher {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl Hasher for NameHasher {
+    /// A name of 8 bytes or more is hashed by its first and last 8 bytes
+    /// and its length, with no loop and no copy: names that share both
+    /// ends still differ in their bytes, which the map compares.
+    fn write(&mut self, bytes: &[u8]) {
+        let word = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
+        if bytes.len() >= 8 {
+            self.add(word(0));
+            self.add(word(bytes.len() - 8));
+            self.add(bytes.len() as u64);
+        } else {
+            for &byte in bytes {
+                self.add(u64::from(byte));
+            }
+        }
+    }
+
+    fn write_u8(&mut self, byte: u8) {
+        self.add(u64::from(byte));
+    }
+
+    /// Rotated, as rustc-hash does: the multiply leaves the low bits,
+    /// which pick the bucket, depending only on the low bytes.
+    fn finish(&self) -> u64 {
+        self.0.rotate_left(26)
+    }
 }
 
 /// Whether the intrinsic named `name` has a runtime implementation.
