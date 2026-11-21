@@ -4,7 +4,8 @@
 //! The changelog's `##` headings are `## Unreleased` or `## vX.Y.Z`, with
 //! the versions newest first. Each version's first line is its date,
 //! `Released YYYY-MM-DD.`. The workspace version in `Cargo.toml` has a
-//! section, so a release always has notes. Git merges the changelog with
+//! section (a pre-release `X.Y.Z-rc.N`, its base `## vX.Y.Z`), so a release
+//! always has notes. Git merges the changelog with
 //! the union driver, which can reorder lines, so the order is checked here.
 
 use std::path::{Path, PathBuf};
@@ -33,16 +34,39 @@ fn workspace_version() -> String {
         .to_string()
 }
 
+/// The run of three or more backticks or tildes that `line` starts with,
+/// after its indentation.
+fn fence_run(line: &str) -> Option<&str> {
+    let line = line.trim_start_matches([' ', '\t']);
+    let marker = line.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let length = line.len() - line.trim_start_matches(marker).len();
+    (length >= 3).then(|| &line[..length])
+}
+
 /// The headings of `text` that start with `marker`, outside code fences,
-/// each with the lines under it up to the next such heading.
+/// each with the lines under it up to the next such heading. Fences follow
+/// scripts/release/notes.sh, which writes the release notes: a fence may be
+/// indented or use tildes, and only a run of the same marker, at least as
+/// long, with nothing after it, closes it.
 fn sections<'a>(text: &'a str, marker: &str) -> Vec<(&'a str, Vec<&'a str>)> {
     let mut out: Vec<(&str, Vec<&str>)> = Vec::new();
-    let mut fenced = false;
+    let mut fence: Option<&str> = None;
     for line in text.lines() {
-        if line.starts_with("```") {
-            fenced = !fenced;
+        let run = fence_run(line);
+        match (fence, run) {
+            (Some(open), Some(run)) => {
+                let rest = &line.trim_start_matches([' ', '\t'])[run.len()..];
+                if run.starts_with(&open[..1])
+                    && run.len() >= open.len()
+                    && rest.trim_matches([' ', '\t']).is_empty()
+                {
+                    fence = None;
+                }
+            }
+            (None, Some(run)) => fence = Some(run),
+            _ => {}
         }
-        if !fenced {
+        if fence.is_none() && run.is_none() {
             if let Some(title) = line.strip_prefix(marker) {
                 out.push((title.trim(), Vec::new()));
                 continue;
@@ -88,10 +112,13 @@ fn is_released_line(line: &str) -> bool {
         })
 }
 
-/// What is wrong with `changelog` for the workspace version `version`:
+/// What is wrong with `changelog` for the workspace version `version`
+/// (a pre-release `X.Y.Z-rc.N` needs the section `## vX.Y.Z`):
 /// one line per problem, empty when it is right.
 fn changelog_problems(changelog: &str, version: &str) -> Vec<String> {
     let mut problems = Vec::new();
+    // A pre-release X.Y.Z-rc.N has its notes under its base version X.Y.Z.
+    let base = version.split('-').next().unwrap_or(version);
     let mut previous: Option<(u64, u64, u64)> = None;
     let mut seen_version = false;
     for (index, (heading, body)) in sections(changelog, "## ").iter().enumerate() {
@@ -115,7 +142,7 @@ fn changelog_problems(changelog: &str, version: &str) -> Vec<String> {
             }
         }
         previous = Some(number);
-        if *heading == format!("v{version}") {
+        if *heading == format!("v{base}") {
             seen_version = true;
         }
         let first = body.iter().find(|line| !line.trim().is_empty());
@@ -127,7 +154,7 @@ fn changelog_problems(changelog: &str, version: &str) -> Vec<String> {
     }
     if !seen_version {
         problems.push(format!(
-            "no `## v{version}` section for the workspace version in Cargo.toml"
+            "no `## v{base}` section for the workspace version in Cargo.toml"
         ));
     }
     problems
@@ -195,6 +222,20 @@ fn a_changelog_without_a_section_for_the_workspace_version_fails() {
 }
 
 #[test]
+fn a_pre_release_workspace_version_needs_its_base_version_section() {
+    // A vX.Y.Z-rc.N tag needs the workspace version X.Y.Z-rc.N, and its
+    // notes are the `## vX.Y.Z` section, as notes.sh reads them.
+    assert_eq!(
+        changelog_problems(GOOD, "1.10.0-rc.1"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        changelog_problems(GOOD, "1.11.0-rc.2"),
+        ["no `## v1.11.0` section for the workspace version in Cargo.toml"]
+    );
+}
+
+#[test]
 fn a_version_without_its_released_line_fails() {
     let changelog = GOOD.replace("Released 2026-11-01.", "Summary first.");
     assert_eq!(
@@ -256,6 +297,26 @@ fn a_heading_inside_a_code_fence_is_not_a_section() {
         changelog_problems(&changelog, "1.10.0"),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn a_heading_inside_an_indented_or_tilde_fence_is_not_a_section() {
+    // The fence rules of scripts/release/notes.sh: a fence may be indented
+    // (in a list item) or use tildes, and only the same marker, at least as
+    // long, closes it.
+    for fence in [
+        "  ```\n## v9.9.9\n  ```\n",
+        "~~~\n## v9.9.9\n~~~\n",
+        "````\n```\n## v9.9.9\n````\n",
+        "~~~\n```\n## v9.9.9\n~~~\n",
+    ] {
+        let changelog = GOOD.replace("- A fix.\n", &format!("- A fix.\n\n{fence}"));
+        assert_eq!(
+            changelog_problems(&changelog, "1.10.0"),
+            Vec::<String>::new(),
+            "{fence:?}"
+        );
+    }
 }
 
 #[test]

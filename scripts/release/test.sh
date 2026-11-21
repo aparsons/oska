@@ -1148,7 +1148,11 @@ test_the_index_is_resigned_monthly_and_on_demand_from_main_only() {
 
 # ---- Release notes in release.yml ------------------------------------------
 #
-# notes.sh itself is tested by scripts/release/notes-test.sh.
+# notes.sh itself is tested by scripts/release/notes-test.sh. These are
+# the checks around its steps: the notes step runs on a pull request too,
+# so the dry run fails for a version with no section; it comes before sign,
+# in a job that holds no secret, no environment and no permission of its
+# own; and no workflow rewrites a release body.
 
 test_the_release_workflow_writes_the_notes_before_signing() {
   local wf=$here/../../.github/workflows/release.yml assemble step

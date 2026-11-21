@@ -304,11 +304,6 @@ SH
   ! ls checkout/pwned-* ./pwned-* 2>/dev/null || fail "a shell ran part of the notes"
 }
 
-# The checks around those steps: the notes step runs on a pull request
-# too, so the dry run fails for a version with no section; it comes before
-# sign, in a job that holds no secret, no environment and no permission
-# of its own; and no workflow rewrites a release body.
-
 # Headings are not notes: a section with only its date and empty
 # subheadings, such as a "Security fixes" list with nothing in it, is empty.
 test_notes_refuse_a_section_with_only_headings() {

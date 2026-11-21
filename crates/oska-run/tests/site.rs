@@ -2044,10 +2044,7 @@ fn the_real_changelog_page_has_an_anchor_for_every_released_version() {
     let page = &site["changelog.html"];
     let changelog = std::fs::read_to_string(common::site::repository_root().join("CHANGELOG.md"))
         .expect("CHANGELOG.md should be readable");
-    let versions: Vec<&str> = changelog
-        .lines()
-        .filter_map(|line| line.strip_prefix("## v"))
-        .collect();
+    let versions = changelog_versions(&changelog);
     assert!(!versions.is_empty(), "CHANGELOG.md has no `## v` heading");
     for version in versions {
         let anchor = format!("v{}", version.replace('.', ""));
@@ -2061,6 +2058,45 @@ fn the_real_changelog_page_has_an_anchor_for_every_released_version() {
         "{}",
         site["llms.txt"]
     );
+}
+
+/// The versions of the `## vX.Y.Z` headings in `changelog`, outside code
+/// fences. Fences follow scripts/release/notes.sh, which writes the release
+/// notes: a fence may be indented or use tildes, and only a run of the same
+/// marker, at least as long, with nothing after it, closes it.
+fn changelog_versions(changelog: &str) -> Vec<&str> {
+    let mut versions = Vec::new();
+    let mut fence: Option<&str> = None;
+    for line in changelog.lines() {
+        let text = line.trim_start_matches([' ', '\t']);
+        let marker = text.chars().next().filter(|c| *c == '`' || *c == '~');
+        let run = marker
+            .map(|m| &text[..text.len() - text.trim_start_matches(m).len()])
+            .filter(|run| run.len() >= 3);
+        match (fence, run) {
+            (Some(open), Some(run)) => {
+                if run.starts_with(&open[..1])
+                    && run.len() >= open.len()
+                    && text[run.len()..].trim_matches([' ', '\t']).is_empty()
+                {
+                    fence = None;
+                }
+            }
+            (None, Some(run)) => fence = Some(run),
+            (None, None) => versions.extend(line.strip_prefix("## v")),
+            (Some(_), None) => {}
+        }
+    }
+    versions
+}
+
+#[test]
+fn a_version_heading_inside_a_code_fence_is_not_a_changelog_version() {
+    // The fence rules of scripts/release/notes.sh: a fence may be indented
+    // or use tildes, and only the same marker, at least as long, closes it.
+    let changelog = "## v1.1.0\n\n- A change:\n\n  ```\n## v9.9.9\n  ```\n\n\
+~~~\n```\n## v9.9.8\n~~~\n\n````\n```\n## v9.9.7\n````\n\n## v1.0.0\n";
+    assert_eq!(changelog_versions(changelog), ["1.1.0", "1.0.0"]);
 }
 
 #[test]

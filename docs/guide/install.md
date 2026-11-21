@@ -86,7 +86,7 @@ The binaries are published on oskalang.dev, together with `SHA256SUMS` and its s
 
 ### The two Linux builds
 
-From v0.7.0, each release has two `oskac` builds for each Linux processor ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). They replace the one `oskac-linux-<arch>` file of earlier releases (see the v0.7.0 notes in the [changelog](../../CHANGELOG.md)).
+From v0.7.0, each release has two `oskac` builds for each Linux processor ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). They replace the one `oskac-linux-<arch>` file of earlier releases (see the v0.7.0 notes in the [changelog](../../CHANGELOG.md), under Unreleased until v0.7.0 ships).
 
 | Build | Release files | Runs on |
 | --- | --- | --- |
