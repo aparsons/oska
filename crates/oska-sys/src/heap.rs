@@ -28,7 +28,7 @@
 //!   block freed on another thread simply joins that thread's list, as
 //!   every block of a class is interchangeable. Only when a list is empty
 //!   (`alloc`) or holds twice its class's [`batch`] (`dealloc`) does the
-//!   thread lock the [`Shared`] pool, to take or give back one batch of
+//!   thread lock the shared pool ([`with_pool`]), to take or give back one batch of
 //!   blocks, or to carve a new batch from the current region. So the
 //!   lock is taken at most once per [`batch`] calls, and memory freed on
 //!   one thread is reused on another.
@@ -53,9 +53,11 @@
 //! twice.
 //!
 //! Nothing here panics or unwinds: no `unwrap`, no overflowing
-//! arithmetic (sizes are at most [`REGION`]), table lookups whose index
-//! is bounded by construction, and a poisoned lock is still taken (no
-//! code here panics while holding it). A request that cannot be served
+//! arithmetic (sizes are at most [`REGION`]), and table lookups whose
+//! index is bounded by construction. The shared pool's lock is a flag
+//! ([`with_pool`]), not `std::sync::Mutex`, so taking it never allocates
+//! or panics, and nothing allocates through this allocator while
+//! holding it. A request that cannot be served
 //! (the system allocator refusing a region or a large block) returns
 //! null, as `GlobalAlloc` asks.
 //!
@@ -70,10 +72,9 @@
 //! reading it never allocates.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// The largest request, in bytes, served from a size class.
 const MAX_SMALL: usize = 1024;
@@ -155,7 +156,7 @@ fn batch(class: usize) -> usize {
 static REGIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// The pool every thread shares, behind [`SHARED`]'s lock.
-struct Shared {
+struct Pool {
     /// For each class, the first block of the first batch of free
     /// blocks given back by threads, or null. Each batch is a list of
     /// exactly [`batch`] blocks linked through their first word; its
@@ -164,21 +165,59 @@ struct Shared {
     /// The start of the unused part of the current region, or null
     /// before the first region.
     next: *mut u8,
-    /// The bytes left in the current region from [`Shared::next`].
+    /// The bytes left in the current region from [`Pool::next`].
     left: usize,
 }
 
-// SAFETY: `Shared` holds only addresses of free blocks and of the unused
-// part of a region, memory that no thread and no live allocation owns.
-// It is reached only through `SHARED`'s lock, so moving it between
-// threads (which is what `Mutex<Shared>: Sync` needs) races with nothing.
-unsafe impl Send for Shared {}
+/// The [`Pool`] behind a lock of its own: a flag that a thread sets to
+/// enter and clears to leave, spinning (and yielding) while another
+/// thread is in. Not `std::sync::Mutex`, which on some platforms
+/// allocates its system lock on first use, inside the allocator.
+struct Shared {
+    /// Whether a thread is in [`with_pool`].
+    busy: AtomicBool,
+    pool: UnsafeCell<Pool>,
+}
 
-static SHARED: Mutex<Shared> = Mutex::new(Shared {
-    batches: [ptr::null_mut(); CLASSES],
-    next: ptr::null_mut(),
-    left: 0,
-});
+// SAFETY: `pool` is reached only in `with_pool`, by the one thread that
+// set `busy` from false to true (an `Acquire` exchange) and until it
+// clears it (a `Release` store), so no two threads touch it at once,
+// and each sees every write the one before it made. The pool holds only
+// addresses of free blocks and of the unused part of a region, memory
+// that no thread and no live allocation owns, so any thread may use it.
+unsafe impl Sync for Shared {}
+
+static SHARED: Shared = Shared {
+    busy: AtomicBool::new(false),
+    pool: UnsafeCell::new(Pool {
+        batches: [ptr::null_mut(); CLASSES],
+        next: ptr::null_mut(),
+        left: 0,
+    }),
+};
+
+/// Runs `f` on the shared [`Pool`], with no other thread in it.
+///
+/// `f` must not call `with_pool` (it would wait for itself), and does
+/// not: nothing in it allocates through this allocator. It must not
+/// panic either, which would leave the lock held; nothing in it does.
+fn with_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
+    while SHARED
+        .busy
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        std::hint::spin_loop();
+        std::thread::yield_now();
+    }
+    // SAFETY: this thread set `busy`, so until it clears it below no
+    // other thread reaches `pool` (see `Shared`'s `Sync`), and this is
+    // the only reference to it.
+    let pool = unsafe { &mut *SHARED.pool.get() };
+    let result = f(pool);
+    SHARED.busy.store(false, Ordering::Release);
+    result
+}
 
 /// One thread's free lists.
 struct Cache {
@@ -236,7 +275,7 @@ unsafe fn set_next(block: *mut u8, next: *mut u8) {
 ///
 /// # Safety
 ///
-/// `batch` heads a batch in [`Shared::batches`], read under the lock,
+/// `batch` heads a batch in [`Pool::batches`], read under the pool's lock,
 /// whose second word was written by [`set_next_batch`].
 unsafe fn next_batch_of(batch: *mut u8) -> *mut u8 {
     // SAFETY: by this function's contract `batch` is a free block of at
@@ -265,34 +304,37 @@ unsafe fn set_next_batch(batch: *mut u8, next: *mut u8) {
 fn take_batch(class: usize) -> (*mut u8, usize) {
     let size = SIZES[class];
     let wanted = batch(class);
-    let (start, count) = {
-        let mut shared = SHARED.lock().unwrap_or_else(PoisonError::into_inner);
-        let first = shared.batches[class];
+    let (start, count, linked) = with_pool(|pool| {
+        let first = pool.batches[class];
         if !first.is_null() {
-            // SAFETY: `first` heads a batch in the pool, and the lock is
-            // held.
-            shared.batches[class] = unsafe { next_batch_of(first) };
+            // SAFETY: `first` heads a batch in the pool, and this thread
+            // holds the pool's lock.
+            pool.batches[class] = unsafe { next_batch_of(first) };
             // Its blocks are linked and null-terminated already.
-            return (first, wanted);
+            return (first, wanted, true);
         }
-        if shared.left < size {
+        if pool.left < size {
             // The rest of the old region, smaller than one block, is
-            // never used.
+            // never used. `System` is the C library's allocator, which
+            // never calls back into this one.
             // SAFETY: `REGION_LAYOUT` has a non-zero size.
             let region = unsafe { System.alloc(REGION_LAYOUT) };
             if region.is_null() {
-                return (ptr::null_mut(), 0);
+                return (ptr::null_mut(), 0, true);
             }
             REGIONS.fetch_add(1, Ordering::Relaxed);
-            shared.next = region;
-            shared.left = REGION;
+            pool.next = region;
+            pool.left = REGION;
         }
-        let count = wanted.min(shared.left / size);
-        let start = shared.next;
-        shared.next = start.wrapping_add(count * size);
-        shared.left -= count * size;
-        (start, count)
-    };
+        let count = wanted.min(pool.left / size);
+        let start = pool.next;
+        pool.next = start.wrapping_add(count * size);
+        pool.left -= count * size;
+        (start, count, false)
+    });
+    if linked {
+        return (start, count);
+    }
     // The `count` blocks from `start` are in the region, past every block
     // carved before and before every block carved later: only this
     // thread can reach them. Link them, outside the lock.
@@ -362,11 +404,12 @@ impl Cache {
             unsafe { set_next(last, ptr::null_mut()) };
             self.heads[class].set(rest);
             self.counts[class].set(count - batch);
-            let mut shared = SHARED.lock().unwrap_or_else(PoisonError::into_inner);
-            // SAFETY: `first` heads the detached batch, which only this
-            // thread can reach until it joins the pool below.
-            unsafe { set_next_batch(first, shared.batches[class]) };
-            shared.batches[class] = first;
+            with_pool(|pool| {
+                // SAFETY: `first` heads the detached batch, which only
+                // this thread can reach until it joins the pool below.
+                unsafe { set_next_batch(first, pool.batches[class]) };
+                pool.batches[class] = first;
+            });
         }
     }
 }
