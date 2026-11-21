@@ -21,6 +21,7 @@ A **No** names the code `oskac` refuses the program with, before any of it runs.
 | `Stdout`, `Stderr` and `Args` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `Env` and `Secret` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `Clock` and `Random` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
+| `Budget` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | Files: `Fs`, `FsRead`, `FsWrite`, and the directory and file capabilities | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | Structured concurrency: `scope`, `spawn` and `join` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `Untrusted` text and `assume_trusted` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |

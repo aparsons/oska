@@ -93,6 +93,9 @@ pub enum Capability {
     Env,
     Clock,
     Random,
+    /// A `Budget`: the number of its counters in the interpreter
+    /// (`budget.rs`), so every copy draws from the same counters.
+    Budget(usize),
     /// `Fs`, `FsRead`, or `FsWrite`, with its attenuation state: its
     /// root is always [`Root::Anywhere`], since `restrict_to` gives a
     /// directory capability.
@@ -160,6 +163,7 @@ enum Kind {
     Env,
     Clock,
     Random,
+    Budget,
     Fs(Access),
     Dir(Access),
     File(Access),
@@ -176,6 +180,7 @@ const IMPLEMENTED: &[(&str, Kind)] = &[
     ("Env", Kind::Env),
     ("Clock", Kind::Clock),
     ("Random", Kind::Random),
+    ("Budget", Kind::Budget),
     ("Fs", Kind::Fs(Access::ReadWrite)),
     ("FsRead", Kind::Fs(Access::Read)),
     ("FsWrite", Kind::Fs(Access::Write)),
@@ -206,6 +211,7 @@ impl Capability {
             Kind::Env => Capability::Env,
             Kind::Clock => Capability::Clock,
             Kind::Random => Capability::Random,
+            Kind::Budget => Capability::Budget(crate::budget::ROOT),
             Kind::Fs(access) => Capability::Fs(FsCap {
                 root: Root::Anywhere,
                 access,
@@ -222,6 +228,7 @@ impl Capability {
             Capability::Env => Kind::Env,
             Capability::Clock => Kind::Clock,
             Capability::Random => Kind::Random,
+            Capability::Budget(_) => Kind::Budget,
             Capability::Fs(fs) => Kind::Fs(fs.access),
             Capability::Dir(dir) => Kind::Dir(dir.access),
             Capability::File(file) => Kind::File(file.access),

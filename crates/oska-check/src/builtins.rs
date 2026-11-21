@@ -26,6 +26,10 @@ pub const TASK: &str = "Task";
 /// The prelude's `Bytes`, a packed buffer laid out by each backend.
 pub const BYTES: &str = "Bytes";
 
+/// The prelude's `Reservation`, a `Budget`'s reservation: each backend
+/// keeps what it holds in its runtime, and `dbg` shows `<reservation>`.
+pub const RESERVATION: &str = "Reservation";
+
 /// The prelude's `Path`.
 pub const PATH: &str = "Path";
 /// The prelude's `IoError`, the error of every I/O operation.
@@ -142,6 +146,9 @@ mod tests {
 
     #[test]
     fn a_test_context_holds_its_capabilities_in_order() {
-        assert_eq!(test_context_fields(), ["Fs", "Clock", "Random", "Stdout"]);
+        assert_eq!(
+            test_context_fields(),
+            ["Fs", "Clock", "Random", "Stdout", "Budget"]
+        );
     }
 }

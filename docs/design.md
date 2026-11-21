@@ -216,6 +216,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 | `Fs` | Filesystem, only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). |
 | `Net` | Network. Attenuates to `NetConnect` or `NetListen`. |
 | `Env` | Environment variables. These can hold secrets. |
+| `Budget` | Spending model tokens and calls, counted by the runtime. Attenuates to a smaller `Budget` with `limit(tokens, calls)`. |
 | `Clock`, `Random` | Nondeterministic inputs |
 | `Sched` | Channels and `select` |
 | `Spawn` | Starting OS processes |
