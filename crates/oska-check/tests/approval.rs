@@ -87,3 +87,30 @@ fn main(stdin: Stdin, stderr: Stderr) {
 fn a_tool_that_takes_only_an_approval_has_no_authority() {
     assert_authority(&format!("{TOOL}\nfn main() {{}}\n"), "delete", &[], true);
 }
+
+#[test]
+fn an_approvals_record_cannot_be_written_to_reuse_it() {
+    assert_errors(
+        "fn reuse(approval: Approval) -> Approval {
+    var again = approval
+    again.handle = 0
+    again
+}
+
+fn main() {}
+",
+        &[("E0272", "handle")],
+    );
+}
+
+#[test]
+fn a_test_context_cannot_be_given_a_forged_approver() {
+    assert_errors(
+        "fn main(io: Stdout, stdin: Stdin, stderr: Stderr, fs: Fs, clock: Clock, random: Random) {
+    let approver = Approver(stdin: stdin, stderr: stderr)
+    let _ = TestContext(fs: fs, clock: clock, random: random, stdout: io, approver: approver)
+}
+",
+        &[("E0271", "Approver")],
+    );
+}

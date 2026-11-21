@@ -1928,7 +1928,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.spend_output(line, 1, span)?;
                     self.call_runtime(function, args.clone(), span)?
                 }
-                Some(Prelude::Ask(function)) => {
+                Some(Prelude::Confirm) => {
                     let &[_, summary, details] = args.as_slice() else {
                         return Err(self.refuse(span, &format!("`{name}`")));
                     };
@@ -1937,7 +1937,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.spend_output(question, 0, span)?;
                     let mut with_question = args.clone();
                     with_question.push(question);
-                    let result = self.call_runtime(function, with_question, span)?;
+                    let result = self.call_runtime("approver_confirm", with_question, span)?;
                     self.release(question, &Type::String)?;
                     result
                 }

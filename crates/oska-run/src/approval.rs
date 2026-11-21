@@ -33,7 +33,7 @@ pub const INTRINSICS: Table = &[
     ("Approver.confirm", HigherOrder(approver_confirm)),
     ("Approval.summary", Plain(approval_summary)),
     ("Approval.details", Plain(approval_details)),
-    ("Approval.matches", Plain(approval_matches)),
+    ("Approval.matches", HigherOrder(approval_matches)),
     ("Approval.consume", HigherOrder(approval_consume)),
     ("ApprovalError.to_string", Plain(approval_error_to_string)),
     (
@@ -55,8 +55,8 @@ pub struct Approvals {
     test: bool,
     /// `t.approver`'s answers still to give, in order.
     answers: VecDeque<bool>,
-    /// Every line `t.approver` has shown.
-    asked: Vec<String>,
+    /// Every question `t.approver` was asked: its summary and details.
+    asked: Vec<(Value, Value)>,
 }
 
 impl Approvals {
@@ -69,7 +69,9 @@ impl Approvals {
 /// The question an approver shows for `summary` and `details`: each line
 /// with its line break. `std.rt`'s `approval_prompt` writes the same.
 fn prompt(summary: &str, details: &[Value]) -> String {
-    let mut text = format!("approval needed: {summary}\n");
+    let mut text = "approval needed: ".to_string();
+    debug(&Value::str(summary), &mut text);
+    text.push('\n');
     for detail in details {
         text.push_str("  ");
         debug(detail, &mut text);
@@ -107,7 +109,9 @@ fn approver_confirm(
     let question = prompt(&summary, &details);
     let yes = if interp.approvals.test {
         let approvals = &mut interp.approvals;
-        approvals.asked.extend(question.lines().map(str::to_string));
+        approvals
+            .asked
+            .push((args[1].clone(), Value::List(details.clone())));
         approvals.answers.pop_front().unwrap_or(false)
     } else {
         match interp.write_output(Stream::Stderr, &question, span)? {
@@ -162,13 +166,14 @@ fn matches(approval: &Value, summary: &Value, details: &Value) -> bool {
     approval.field(0).as_str() == summary.as_str() && texts(&approval.field(1)) == texts(details)
 }
 
-/// `Approval.matches(self, summary, details)`.
+/// `Approval.matches(self, summary, details)`: false once it is used.
 fn approval_matches(
-    _: &mut dyn crate::host::Host,
+    interp: &mut Interpreter<'_, '_>,
     args: Vec<Value>,
     _: Span,
 ) -> Result<Value, Panic> {
-    Ok(Value::Bool(matches(&args[0], &args[1], &args[2])))
+    let unused = !interp.approvals.used[args[0].field(2).as_int() as usize];
+    Ok(Value::Bool(unused && matches(&args[0], &args[1], &args[2])))
 }
 
 /// `Approval.consume(self, summary, details)`.
@@ -208,21 +213,28 @@ fn test_answer_approval(
     args: Vec<Value>,
     _: Span,
 ) -> Result<Value, Panic> {
-    interp.approvals.answers.push_back(args[1].as_bool());
+    // A program can build a `TestContext` by hand, but its approvers all
+    // ask the terminal: nothing is scripted there, as in `std.rt`.
+    if interp.approvals.test {
+        interp.approvals.answers.push_back(args[1].as_bool());
+    }
     Ok(Value::Unit)
 }
 
-/// `t.approvals_asked()`: every line `t.approver` has shown.
+/// `t.approvals_asked()`: every question `t.approver` was asked.
 fn test_approvals_asked(
     interp: &mut Interpreter<'_, '_>,
     _: Vec<Value>,
     _: Span,
 ) -> Result<Value, Panic> {
-    let lines = interp
+    let asked = interp
         .approvals
         .asked
         .iter()
-        .map(|l| Value::str(l))
+        .map(|(summary, details)| Value::Struct {
+            ty: "ApprovalRequest".into(),
+            fields: Rc::new(vec![summary.clone(), details.clone()]),
+        })
         .collect();
-    Ok(Value::List(Rc::new(lines)))
+    Ok(Value::List(Rc::new(asked)))
 }

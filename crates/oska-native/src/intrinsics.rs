@@ -29,13 +29,13 @@ pub enum Prelude {
     /// intrinsic whose function can write the program's text must be one,
     /// which a test checks.
     WriteLine(&'static str),
-    /// `Approver.confirm`: `std.rt`'s `approval_prompt` writes the
-    /// question first, from arguments 1 and 2, whose bytes are counted
-    /// under `--max-output` (`Body::spend_output`), and then a call of the
-    /// `std.rt` function of this name, with the arguments and the
-    /// question, which writes it to stderr (or records it, in a test) and
-    /// reads the answer.
-    Ask(&'static str),
+    /// `Approver.confirm`, and nothing else: `std.rt`'s `approval_prompt`
+    /// writes the question first, from arguments 1 and 2, whose bytes are
+    /// counted under `--max-output` (`Body::spend_output`), and then
+    /// `approver_confirm`, given the arguments and the question, writes it
+    /// to stderr (or records the question, in a test) and reads the
+    /// answer.
+    Confirm,
     /// Its one argument is its result, as `String.to_string`'s is.
     Identity,
     /// Its result is field `n` of its struct receiver.
@@ -208,7 +208,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::Runtime("test_approvals_asked"),
     ),
     ("Approver.terminal", Prelude::Runtime("approver_terminal")),
-    ("Approver.confirm", Prelude::Ask("approver_confirm")),
+    ("Approver.confirm", Prelude::Confirm),
     ("Approval.summary", Prelude::Field(0)),
     ("Approval.details", Prelude::Field(1)),
     ("Approval.matches", Prelude::Runtime("approval_matches")),
@@ -2015,11 +2015,11 @@ mod tests {
         match implementation {
             Prelude::Runtime(f)
             | Prelude::WriteLine(f)
-            | Prelude::Ask(f)
             | Prelude::Checked(f, _)
             | Prelude::Mutating(f, _) => Some(f),
             Prelude::ByteRead { secret: false, .. } => Some("bytes_read"),
             Prelude::ByteRead { secret: true, .. } => Some("bytes_read_secret"),
+            Prelude::Confirm => Some("approver_confirm"),
             Prelude::Identity | Prelude::Field(_) => None,
         }
     }
@@ -2092,10 +2092,10 @@ mod tests {
 
     /// `--max-output` fails closed: a prelude intrinsic whose `std.rt`
     /// function can write the program's text to stdout or stderr is a
-    /// [`Prelude::WriteLine`] or a [`Prelude::Ask`], which count the bytes
-    /// first, and the lowering calls no other such function directly but
-    /// `dbg_write` and `main_failed`, which it counts at the call
-    /// (`spend_output`).
+    /// [`Prelude::WriteLine`], or `Approver.confirm`'s [`Prelude::Confirm`],
+    /// which count the bytes first, and the lowering calls no other such
+    /// function directly but `dbg_write`, `main_failed` and
+    /// `approver_confirm`, which it counts at the call (`spend_output`).
     #[test]
     fn every_write_of_the_programs_text_is_counted_against_max_output() {
         let calls = rt_calls();
@@ -2104,13 +2104,16 @@ mod tests {
             let Some(function) = runtime_function(*implementation) else {
                 continue;
             };
-            let counted = matches!(implementation, Prelude::WriteLine(_) | Prelude::Ask(_));
+            let counted = matches!(implementation, Prelude::WriteLine(_) | Prelude::Confirm);
             write_lines += usize::from(matches!(implementation, Prelude::WriteLine(_)));
             assert_eq!(
                 writes_output(&calls, function),
                 counted,
-                "`{name}` (`{function}`) writes output exactly when it is a `Prelude::WriteLine` or a `Prelude::Ask`"
+                "`{name}` (`{function}`) writes output exactly when it is a `Prelude::WriteLine` or a `Prelude::Confirm`"
             );
+            if matches!(implementation, Prelude::Confirm) {
+                assert_eq!(*name, "Approver.confirm", "only `Approver.confirm` asks");
+            }
         }
         assert_eq!(write_lines, 2, "`Stdout.println` and `Stderr.println`");
         let lower = [
@@ -2137,7 +2140,7 @@ mod tests {
         }
         assert_eq!(
             direct,
-            std::collections::BTreeSet::from(["dbg_write", "main_failed"]),
+            std::collections::BTreeSet::from(["approver_confirm", "dbg_write", "main_failed"]),
             "the lowering writes output only through these, which it counts"
         );
     }

@@ -113,6 +113,16 @@ _Avoid_: constant-time int, CtU32
 The property of code that no conditional branch or memory address depends on a secret value, and no secret is a divisor or a shift amount, so the path the code takes and the memory it touches do not reveal the secret. It holds for native code, not for the interpreter, and not for what the hardware does with the instructions.
 _Avoid_: timing-safe, side-channel free
 
+**Approval**:
+A person's yes to one consequential action, such as a tool deleting a file, recorded with the action's summary and details. Only an approver makes one, and it is single use: the tool it is given to consumes it, and the runtime refuses a second use. It is not the approval of a widening, which is a change to an authority baseline that a reviewer makes before a build.
+_Avoid_: consent, confirmation token
+
+**Approver**:
+Who an approval comes from: the person at a terminal, asked over standard error with the answer read from standard input, or a test's scripted stand-in. An approver over standard input is only as strong as whoever controls that stream.
+
+**Approval summary**:
+The trusted text that says what an approval is for, shown above its untrusted details. Both are shown with control and bidirectional characters made visible, so neither can disguise the action.
+
 **Sink**:
 An API where data leaves the program or affects how it behaves, such as SQL queries, process execution, HTML output, filesystem paths, network hosts, or logs.
 

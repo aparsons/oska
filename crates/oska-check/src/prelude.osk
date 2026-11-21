@@ -454,15 +454,17 @@ pub cap struct Approver { stdin: Stdin, stderr: Stderr }
 impl Approver {
     // An approver that asks the person at the terminal: it writes each
     // question to `stderr`, never to standard output, which a pipeline or
-    // an MCP server may own, and reads the answer from `stdin`.
+    // an MCP server may own, and reads the answer from `stdin`. It is only
+    // as strong as whoever writes to `stdin`: never build one over the
+    // standard input of an MCP server, or of anything a script feeds.
     pub fn terminal(stdin: Stdin, stderr: Stderr) -> Approver
     // Ask for a yes to the action `summary` describes, with `details`,
     // such as the arguments a model chose for a tool. It shows
     // `approval needed: ` and the summary, then each detail on a line of
-    // its own, indented, in double quotes, as `dbg` shows text: `"` and
-    // `\` escaped, and control, bidirectional and other invisible
-    // characters written as escapes such as `\n` and `\u{202e}`, so a
-    // detail cannot disguise itself. Then `approve? [y/N]`. Only `y` or
+    // its own, indented. Each is in double quotes, as `dbg` shows text:
+    // `"` and `\` escaped, and control, bidirectional and other invisible
+    // characters written as escapes such as `\n` and `\u{202e}`, so
+    // neither can disguise itself. Then `approve? [y/N]`. Only `y` or
     // `yes`, in any case and with any spaces around it, approves; any
     // other answer, the end of input or a failed read or write is `None`.
     pub fn confirm(self, summary: String, details: List<Untrusted<String>>) -> Option<Approval>
@@ -483,14 +485,21 @@ impl Approval {
     pub fn summary(self) -> String
     // The details that were approved.
     pub fn details(self) -> List<Untrusted<String>>
-    // Whether it approved exactly this summary and these details. It does
-    // not use the approval.
+    // Whether it approved exactly this summary and these details and is
+    // still unused: whether `consume` would succeed. It does not use the
+    // approval, so a tool that acts on one calls `consume`, not this.
     pub fn matches(self, summary: String, details: List<Untrusted<String>>) -> Bool
     // Use the approval for the action `summary` and `details` describe:
     // `Ok` once, when it matches and has not been used. A used one is
     // refused with `ApprovalError.Used`, and one given for a different
     // action with `ApprovalError.Mismatch`, which leaves it unused.
     pub fn consume(self, summary: String, details: List<Untrusted<String>>) -> Result<(), ApprovalError>
+}
+
+// A question an approver was asked: what `t.approvals_asked` records.
+pub struct ApprovalRequest {
+    pub summary: String,
+    pub details: List<Untrusted<String>>,
 }
 
 // Why `Approval.consume` refused an approval.
@@ -546,9 +555,9 @@ impl TestContext {
     // `true` approves, `false` refuses. Answers are given in the order
     // they were scripted; a question with none left is refused.
     pub fn answer_approval(self, yes: Bool)
-    // Every line `t.approver` has shown so far, without its line break,
-    // as the terminal approver writes them to standard error.
-    pub fn approvals_asked(self) -> List<Untrusted<String>>
+    // Every question `t.approver` has been asked so far, in order: its
+    // summary and details, as the code that asked gave them.
+    pub fn approvals_asked(self) -> List<ApprovalRequest>
 }
 
 // ---- Core types --------------------------------------------------------

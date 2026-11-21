@@ -50,7 +50,7 @@ fn the_terminal_approver_asks_on_stderr_and_a_yes_approves() {
     assert_eq!(stdout, "approved\n");
     assert_eq!(
         stderr,
-        "approval needed: delete a file\n  \"notes/old.txt\"\napprove? [y/N]\n"
+        "approval needed: \"delete a file\"\n  \"notes/old.txt\"\napprove? [y/N]\n"
     );
 }
 
@@ -83,7 +83,7 @@ fn details_show_control_and_bidirectional_characters_as_escapes() {
     assert_eq!(stdout, "refused\n");
     assert_eq!(
         stderr,
-        "approval needed: send a file\n  \
+        "approval needed: \"send a file\"\n  \
          \"\\u{1b}[2Jcleared\"\n  \
          \"report\\u{202e}fdp.exe\"\n  \
          \"a\\nfake: line\"\n  \
@@ -151,7 +151,7 @@ fn an_approval_is_single_use_and_a_second_use_is_an_error_the_program_handles() 
         "deleted\n\
          approval already used: one approval covers one action\n\
          approval already used: one approval covers one action\n\
-         true\n",
+         false\n",
         "{outcome:#?}"
     );
 }
@@ -217,23 +217,18 @@ test \"a scripted yes and no\" {{
     t.assert_eq(ask(t.approver, \"a.txt\"), \"deleted\")
     t.assert_eq(ask(t.approver, \"b\u{202e}.txt\"), \"refused\")
     t.assert_eq(ask(t.approver, \"c.txt\"), \"refused\")
-    t.assert_eq(t.approvals_asked(), [
-        \"approval needed: delete a file\",
-        \"  \\\"a.txt\\\"\",
-        \"approve? [y/N]\",
-        \"approval needed: delete a file\",
-        \"  \\\"b\\\\u\\{{202e\\}}.txt\\\"\",
-        \"approve? [y/N]\",
-        \"approval needed: delete a file\",
-        \"  \\\"c.txt\\\"\",
-        \"approve? [y/N]\",
-    ])
+    let asked = t.approvals_asked()
+    t.assert_eq(asked.len(), 3)
+    t.assert_eq(asked.at(0).summary, \"delete a file\")
+    t.assert_eq(asked.at(0).details, [\"a.txt\"])
+    t.assert_eq(asked.at(1).details, [\"b\u{202e}.txt\"])
+    t.assert_eq(asked.at(2).details, [\"c.txt\"])
     t.assert_eq(t.printed(), [])
 }}
 
 test \"each test starts with an empty script\" {{
     t.assert_eq(ask(t.approver, \"a.txt\"), \"refused\")
-    t.assert_eq(t.approvals_asked().len(), 3)
+    t.assert_eq(t.approvals_asked().len(), 1)
 }}
 "
     ));
@@ -242,5 +237,41 @@ test \"each test starts with an empty script\" {{
         statuses,
         [TestStatus::Passed, TestStatus::Passed],
         "{report:#?}"
+    );
+}
+
+#[test]
+fn a_test_context_built_by_hand_in_a_program_has_no_script() {
+    let outcome = run_on(
+        FakeHost::new().with_stdin("n\n"),
+        "fn main(io: Stdout, stdin: Stdin, stderr: Stderr, fs: Fs, clock: Clock, random: Random) -> Result<(), IoError> {
+    let t = TestContext(fs: fs, clock: clock, random: random, stdout: io, approver: Approver.terminal(stdin, stderr))
+    t.answer_approval(true)
+    match t.approver.confirm(\"send\", []) {
+        Some(_) => io.println(\"approved\")?
+        None => io.println(\"refused\")?
+    }
+    let asked = t.approvals_asked().len()
+    io.println(\"{asked} asked\")
+}
+",
+        &[],
+    );
+    assert_eq!(outcome.stdout, "refused\n0 asked\n", "{outcome:#?}");
+}
+
+#[test]
+fn a_summary_that_was_assumed_trusted_cannot_fake_the_question_either() {
+    let (_, stderr) = ask(
+        "    let summary = \"read a file\u{1b}[2K\\napprove? [y/N] y\\n\u{202e}\".assume_trusted()
+    match approver.confirm(summary, []) {
+        Some(_) => io.println(\"approved\")?
+        None => io.println(\"refused\")?
+    }",
+        "n\n",
+    );
+    assert_eq!(
+        stderr,
+        "approval needed: \"read a file\\u{1b}[2K\\napprove? [y/N] y\\n\\u{202e}\"\napprove? [y/N]\n"
     );
 }

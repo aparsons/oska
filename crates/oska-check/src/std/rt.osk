@@ -521,8 +521,8 @@ fn broken_pipe(result: Int) -> Bool {
 //   48      on Windows, the word a call puts its count in (`win_write`);
 //   49      on Windows, the console area, or 0 (see "The Windows console");
 //   50      the call stack ("The call stack");
-//   51      in a test, `t.approver`'s answers still to give, 52 the lines
-//           it has shown ("Approvals");
+//   51      in a test, `t.approver`'s answers still to give, 52 the
+//           questions it was asked ("Approvals");
 //   53      under `--max-steps` only, the steps left (`oska-native`'s
 //           `STEPS_WORD`);
 //   54      under `--max-memory` only, the report of its panic
@@ -5897,7 +5897,7 @@ pub fn test_printed(t: TestContext) -> List<String> {
 // who answers: in a program, the person at the terminal; in a test
 // executable, where the only approver is `t.approver`, the test's script,
 // in word 51 (the answers still to give, `y` or `n` each), and word 52
-// records the lines it has shown.
+// records the questions it was asked.
 
 struct Grant {
     summary: String,
@@ -5918,7 +5918,8 @@ pub fn approver_terminal(stdin: Int, stderr: Int) -> Asker {
 // `Approver.confirm`'s question for `summary` and `details`, each line
 // with its line break, as the interpreter's `prompt` writes it.
 pub fn approval_prompt(summary: String, details: List<String>) -> String {
-    var text = "approval needed: {summary}\n"
+    let heading = debug_string(summary)
+    var text = "approval needed: {heading}\n"
     for detail in details {
         let shown = debug_string(detail)
         text = "{text}  {shown}\n"
@@ -5929,18 +5930,23 @@ pub fn approval_prompt(summary: String, details: List<String>) -> String {
 // `Approver.confirm`: `question` is `approval_prompt`'s, which the
 // generated code counted under `--max-output`. An approval only on a yes.
 pub fn approver_confirm(approver: Int, summary: String, details: List<String>, question: String) -> Option<Grant> {
-    if !approval_answer(question) {
+    if !approval_answer(summary, details, question) {
         return None
     }
     Some(Grant(summary: summary, details: details, used: 0))
 }
 
-// Ask `question`: whether the answer is a yes.
-fn approval_answer(question: String) -> Bool {
+// Ask `question`, for `summary` and `details`: whether the answer is a
+// yes.
+fn approval_answer(summary: String, details: List<String>, question: String) -> Bool {
     if testing() {
+        // Each question as its summary, how many details it has, and the
+        // details (`test_approvals_asked`).
         var asked = take_word_list(52)
-        for line in question.lines() {
-            asked.push(line)
+        asked.push(summary)
+        asked.push(int_text(details.len(), false))
+        for detail in details {
+            asked.push(detail)
         }
         put_word_list(52, asked)
         let answers = take_word_text(51)
@@ -5991,7 +5997,7 @@ fn approval_for(approval: Int, summary: String, details: List<String>) -> Bool {
 
 // `Approval.matches`.
 pub fn approval_matches(approval: Int, summary: String, details: List<String>) -> Bool {
-    approval_for(approval, summary, details)
+    rt_mem_load64(rt_mem_add(approval, 24)) == 0 && approval_for(approval, summary, details)
 }
 
 // `Approval.consume`: `Ok` once, marking it used in place.
@@ -6014,8 +6020,13 @@ pub fn approval_error_to_string(e: ApprovalError) -> String {
     }
 }
 
-// `TestContext.answer_approval`: `t.approver`'s next answer.
+// `TestContext.answer_approval`: `t.approver`'s next answer. In a
+// program, which can build a `TestContext` by hand but whose approvers
+// all ask the terminal, it does nothing, as on the interpreter.
 pub fn test_answer_approval(t: TestContext, yes: Bool) {
+    if !testing() {
+        return
+    }
     let answers = take_word_text(51)
     var next = "n"
     if yes {
@@ -6024,9 +6035,33 @@ pub fn test_answer_approval(t: TestContext, yes: Bool) {
     put_word_text(51, "{answers}{next}")
 }
 
-// `TestContext.approvals_asked`: every line `t.approver` has shown.
-pub fn test_approvals_asked(t: TestContext) -> List<String> {
-    word_list(52)
+// What `TestContext.approvals_asked` gives: `ApprovalRequest`'s layout.
+struct Asked {
+    summary: String,
+    details: List<String>,
+}
+
+// `TestContext.approvals_asked`: every question `t.approver` was asked.
+pub fn test_approvals_asked(t: TestContext) -> List<Asked> {
+    var requests: List<Asked> = []
+    if !testing() {
+        return requests
+    }
+    let asked = word_list(52)
+    var at = 0
+    while at < asked.len() {
+        let summary = asked.at(at)
+        let count = asked.at(at + 1).parse_int().unwrap_or(0)
+        var details: List<String> = []
+        var k = 0
+        while k < count {
+            details.push(asked.at(at + 2 + k))
+            k = k + 1
+        }
+        requests.push(Asked(summary: summary, details: details))
+        at = at + 2 + count
+    }
+    requests
 }
 
 // The text in the runtime's word `index`, whose reference passes to the

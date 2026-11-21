@@ -24,7 +24,7 @@ Inside a test, `t` holds deterministic stand-in capabilities, so a test needs no
 | `t.clock` | A `Clock` fixed at the Unix epoch: `now_millis()` is `0` |
 | `t.random` | A `Random` with the same fixed seed in every test |
 | `t.stdout` | A recording `Stdout`. `t.printed()` returns one entry per `println`, without its line break. |
-| `t.approver` | An `Approver` that answers from the test's script: `t.answer_approval(true)` or `t.answer_approval(false)` queues its next answer, and a question with no answer left is refused. `t.approvals_asked()` returns each line it showed, as the terminal approver writes them to stderr. It answers from the script under `--integration` too. |
+| `t.approver` | An `Approver` that answers from the test's script: `t.answer_approval(true)` or `t.answer_approval(false)` queues its next answer, and a question with no answer left is refused. `t.approvals_asked()` returns each question it was asked, an `ApprovalRequest` with the `summary` and `details` the code gave. It answers from the script under `--integration` too. |
 
 Each test gets a fresh `t` on a fresh in-memory host, so nothing one test does is visible to another.
 
