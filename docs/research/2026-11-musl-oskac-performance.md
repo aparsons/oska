@@ -3,6 +3,7 @@
 - **Date:** 2026-11-20
 - **Scope:** Ticket #469 of spec #461 ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). On 2026-11-19 the musl build took 0.32 s to `oskac build` the site generator against 0.20 s for the glibc build, and its interpreter took 5.8 s against 3.8 s. Find where the time goes, on x86_64 and aarch64, and rank the fixes. No allocator and no `unsafe` code in this ticket.
 - **Status:** x86_64 measured here. **aarch64 is pending**: this machine is x86_64 only, and no aarch64 number below is measured. Section 5 gives the exact commands for an aarch64 runner.
+- **Update 2026-11-21:** aarch64 measured on a GitHub `ubuntu-24.04-arm` runner (ticket #506). Section 5 has the figures: causes 1 and 2 hold there, cause 3 (`memcpy`) does not.
 - **Method:** Built both release binaries of `oskac` at `36167da` with the pinned Rust 1.100.0: `cargo build --release -p oskac` and the same with `--target x86_64-unknown-linux-musl`. Ran `scripts/bench-native.sh` once with each. Timed the site generator with `perf stat`. Profiled with `perf record` (CPU-clock sampling, as this VM has no hardware counters), `strace -c`, and `valgrind --tool=callgrind`, which counts instructions and calls exactly. Disassembled the C library routines in the binaries. Wrote a small Rust program that times `memcpy` and allocation on each C library.
 - **Machine:** Intel Xeon @ 2.10GHz, 4 CPUs, a Linux 6.18 VM shared with one other agent. CPU times (user plus system) are used, as other work stretches the wall clock but not CPU time much. Each figure is the best of 3 to 5 runs. The musl build was slower in every run, but absolute times differ between runs and tools: the musl interpreter's site build took 8,333 ms in the bench script and 8,879 ms under `perf stat`, 6.5% apart.
 - **Sources:** what this note measured, plus the musl release notes. The musl source site and its GitHub mirror were not reachable from this session, so each claim about how musl works is either read from the disassembly of the shipped `libc.a` or marked **Inference**.
@@ -147,7 +148,114 @@ A bigger cost that is not musl's: `intrinsics::lookup` runs on each of 14.7 mill
 
 Separately, `Sha256::compress` is 24% of the compile's instructions in both builds. It does not explain the gap, but it is the compile's biggest single cost.
 
-## 5. aarch64: pending
+## 5. aarch64
+
+### Measured on 2026-11-21 (ticket #506)
+
+- **Machine:** a GitHub `ubuntu-24.04-arm` runner, Arm Neoverse-N2, 4 CPUs. Unlike the x86_64 VM above, it has hardware counters, so the profiles sample CPU cycles (`armv8_pmuv3_0/cycles`) and `perf stat` counts instructions, cycles and cache misses.
+- **Builds:** both release builds of `oskac` at `12f5797` (the integration branch at `91aa329` plus a temporary job in `bench.yml`, since reverted), Rust 1.100.0, built by the bench script.
+- **Method:** the commands in "How to measure it" below, plus `strace -c` of the compile and one `perf stat` run with hardware counters, run by that temporary job (workflow run 44888617764). `perf` is 7.0.14 from Ubuntu's `linux-tools`, with `kernel.perf_event_paranoid=-1`, so the profiles include kernel samples. One sample is about 1 ms. Each profile's text was cut at its first 80 lines, so the groups below count the symbols listed there (every symbol of 0.07% and more in the interpreter, 0.2% and more in the compile), and the smaller ones fall in "the rest".
+
+#### The bench script
+
+| Workload | glibc interpreter | musl interpreter | musl / glibc | glibc native | musl native |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| loop | 710 ms | 704 ms | 0.99x | 15 ms | 15 ms |
+| text | 126 ms | 187 ms | 1.48x | 5 ms | 5 ms |
+| bulk-text | 27 ms | 28 ms | 1.04x | 24 ms | 24 ms |
+| lists | 552 ms | 629 ms | 1.14x | 13 ms | 12 ms |
+| recursion | 534 ms | 936 ms | 1.75x | 6 ms | 6 ms |
+| site | 5,833 ms | 8,058 ms | 1.38x | 198 ms | 197 ms |
+
+The same pattern as on x86_64: no gap for `loop`, the largest for the workloads that allocate on each step, and native executables at the same speed from either build. The glibc bench job of the same run, on another runner, measured within 3% of these glibc figures (site 5,906 ms).
+
+#### The site generator
+
+`perf stat`, best of 3 by `task-clock`.
+
+| Command | glibc | musl | musl / glibc | glibc page faults | musl page faults |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `oskac build site/build.osk` | 42 ms | 66 ms | 1.56x | 2,911 | 8,487 |
+| `oskac run --interpret site/build.osk` | 5,839 ms | 8,065 ms | 1.38x | 4,414 | 373,783 |
+
+Of the interpreter's 8,065 ms under musl, 776 ms is system time; glibc's is 48 ms. One more interpreted run with hardware counters:
+
+| Counter | glibc | musl | musl / glibc |
+| --- | ---: | ---: | ---: |
+| Instructions | 64.78 billion | 72.18 billion | 1.11x |
+| Cycles | 19.74 billion | 27.34 billion | 1.38x |
+| Instructions per cycle | 3.28 | 2.64 | 0.80x |
+| Cache misses | 121.6 million | 215.4 million | 1.77x |
+| dTLB load misses | not supported | not supported | |
+
+As on x86_64, the musl build runs about 10% more instructions and takes much longer: its instructions run slower, and it misses the cache 77% more often.
+
+#### System calls
+
+`strace -f -c`.
+
+| Call | glibc interpreter | musl interpreter | glibc compile | musl compile |
+| --- | ---: | ---: | ---: | ---: |
+| `mmap` | 15 | 85,655 | 12 | 4,226 |
+| `munmap` | 10 | 85,612 | 6 | 4,183 |
+| `mremap` | 4 | 122 | 4 | 9 |
+| `brk` | 37 | 19 | 39 | 19 |
+| All calls | 4,900 | 176,028 | 163 | 8,513 |
+
+#### Profiles
+
+The interpreted site build, sampled at 999 Hz (glibc 5,870 samples, musl 8,206):
+
+| Group | glibc | musl | Change | Share of the gap |
+| --- | ---: | ---: | ---: | ---: |
+| Allocator: `malloc`, `free` and their helpers | 1,406 | 3,040 | +1,634 | 70% |
+| of which locks: musl's `__lock` and `__unlock`, glibc's atomic helpers (`__aarch64_swp4_rel`, `__aarch64_cas8_rel` and others) | 212 | 1,106 | +894 | 38% |
+| Kernel (TLB flushes, page faults, `mmap`, `munmap`) | 0 listed | 462 | +462 | 20% |
+| `memcpy` | 75 | 104 | +29 | 1% |
+| `memcmp` and `bcmp` | 224 | 324 | +100 | 4% |
+| Oska's Rust code and the rest | 4,165 | 4,276 | +111 | 5% |
+| Total | 5,870 | 8,206 | +2,336 | 100% |
+
+The kernel row counts only the kernel symbols the cut profile lists. `perf stat`'s system time (776 ms against 48 ms) puts the kernel's real share near 31%. The kernel samples that the cut leaves out fall in "the rest", so Oska's own code takes about the same time, or a little less, under musl. Its hottest symbols agree: `intrinsics::lookup` takes 822 samples under musl and 895 under glibc, and `Interpreter::binary` 301 and 394.
+
+The compile, profiled over 10 runs at 1999 Hz (only the `oskac` process: glibc about 880 samples, musl about 1,392):
+
+| Group | glibc | musl | Change | Share of the gap |
+| --- | ---: | ---: | ---: | ---: |
+| Allocator | 352 | 413 | +61 | 12% |
+| Kernel | 46 | 402 | +356 | 70% |
+| `memcpy` and `memcmp` | 19 | 27 | +8 | 2% |
+| Oska's Rust code and the rest | 463 | 550 | +87 | 17% |
+| Total | 880 | 1,392 | +512 | 100% |
+
+The compile runs on one thread, and no `__lock` or `__unlock` sample shows in it. The kernel's largest symbol is `tlb_flush_mmu_tlbonly` (121 samples), the TLB flush after each `munmap`.
+
+#### Do the x86_64 causes hold on aarch64?
+
+| Cause | x86_64 (interpreter's gap) | aarch64 (interpreter's gap) | Holds? |
+| --- | ---: | ---: | --- |
+| 1. mallocng's cost per call and its lock | 44%, lock 26% | 70%, lock 38% | **Yes, and larger.** `__lock` and `__unlock` take 1,106 ms, 13.5% of the musl run, and only in the threaded interpreter. glibc on aarch64 also spends 212 ms in atomic helpers, which x86_64 inlines. |
+| 2. mmap churn | 20% (81,309 `mmap`, 345,726 faults) | 20% to 31% (85,655 `mmap`, 373,783 faults) | **Yes, the same.** It is the largest cause of the compile's gap (70%). |
+| 3. musl's `memcpy` | 28% | 1% | **No.** musl's aarch64 `memcpy` (paired `ldp` and `stp`, no `rep`) costs about what glibc's `__memcpy_sve` does. Section 3's inference is confirmed. |
+| 4. Oska's code running slower | 16% | about 0% | **No clear sign.** The cache misses rise 77%, but the time in Oska's own code does not grow. `memcmp` is a little slower under musl here, where it was faster on x86_64. |
+
+So on aarch64 the gap is smaller (1.38x for the interpreted site build against 1.7x) because `memcpy` drops out, and it comes almost all from the allocator: its lock, its code, and the mappings it gives back and takes again. Fixes 1, 2 and 6 in section 6 attack exactly that, by allocating less. Fix 7 (a size-class allocator) would remove causes 1 and 2, which on aarch64 are almost the whole gap.
+
+#### Instruction counts
+
+`valgrind --tool=callgrind` on the interpreted site build, in a second job of the same run. Only the first 80 lines of `callgrind_annotate --inclusive=no` were kept, so the allocator and copy rows add up the functions listed there (each 0.08% of the run or more) and are lower bounds.
+
+| | glibc | musl | musl / glibc |
+| --- | ---: | ---: | ---: |
+| Interpreter: all user-space instructions | 64.82 billion | 67.64 billion | 1.04x |
+| Allocator instructions (listed functions) | 14.84 billion | 19.21 billion | 1.29x |
+| of which musl's `__lock` and `__unlock` | | 1.74 billion | |
+| `memcpy` instructions | 1.07 billion | 1.16 billion | 1.09x |
+| `memcmp` and `bcmp` instructions | 3.02 billion | 3.36 billion | 1.11x |
+
+The user-space instruction counts differ by 4%. `perf stat` counted 11% more instructions under musl because it also counts the kernel's, spent on musl's `mmap`, `munmap` and page faults. Oska's own functions run the same instruction counts in both builds (for example `Interpreter::eval` 4.38 billion and `ops::binary` 1.43 billion in each).
+
+### How to measure it (written 2026-11-20)
 
 Not measured. This machine is x86_64 only, and no figure in this note is from aarch64. To fill in sections 1 to 3 for aarch64, run these on an aarch64 Linux machine (the maintainer's Raspberry Pi 5, or a GitHub `ubuntu-24.04-arm` runner) from the repository root, with `perf`, `strace` and `valgrind` installed (`sudo apt-get install -y linux-tools-generic strace valgrind` on Ubuntu; on a runner, `perf` may need `sudo sysctl kernel.perf_event_paranoid=1`):
 
@@ -210,7 +318,7 @@ Follow-up tickets: #500 (string literals), #501 (`String.chars`), #502 (intrinsi
 
 ## Open questions
 
-- The aarch64 profiles (section 5).
+- ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
 - How much of the 592 ms in Oska's own code (cause 4) comes from cache and TLB misses. A machine with hardware counters (`perf stat -e cache-misses,dTLB-load-misses`) can answer it.
 - After fixes 1 to 6, does the musl build meet a threshold? The 2026-11-19 research note suggested at most 10% slower than glibc. Decide it before fix 7.
 
