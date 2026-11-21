@@ -13,14 +13,15 @@
 // Trust (ADR 0006): a `String` parameter or result is trusted text, a
 // **structural position**. `Untrusted<String>` is untrusted text: sources
 // return it, and a **data position** declares it, which also accepts
-// trusted text.
+// trusted text. `Bytes` carries the same flag (#223): `Untrusted<Bytes>`
+// is bytes from outside the program, under the same rules.
 //
-// A text operation marked `#[follows_trust]` is trust-polymorphic: its
-// receiver and every `String` in its parameters accept text of either
-// trust, and every `String` in its result is untrusted when any of them
-// is untrusted. Results that are not text, such as `Int` or `Bool`, are
-// trusted. Without the attribute, `String` means trusted everywhere, the
-// receiver included.
+// An operation marked `#[follows_trust]` is trust-polymorphic: its
+// receiver and every `String` and `Bytes` in its parameters accept values
+// of either trust, and every `String` and `Bytes` in its result is
+// untrusted when any of them is untrusted. Results that carry no flag,
+// such as `Int` or `Bool`, are trusted. Without the attribute, `String`
+// and `Bytes` mean trusted everywhere, the receiver included.
 
 // For maintainers: this file is parsed in prelude mode, so functions may
 // omit their bodies (the runtime implements them) and `#[capability]`
@@ -147,6 +148,8 @@ impl DirRead {
     // The whole file at `path`, as text. What a file holds comes from
     // outside the program, so it is untrusted.
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
+    // The bytes of the file at `path`, as they are, UTF-8 or not.
+    pub fn read_bytes(self, path: Path) -> Result<Untrusted<Bytes>, IoError>
     // The names of the entries of the directory at `path` (`"."` is the
     // root itself), sorted so the order is the same on every host. A name
     // comes from outside the program, so it is untrusted.
@@ -166,6 +169,8 @@ impl DirWrite {
     // Create the file at `path`, or replace what it holds, with
     // `contents`. A symlink at `path` is never followed.
     pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
+    // `write` with bytes: the file holds exactly `contents`.
+    pub fn write_bytes(self, path: Path, contents: Untrusted<Bytes>) -> Result<(), IoError>
     // Create the directory at `path`; its parent must exist. A directory
     // already there is kept, with everything in it, and anything else
     // there is an error. A symlink at `path` is never followed.
@@ -186,6 +191,8 @@ impl FileRead {
     // The whole file, as text. What a file holds comes from outside the
     // program, so it is untrusted.
     pub fn read_to_string(self) -> Result<Untrusted<String>, IoError>
+    // The file's bytes, as they are, UTF-8 or not.
+    pub fn read_bytes(self) -> Result<Untrusted<Bytes>, IoError>
 }
 
 // A file capability that only writes. See `FileRead`.
@@ -195,6 +202,8 @@ pub struct FileWrite { handle: Int }
 impl FileWrite {
     // Create the file, or replace what it holds, with `contents`.
     pub fn write(self, contents: Untrusted<String>) -> Result<(), IoError>
+    // `write` with bytes: the file holds exactly `contents`.
+    pub fn write_bytes(self, contents: Untrusted<Bytes>) -> Result<(), IoError>
 }
 
 // Network access, as `main` declares it. It has no runtime yet: a
@@ -228,6 +237,10 @@ impl Connection {
     pub fn send(self, body: Untrusted<String>) -> Result<(), IoError>
     // What the host sent back: text from outside the program.
     pub fn receive(self) -> Result<Untrusted<String>, IoError>
+    // `send` and `receive` with bytes.
+    pub fn send_bytes(self, body: Untrusted<Bytes>) -> Result<(), IoError>
+    // What the host sent back, as bytes from outside the program.
+    pub fn receive_bytes(self) -> Result<Untrusted<Bytes>, IoError>
 }
 
 // The capability to accept network connections. It has no methods yet,
@@ -246,12 +259,28 @@ impl Env {
     pub fn secret(self, name: String) -> Secret<String>
 }
 
-// A secret value. It has no `Display` and no `Eq`, and cannot be
-// interpolated: compare it with `constant_time_eq`, and read it with
-// `expose`, which is an audit site.
+// A secret value. It has no `Display`, no `Eq` and no `Hash`, and cannot
+// be interpolated: compare it with `constant_time_eq` or `ct_eq`, and
+// read it with `expose`, which is an audit site.
+//
+// `Secret<U8>`, `Secret<U32>` and `Secret<U64>` are secret integers,
+// computed on without exposing them. `+ - *` wrap, and the bitwise and
+// shift operators work as on the public type; a public operand of the
+// same type, a literal included, gives a secret result. A secret cannot
+// decide a branch (`E0353`), an index, an offset, a length or a hash key
+// (`E0354`), a division, a remainder or a shift or rotation amount
+// (`E0355`), or an ordering (`E0356`), and `==` on one is `E0351`. So no
+// operation on a secret panics, or takes a path or reads memory, that
+// depends on its value. `Secret<Bool>` is the result of `ct_eq`, and
+// `Secret<Bytes>` holds key material.
 pub struct Secret<T> { value: T }
 
 impl<T> Secret<T> {
+    // `value`, made secret. Adding secrecy never weakens a guarantee, so
+    // this is not an audit site. It makes `Secret<U8>`, `Secret<U32>`,
+    // `Secret<U64>`, `Secret<Bool>` and `Secret<Bytes>` only (`E0223`);
+    // a `Secret<String>` comes from `Env.secret` (`E0271`).
+    pub fn new(value: T) -> Secret<T>
     // The secret's value. Every call is an audit site.
     pub fn expose(self) -> T
 }
@@ -262,6 +291,125 @@ impl Secret<String> {
     // Compare with another secret without leaking timing information,
     // and without exposing either.
     pub fn constant_time_eq_secret(self, other: Secret<String>) -> Bool
+}
+
+// A secret integer has the public type's rotations (by a public amount,
+// which panics with `P0008` out of range, as the public one does),
+// widening and wrapping narrowing, but no checked narrowing, which would
+// panic on a secret value.
+impl Secret<U8> {
+    // The bits rotated left by `n`, as `U8.rotl` does.
+    pub fn rotl(self, n: Int) -> Secret<U8>
+    // The bits rotated right by `n`, as `U8.rotr` does.
+    pub fn rotr(self, n: Int) -> Secret<U8>
+    // Whether the two are equal, as a secret.
+    pub fn ct_eq(self, other: Secret<U8>) -> Secret<Bool>
+    // The same value as a secret `U32`.
+    pub fn to_u32(self) -> Secret<U32>
+    // The same value as a secret `U64`.
+    pub fn to_u64(self) -> Secret<U64>
+}
+
+impl Secret<U32> {
+    // The bits rotated left by `n`, as `U32.rotl` does.
+    pub fn rotl(self, n: Int) -> Secret<U32>
+    // The bits rotated right by `n`, as `U32.rotr` does.
+    pub fn rotr(self, n: Int) -> Secret<U32>
+    // Whether the two are equal, as a secret.
+    pub fn ct_eq(self, other: Secret<U32>) -> Secret<Bool>
+    // The same value as a secret `U64`.
+    pub fn to_u64(self) -> Secret<U64>
+    // The low 8 bits, as a secret `U8`.
+    pub fn wrapping_to_u8(self) -> Secret<U8>
+}
+
+impl Secret<U64> {
+    // The bits rotated left by `n`, as `U64.rotl` does.
+    pub fn rotl(self, n: Int) -> Secret<U64>
+    // The bits rotated right by `n`, as `U64.rotr` does.
+    pub fn rotr(self, n: Int) -> Secret<U64>
+    // Whether the two are equal, as a secret.
+    pub fn ct_eq(self, other: Secret<U64>) -> Secret<Bool>
+    // The low 8 bits, as a secret `U8`.
+    pub fn wrapping_to_u8(self) -> Secret<U8>
+    // The low 32 bits, as a secret `U32`.
+    pub fn wrapping_to_u32(self) -> Secret<U32>
+}
+
+// A secret condition. `&&`, `||` and `!` would branch on it (`E0353`):
+// combine conditions with `and`, `or`, `xor` and `not`, which evaluate
+// both operands.
+impl Secret<Bool> {
+    // Whether both hold.
+    pub fn and(self, other: Secret<Bool>) -> Secret<Bool>
+    // Whether either holds.
+    pub fn or(self, other: Secret<Bool>) -> Secret<Bool>
+    // Whether exactly one holds.
+    pub fn xor(self, other: Secret<Bool>) -> Secret<Bool>
+    // Whether the condition does not hold.
+    pub fn not(self) -> Secret<Bool>
+    // `if_true` when the condition holds, otherwise `if_false`, without
+    // a branch: both are evaluated. `T` is `U8`, `U32`, `U64`, `Bool` or
+    // `Bytes`; two `Bytes` must have the same length, or it panics
+    // (`P0042`).
+    pub fn ct_select<T>(self, if_true: Secret<T>, if_false: Secret<T>) -> Secret<T>
+}
+
+// A secret buffer, such as a key. Its length, and every index and offset
+// into it, are public; the bytes and the integers read from them are
+// secret. Out of bounds, a method panics as `Bytes`'s does.
+// Like `Bytes`'s, each operation follows the trust of its inputs: a
+// secret of untrusted bytes gives untrusted results (#223).
+// There are no 16-bit endian reads or pushes, because there is no
+// `Secret<U16>` for them to give or take: `U16` has no bitwise
+// operators to compute on a secret with.
+impl Secret<Bytes> {
+    // The number of bytes, which is public.
+    #[follows_trust]
+    pub fn len(self) -> Int
+    // The byte at `index`, as a secret.
+    #[follows_trust]
+    pub fn at(self, index: Int) -> Secret<U8>
+    // The bytes from `start` up to, but excluding, `end`, as a secret.
+    #[follows_trust]
+    pub fn slice(self, start: Int, end: Int) -> Secret<Bytes>
+    // The `U32` stored big-endian at byte `offset`, as a secret.
+    #[follows_trust]
+    pub fn read_u32_be(self, offset: Int) -> Secret<U32>
+    // The `U32` stored little-endian at byte `offset`, as a secret.
+    #[follows_trust]
+    pub fn read_u32_le(self, offset: Int) -> Secret<U32>
+    // The `U64` stored big-endian at byte `offset`, as a secret.
+    #[follows_trust]
+    pub fn read_u64_be(self, offset: Int) -> Secret<U64>
+    // The `U64` stored little-endian at byte `offset`, as a secret.
+    #[follows_trust]
+    pub fn read_u64_le(self, offset: Int) -> Secret<U64>
+    // `byte` added at the end.
+    #[follows_trust]
+    pub fn push(var self, byte: Secret<U8>)
+    // `other`'s bytes added at the end.
+    #[follows_trust]
+    pub fn append(var self, other: Secret<Bytes>)
+    // `value`'s bytes added at the end, in big-endian order.
+    #[follows_trust]
+    pub fn push_u32_be(var self, value: Secret<U32>)
+    // `value`'s bytes added at the end, in little-endian order.
+    #[follows_trust]
+    pub fn push_u32_le(var self, value: Secret<U32>)
+    // `value`'s bytes added at the end, in big-endian order.
+    #[follows_trust]
+    pub fn push_u64_be(var self, value: Secret<U64>)
+    // `value`'s bytes added at the end, in little-endian order.
+    #[follows_trust]
+    pub fn push_u64_le(var self, value: Secret<U64>)
+    // Compare without leaking timing information: the time depends on
+    // the lengths only.
+    #[follows_trust]
+    pub fn constant_time_eq(self, other: Untrusted<Bytes>) -> Bool
+    // Compare with another secret, exposing neither.
+    #[follows_trust]
+    pub fn constant_time_eq_secret(self, other: Secret<Bytes>) -> Bool
 }
 
 // The wall clock. A test's `t.clock` is fixed.
@@ -383,6 +531,107 @@ impl<T> List<T> {
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
 }
 
+// A packed buffer of bytes: a value, like `List`, copied on write. A
+// mutating method changes a `Bytes` that nothing else holds in place, and
+// copies one that is shared first, so appending in a loop is not
+// quadratic. Its representation is built in.
+//
+// Every method follows trust: bytes or text it gives are untrusted when
+// the receiver or a `Bytes` or `String` argument is, and the integers it
+// reads are trusted, as `len` of untrusted text is (#223). `new` and
+// `zeroed` take no bytes or text; they follow trust so that what they
+// give starts with a trust of its own, as a string literal does, and a
+// `var` they start can take untrusted bytes later (`var buf =
+// Bytes.new()` then `buf.append(raw)`).
+//
+// An index out of bounds in `at` or `set` panics (`P0002`), as in
+// `List.at`. A slice or an endian read that does not lie wholly inside
+// the buffer panics (`P0042`), and so does a negative length for
+// `zeroed`. A buffer that would grow past 256 MiB panics (`P0043`). The
+// cap is not yet checked where a buffer is made whole from outside the
+// buffer methods: `String.to_bytes` and the capabilities' `read_bytes`
+// give every byte, however many, and a read that no memory holds is an
+// `IoError`.
+pub struct Bytes { handle: Int }
+
+impl Bytes {
+    // An empty buffer.
+    #[follows_trust]
+    pub fn new() -> Bytes
+    // A buffer of `len` zero bytes.
+    #[follows_trust]
+    pub fn zeroed(len: Int) -> Bytes
+    // The bytes that `text` spells in hexadecimal, two digits a byte, in
+    // either case; `None` when it spells none.
+    #[follows_trust]
+    pub fn from_hex(text: String) -> Option<Bytes>
+    // The number of bytes.
+    #[follows_trust]
+    pub fn len(self) -> Int
+    // The byte at `index`, or `None` when the index is out of bounds.
+    #[follows_trust]
+    pub fn get(self, index: Int) -> Option<U8>
+    // The byte at `index`.
+    #[follows_trust]
+    pub fn at(self, index: Int) -> U8
+    // The bytes from `start` up to, but excluding, `end`.
+    #[follows_trust]
+    pub fn slice(self, start: Int, end: Int) -> Bytes
+    // The integer stored at byte `offset`, its most significant byte
+    // first (`_be`, big-endian, the network's order) or last (`_le`).
+    #[follows_trust]
+    pub fn read_u16_be(self, offset: Int) -> U16
+    // The `U16` stored little-endian at byte `offset`.
+    #[follows_trust]
+    pub fn read_u16_le(self, offset: Int) -> U16
+    // The `U32` stored big-endian at byte `offset`.
+    #[follows_trust]
+    pub fn read_u32_be(self, offset: Int) -> U32
+    // The `U32` stored little-endian at byte `offset`.
+    #[follows_trust]
+    pub fn read_u32_le(self, offset: Int) -> U32
+    // The `U64` stored big-endian at byte `offset`.
+    #[follows_trust]
+    pub fn read_u64_be(self, offset: Int) -> U64
+    // The `U64` stored little-endian at byte `offset`.
+    #[follows_trust]
+    pub fn read_u64_le(self, offset: Int) -> U64
+    // Two lower-case hexadecimal digits a byte.
+    #[follows_trust]
+    pub fn to_hex(self) -> String
+    // The text the bytes encode in UTF-8, or `None` when they are not
+    // UTF-8.
+    #[follows_trust]
+    pub fn to_text(self) -> Option<String>
+    // `byte` added at the end.
+    #[follows_trust]
+    pub fn push(var self, byte: U8)
+    // The byte at `index` replaced by `byte`.
+    #[follows_trust]
+    pub fn set(var self, index: Int, byte: U8)
+    // `other`'s bytes added at the end.
+    #[follows_trust]
+    pub fn append(var self, other: Bytes)
+    // `value`'s bytes added at the end, in big- or little-endian order.
+    #[follows_trust]
+    pub fn push_u16_be(var self, value: U16)
+    // `value`'s bytes added at the end, in little-endian order.
+    #[follows_trust]
+    pub fn push_u16_le(var self, value: U16)
+    // `value`'s bytes added at the end, in big-endian order.
+    #[follows_trust]
+    pub fn push_u32_be(var self, value: U32)
+    // `value`'s bytes added at the end, in little-endian order.
+    #[follows_trust]
+    pub fn push_u32_le(var self, value: U32)
+    // `value`'s bytes added at the end, in big-endian order.
+    #[follows_trust]
+    pub fn push_u64_be(var self, value: U64)
+    // `value`'s bytes added at the end, in little-endian order.
+    #[follows_trust]
+    pub fn push_u64_le(var self, value: U64)
+}
+
 // `start..end`, which excludes `end`.
 pub struct Range<T> { pub start: T, pub end: T }
 
@@ -442,12 +691,21 @@ impl String {
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>
+    // Its UTF-8 encoding.
+    #[follows_trust]
+    pub fn to_bytes(self) -> Bytes
 }
 
 impl Untrusted<String> {
     // A trust assertion: a validator vouches for text it has checked.
     // Every call is an audit site.
     pub fn assume_trusted(self) -> String
+}
+
+impl Untrusted<Bytes> {
+    // A trust assertion: a validator vouches for bytes it has checked.
+    // Every call is an audit site.
+    pub fn assume_trusted(self) -> Bytes
 }
 
 // A path, relative to a directory capability's root. A directory
@@ -477,6 +735,119 @@ pub struct IoError { pub message: Untrusted<String> }
 
 impl Display for IoError {
     fn to_string(self) -> String
+}
+
+// ---- Fixed-width integers -----------------------------------------------
+
+// `U8`, `U32` and `U64` have the bitwise and shift operators
+// (`& | ^ ~ << >>`) and the rotations. A rotation moves the bits shifted
+// out at one end back in at the other. An amount below 0, or not below
+// the type's width, is a bug: it panics (`P0008`), as a shift's does.
+//
+// `+ - *` never wrap. `wrapping_add`, `wrapping_sub` and `wrapping_mul`
+// do: they keep the low bits of the result, arithmetic modulo 2 to the
+// type's width.
+//
+// Integer types convert only explicitly. `Int`, `U8`, `U16`, `U32` and
+// `U64` each convert to each other with `to_<type>()`: one that widens
+// never fails, and a value that does not fit its target panics (`P0001`).
+// `wrapping_to_<type>()`, from a wider unsigned type to a narrower one,
+// keeps the value's low bits instead.
+impl Int {
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
+    pub fn to_u8(self) -> U8
+    // The same value as a `U16`; it panics (`P0001`) when it does not fit.
+    pub fn to_u16(self) -> U16
+    // The same value as a `U32`; it panics (`P0001`) when it does not fit.
+    pub fn to_u32(self) -> U32
+    // The same value as a `U64`; it panics (`P0001`) when it does not fit.
+    pub fn to_u64(self) -> U64
+}
+
+impl U8 {
+    // The bits rotated left by `n`.
+    pub fn rotl(self, n: Int) -> U8
+    // The bits rotated right by `n`.
+    pub fn rotr(self, n: Int) -> U8
+    // The sum, wrapping around modulo 2^8.
+    pub fn wrapping_add(self, other: U8) -> U8
+    // The difference, wrapping around modulo 2^8.
+    pub fn wrapping_sub(self, other: U8) -> U8
+    // The product, wrapping around modulo 2^8.
+    pub fn wrapping_mul(self, other: U8) -> U8
+    // The same value as an `Int`.
+    pub fn to_int(self) -> Int
+    // The same value as a `U16`.
+    pub fn to_u16(self) -> U16
+    // The same value as a `U32`.
+    pub fn to_u32(self) -> U32
+    // The same value as a `U64`.
+    pub fn to_u64(self) -> U64
+}
+
+impl U16 {
+    // The same value as an `Int`.
+    pub fn to_int(self) -> Int
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
+    pub fn to_u8(self) -> U8
+    // The same value as a `U32`.
+    pub fn to_u32(self) -> U32
+    // The same value as a `U64`.
+    pub fn to_u64(self) -> U64
+    // The low 8 bits, as a `U8`.
+    pub fn wrapping_to_u8(self) -> U8
+}
+
+impl U32 {
+    // The bits rotated left by `n`.
+    pub fn rotl(self, n: Int) -> U32
+    // The bits rotated right by `n`.
+    pub fn rotr(self, n: Int) -> U32
+    // The sum, wrapping around modulo 2^32.
+    pub fn wrapping_add(self, other: U32) -> U32
+    // The difference, wrapping around modulo 2^32.
+    pub fn wrapping_sub(self, other: U32) -> U32
+    // The product, wrapping around modulo 2^32.
+    pub fn wrapping_mul(self, other: U32) -> U32
+    // The same value as an `Int`.
+    pub fn to_int(self) -> Int
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
+    pub fn to_u8(self) -> U8
+    // The same value as a `U16`; it panics (`P0001`) when it does not fit.
+    pub fn to_u16(self) -> U16
+    // The same value as a `U64`.
+    pub fn to_u64(self) -> U64
+    // The low 8 bits, as a `U8`.
+    pub fn wrapping_to_u8(self) -> U8
+    // The low 16 bits, as a `U16`.
+    pub fn wrapping_to_u16(self) -> U16
+}
+
+impl U64 {
+    // The bits rotated left by `n`.
+    pub fn rotl(self, n: Int) -> U64
+    // The bits rotated right by `n`.
+    pub fn rotr(self, n: Int) -> U64
+    // The sum, wrapping around modulo 2^64.
+    pub fn wrapping_add(self, other: U64) -> U64
+    // The difference, wrapping around modulo 2^64.
+    pub fn wrapping_sub(self, other: U64) -> U64
+    // The product, wrapping around modulo 2^64.
+    pub fn wrapping_mul(self, other: U64) -> U64
+    // The same value as an `Int`; it panics (`P0001`) when it does not fit.
+    pub fn to_int(self) -> Int
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
+    pub fn to_u8(self) -> U8
+    // The same value as a `U16`; it panics (`P0001`) when it does not fit.
+    pub fn to_u16(self) -> U16
+    // The same value as a `U32`; it panics (`P0001`) when it does not fit.
+    pub fn to_u32(self) -> U32
+    // The low 8 bits, as a `U8`.
+    pub fn wrapping_to_u8(self) -> U8
+    // The low 16 bits, as a `U16`.
+    pub fn wrapping_to_u16(self) -> U16
+    // The low 32 bits, as a `U32`.
+    pub fn wrapping_to_u32(self) -> U32
 }
 
 // ---- Structured concurrency ---------------------------------------------
@@ -535,6 +906,7 @@ impl Eq for IoError { fn eq(self, other: IoError) -> Bool }
 impl<T: Eq> Eq for Option<T> { fn eq(self, other: Option<T>) -> Bool }
 impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Bool }
 impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
+impl Eq for Bytes { fn eq(self, other: Bytes) -> Bool }
 
 // A value that can be hashed.
 pub trait Hash {
@@ -542,6 +914,9 @@ pub trait Hash {
     #[follows_trust]
     fn hash(self) -> Int
 }
+
+// The 64-bit FNV-1a hash of the bytes, the same on every platform.
+impl Hash for Bytes { fn hash(self) -> Int }
 
 // A value with a text form, which `"{value}"` interpolation uses.
 pub trait Display {

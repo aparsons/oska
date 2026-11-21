@@ -4,7 +4,7 @@
 //! limit is made.
 //!
 //! **What counts.** Each text, list, struct or enum value the program
-//! builds, each closure, and each struct the prelude makes for it (a
+//! builds, each `Bytes`, each closure, and each struct the prelude makes for it (a
 //! `Range`, `Secret`, `Path`, `IoError`, or `std.html` markup): its bytes as this module reckons them
 //! ([`text_bytes`] and the like), which are the bytes the interpreter
 //! allocates for it, its record here included. A list that grows in
@@ -52,6 +52,7 @@ thread_local! {
 enum Held {
     Text(Weak<str>),
     Items(Weak<Vec<Value>>),
+    Bytes(Weak<Vec<u8>>),
     Closure(Weak<ClosureValue>),
 }
 
@@ -60,6 +61,7 @@ impl Held {
         match self {
             Held::Text(weak) => weak.strong_count() > 0,
             Held::Items(weak) => weak.strong_count() > 0,
+            Held::Bytes(weak) => weak.strong_count() > 0,
             Held::Closure(weak) => weak.strong_count() > 0,
         }
     }
@@ -81,6 +83,8 @@ struct Meter {
     /// its entry. (A weak reference keeps the address taken, so it names
     /// one list while its entry lives.)
     items: HashMap<usize, usize>,
+    /// The entry of each counted `Bytes`, by its address, as for lists.
+    buffers: HashMap<usize, usize>,
     /// How many entries there were after the last sweep.
     swept: usize,
 }
@@ -90,9 +94,16 @@ impl Meter {
     fn sweep(&mut self) {
         self.entries.retain(|entry| entry.held.alive());
         self.items.clear();
+        self.buffers.clear();
         for (index, entry) in self.entries.iter().enumerate() {
-            if let Held::Items(weak) = &entry.held {
-                self.items.insert(weak.as_ptr() as usize, index);
+            match &entry.held {
+                Held::Items(weak) => {
+                    self.items.insert(weak.as_ptr() as usize, index);
+                }
+                Held::Bytes(weak) => {
+                    self.buffers.insert(weak.as_ptr() as usize, index);
+                }
+                Held::Text(_) | Held::Closure(_) => {}
             }
         }
         self.live = self.entries.iter().map(|entry| entry.bytes).sum();
@@ -100,9 +111,16 @@ impl Meter {
     }
 
     fn record(&mut self, held: Held, bytes: u64) {
-        if let Held::Items(weak) = &held {
-            self.items
-                .insert(weak.as_ptr() as usize, self.entries.len());
+        match &held {
+            Held::Items(weak) => {
+                self.items
+                    .insert(weak.as_ptr() as usize, self.entries.len());
+            }
+            Held::Bytes(weak) => {
+                self.buffers
+                    .insert(weak.as_ptr() as usize, self.entries.len());
+            }
+            Held::Text(_) | Held::Closure(_) => {}
         }
         self.entries.push(Entry { held, bytes });
     }
@@ -121,6 +139,7 @@ impl Metering {
                 live: 0,
                 entries: Vec::new(),
                 items: HashMap::new(),
+                buffers: HashMap::new(),
                 swept: 0,
             });
         });
@@ -208,6 +227,125 @@ fn items_bytes(capacity: usize) -> u64 {
         + RC
         + std::mem::size_of::<Vec<Value>>() as u64
         + (capacity as u64).saturating_mul(std::mem::size_of::<Value>() as u64)
+}
+
+/// What a `Bytes` with room for `capacity` bytes takes.
+fn buffer_bytes(capacity: usize) -> u64 {
+    ENTRY + RC + std::mem::size_of::<Vec<u8>>() as u64 + capacity as u64
+}
+
+/// The `Bytes` `make` builds, of `len` bytes, made at `span`: charged
+/// before `make` runs, so a buffer that would pass the limit is never
+/// built.
+#[inline]
+pub(crate) fn bytes_of_len(
+    len: usize,
+    span: Span,
+    make: impl FnOnce() -> Vec<u8>,
+) -> Result<Value, Panic> {
+    if metered() {
+        return bytes_of_len_metered(len, span, make);
+    }
+    Ok(Value::Bytes(Rc::new(make())))
+}
+
+#[cold]
+#[inline(never)]
+fn bytes_of_len_metered(
+    len: usize,
+    span: Span,
+    make: impl FnOnce() -> Vec<u8>,
+) -> Result<Value, Panic> {
+    let charged = buffer_bytes(len);
+    charge(charged, span)?;
+    let data = Rc::new(make());
+    let bytes = buffer_bytes(data.capacity());
+    METER.with(|meter| {
+        if let Some(meter) = meter.borrow_mut().as_mut() {
+            meter.live = meter.live.saturating_add(bytes).saturating_sub(charged);
+            meter.record(Held::Bytes(Rc::downgrade(&data)), bytes);
+        }
+    });
+    Ok(Value::Bytes(data))
+}
+
+/// `write` applied to the bytes of `buffer`, at `span`, which adds
+/// `extra` bytes at the end: the buffer is copied first when it is
+/// shared, as [`Rc::make_mut`] does. Under the limit the growth, or the
+/// copy, is charged first.
+#[inline]
+pub(crate) fn write_bytes(
+    buffer: &mut Rc<Vec<u8>>,
+    extra: usize,
+    span: Span,
+    write: impl FnOnce(&mut Vec<u8>),
+) -> Result<(), Panic> {
+    if metered() {
+        return write_bytes_metered(buffer, extra, span, write);
+    }
+    write(Rc::make_mut(buffer));
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn write_bytes_metered(
+    buffer: &mut Rc<Vec<u8>>,
+    extra: usize,
+    span: Span,
+    write: impl FnOnce(&mut Vec<u8>),
+) -> Result<(), Panic> {
+    let len = buffer.len();
+    let capacity = buffer.capacity();
+    let needed = len.saturating_add(extra);
+    // The capacity it grows to, which is reserved exactly.
+    let wanted = if needed <= capacity {
+        capacity
+    } else {
+        capacity.saturating_mul(2).max(needed).max(8)
+    };
+    if Rc::strong_count(buffer) > 1 {
+        // Shared: a copy of its own, with room for what is added.
+        let bytes = buffer_bytes(wanted);
+        charge(bytes, span)?;
+        let mut copy = Vec::with_capacity(wanted);
+        copy.extend_from_slice(buffer);
+        write(&mut copy);
+        *buffer = Rc::new(copy);
+        record(Held::Bytes(Rc::downgrade(buffer)), bytes);
+        return Ok(());
+    }
+    let grown = buffer_bytes(wanted) - buffer_bytes(capacity);
+    charge(grown, span)?;
+    let before = Rc::as_ptr(buffer) as usize;
+    let data = Rc::make_mut(buffer);
+    data.reserve_exact(wanted - len);
+    write(data);
+    let actual = buffer_bytes(data.capacity()) - buffer_bytes(capacity);
+    METER.with(|meter| {
+        let mut meter = meter.borrow_mut();
+        let Some(meter) = meter.as_mut() else {
+            return;
+        };
+        meter.live = meter.live.saturating_add(actual).saturating_sub(grown);
+        let after = Rc::as_ptr(buffer) as usize;
+        match meter.buffers.remove(&before) {
+            Some(index) => {
+                let entry = &mut meter.entries[index];
+                entry.held = Held::Bytes(Rc::downgrade(buffer));
+                entry.bytes += actual;
+                meter.buffers.insert(after, index);
+            }
+            // A buffer made before counting started: from now on it is
+            // counted.
+            None => {
+                let bytes = buffer_bytes(buffer.capacity());
+                meter.live = meter.live.saturating_add(bytes).saturating_sub(actual);
+                meter.record(Held::Bytes(Rc::downgrade(buffer)), bytes);
+            }
+        }
+    });
+    Ok(())
 }
 
 /// `text` as a text value, made at `span`.

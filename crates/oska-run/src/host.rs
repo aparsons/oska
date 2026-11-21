@@ -90,10 +90,10 @@ pub trait Host: Send {
     /// file itself is not opened.
     fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle>;
 
-    /// The text of the regular file reached by walking `names` beneath
+    /// The bytes of the regular file reached by walking `names` beneath
     /// `root`, none of them a symlink. When `root` is a single file,
     /// `names` is empty.
-    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String>;
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<u8>>;
 
     /// Create the regular file reached by walking `names` beneath `root`,
     /// or replace its contents, with `contents`. No name is a symlink,
@@ -103,7 +103,7 @@ pub trait Host: Send {
         &mut self,
         root: &RootHandle,
         names: &[String],
-        contents: &str,
+        contents: &[u8],
     ) -> io::Result<()>;
 
     /// Create the directory reached by walking `names` beneath `root`,
@@ -427,29 +427,29 @@ impl Host for RealHost {
         ))
     }
 
-    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<u8>> {
         let mut file = match &root.file {
             Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
             Some(name) => root_dir(root)?.open_file(&[name])?,
             None => checked_names(root, names)?.open_file(names)?,
         };
-        let mut text = String::new();
-        file.read_to_string(&mut text)?;
-        Ok(text)
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 
     fn write_file_beneath(
         &mut self,
         root: &RootHandle,
         names: &[String],
-        contents: &str,
+        contents: &[u8],
     ) -> io::Result<()> {
         let mut file = match &root.file {
             Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
             Some(name) => root_dir(root)?.create_file(&[name])?,
             None => checked_names(root, names)?.create_file(names)?,
         };
-        file.write_all(contents.as_bytes())
+        file.write_all(contents)
     }
 
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
@@ -604,8 +604,8 @@ pub struct FakeWorld {
     /// The lines waiting on stdin, without their line breaks.
     pub stdin: Vec<String>,
     pub env: BTreeMap<String, String>,
-    /// Every file, by absolute path, with its contents.
-    pub files: BTreeMap<PathBuf, String>,
+    /// Every file, by absolute path, with its bytes.
+    pub files: BTreeMap<PathBuf, Vec<u8>>,
     /// Directories that exist though no file lies under them.
     pub dirs: BTreeSet<PathBuf>,
     /// Symlinks, by their absolute path, to their target's.
@@ -634,7 +634,7 @@ pub struct FakeHost {
     printed: Vec<String>,
     stdin: VecDeque<String>,
     env: BTreeMap<String, String>,
-    files: BTreeMap<PathBuf, String>,
+    files: BTreeMap<PathBuf, Vec<u8>>,
     /// Directories that exist though no file lies under them.
     dirs: BTreeSet<PathBuf>,
     /// Symlinks, by their path, to their target's.
@@ -676,9 +676,15 @@ impl FakeHost {
 
     /// The host with a file at `path`, relative to `/`, holding
     /// `contents`.
-    pub fn with_file(mut self, path: &str, contents: &str) -> Self {
+    pub fn with_file(self, path: &str, contents: &str) -> Self {
+        self.with_file_bytes(path, contents.as_bytes())
+    }
+
+    /// The host with a file at `path`, relative to `/`, holding the bytes
+    /// `contents`, which need not be UTF-8.
+    pub fn with_file_bytes(mut self, path: &str, contents: &[u8]) -> Self {
         self.files
-            .insert(normalize(Path::new(path)), contents.to_string());
+            .insert(normalize(Path::new(path)), contents.to_vec());
         self
     }
 
@@ -701,7 +707,8 @@ impl FakeHost {
     }
 
     /// Every file under the directory `dir`, relative to `/`, by its path
-    /// relative to `dir`, with `/` between components.
+    /// relative to `dir`, with `/` between components, and its text, in
+    /// which a byte that is not UTF-8 shows as U+FFFD.
     pub fn files_under(&self, dir: &str) -> BTreeMap<String, String> {
         let dir = normalize(Path::new(dir));
         self.files
@@ -713,7 +720,7 @@ impl FakeHost {
                     .map(|c| c.as_os_str().to_string_lossy())
                     .collect::<Vec<_>>()
                     .join("/");
-                Some((name, text.clone()))
+                Some((name, String::from_utf8_lossy(text).into_owned()))
             })
             .collect()
     }
@@ -730,10 +737,26 @@ impl FakeHost {
     }
 
     /// The text of the file at `path`, relative to `/`, if there is one.
+    /// `None` means no file at all, so a test can assert that nothing was
+    /// written there.
+    ///
+    /// # Panics
+    ///
+    /// When the file's bytes are not UTF-8: read those with
+    /// [`FakeHost::file_bytes`].
     pub fn file(&self, path: &str) -> Option<&str> {
+        let bytes = self.file_bytes(path)?;
+        match std::str::from_utf8(bytes) {
+            Ok(text) => Some(text),
+            Err(_) => panic!("the file at {path} is not UTF-8: read it with `file_bytes`"),
+        }
+    }
+
+    /// The bytes of the file at `path`, relative to `/`, if there is one.
+    pub fn file_bytes(&self, path: &str) -> Option<&[u8]> {
         self.files
             .get(&normalize(Path::new(path)))
-            .map(String::as_str)
+            .map(Vec::as_slice)
     }
 
     /// A directory root at `path`, already normalized.
@@ -820,10 +843,10 @@ impl FakeHost {
 
     /// Write `contents` to the file at `path`, created if need be in its
     /// parent directory, which must exist.
-    fn put_file(&mut self, path: PathBuf, contents: &str) -> io::Result<()> {
+    fn put_file(&mut self, path: PathBuf, contents: &[u8]) -> io::Result<()> {
         match path.parent() {
             Some(parent) if self.is_dir(parent) && !self.is_dir(&path) => {
-                self.files.insert(path, contents.to_string());
+                self.files.insert(path, contents.to_vec());
                 Ok(())
             }
             _ => Err(not_found(&path)),
@@ -1019,7 +1042,7 @@ impl Host for FakeHost {
         self.file_root_at(self.walk(root, parents)?.join(name))
     }
 
-    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<u8>> {
         let path = self.walk_file(root, names)?;
         self.files
             .get(&path)
@@ -1031,7 +1054,7 @@ impl Host for FakeHost {
         &mut self,
         root: &RootHandle,
         names: &[String],
-        contents: &str,
+        contents: &[u8],
     ) -> io::Result<()> {
         if !root.is_file() && names.is_empty() {
             return Err(no_name());

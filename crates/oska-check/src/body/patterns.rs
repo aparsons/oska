@@ -35,14 +35,18 @@ impl Body<'_, '_, '_> {
         arms: &[MatchArm],
         expected: Option<&Ty>,
     ) -> Ty {
-        let scrutinee_ty = self.infer(scrutinee);
+        let mut scrutinee_ty = self.infer(scrutinee);
+        if self.is_secret(&scrutinee_ty) {
+            self.secret_branch("a `match` scrutinee", scrutinee.span, None);
+            scrutinee_ty = Ty::Error;
+        }
         let mut result: Option<Ty> = expected.cloned();
         let mut pats = Vec::new();
         for arm in arms {
             let height = self.locals.len();
             pats.push(self.pattern(&arm.pattern, &scrutinee_ty));
             if let Some(guard) = &arm.guard {
-                self.check(guard, &Ty::bool());
+                self.condition(guard, "a `match` guard");
             }
             match &result {
                 Some(ty) => {

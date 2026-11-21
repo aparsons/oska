@@ -164,7 +164,8 @@ pub struct Outcome {
     /// `None` when a signal killed it.
     pub exit_code: Option<i32>,
     /// Every file under the working directory afterwards, by relative
-    /// path, with its contents; a directory has `None`.
+    /// path, with its contents (`<not UTF-8: HEX>` for bytes that are not
+    /// text); a directory has `None`.
     pub tree: BTreeMap<String, Option<String>>,
 }
 
@@ -534,6 +535,16 @@ fn outcome(mut command: Command, case: &Case, dir: &Path) -> Outcome {
     }
 }
 
+/// A file's contents as the tree records them: its text, or, for bytes
+/// that are not UTF-8, every byte in hexadecimal, so that two files that
+/// differ in any byte never look the same.
+fn contents(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| {
+        let hex: String = e.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        format!("<not UTF-8: {hex}>")
+    })
+}
+
 fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Option<String>>) {
     let entries = std::fs::read_dir(dir).expect("should list the directory");
     for entry in entries {
@@ -553,7 +564,7 @@ fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Option<String
             read_tree(&path, &format!("{name}/"), tree);
         } else {
             let bytes = std::fs::read(&path).expect("should read the file");
-            tree.insert(name, Some(String::from_utf8_lossy(&bytes).into_owned()));
+            tree.insert(name, Some(contents(bytes)));
         }
     }
 }

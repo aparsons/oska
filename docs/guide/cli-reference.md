@@ -291,7 +291,7 @@ A bare `-` as the path makes `check` and `run` read one module from standard inp
 | --- | --- |
 | `0` | The executable was written. |
 | `1` | The checker refused the program, or the executable could not be written (`E0391`). |
-| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`), or `--target` names a platform it cannot build for (`E0393`, `E0394`). |
+| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`), the backend's code would depend on a secret (`E0398`, a bug in `oskac`), or `--target` names a platform it cannot build for (`E0393`, `E0394`). |
 
 See the [runtime notes](../runtime.md#native-builds) for the codes.
 
@@ -312,7 +312,7 @@ The first line puts the name and the version under the signature, so a signed re
 | --- | --- |
 | `0` | The release was written and signed. |
 | `1` | The checker refused the program, the directory could not be written or already exists (`E0391`), the key is missing, is not an SSH signing key, or could not sign (`E0396`), or the program's name cannot name a release (`E0397`). |
-| `2` | The version is missing or is not `X.Y.Z` (`E0395`), or the program uses something the native backend cannot compile yet (`E0371`, `E0390`). |
+| `2` | The version is missing or is not `X.Y.Z` (`E0395`), or the program uses something the native backend cannot compile yet (`E0371`, `E0390`), or the backend's code would depend on a secret (`E0398`, a bug in `oskac`). |
 
 ## `oskac fix`
 
@@ -556,7 +556,7 @@ oskac doc List.push            # one method
 oskac doc std.sql.connect      # an item, with its module
 ```
 
-An item is a function, a struct, an enum, a trait, a built-in capability, a method of a type or trait (`List.push`, `Eq.eq`), or an `impl Trait for Type` (`Display for IoError`). For each, the reference gives:
+An item is a function, a struct, an enum, a trait, a built-in capability, a method of a type or trait (`List.push`, `Eq.eq`), or an `impl Trait for Type` (`Display for IoError`). A method that impls of one type with different type arguments share is named with its impl's type, as `Secret<U8>.rotl` and `Secret<U32>.rotl`, so each has its own entry and URL; `oskac doc Secret.rotl` lists them all. For each, the reference gives:
 
 - its signature, as the source declares it, on one line, without private fields;
 - its authority, in the authority report's words: `pure`, or each capability-bearing parameter with what it supplies, as `FsRead (self)`. A type names the capabilities a value of it carries;
@@ -572,7 +572,7 @@ With `--format=json` it prints `{"items": [...]}`, one object per item and per l
 | Field | Value |
 | --- | --- |
 | `module` | `"prelude"`, or the module's path, such as `"std.sql"`. |
-| `name` | The item's name: `"connect"`, `"List.push"`, `"Display for IoError"`. Each module also has one item of kind `module`, named by its path, whose `description` describes the module. |
+| `name` | The item's name: `"connect"`, `"List.push"`, `"Secret<U8>.rotl"`, `"Display for IoError"`. Each module also has one item of kind `module`, named by its path, whose `description` describes the module. |
 | `kind` | `"module"`, `"fn"`, `"struct"`, `"enum"`, `"trait"`, `"capability"`, `"method"` or `"impl"`. |
 | `signature` | The declaration on one line, such as `"pub fn push(var self, item: T)"`. Empty for a module. |
 | `description` | The comment above the item, as Markdown, with `\n\n` between paragraphs. Empty when there is none. |

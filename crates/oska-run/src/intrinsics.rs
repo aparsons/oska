@@ -19,13 +19,17 @@ use oska_check::limits;
 use oska_check::program::IntrinsicName;
 use oska_syntax::Span;
 
+use crate::bytes;
 use crate::confine::{self, Intent};
 use crate::data;
 use crate::host::{Host, RootHandle};
 use crate::html;
+use crate::int_methods;
 use crate::interp::{Interpreter, Stream};
 use crate::memory;
+use crate::ops;
 use crate::panics::{codes, Panic};
+use crate::secrets;
 use crate::tasks;
 use crate::testing;
 use crate::traits;
@@ -84,6 +88,7 @@ pub const INTRINSICS: Table = &[
     ("Dir.restrict_to", Plain(dir_restrict_to)),
     ("Dir.write_only", Plain(fs_write_only)),
     ("DirRead.list_dir", Plain(fs_list_dir)),
+    ("DirRead.read_bytes", Plain(fs_read_bytes)),
     ("DirRead.read_to_string", Plain(fs_read_to_string)),
     ("DirRead.restrict_to", Plain(dir_restrict_to)),
     ("DirRead.restrict_to_file", Plain(dir_restrict_to_file)),
@@ -91,10 +96,13 @@ pub const INTRINSICS: Table = &[
     ("DirWrite.restrict_to", Plain(dir_restrict_to)),
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.write", Plain(fs_write)),
+    ("DirWrite.write_bytes", Plain(fs_write_bytes)),
     ("Env.get", Plain(env_get)),
     ("Env.secret", HigherOrder(env_secret)),
+    ("FileRead.read_bytes", Plain(file_read_bytes)),
     ("FileRead.read_to_string", Plain(file_read_to_string)),
     ("FileWrite.write", Plain(file_write)),
+    ("FileWrite.write_bytes", Plain(file_write_bytes)),
     ("Fs.read_only", Plain(fs_read_only)),
     ("Fs.restrict_to", Plain(fs_restrict_to)),
     ("Fs.write_only", Plain(fs_write_only)),
@@ -122,6 +130,12 @@ pub const INTRINSICS: Table = &[
     ("Stdout.println", HigherOrder(stdout_println)),
     ("String.assume_trusted", Plain(string_assume_trusted)),
     ("String.to_string", Plain(string_to_string)),
+    ("U32.rotl", Plain(rotl)),
+    ("U32.rotr", Plain(rotr)),
+    ("U64.rotl", Plain(rotl)),
+    ("U64.rotr", Plain(rotr)),
+    ("U8.rotl", Plain(rotl)),
+    ("U8.rotr", Plain(rotr)),
     ("dbg", HigherOrder(dbg)),
     ("todo", Plain(todo)),
 ];
@@ -153,9 +167,12 @@ pub fn resolved(name: &IntrinsicName) -> Intrinsic {
 
 /// Every module's table, in the order [`lookup`] prefers them, with the
 /// `std` module whose functions it holds, for a `std` module's table.
-const TABLES: [(Option<&str>, Table); 6] = [
+const TABLES: [(Option<&str>, Table); 9] = [
     (None, INTRINSICS),
+    (None, int_methods::INTRINSICS),
     (None, data::INTRINSICS),
+    (None, bytes::INTRINSICS),
+    (None, secrets::INTRINSICS),
     (None, tasks::INTRINSICS),
     (None, traits::INTRINSICS),
     (None, testing::INTRINSICS),
@@ -228,13 +245,38 @@ fn io_failure(err: &io::Error, span: Span) -> Result<Value, Panic> {
     )?))
 }
 
-/// The text read from outside, or the failure, counted under
-/// `--max-memory` once read, at `span`.
-fn io_text(result: io::Result<String>, span: Span) -> Result<Value, Panic> {
+/// The text of the bytes read from outside, or the failure, counted
+/// under `--max-memory` once read, at `span`. Bytes that are not UTF-8
+/// are a failure, worded as Rust's `read_to_string` words it.
+fn io_text(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
+    let result = result.and_then(|bytes| {
+        String::from_utf8(bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })
+    });
     match result {
         Ok(text) => Ok(Value::ok(memory::text(&text, span)?)),
         Err(err) => io_failure(&err, span),
     }
+}
+
+/// The bytes read from outside, as they are, or the failure, counted
+/// under `--max-memory` once read, at `span`.
+fn io_bytes(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
+    match result {
+        Ok(bytes) => Ok(Value::ok(memory::bytes_of_len(bytes.len(), span, || {
+            bytes
+        })?)),
+        Err(err) => io_failure(&err, span),
+    }
+}
+
+/// The bytes of the `Bytes` argument at `index`.
+fn bytes_arg(args: &[Value], index: usize) -> &[u8] {
+    args[index].as_bytes()
 }
 
 // ---- Standard streams --------------------------------------------------
@@ -340,6 +382,11 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
             }
             out.push(']');
         }
+        Value::Bytes(data) => {
+            out.push_str("Bytes(");
+            out.push_str(&bytes::hex(data));
+            out.push(')');
+        }
         Value::Closure(_) => out.push_str("<closure>"),
         Value::Function(_) => out.push_str("<fn>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
@@ -440,27 +487,36 @@ fn secret_expose(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Pa
     Ok(args[0].fields()[0].clone())
 }
 
-/// `Secret.constant_time_eq(self, other)`.
+/// `Secret.constant_time_eq(self, other)`, on secret text or bytes.
 fn secret_constant_time_eq(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
-    let secret = args[0].fields()[0].as_str();
-    Ok(Value::Bool(constant_time_eq(secret, text(args, 1))))
+    let secret = &args[0].fields()[0];
+    Ok(Value::Bool(constant_time_eq(
+        contents(secret),
+        contents(&args[1]),
+    )))
 }
 
-/// `Secret.constant_time_eq_secret(self, other)`.
+/// `Secret.constant_time_eq_secret(self, other)`, on secret text or bytes.
 fn secret_constant_time_eq_secret(
     _: &mut dyn Host,
     args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
-    let a = args[0].fields()[0].as_str();
-    let b = args[1].fields()[0].as_str();
-    Ok(Value::Bool(constant_time_eq(a, b)))
+    let (a, b) = (&args[0].fields()[0], &args[1].fields()[0]);
+    Ok(Value::Bool(constant_time_eq(contents(a), contents(b))))
+}
+
+/// The bytes of a text or `Bytes` value.
+fn contents(value: &Value) -> &[u8] {
+    match value {
+        Value::Bytes(bytes) => bytes,
+        _ => value.as_str().as_bytes(),
+    }
 }
 
 /// Whether `a` and `b` are equal, in time that depends on their lengths
 /// but not on where they first differ.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let diff = a
         .iter()
         .zip(b)
@@ -655,8 +711,20 @@ fn root_for(fs: &FsCap, intent: Intent) -> io::Result<&RootHandle> {
 /// `DirRead.read_to_string(self, path)`: the path is walked beneath the
 /// root's handle (`confine.rs`).
 fn fs_read_to_string(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    io_text(fs_read(host, args), span)
+}
+
+/// `DirRead.read_bytes(self, path)`: read as `read_to_string` reads, but
+/// the bytes as they are.
+fn fs_read_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    io_bytes(fs_read(host, args), span)
+}
+
+/// The bytes of the file a `DirRead` (`args[0]`) reaches at the path
+/// `args[1]`.
+fn fs_read(host: &mut dyn Host, args: &[Value]) -> io::Result<Vec<u8>> {
     let raw = args[1].fields()[0].as_str();
-    let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
+    root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
         if names.is_empty() {
             return Err(io::Error::new(
@@ -665,8 +733,7 @@ fn fs_read_to_string(host: &mut dyn Host, args: &mut Args, span: Span) -> Result
             ));
         }
         host.read_file_beneath(root, &names)
-    });
-    io_text(result, span)
+    })
 }
 
 /// `DirRead.list_dir(self, path)`: the names of the entries of the
@@ -693,13 +760,22 @@ fn fs_list_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value
 /// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
 /// and is walked beneath the root's handle.
 fn fs_write(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
-    let contents = text(args, 2);
+    io_unit(fs_put(host, args, text(args, 2).as_bytes()), span)
+}
+
+/// `DirWrite.write_bytes(self, path, contents)`: `write` with bytes.
+fn fs_write_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    io_unit(fs_put(host, args, bytes_arg(args, 2)), span)
+}
+
+/// Write `contents` to the file a `DirWrite` (`args[0]`) reaches at the
+/// path `args[1]`.
+fn fs_put(host: &mut dyn Host, args: &[Value], contents: &[u8]) -> io::Result<()> {
     let raw = args[1].fields()[0].as_str();
-    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+    root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
         host.write_file_beneath(root, &names, contents)
-    });
-    io_unit(result, span)
+    })
 }
 
 /// `DirWrite.create_dir(self, path)`: confined like a write, so `path`
@@ -720,11 +796,24 @@ fn file_read_to_string(host: &mut dyn Host, args: &mut Args, span: Span) -> Resu
     io_text(result, span)
 }
 
+/// `FileRead.read_bytes(self)`: the file's bytes, as they are.
+fn file_read_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
+    io_bytes(result, span)
+}
+
 /// `FileWrite.write(self, contents)`: creates the file, or replaces what
 /// it holds, opened by its name beneath the parent directory's handle.
 fn file_write(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
-    let result =
-        file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], text(args, 1)));
+    let contents = text(args, 1).as_bytes();
+    let result = file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], contents));
+    io_unit(result, span)
+}
+
+/// `FileWrite.write_bytes(self, contents)`: `write` with bytes.
+fn file_write_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let contents = bytes_arg(args, 1);
+    let result = file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], contents));
     io_unit(result, span)
 }
 
@@ -796,6 +885,25 @@ fn todo(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
         "reached `todo()`: this code is not written yet",
         span,
     ))
+}
+
+/// `U8.rotl(self, n)`, and `U32`'s and `U64`'s: `P0008` for an amount
+/// out of range (`ops::rotate`).
+fn rotl(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    rotate(args, true, span)
+}
+
+/// `U8.rotr(self, n)`, and `U32`'s and `U64`'s.
+fn rotr(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    rotate(args, false, span)
+}
+
+/// A rotation's receiver and amount, `args`, rotated left or not.
+fn rotate(args: &mut Args, left: bool, span: Span) -> Result<Value, Panic> {
+    let (Some(n), Some(x)) = (args.pop(), args.pop()) else {
+        unreachable!("a rotation's receiver and amount");
+    };
+    ops::rotate(x, n, left, span)
 }
 
 /// `Int.to_string(self)`: the integer in decimal.

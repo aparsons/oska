@@ -42,7 +42,7 @@ tree() {
   shift
   dir=$(mktemp -d "$work/tree.XXXXXX")
   mkdir -p "$dir/examples/pkg" "$dir/crates/oskac/tests/fixtures/packages" "$dir/site" \
-    "$dir/scripts/cross-build"
+    "$dir/crates/oskac/tests/fixtures/secret_crypto" "$dir/scripts/cross-build"
   touch "$dir/examples/hello.osk" "$dir/examples/pkg/oska.toml" \
     "$dir/crates/oskac/tests/fixtures/tested.osk" "$dir/site/build.osk"
   for program in "$@"; do
@@ -96,6 +96,10 @@ expect_pass "a source file is built for every target" "$dir" \
   "linux-x86_64 examples/hello.osk $(hash_of examples/hello.osk linux-x86_64)"
 expect_pass "a package is built from its directory" "$dir" \
   "linux-aarch64 examples/pkg $(hash_of examples/pkg linux-aarch64)"
+
+dir=$(tree '' crates/oskac/tests/fixtures/secret_crypto/sha256_secret.osk)
+expect_pass "a secret crypto fixture is built for every target" "$dir" \
+  "windows-x86_64 crates/oskac/tests/fixtures/secret_crypto/sha256_secret.osk $(hash_of crates/oskac/tests/fixtures/secret_crypto/sha256_secret.osk windows-x86_64)"
 
 dir=$(tree '' examples/refused.osk)
 # shellcheck disable=SC2016 # the backticks are literal error text

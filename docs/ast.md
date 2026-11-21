@@ -451,7 +451,7 @@ A prefix operator.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `op` | string | `-` or `!` |
+| `op` | string | `-`, `!` or `~` |
 | `operand` | expression node |  |
 
 #### `BinaryExpr`
@@ -460,7 +460,7 @@ A binary operator.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `op` | string | as written: `implies`, `\|\|`, `&&`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `+`, `-`, `*`, `/`, `%` |
+| `op` | string | as written: `implies`, `\|\|`, `&&`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `\|`, `^`, `&`, `<<`, `>>`, `+`, `-`, `*`, `/`, `%` |
 | `lhs` | expression node |  |
 | `rhs` | expression node |  |
 

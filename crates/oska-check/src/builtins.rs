@@ -23,6 +23,9 @@ pub use crate::ty::{
 /// The prelude's `Task`, which `Scope.spawn` returns.
 pub const TASK: &str = "Task";
 
+/// The prelude's `Bytes`, a packed buffer laid out by each backend.
+pub const BYTES: &str = "Bytes";
+
 /// The prelude's `Path`.
 pub const PATH: &str = "Path";
 /// The prelude's `IoError`, the error of every I/O operation.
