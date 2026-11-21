@@ -384,6 +384,7 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to_file(\"site/favicon.svg\")",
         "read.restrict_to_file(\"Cargo.toml\")",
         "read.restrict_to_file(\"site/authority.txt\")",
+        "read.restrict_to_file(\"site/api.json\")",
         "read.restrict_to_file(\"site/lastmod.txt\")",
         "restrict_to(Path.new(\"_site\"))",
     ] {
@@ -2203,4 +2204,34 @@ fn the_dead_targets_the_site_review_found_now_resolve() {
             assert!(!site[copy].contains(dead), "{copy} still has {dead}");
         }
     }
+}
+
+// ---- The real site: the API reference (#294) --------------------------------------------
+
+/// The real site, built from the `std.sql` part of the real reference
+/// (`common::site::real_inputs`), has its page, with a heading at each
+/// item's anchor, and republishes the items in `api.json`. `oskac`'s own
+/// tests build it from the whole reference.
+#[test]
+fn the_real_site_publishes_the_reference_with_an_anchor_per_item() {
+    let site = real_site();
+    let input = common::site::real_inputs()["site/api.json"].clone();
+    let reference = oska_syntax::parse_json(&input).expect("the reference is JSON");
+    let items = reference
+        .get("items")
+        .and_then(oska_syntax::JsonValue::as_array)
+        .expect("an items array");
+    let page = &site["api/std-sql.html"];
+    for item in items {
+        let url = item.get("url").and_then(|u| u.as_str()).expect("a url");
+        if let Some((_, anchor)) = url.split_once('#') {
+            assert!(page.contains(&format!("<h2 id=\"{anchor}\">")), "{url}");
+        }
+    }
+    assert_eq!(
+        oska_syntax::parse_json(&site["api.json"]).expect("api.json is JSON"),
+        reference
+    );
+    assert!(site["reference.html"].contains("<a href=\"/api/\">API reference</a>"));
+    assert!(llms_group(&site["llms.txt"], "API reference").contains("/api/std-sql.md"));
 }

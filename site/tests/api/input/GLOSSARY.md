@@ -1,0 +1,5 @@
+# Glossary
+
+## Capability
+
+A value.

@@ -36,6 +36,9 @@ jobs:
       # The generator publishes its own authority report, as the checker
       # prints it now, at /authority.html.
       - run: ./target/release/oskac check site/build.osk > site/authority.txt
+      # The API reference, as this `oskac` prints it, which the generator
+      # publishes at /api/ and /api.json.
+      - run: ./target/release/oskac doc --format=json > site/api.json
       # Each published source file's last commit date, for the sitemap's
       # <lastmod>: one `YYYY-MM-DD path` line per file.
       - name: Write site/lastmod.txt
@@ -116,7 +119,7 @@ jobs:
       - name: the files agents and installers fetch are published
         run: |
           for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt llms-research.txt \
-            sitemap.xml robots.txt latest.json codes.json search.json agent-setup.md \
+            sitemap.xml robots.txt latest.json codes.json api.json search.json agent-setup.md \
             security.md favicon.svg; do
             curl --silent --show-error --fail --location --output /dev/null \
               --retry 6 --retry-delay 10 --retry-all-errors \
