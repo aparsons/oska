@@ -71,10 +71,14 @@ pub mod codes {
     pub const NOT_A_SIGNING_KEY: &str = "E0396";
     /// `oskac release` on a program whose name cannot name a release.
     pub const BAD_RELEASE_NAME: &str = "E0397";
+    /// The backend's own code would make a branch or a memory address
+    /// depend on a secret (`constant_time.rs`): an internal error, a bug
+    /// in the backend, never in the program.
+    pub const NOT_CONSTANT_TIME: &str = "E0398";
 
     /// The backend's own codes, in the order `docs/runtime.md` lists
     /// them. `E0371` is the interpreter's, shared.
-    pub const ALL: [&str; 8] = [
+    pub const ALL: [&str; 9] = [
         UNSUPPORTED,
         UNWRITABLE_OUTPUT,
         PROCESS_FAULT,
@@ -83,6 +87,7 @@ pub mod codes {
         BAD_VERSION,
         NOT_A_SIGNING_KEY,
         BAD_RELEASE_NAME,
+        NOT_CONSTANT_TIME,
     ];
 
     /// The `P`-codes native code panics with: the interpreter's.

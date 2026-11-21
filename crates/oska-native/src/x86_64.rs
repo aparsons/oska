@@ -42,6 +42,8 @@
 //! executable needs no relocation: [`Text::link`] patches the addresses
 //! of data ([`Fixup`]) once the file has been laid out.
 
+#[cfg(test)]
+mod decode;
 mod encode;
 
 use encode::{
@@ -457,9 +459,9 @@ impl Emitter {
                 self.asm.constant(r, *value);
                 self.write(*dst, r);
             }
-            // A secret's mark is the optimizer's and the guard's
+            // Secrets' marks and exposures are the optimizer's and the guard's
             // (`constant_time.rs`): here it is a copy.
-            Inst::Copy { dst, src } | Inst::Secret { dst, src } => {
+            Inst::Copy { dst, src } | Inst::Secret { dst, src } | Inst::Expose { dst, src } => {
                 let s = self.read(*src, RAX);
                 self.write(*dst, s);
             }
@@ -938,7 +940,7 @@ fn condition(cond: Cond) -> u8 {
 /// For each function of `module`, for each of its instructions, what its
 /// machine code does that a secret must not decide: its conditional
 /// jumps and its memory operands, by whether `rsp` or `rbp` addresses
-/// them (`encode.rs` notes each as it encodes it).
+/// them, decoded from the bytes (`decode.rs`).
 #[cfg(test)]
 pub(crate) fn trace(module: &Module, windows: bool) -> Vec<Vec<crate::target::Selected>> {
     let mut emitter = Emitter {
@@ -952,27 +954,14 @@ pub(crate) fn trace(module: &Module, windows: bool) -> Vec<Vec<crate::target::Se
             .function(function)
             .expect("the code should be emitted");
     }
-    let notes = &emitter.asm.notes;
+    let bytes = &emitter.asm.bytes;
     emitter
         .ranges
         .iter()
         .map(|function| {
             function
                 .iter()
-                .map(|range| {
-                    let mut selected = crate::target::Selected::default();
-                    for (at, note) in notes {
-                        if !range.contains(at) {
-                            continue;
-                        }
-                        match note {
-                            encode::Note::ConditionalJump => selected.conditional_branches += 1,
-                            encode::Note::Memory(RSP | RBP) => selected.stack_accesses += 1,
-                            encode::Note::Memory(_) => selected.other_accesses += 1,
-                        }
-                    }
-                    selected
-                })
+                .map(|range| decode::selected(&bytes[range.clone()]))
                 .collect()
         })
         .collect()

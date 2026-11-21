@@ -66,9 +66,10 @@ fn a_branch_on_a_secret_fails_the_build_with_an_internal_error() {
         ]),
     );
     let diagnostic = verify(&[f]).expect_err("the build should fail");
-    assert_eq!(diagnostic.code, "E0390");
+    assert_eq!(diagnostic.code, "E0398");
     assert!(
-        diagnostic.message.starts_with("internal error:"),
+        diagnostic.message.starts_with("internal error:")
+            && !diagnostic.message.contains("interpret"),
         "{}",
         diagnostic.message
     );
@@ -259,10 +260,9 @@ fn a_result_computed_from_a_secret_argument_is_secret_to_the_caller() {
     assert_eq!(leak(&[caller, rotl]).function, "caller");
 }
 
-/// `bytes_read` marks the bytes it reads, but `Bytes.at` of public bytes
-/// is public: a mark stays in the function that makes it.
+/// A value marked in a callee and returned is secret in the caller.
 #[test]
-fn a_mark_made_in_a_callee_does_not_make_its_result_secret() {
+fn a_value_marked_in_a_callee_is_secret_in_the_caller() {
     let caller = function(
         "main",
         1,
@@ -278,7 +278,7 @@ fn a_mark_made_in_a_callee_does_not_make_its_result_secret() {
         ],
     );
     let read = function(
-        "bytes_read",
+        "bytes_read_secret",
         1,
         vec![
             Inst::Load {
@@ -288,10 +288,163 @@ fn a_mark_made_in_a_callee_does_not_make_its_result_secret() {
                 offset: 24,
             },
             Inst::Secret { dst: 2, src: 1 },
+            Inst::BinaryImm {
+                op: BinOp::Shl,
+                dst: 3,
+                lhs: 2,
+                imm: 8,
+            },
+            Inst::Return(3),
+        ],
+    );
+    assert_eq!(
+        leak(&[caller, read]),
+        Leak {
+            function: "main".to_string(),
+            what: "the condition of a branch",
+        }
+    );
+}
+
+/// What a secret exposure gives is public: the result of a constant-time
+/// comparison, which the caller may branch on.
+#[test]
+fn an_exposed_value_is_public() {
+    let caller = function(
+        "main",
+        1,
+        vec![
+            Inst::Call {
+                dst: 1,
+                callee: 1,
+                args: vec![0],
+            },
+            Inst::JumpIfZero { cond: 1, target: 0 },
+            Inst::Label(0),
+            Inst::Return(1),
+        ],
+    );
+    let compare = function(
+        "bytes_constant_time_eq",
+        1,
+        vec![
+            Inst::Load {
+                width: Width::W8,
+                dst: 1,
+                base: 0,
+                offset: 24,
+            },
+            Inst::Secret { dst: 2, src: 1 },
+            Inst::Expose { dst: 3, src: 2 },
+            Inst::CompareImm {
+                cond: Cond::Eq,
+                dst: 4,
+                lhs: 3,
+                imm: 0,
+            },
+            Inst::Return(4),
+        ],
+    );
+    assert!(secrets(&[caller, compare]).is_ok());
+}
+
+/// A recursive function that branches on what its own recursive call
+/// returns, computed from its secret argument.
+#[test]
+fn a_branch_on_a_recursive_call_of_a_secret_is_refused() {
+    let caller = function(
+        "main",
+        1,
+        with_secret(vec![
+            Inst::Call {
+                dst: 4,
+                callee: 1,
+                args: vec![2],
+            },
+            Inst::Return(0),
+        ]),
+    );
+    let recursive = function(
+        "recursive",
+        1,
+        vec![
+            Inst::Call {
+                dst: 1,
+                callee: 1,
+                args: vec![0],
+            },
+            Inst::JumpIfZero { cond: 1, target: 0 },
+            Inst::Label(0),
+            Inst::Return(0),
+        ],
+    );
+    assert_eq!(leak(&[caller, recursive]).function, "recursive");
+}
+
+/// An indirect call's callee is not known, so a secret argument to one
+/// cannot be followed: it is refused.
+#[test]
+fn a_secret_argument_of_an_indirect_call_is_refused() {
+    let f = function(
+        "f",
+        1,
+        with_secret(vec![
+            Inst::Addr {
+                dst: 4,
+                symbol: crate::ir::Symbol::Function(1),
+            },
+            Inst::CallIndirect {
+                dst: 5,
+                target: 4,
+                args: vec![2],
+            },
+            Inst::Return(5),
+        ]),
+    );
+    let g = function("g", 1, vec![Inst::Return(0)]);
+    assert_eq!(
+        leak(&[f, g]).what,
+        "an argument of an indirect call, whose callee is not known,"
+    );
+}
+
+/// An indirect call may reach any function whose address is taken: its
+/// result is secret when one of theirs is.
+#[test]
+fn an_indirect_call_gives_a_secret_when_a_function_it_may_reach_does() {
+    let f = function(
+        "f",
+        1,
+        vec![
+            Inst::Addr {
+                dst: 1,
+                symbol: crate::ir::Symbol::Function(1),
+            },
+            Inst::CallIndirect {
+                dst: 2,
+                target: 1,
+                args: vec![0],
+            },
+            Inst::JumpIfZero { cond: 2, target: 0 },
+            Inst::Label(0),
+            Inst::Return(0),
+        ],
+    );
+    let g = function(
+        "g",
+        1,
+        vec![
+            Inst::Load {
+                width: Width::W64,
+                dst: 1,
+                base: 0,
+                offset: 8,
+            },
+            Inst::Secret { dst: 2, src: 1 },
             Inst::Return(2),
         ],
     );
-    assert!(secrets(&[caller, read]).is_ok());
+    assert_eq!(leak(&[f, g]).function, "f");
 }
 
 #[test]
@@ -343,6 +496,8 @@ fn a_loop_bound_on_a_public_length_is_fine_and_on_a_secret_is_not() {
 /// Programs through the whole pipeline: lowering, the optimizer, the
 /// guard, and each target's instruction selection.
 mod programs {
+    use std::collections::HashMap;
+
     use oska_check::limits::Limits;
 
     use super::super::secrets;
@@ -351,6 +506,27 @@ mod programs {
 
     /// Every operation on a secret, called from `main`.
     const SECRET_OPS: &str = include_str!("secret_ops.osk");
+
+    /// The functions in which `SECRET_OPS`'s operations are computed: one
+    /// for each secret integer type's operators and methods, the
+    /// conversions, `Secret<Bool>`'s methods, `ct_eq`, `ct_select` and
+    /// `Secret<Bytes>`'s methods; and the `std.rt` functions that handle
+    /// secret bytes and secret arguments.
+    const SECRET_FUNCTIONS: [&str; 13] = [
+        "ops_u8",
+        "ops_u32",
+        "ops_u64",
+        "conversions",
+        "conditions",
+        "equalities",
+        "selects",
+        "buffers",
+        "std.rt.bytes_read_secret",
+        "std.rt.bytes_select",
+        "std.rt.bytes_constant_time_eq",
+        "std.rt.text_equal_constant",
+        "std.rt.bytes_push_int",
+    ];
 
     /// `src`, which checks cleanly, lowered and optimized for `target`.
     fn lower(src: &str, target: Target) -> Result<Module, oska_syntax::Diagnostic> {
@@ -398,21 +574,7 @@ mod programs {
     fn the_guard_follows_every_secret_operation() {
         let module = lower(SECRET_OPS, Target::LinuxAarch64).expect("it lowers");
         let names = with_secrets(&module);
-        for name in [
-            "ops_u8",
-            "ops_u32",
-            "ops_u64",
-            "conversions",
-            "conditions",
-            "equalities",
-            "selects",
-            "buffers",
-            "std.rt.bytes_read",
-            "std.rt.bytes_select",
-            "std.rt.bytes_constant_time_eq",
-            "std.rt.text_equal_constant",
-            "std.rt.bytes_push_int",
-        ] {
+        for name in SECRET_FUNCTIONS {
             assert!(names.contains(&name), "no secret in `{name}`: {names:?}");
         }
     }
@@ -450,7 +612,7 @@ mod programs {
         let built = lower(src, Target::LinuxX86_64);
         lower::BRANCHY.with(|b| b.set(false));
         let diagnostic = built.expect_err("the build should fail");
-        assert_eq!(diagnostic.code, "E0390");
+        assert_eq!(diagnostic.code, "E0398");
         assert!(
             diagnostic.message.starts_with("internal error:")
                 && diagnostic.message.contains("the condition of a branch"),
@@ -460,17 +622,19 @@ mod programs {
         assert!(lower(src, Target::LinuxX86_64).is_ok(), "fixed, it builds");
     }
 
-    /// On aarch64 and on x86_64, the machine code of every instruction
-    /// that reads a secret has no conditional branch, and reads or writes
-    /// memory only in the stack frame, unless it is a load, store or call,
-    /// whose address the guard has shown is public.
+    /// On aarch64 and on x86_64, for every target, the machine code of
+    /// every instruction that reads a secret has no conditional branch,
+    /// and reads or writes memory only in the stack frame, unless it is a
+    /// load, store or call, whose address the guard has shown is public.
+    /// Each operation's function, and each `std.rt` function that handles
+    /// secret bytes, is inspected.
     #[test]
     fn the_machine_code_of_every_secret_operation_is_branch_free() {
-        for target in [Target::LinuxAarch64, Target::LinuxX86_64] {
+        for target in Target::ALL {
             let module = lower(SECRET_OPS, target).expect("it lowers");
             let marked = secrets(&module.functions).expect("the code is constant-time");
             let selected = target.trace(&module);
-            let mut inspected = 0;
+            let mut inspected: HashMap<&str, usize> = HashMap::new();
             for ((function, marked), selected) in
                 module.functions.iter().zip(&marked).zip(&selected)
             {
@@ -478,7 +642,7 @@ mod programs {
                     if !inst.uses().iter().any(|&t| marked[t as usize]) {
                         continue;
                     }
-                    inspected += 1;
+                    *inspected.entry(function.name.as_str()).or_default() += 1;
                     let at = format!("{target:?}, `{}`: {inst:?}", function.name);
                     assert_eq!(code.conditional_branches, 0, "{at}");
                     let addressed = matches!(
@@ -493,7 +657,12 @@ mod programs {
                     }
                 }
             }
-            assert!(inspected > 100, "{target:?}: only {inspected} inspected");
+            for name in SECRET_FUNCTIONS {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
             // The trace sees branches and loads where public values decide
             // them, so it would see them where a secret did.
             let all = selected.iter().flatten();

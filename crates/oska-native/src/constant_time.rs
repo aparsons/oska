@@ -5,12 +5,13 @@
 //! shift amount (`E0353` to `E0356`). This is the backend's half: after
 //! lowering and optimization, just before code is selected, [`verify`]
 //! follows every secret through the code and fails the build with an
-//! internal error (`E0390`) if one reaches
+//! internal error (`E0398`) if one reaches
 //!
 //! - the condition of a branch ([`Inst::Branch`], [`Inst::BranchImm`],
 //!   [`Inst::JumpIfZero`]), or checked arithmetic, which branches on
 //!   overflow ([`Inst::Arith`], [`Inst::ArithImm`]);
-//! - the address of a load or store, or of an indirect call.
+//! - the address of a load or store, or of a call;
+//! - an argument of an indirect call, whose callee is not known.
 //!
 //! That cannot happen for a program that checked: it would be a bug in
 //! the lowering or the optimizer, and the build stops rather than write
@@ -21,28 +22,38 @@
 //! The lowering marks a secret with an [`Inst::Secret`]: the value read
 //! out of a `Secret<U8>`, `Secret<U32>`, `Secret<U64>` or `Secret<Bool>`
 //! (`data.rs`'s `field`), and in `std.rt` a byte of secret bytes, which
-//! `rt_mem_conceal` marks (`bytes_read`, `bytes_constant_time_eq`,
-//! `bytes_select`, the constant-time text comparison). A `Secret<Bytes>`'s
-//! object address and length are public; only its bytes are secret.
+//! `rt_mem_conceal` marks (`bytes_read_secret`, which `Secret<Bytes>`'s
+//! reads call, `bytes_constant_time_eq`, `bytes_select`, and the
+//! constant-time text comparison). A `Secret<Bytes>`'s object address and
+//! length are public; only its bytes are secret. An [`Inst::Expose`]
+//! (`std.rt`'s `rt_mem_expose`) makes a value public on purpose: the
+//! result of a constant-time comparison, a public `Bool`.
 //!
-//! Every value an instruction computes from a secret is secret. A call
-//! with secret arguments is followed into the callee, with those
-//! parameters secret (each callee once for each set of secret
-//! parameters), and its result is secret when the callee returns a value
-//! computed from one of them. A mark made inside the callee stays there:
-//! `bytes_read` gives `Bytes.at` of public bytes a public byte, and a
-//! secret's operation stores its result in a new `Secret`, whose read is
-//! marked again. A value stored to memory and loaded back is not followed:
-//! the reads that matter are the marked ones.
+//! Every value an instruction computes from a secret is secret. A call is
+//! followed into its callee, with the parameters its secret arguments
+//! pass to secret, and its result is secret when the callee can return a
+//! secret, from those parameters or from a mark of its own. Recursion is
+//! followed to a fixed point. An indirect call may reach any function
+//! whose address the code takes: it may not pass a secret, and its result
+//! is secret when one of theirs can be.
 //!
-//! Each function is followed as a whole, not path by path: a temporary
-//! is secret if any instruction writes a secret to it.
+//! # Limits
+//!
+//! - A value stored to memory and loaded back is not followed: a load
+//!   gives a public value. Secrets are marked again where they are read:
+//!   every read of a secret word out of its `Secret`, and every byte
+//!   `std.rt` reads from secret bytes through `rt_mem_conceal`. A byte
+//!   `std.rt` read from secret bytes without it would not be followed.
+//! - Each function is followed as a whole, not path by path: a temporary
+//!   is secret if any instruction writes a secret to it.
+//! - A function that marks a secret is never inlined (`optimize.rs`), so
+//!   the mark stays where the lowering made it.
 
 use std::collections::{HashMap, HashSet};
 
 use oska_syntax::Diagnostic;
 
-use crate::ir::{FnId, Function, Inst, Temp};
+use crate::ir::{FnId, Function, Inst, Symbol};
 use crate::{codes, NOWHERE};
 
 /// Where a secret would decide control flow or an address.
@@ -54,17 +65,16 @@ pub struct Leak {
     pub what: &'static str,
 }
 
-/// Fail with an internal error (`E0390`) if a secret value decides a
+/// Fail with an internal error (`E0398`) if a secret value decides a
 /// conditional branch or a memory address anywhere in `functions`.
 pub fn verify(functions: &[Function]) -> Result<(), Diagnostic> {
     secrets(functions).map(|_| ()).map_err(|leak| {
         Diagnostic::new(
-            codes::UNSUPPORTED,
+            codes::NOT_CONSTANT_TIME,
             format!(
                 "internal error: the native backend would make {} depend on a secret value, \
                  in `{}`; this is a bug in `oskac`, not in the program, so the build stops \
-                 rather than write an executable that is not constant-time (`oskac run \
-                 --interpret` runs the program)",
+                 rather than write an executable that is not constant-time; please report it",
                 leak.what, leak.function
             ),
             NOWHERE,
@@ -75,148 +85,165 @@ pub fn verify(functions: &[Function]) -> Result<(), Diagnostic> {
 /// For each function of `functions`, which of its temporaries ever hold
 /// a secret; or the first place a secret decides a branch or an address.
 pub fn secrets(functions: &[Function]) -> Result<Vec<Vec<bool>>, Leak> {
+    let indirect: Vec<FnId> = functions
+        .iter()
+        .flat_map(|f| &f.insts)
+        .filter_map(|inst| match inst {
+            Inst::Addr {
+                symbol: Symbol::Function(id),
+                ..
+            } => Some(*id),
+            _ => None,
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
     let mut analysis = Analysis {
         functions,
-        summaries: HashMap::new(),
-        running: HashSet::new(),
+        indirect,
+        returns: HashMap::new(),
+        queue: Vec::new(),
+        queued: HashSet::new(),
         secret: functions
             .iter()
             .map(|f| vec![false; f.temps as usize])
             .collect(),
     };
     for (id, function) in functions.iter().enumerate() {
-        if function
-            .insts
-            .iter()
-            .any(|inst| matches!(inst, Inst::Secret { .. }))
-        {
-            analysis.function(id, vec![false; function.params as usize])?;
-        }
+        analysis.request((id, vec![false; function.params as usize]));
     }
-    Ok(analysis.secret)
-}
-
-/// How secret a temporary is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct Taint {
-    /// Computed from a secret parameter: a result made from it is secret
-    /// to the caller.
-    param: bool,
-    /// Computed from any secret, a parameter or a mark.
-    any: bool,
-}
-
-impl Taint {
-    fn join(self, other: Taint) -> Taint {
-        Taint {
-            param: self.param || other.param,
-            any: self.any || other.any,
+    // To a fixed point: what a function may return only grows, from
+    // public, as the functions it calls are found to return secrets.
+    loop {
+        let mut grew = false;
+        let mut at = 0;
+        while at < analysis.queue.len() {
+            let key = analysis.queue[at].clone();
+            let returns = analysis.function(&key)?;
+            if returns && analysis.returns.insert(key, true) != Some(true) {
+                grew = true;
+            }
+            at += 1;
+        }
+        if !grew {
+            return Ok(analysis.secret);
         }
     }
 }
+
+/// A function and which of its parameters are secret.
+type Key = (FnId, Vec<bool>);
 
 struct Analysis<'a> {
     functions: &'a [Function],
-    /// Whether a function returns a value computed from its secret
-    /// parameters, for each set of them followed so far.
-    summaries: HashMap<(FnId, Vec<bool>), bool>,
-    /// The functions being followed, for recursion.
-    running: HashSet<(FnId, Vec<bool>)>,
+    /// The functions an indirect call may reach: those whose address the
+    /// code takes.
+    indirect: Vec<FnId>,
+    /// The functions, with their secret parameters, known so far to
+    /// return a secret.
+    returns: HashMap<Key, bool>,
+    /// Every function with its secret parameters to follow, in the order
+    /// first asked for.
+    queue: Vec<Key>,
+    queued: HashSet<Key>,
     /// [`secrets`]'s answer, so far.
     secret: Vec<Vec<bool>>,
 }
 
 impl Analysis<'_> {
-    /// Follow the secrets of function `id`, whose parameters `params`
-    /// says are secret: whether it returns one computed from them.
-    fn function(&mut self, id: FnId, params: Vec<bool>) -> Result<bool, Leak> {
-        let key = (id, params);
-        if let Some(&returns) = self.summaries.get(&key) {
-            return Ok(returns);
+    /// Follow `key` too, if it is new.
+    fn request(&mut self, key: Key) {
+        if self.queued.insert(key.clone()) {
+            self.queue.push(key);
         }
-        // A recursive call: its result is taken as public this time
-        // round; the outer call follows every instruction anyway.
-        if !self.running.insert(key.clone()) {
-            return Ok(false);
-        }
+    }
+
+    /// Whether `key` returns a secret, as far as is known yet; it is
+    /// followed in turn.
+    fn returns(&mut self, key: Key) -> bool {
+        let known = self.returns.get(&key).copied().unwrap_or(false);
+        self.request(key);
+        known
+    }
+
+    /// Follow the secrets of `key`'s function, with its secret
+    /// parameters, given what is known of the functions it calls: whether
+    /// it returns one.
+    fn function(&mut self, key: &Key) -> Result<bool, Leak> {
         let functions = self.functions;
-        let function = &functions[id];
-        let mut taint = vec![Taint::default(); function.temps as usize];
-        for (param, &secret) in key.1.iter().enumerate() {
-            if let Some(t) = taint.get_mut(param) {
-                *t = Taint {
-                    param: secret,
-                    any: secret,
-                };
+        let (id, params) = key;
+        let function = &functions[*id];
+        let mut secret = vec![false; function.temps as usize];
+        for (param, &is) in params.iter().enumerate() {
+            if let Some(s) = secret.get_mut(param) {
+                *s = is;
             }
         }
-        let get = |taint: &[Taint], t: Temp| taint.get(t as usize).copied().unwrap_or_default();
+        let is = |secret: &[bool], t: u32| secret.get(t as usize).copied().unwrap_or(false);
         let leak = |what| Leak {
             function: function.name.clone(),
             what,
         };
         let mut returns = false;
-        let mut last_call = Taint::default();
         loop {
             let mut changed = false;
+            // What the last call returned, for an `Inst::Second` after it.
+            let mut last_call = false;
             for inst in &function.insts {
-                let uses = inst
-                    .uses()
-                    .into_iter()
-                    .fold(Taint::default(), |acc, t| acc.join(get(&taint, t)));
+                let reads = inst.uses().into_iter().any(|t| is(&secret, t));
                 let result = match inst {
-                    Inst::Secret { src, .. } => Taint {
-                        param: get(&taint, *src).param,
-                        any: true,
-                    },
+                    Inst::Secret { .. } => true,
+                    Inst::Expose { .. } => false,
                     Inst::Branch { .. } | Inst::BranchImm { .. } | Inst::JumpIfZero { .. }
-                        if uses.any =>
+                        if reads =>
                     {
                         return Err(leak("the condition of a branch"));
                     }
-                    Inst::Arith { .. } | Inst::ArithImm { .. } if uses.any => {
+                    Inst::Arith { .. } | Inst::ArithImm { .. } if reads => {
                         return Err(leak("checked arithmetic, which branches on overflow,"));
                     }
-                    Inst::Load { base, .. } | Inst::Store { base, .. }
-                        if get(&taint, *base).any =>
-                    {
+                    Inst::Load { base, .. } | Inst::Store { base, .. } if is(&secret, *base) => {
                         return Err(leak("the address of a load or store"));
                     }
-                    Inst::CallIndirect { target, .. } if get(&taint, *target).any => {
-                        return Err(leak("the address of a call"));
-                    }
-                    Inst::CallOnStack { stack, .. } if get(&taint, *stack).any => {
+                    Inst::CallOnStack { stack, .. } if is(&secret, *stack) => {
                         return Err(leak("the address of the stack"));
                     }
+                    Inst::CallIndirect { target, args, .. } => {
+                        if is(&secret, *target) {
+                            return Err(leak("the address of a call"));
+                        }
+                        if args.iter().any(|&a| is(&secret, a)) {
+                            return Err(leak(
+                                "an argument of an indirect call, whose callee is not known,",
+                            ));
+                        }
+                        let mut any = false;
+                        for callee in self.indirect.clone() {
+                            let params = vec![false; functions[callee].params as usize];
+                            any |= self.returns((callee, params));
+                        }
+                        last_call = any;
+                        any
+                    }
                     Inst::Call { callee, args, .. } => {
-                        let params: Vec<bool> = args.iter().map(|&a| get(&taint, a).any).collect();
-                        let result = if params.contains(&true) {
-                            let returned = self.function(*callee, params)?;
-                            Taint {
-                                param: returned && uses.param,
-                                any: returned,
-                            }
-                        } else {
-                            Taint::default()
-                        };
-                        last_call = result;
-                        result
+                        let params = args.iter().map(|&a| is(&secret, a)).collect();
+                        last_call = self.returns((*callee, params));
+                        last_call
                     }
                     // The second result of the call just before.
                     Inst::Second { .. } => last_call,
                     // A load's value is not followed through memory.
-                    Inst::Load { .. } => Taint::default(),
+                    Inst::Load { .. } => false,
                     Inst::Return(_) | Inst::ReturnPair { .. } => {
-                        returns |= uses.param;
-                        Taint::default()
+                        returns |= reads;
+                        false
                     }
-                    _ => uses,
+                    _ => reads,
                 };
                 if let Some(dst) = inst.def() {
-                    if let Some(t) = taint.get_mut(dst as usize) {
-                        let joined = t.join(result);
-                        if joined != *t {
-                            *t = joined;
+                    if let Some(s) = secret.get_mut(dst as usize) {
+                        if result && !*s {
+                            *s = true;
                             changed = true;
                         }
                     }
@@ -226,15 +253,13 @@ impl Analysis<'_> {
                 break;
             }
         }
-        for (t, taint) in taint.iter().enumerate() {
-            if taint.any {
-                if let Some(s) = self.secret[id].get_mut(t) {
+        for (t, &is) in secret.iter().enumerate() {
+            if is {
+                if let Some(s) = self.secret[*id].get_mut(t) {
                     *s = true;
                 }
             }
         }
-        self.running.remove(&key);
-        self.summaries.insert(key, returns);
         Ok(returns)
     }
 }

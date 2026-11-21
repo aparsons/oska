@@ -156,6 +156,10 @@ pub fn rt_mem_mul(a: Int, b: Int) -> Int
 // backend refuses to build code in which a branch or an address depends on
 // it, or on anything computed from it (`oska-native`'s `constant_time.rs`).
 pub fn rt_mem_conceal(value: Int) -> Int
+// `value` itself, public whatever it was computed from: a secret exposure
+// in the runtime, made only where the prelude gives a public result, such as
+// the `Bool` of a constant-time comparison.
+pub fn rt_mem_expose(value: Int) -> Int
 
 // ---- Values ----------------------------------------------------------------
 //
@@ -2036,6 +2040,24 @@ pub fn bytes_read(bytes: Bytes, offset: Int, width: Int, big: Bool) -> Int {
     var i = 0
     while i < width {
         let k = if big { i } else { rt_mem_sub(rt_mem_sub(width, 1), i) }
+        n = rt_mem_or(rt_mem_shl(n, 8), rt_mem_load8(rt_mem_add(at, k)))
+        i = i + 1
+    }
+    n
+}
+
+// `bytes_read` for `Secret<Bytes>`'s `at` and endian reads: each byte it
+// reads is marked secret, so the native backend refuses to build code in
+// which a branch or an address depends on what it gives.
+pub fn bytes_read_secret(bytes: Bytes, offset: Int, width: Int, big: Bool) -> Int {
+    if !bytes_readable(bytes, offset, width) {
+        return 0
+    }
+    let at = rt_mem_add(bytes_data(rt_mem_bytes(bytes)), offset)
+    var n = 0
+    var i = 0
+    while i < width {
+        let k = if big { i } else { rt_mem_sub(rt_mem_sub(width, 1), i) }
         n = rt_mem_or(rt_mem_shl(n, 8), rt_mem_conceal(rt_mem_load8(rt_mem_add(at, k))))
         i = i + 1
     }
@@ -2203,7 +2225,7 @@ pub fn bytes_constant_time_eq(a: Bytes, b: Bytes) -> Bool {
         diff = rt_mem_or(diff, rt_mem_xor(x, y))
         i = i + 1
     }
-    diff == 0
+    rt_mem_expose(diff) == 0
 }
 
 // `ct_select` between two `Secret<Bytes>`: a new buffer of `a`'s bytes
@@ -3830,7 +3852,7 @@ fn text_equal_constant(a: Int, b: Int) -> Bool {
         diff = rt_mem_or(diff, rt_mem_xor(x, y))
         i = i + 1
     }
-    diff == 0
+    rt_mem_expose(diff) == 0
 }
 
 // ---- Clock and randomness --------------------------------------------------

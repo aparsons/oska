@@ -576,6 +576,7 @@ fn pure(inst: &Inst) -> bool {
         Inst::Const { .. }
             | Inst::Copy { .. }
             | Inst::Secret { .. }
+            | Inst::Expose { .. }
             | Inst::Addr { .. }
             | Inst::Binary { .. }
             | Inst::BinaryImm { .. }
@@ -598,6 +599,7 @@ fn rename_def(inst: &mut Inst, to: Temp) {
         Inst::Const { dst, .. }
         | Inst::Copy { dst, .. }
         | Inst::Secret { dst, .. }
+        | Inst::Expose { dst, .. }
         | Inst::Addr { dst, .. }
         | Inst::Binary { dst, .. }
         | Inst::BinaryImm { dst, .. }
@@ -635,7 +637,7 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
         }
     };
     match inst {
-        Inst::Copy { src, .. } | Inst::Secret { src, .. } => swap(src),
+        Inst::Copy { src, .. } | Inst::Secret { src, .. } | Inst::Expose { src, .. } => swap(src),
         Inst::Binary { lhs, rhs, .. }
         | Inst::Compare { lhs, rhs, .. }
         | Inst::Arith { lhs, rhs, .. }
@@ -682,61 +684,109 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
 mod tests {
     use super::{module, Code};
     use crate::constant_time::secrets;
-    use crate::ir::{BinOp, Function, Inst, Width};
+    use crate::ir::{BinOp, Cond, Function, Inst, Width};
 
-    /// `t2`, a secret read from the `Secret` at the parameter `t0`, copied,
-    /// added to a constant, mixed with itself and stored back through an
-    /// address one addition away, next to a dead constant: something for
-    /// every pass to do.
+    /// In a loop over the public bound `t1`: `t3`, a secret read from the
+    /// `Secret` at the parameter `t0`, copied, added to a constant, and
+    /// made the condition of a choice (`ct_select`'s mask sequence)
+    /// between itself and the sum, stored back through an address one
+    /// addition away, next to a dead constant. Something for every pass
+    /// to do, a choice it could make a branch, and a loop it must leave.
     fn secret_code() -> Function {
         Function {
             name: "f".to_string(),
-            params: 1,
-            temps: 9,
-            labels: 0,
+            params: 2,
+            temps: 20,
+            labels: 2,
             insts: vec![
+                Inst::Const { dst: 2, value: 0 },
+                Inst::Const { dst: 9, value: 0 },
+                Inst::Label(0),
+                Inst::Branch {
+                    cond: Cond::Ge,
+                    lhs: 2,
+                    rhs: 1,
+                    target: 1,
+                },
                 Inst::Load {
                     width: Width::W64,
-                    dst: 1,
+                    dst: 4,
                     base: 0,
                     offset: 8,
                 },
-                Inst::Secret { dst: 2, src: 1 },
-                Inst::Copy { dst: 3, src: 2 },
-                Inst::Const { dst: 4, value: 5 },
+                Inst::Secret { dst: 3, src: 4 },
+                Inst::Copy { dst: 5, src: 3 },
+                Inst::Const { dst: 6, value: 5 },
                 Inst::Binary {
                     op: BinOp::Add,
-                    dst: 5,
+                    dst: 7,
+                    lhs: 5,
+                    rhs: 6,
+                },
+                // The choice: `mask = 0 - pick`, then
+                // `b ^ ((a ^ b) & mask)`.
+                Inst::Const { dst: 8, value: 1 },
+                Inst::Binary {
+                    op: BinOp::And,
+                    dst: 10,
                     lhs: 3,
-                    rhs: 4,
+                    rhs: 8,
+                },
+                Inst::Binary {
+                    op: BinOp::Sub,
+                    dst: 11,
+                    lhs: 9,
+                    rhs: 10,
                 },
                 Inst::Binary {
                     op: BinOp::Xor,
-                    dst: 6,
-                    lhs: 5,
-                    rhs: 2,
+                    dst: 12,
+                    lhs: 7,
+                    rhs: 3,
+                },
+                Inst::Binary {
+                    op: BinOp::And,
+                    dst: 13,
+                    lhs: 12,
+                    rhs: 11,
+                },
+                Inst::Binary {
+                    op: BinOp::Xor,
+                    dst: 14,
+                    lhs: 3,
+                    rhs: 13,
                 },
                 Inst::BinaryImm {
                     op: BinOp::Add,
-                    dst: 7,
+                    dst: 15,
                     lhs: 0,
                     imm: 8,
                 },
                 Inst::Store {
                     width: Width::W64,
-                    base: 7,
+                    base: 15,
                     offset: 0,
-                    src: 6,
+                    src: 14,
                 },
-                Inst::Const { dst: 8, value: 0 },
-                Inst::Return(6),
+                Inst::Copy { dst: 16, src: 14 },
+                Inst::Const { dst: 17, value: 0 },
+                Inst::BinaryImm {
+                    op: BinOp::Add,
+                    dst: 2,
+                    lhs: 2,
+                    imm: 1,
+                },
+                Inst::Jump(0),
+                Inst::Label(1),
+                Inst::Return(16),
             ],
-            cold: 10,
+            cold: 23,
         }
     }
 
     /// The mark is still there, the value stored and the value returned
-    /// are still secret, and nothing branches.
+    /// are still secret, the guard finds no secret branch or address, and
+    /// nothing branches but the loop.
     fn assert_marked(f: &Function, pass: &str) {
         let marks = f
             .insts
@@ -755,11 +805,9 @@ mod tests {
             };
             assert!(marked[read as usize], "{pass}: {inst:?} in {:?}", f.insts);
         }
-        assert!(
-            f.insts.iter().all(|i| i.target().is_none()),
-            "{pass}: {:?}",
-            f.insts
-        );
+        // Only the loop's own branch and jump: the choice is no branch.
+        let branches = f.insts.iter().filter(|i| i.target().is_some()).count();
+        assert_eq!(branches, 2, "{pass}: {:?}", f.insts);
     }
 
     #[test]

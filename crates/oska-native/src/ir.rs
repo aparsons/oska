@@ -192,6 +192,14 @@ pub enum Inst {
         dst: Temp,
         src: Temp,
     },
+    /// `dst = src`, and `dst` is public, whatever `src` is: a secret
+    /// exposure that `std.rt` makes on purpose, such as the result of a
+    /// constant-time comparison, which `Secret.constant_time_eq` gives as a
+    /// public `Bool` (`rt_mem_expose`). Selected as a [`Inst::Copy`].
+    Expose {
+        dst: Temp,
+        src: Temp,
+    },
     /// `dst =` the run-time address of `symbol`, found relative to the
     /// code, so the program can be loaded anywhere.
     Addr {
@@ -391,6 +399,7 @@ impl Inst {
             Inst::Const { dst, .. }
             | Inst::Copy { dst, .. }
             | Inst::Secret { dst, .. }
+            | Inst::Expose { dst, .. }
             | Inst::Addr { dst, .. }
             | Inst::Binary { dst, .. }
             | Inst::BinaryImm { dst, .. }
@@ -419,7 +428,7 @@ impl Inst {
             | Inst::Second { dst }
             | Inst::Depth { dst }
             | Inst::EntrySp { dst } => each(dst),
-            Inst::Copy { dst, src } | Inst::Secret { dst, src } => {
+            Inst::Copy { dst, src } | Inst::Secret { dst, src } | Inst::Expose { dst, src } => {
                 each(dst);
                 each(src);
             }
@@ -474,7 +483,9 @@ impl Inst {
     /// The temporaries it reads, in order.
     pub fn uses(&self) -> Vec<Temp> {
         match self {
-            Inst::Copy { src, .. } | Inst::Secret { src, .. } => vec![*src],
+            Inst::Copy { src, .. } | Inst::Secret { src, .. } | Inst::Expose { src, .. } => {
+                vec![*src]
+            }
             Inst::Binary { lhs, rhs, .. }
             | Inst::Compare { lhs, rhs, .. }
             | Inst::Arith { lhs, rhs, .. }

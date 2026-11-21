@@ -130,20 +130,6 @@ pub struct Mem {
 #[derive(Debug, Default)]
 pub struct Asm {
     pub bytes: Vec<u8>,
-    /// Where each conditional jump and memory operand starts, for the
-    /// constant-time tests (`x86_64::trace`).
-    #[cfg(test)]
-    pub notes: Vec<(usize, Note)>,
-}
-
-/// An instruction the constant-time tests look for.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Note {
-    ConditionalJump,
-    /// A memory operand, addressed by this base register. `lea` has one
-    /// too, though it reads no memory.
-    Memory(u8),
 }
 
 /// What a REX prefix carries: W for a 64-bit operand, and the high bits
@@ -182,8 +168,6 @@ impl Asm {
     /// `opcode` with ModRM (and SIB and displacement) addressing `mem`,
     /// `reg` in its reg field. `byte` when `reg` is a byte register.
     fn op_mem(&mut self, w: bool, opcode: &[u8], reg: u8, mem: Mem, byte: bool) {
-        #[cfg(test)]
-        self.notes.push((self.bytes.len(), Note::Memory(mem.base)));
         let index = mem.index.unwrap_or(0);
         let byte = byte && (4..8).contains(&reg);
         self.prefix(w, reg, index, mem.base, byte);
@@ -354,8 +338,6 @@ impl Asm {
 
     /// `jcc rel32`: where its displacement is.
     pub fn jcc(&mut self, cc: u8) -> usize {
-        #[cfg(test)]
-        self.notes.push((self.bytes.len(), Note::ConditionalJump));
         self.put(&[0x0f, 0x80 | cc]);
         self.rel32()
     }
@@ -368,8 +350,6 @@ impl Asm {
 
     /// `jcc rel8`: where its displacement is.
     pub fn jcc8(&mut self, cc: u8) -> usize {
-        #[cfg(test)]
-        self.notes.push((self.bytes.len(), Note::ConditionalJump));
         self.put(&[0x70 | cc, 0]);
         self.bytes.len() - 1
     }

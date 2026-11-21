@@ -41,7 +41,11 @@ pub enum Prelude {
     /// of `width` bytes: `std.rt`'s `bytes_readable` first, which gives
     /// 0 when the bytes do not all lie inside the buffer, for the
     /// generated code to panic, then `bytes_read`.
-    ByteRead { width: u8, big: bool },
+    ///
+    /// A `secret` one, `Secret<Bytes>`'s, calls `bytes_read_secret`
+    /// instead, which marks each byte it reads secret
+    /// (`constant_time.rs`); `Bytes`' own gives public bytes.
+    ByteRead { width: u8, big: bool, secret: bool },
     /// A mutating method of `Bytes`: a call of the `std.rt` function of
     /// this name with the receiver's object (and the place's reference to
     /// it) and the other arguments, which gives the object the place
@@ -201,6 +205,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::ByteRead {
             width: 1,
             big: true,
+            secret: false,
         },
     ),
     (
@@ -212,6 +217,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::ByteRead {
             width: 2,
             big: true,
+            secret: false,
         },
     ),
     (
@@ -219,6 +225,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::ByteRead {
             width: 2,
             big: false,
+            secret: false,
         },
     ),
     (
@@ -226,6 +233,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::ByteRead {
             width: 4,
             big: true,
+            secret: false,
         },
     ),
     (
@@ -233,6 +241,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::ByteRead {
             width: 4,
             big: false,
+            secret: false,
         },
     ),
     (
@@ -240,6 +249,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::ByteRead {
             width: 8,
             big: true,
+            secret: false,
         },
     ),
     (
@@ -247,6 +257,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::ByteRead {
             width: 8,
             big: false,
+            secret: false,
         },
     ),
     ("Bytes.to_hex", Prelude::Runtime("bytes_to_hex")),
@@ -305,8 +316,24 @@ pub fn unqualified(name: &str) -> &str {
 /// The implementation of the prelude intrinsic `name`, if there is one.
 pub fn prelude(name: &str) -> Option<Prelude> {
     let name = unqualified(name);
+    if let Some(method) = name.strip_prefix(SECRET_BYTES) {
+        return match prelude(&format!("Bytes.{method}")) {
+            Some(Prelude::ByteRead { width, big, .. }) => Some(Prelude::ByteRead {
+                width,
+                big,
+                secret: true,
+            }),
+            _ => None,
+        };
+    }
     PRELUDE.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
 }
+
+/// What the lowering prefixes a read of `Secret<Bytes>` with, in place of
+/// `Bytes.`, once the checked program's call of it (such as `Secret.at`)
+/// is the public read of the bytes inside (`SecretBytes.at` for
+/// `Bytes.at`): a [`Prelude::ByteRead`] that is `secret`.
+pub const SECRET_BYTES: &str = "SecretBytes.";
 
 /// How a `std.rt` intrinsic is lowered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,6 +365,9 @@ pub enum Runtime {
     /// secret bytes, which no branch or address may then depend on
     /// (`constant_time.rs`).
     Conceal,
+    /// Its one argument, made public on purpose (`Inst::Expose`): the
+    /// result of a constant-time comparison.
+    Expose,
 }
 
 /// An operating-system call, which the `std.rt` intrinsic of its name
@@ -1229,6 +1259,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_sub", Runtime::Binary(BinOp::Sub)),
     ("rt_mem_mul", Runtime::Binary(BinOp::Mul)),
     ("rt_mem_conceal", Runtime::Conceal),
+    ("rt_mem_expose", Runtime::Expose),
     ("rt_mem_text", Runtime::Identity),
     ("rt_mem_as_text", Runtime::Identity),
     ("rt_mem_secret", Runtime::Identity),
@@ -1961,7 +1992,8 @@ mod tests {
             | Prelude::WriteLine(f)
             | Prelude::Checked(f, _)
             | Prelude::Mutating(f, _) => Some(f),
-            Prelude::ByteRead { .. } => Some("bytes_read"),
+            Prelude::ByteRead { secret: false, .. } => Some("bytes_read"),
+            Prelude::ByteRead { secret: true, .. } => Some("bytes_read_secret"),
             Prelude::Identity | Prelude::Field(_) => None,
         }
     }

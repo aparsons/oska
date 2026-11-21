@@ -416,9 +416,9 @@ impl Emitter {
                 self.constant(r, *value);
                 self.write(*dst, r);
             }
-            // A secret's mark is the optimizer's and the guard's
+            // Secrets' marks and exposures are the optimizer's and the guard's
             // (`constant_time.rs`): here it is a copy.
-            Inst::Copy { dst, src } | Inst::Secret { dst, src } => {
+            Inst::Copy { dst, src } | Inst::Secret { dst, src } | Inst::Expose { dst, src } => {
                 let s = self.read(*src, X9);
                 self.write(*dst, s);
             }
