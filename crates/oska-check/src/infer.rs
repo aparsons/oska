@@ -59,7 +59,7 @@ mod flags;
 use std::collections::HashSet;
 
 use crate::ty::{Cap, Trust, Ty};
-use flags::{Flag, Flags, Mark};
+use flags::{Flag, Flags};
 
 /// Why a value cannot flow where a type is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,28 +123,20 @@ struct Rules {
 pub struct Infer {
     /// The solution of each variable, by index.
     solutions: Vec<Option<Ty>>,
-    /// The variables solved since the open [`Trial`], while one is open,
-    /// so that the trial can be undone.
+    /// The variables solved since [`Infer::flow`] began, so that a failed
+    /// attempt can be undone (the [`Flags`] stores log their own changes).
+    /// Unification only ever adds: it solves an unsolved variable, adds
+    /// flag variables and edges, and raises or pins flag variables. So
+    /// undoing an attempt reverts exactly what it logged, without a copy
+    /// of the whole context.
     solved: Vec<u32>,
-    /// Whether a [`Trial`] is open.
-    trying: bool,
+    /// Whether [`Infer::flow`] is running, so that it cannot run inside
+    /// itself: the inner call would clear the logs the outer one needs.
+    in_flow: bool,
     /// The trust variables.
     trust: Flags,
     /// The capability variables.
     caps: Flags,
-}
-
-/// The state an [`Infer`] returns to when a trial in [`Infer::flow`] is
-/// undone. Unification only ever adds: it solves an unsolved variable,
-/// adds flag variables and edges, and raises or pins flag variables. So
-/// the trial logs what it solved (and each [`Flags`] store logs its own
-/// changes), and undoing it reverts exactly those, without copying the
-/// whole context first.
-#[derive(Debug, Clone, Copy)]
-struct Trial {
-    solutions: usize,
-    trust: Mark,
-    caps: Mark,
 }
 
 fn trust_flag(trust: Trust) -> Flag {
@@ -376,42 +368,41 @@ impl Infer {
         self.flow(actual, expected).is_ok()
     }
 
-    /// Start a trial: from here on, every change can be undone.
-    fn begin_trial(&mut self) -> Trial {
-        debug_assert!(!self.trying, "a trial is already open");
-        self.trying = true;
-        Trial {
-            solutions: self.solutions.len(),
-            trust: self.trust.mark(),
-            caps: self.caps.mark(),
-        }
+    /// Start logging changes, so that an attempt can be undone. What
+    /// changed before is kept. Panics, in every build, if a flow is
+    /// already running.
+    fn begin_attempts(&mut self) {
+        assert!(!self.in_flow, "Infer::flow must not run inside itself");
+        self.in_flow = true;
+        self.forget_changes();
     }
 
-    /// Undo every change made since `trial` began. The trial stays open.
-    fn undo_trial(&mut self, trial: Trial) {
+    /// Undo every change since [`Infer::begin_attempts`].
+    fn undo_attempt(&mut self) {
         for v in self.solved.drain(..) {
             self.solutions[v as usize] = None;
         }
-        self.solutions.truncate(trial.solutions);
-        self.trust.undo_to(trial.trust);
-        self.caps.undo_to(trial.caps);
+        self.trust.undo();
+        self.caps.undo();
     }
 
-    /// Keep every change made since `trial` began, and close it.
-    fn end_trial(&mut self, trial: Trial) {
+    /// Keep every change since [`Infer::begin_attempts`].
+    fn end_attempts(&mut self) {
+        self.forget_changes();
+        self.in_flow = false;
+    }
+
+    fn forget_changes(&mut self) {
         self.solved.clear();
-        self.trying = false;
-        self.trust.keep(trial.trust);
-        self.caps.keep(trial.caps);
+        self.trust.forget();
+        self.caps.forget();
     }
 
     /// Solve the unsolved variable `v` to `ty`.
     fn solve(&mut self, v: u32, ty: Ty) {
         debug_assert!(self.solutions[v as usize].is_none());
         self.solutions[v as usize] = Some(ty);
-        if self.trying {
-            self.solved.push(v);
-        }
+        self.solved.push(v);
     }
 
     /// [`Infer::unify`], saying why it failed.
@@ -450,7 +441,7 @@ impl Infer {
                 Some(Mismatch::TrustLost),
             ),
         ];
-        let trial = self.begin_trial();
+        self.begin_attempts();
         let mut result = Err(Mismatch::Types);
         for (rules, mismatch) in attempts {
             let ok = self.unify_inner(actual, expected, Polarity::Positive, rules);
@@ -458,13 +449,13 @@ impl Infer {
                 result = Ok(());
                 break;
             }
-            self.undo_trial(trial);
+            self.undo_attempt();
             if let (true, Some(mismatch)) = (ok, mismatch) {
                 result = Err(mismatch);
                 break;
             }
         }
-        self.end_trial(trial);
+        self.end_attempts();
         result
     }
 
@@ -582,7 +573,7 @@ mod tests {
         assert_eq!(infer.flow(&plain, &Ty::Unit), Err(Mismatch::Types));
     }
 
-    /// Types with every kind of flag and variable, for the trial tests:
+    /// Types with every kind of flag and variable, for the undo tests:
     /// each alone, and each as the first field of a pair whose second
     /// field is an `Int` or a `Bool`, so that a flow between two pairs
     /// can change a flag or solve a variable and then fail.
@@ -640,6 +631,14 @@ mod tests {
             }
         }
         assert!(failed > 1000, "only {failed} flows failed");
+    }
+
+    #[test]
+    #[should_panic(expected = "must not run inside itself")]
+    fn a_flow_cannot_start_while_another_is_running() {
+        let mut infer = Infer::default();
+        infer.begin_attempts();
+        infer.flow(&Ty::int(), &Ty::int()).ok();
     }
 
     #[test]

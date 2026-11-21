@@ -9,10 +9,10 @@
 //! turns out high later in the body still reaches every slot it flowed
 //! into.
 //!
-//! Every change to a store is monotone: a variable is added, an edge is
-//! added, or a variable becomes high or pinned. So a trial can be undone
-//! by logging those changes while it runs and reverting them in reverse
-//! ([`Flags::mark`], [`Flags::undo_to`]), with no copy of the store.
+//! Every change to a store only adds: a variable, an edge, or a variable
+//! becoming high or pinned. The store logs each change, so the changes
+//! since the log was last cleared ([`Flags::forget`]) can be undone in
+//! reverse ([`Flags::undo`]), with no copy of the store.
 
 /// A flag: low (trusted, plain `fn`), high (untrusted, `cap fn`), or a
 /// variable of a [`Flags`] store.
@@ -50,65 +50,50 @@ enum Change {
     Pinned(u32),
 }
 
-/// A point in a [`Flags`] store's history to undo back to, from
-/// [`Flags::mark`].
-#[derive(Debug, Clone, Copy)]
-pub(super) struct Mark(usize);
-
 /// The flag variables of one body, for one kind of flag.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub(super) struct Flags {
     vars: Vec<FlagVar>,
-    /// The changes since the open [`Mark`], while one is open.
+    /// The changes since the log was last cleared.
     log: Vec<Change>,
-    /// Whether a [`Mark`] is open, so that changes are logged.
-    logging: bool,
+}
+
+/// The variables only: the log is bookkeeping, not what is known.
+impl std::fmt::Debug for Flags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Flags").field("vars", &self.vars).finish()
+    }
 }
 
 impl Flags {
-    /// Start logging changes, and return the point to undo back to. Only
-    /// one mark is open at a time; [`Flags::keep`] closes it.
-    pub(super) fn mark(&mut self) -> Mark {
-        debug_assert!(!self.logging, "a mark is already open");
-        self.logging = true;
-        Mark(self.log.len())
-    }
-
-    /// Undo every change made since `mark`.
-    pub(super) fn undo_to(&mut self, mark: Mark) {
-        while self.log.len() > mark.0 {
-            match self.log.pop() {
-                Some(Change::Fresh) => {
-                    self.vars.pop();
+    /// Undo every change logged since the log was last cleared, latest
+    /// first, and clear it.
+    pub(super) fn undo(&mut self) {
+        let Flags { vars, log } = self;
+        for change in log.drain(..).rev() {
+            match change {
+                Change::Fresh => {
+                    vars.pop();
                 }
-                Some(Change::Edge(x, y)) => {
-                    self.vars[x as usize].into.pop();
-                    self.vars[y as usize].from.pop();
+                Change::Edge(x, y) => {
+                    vars[x as usize].into.pop();
+                    vars[y as usize].from.pop();
                 }
-                Some(Change::Raised(v)) => self.vars[v as usize].high = false,
-                Some(Change::Pinned(v)) => self.vars[v as usize].pinned = false,
-                None => break,
+                Change::Raised(v) => vars[v as usize].high = false,
+                Change::Pinned(v) => vars[v as usize].pinned = false,
             }
         }
     }
 
-    /// Keep every change made since `mark`, and close it: changes are no
-    /// longer logged.
-    pub(super) fn keep(&mut self, mark: Mark) {
-        self.log.truncate(mark.0);
-        self.logging = false;
-    }
-
-    fn record(&mut self, change: Change) {
-        if self.logging {
-            self.log.push(change);
-        }
+    /// Keep every change logged so far: clear the log.
+    pub(super) fn forget(&mut self) {
+        self.log.clear();
     }
 
     /// A new variable, with nothing flowing into or out of it.
     pub(super) fn fresh(&mut self) -> u32 {
         self.vars.push(FlagVar::default());
-        self.record(Change::Fresh);
+        self.log.push(Change::Fresh);
         self.vars.len() as u32 - 1
     }
 
@@ -152,7 +137,7 @@ impl Flags {
                 }
                 self.vars[x as usize].into.push(y);
                 self.vars[y as usize].from.push(x);
-                self.record(Change::Edge(x, y));
+                self.log.push(Change::Edge(x, y));
                 (!self.vars[x as usize].high || self.raise(y))
                     && (!self.vars[y as usize].pinned || self.pin(x))
             }
@@ -169,15 +154,8 @@ impl Flags {
             return false;
         }
         var.high = true;
-        self.record(Change::Raised(v));
-        let mut i = 0;
-        while let Some(&w) = self.vars[v as usize].into.get(i) {
-            if !self.raise(w) {
-                return false;
-            }
-            i += 1;
-        }
-        true
+        self.log.push(Change::Raised(v));
+        self.all_linked(v, |var| &var.into, Flags::raise)
     }
 
     /// `v`, and everything that flows into it, flows into a low slot.
@@ -190,10 +168,22 @@ impl Flags {
             return false;
         }
         var.pinned = true;
-        self.record(Change::Pinned(v));
+        self.log.push(Change::Pinned(v));
+        self.all_linked(v, |var| &var.from, Flags::pin)
+    }
+
+    /// Apply `step` to each variable in `v`'s `linked` list, in order,
+    /// until one fails. `step` may change the store, but not that list,
+    /// so the list is walked by index rather than copied.
+    fn all_linked(
+        &mut self,
+        v: u32,
+        linked: fn(&FlagVar) -> &Vec<u32>,
+        step: fn(&mut Flags, u32) -> bool,
+    ) -> bool {
         let mut i = 0;
-        while let Some(&w) = self.vars[v as usize].from.get(i) {
-            if !self.pin(w) {
+        while let Some(&w) = linked(&self.vars[v as usize]).get(i) {
+            if !step(self, w) {
                 return false;
             }
             i += 1;
