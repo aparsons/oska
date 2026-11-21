@@ -8,3 +8,4 @@ plugins/oska/.claude-plugin/plugin.json: name
 plugins/oska/.claude-plugin/plugin.json: version
 plugins/oska/.claude-plugin/plugin.json: description
 plugins/oska/.claude-plugin/plugin.json: author.name
+plugins/oska/skills/oska/SKILL.md
