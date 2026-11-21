@@ -1612,7 +1612,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         depth: usize,
     ) -> Option<(&'c ImplInfo, Vec<Ty>)> {
         self.items.impls.iter().find_map(|imp| {
-            if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
+            if imp.trait_name != trait_name
+                || imp.trait_args.len() != args.len()
+                || !same_head(ty, &imp.target)
+            {
                 return None;
             }
             let mut attempt = infer.clone();
@@ -2094,5 +2097,16 @@ fn is_int_literal(expr: &Expr) -> bool {
             operand,
         } => matches!(operand.kind, ExprKind::Int(_)),
         _ => false,
+    }
+}
+
+/// Whether `ty` could unify with an impl's `target`: false only when both
+/// are named types whose names or argument counts differ, which unifying
+/// rejects whatever else it has solved. [`Body::impl_in`] skips such an
+/// impl before it clones the inference state to try it (#572).
+fn same_head(ty: &Ty, target: &Ty) -> bool {
+    match (ty, target) {
+        (Ty::Named(n1, a1, _), Ty::Named(n2, a2, _)) => n1 == n2 && a1.len() == a2.len(),
+        _ => true,
     }
 }

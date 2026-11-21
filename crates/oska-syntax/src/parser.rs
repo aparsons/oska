@@ -302,11 +302,22 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn bump(&mut self) -> Option<Token> {
-        let token = self.tokens.get(self.pos).cloned()?;
+    /// Consume the next token, and give its span.
+    fn bump(&mut self) -> Option<Span> {
+        let span = self.tokens.get(self.pos)?.span;
+        self.pos += 1;
+        self.prev_end = span.end;
+        Some(span)
+    }
+
+    /// Consume the next token, and give its kind: moved out, not cloned,
+    /// as nothing reads a token again once it is consumed (#572).
+    fn bump_kind(&mut self) -> Option<TokenKind> {
+        let token = self.tokens.get_mut(self.pos)?;
+        let kind = std::mem::replace(&mut token.kind, TokenKind::Newline);
         self.pos += 1;
         self.prev_end = token.span.end;
-        Some(token)
+        Some(kind)
     }
 
     fn at_punct(&self, p: Punct) -> bool {
@@ -335,10 +346,7 @@ impl<'a> Parser<'a> {
 
     fn expect_punct(&mut self, p: Punct) -> Result<Span, Diagnostic> {
         if self.at_punct(p) {
-            Ok(self
-                .bump()
-                .map(|t| t.span)
-                .unwrap_or_else(|| self.peek_span()))
+            Ok(self.bump().unwrap_or_else(|| self.peek_span()))
         } else {
             Err(self.expected(&format!("`{}`", p.text())))
         }
@@ -346,10 +354,7 @@ impl<'a> Parser<'a> {
 
     fn expect_kw(&mut self, kw: Keyword) -> Result<Span, Diagnostic> {
         if self.at_kw(kw) {
-            Ok(self
-                .bump()
-                .map(|t| t.span)
-                .unwrap_or_else(|| self.peek_span()))
+            Ok(self.bump().unwrap_or_else(|| self.peek_span()))
         } else {
             Err(self.expected(&format!("`{}`", kw.text())))
         }
@@ -357,10 +362,11 @@ impl<'a> Parser<'a> {
 
     fn expect_ident(&mut self, what: &str) -> Result<Ident, Diagnostic> {
         match self.peek() {
-            Some(TokenKind::Ident(name)) => {
-                let name = name.clone();
+            Some(TokenKind::Ident(_)) => {
                 let span = self.peek_span();
-                self.bump();
+                let Some(TokenKind::Ident(name)) = self.bump_kind() else {
+                    unreachable!("the next token is an identifier");
+                };
                 Ok(Ident { name, span })
             }
             _ => Err(self.expected(what)),
@@ -1486,18 +1492,20 @@ impl<'a> Parser<'a> {
 
     fn primary(&mut self) -> Result<Expr, Diagnostic> {
         let start = self.peek_span();
-        let kind = match self.peek().cloned() {
-            Some(TokenKind::Int(digits)) => {
-                self.bump();
-                ExprKind::Int(digits)
+        // A token whose kind holds text is moved out ([`Parser::bump_kind`]),
+        // so matching on it copies no text (#572).
+        let kind = match self.peek() {
+            Some(TokenKind::Int(_) | TokenKind::SinkStr { .. } | TokenKind::Ident(_)) => {
+                match self.bump_kind() {
+                    Some(TokenKind::Int(digits)) => ExprKind::Int(digits),
+                    Some(TokenKind::SinkStr { tag, value }) => ExprKind::SinkStr { tag, value },
+                    Some(TokenKind::Ident(name)) => ExprKind::Name(Ident { name, span: start }),
+                    _ => unreachable!("the token peeked at"),
+                }
             }
             Some(TokenKind::Str(_)) => {
                 self.bump();
                 ExprKind::Str(self.str_parts(start)?)
-            }
-            Some(TokenKind::SinkStr { tag, value }) => {
-                self.bump();
-                ExprKind::SinkStr { tag, value }
             }
             Some(TokenKind::Keyword(Keyword::True)) => {
                 self.bump();
@@ -1510,10 +1518,6 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Keyword(Keyword::SelfValue)) => {
                 self.bump();
                 ExprKind::SelfValue
-            }
-            Some(TokenKind::Ident(name)) => {
-                self.bump();
-                ExprKind::Name(Ident { name, span: start })
             }
             Some(TokenKind::Punct(Punct::LParen)) => {
                 self.bump();
@@ -1557,7 +1561,7 @@ impl<'a> Parser<'a> {
             other => {
                 return Err(error(
                     "E0100",
-                    format!("expected an expression, found {}", describe(other.as_ref())),
+                    format!("expected an expression, found {}", describe(other)),
                     start,
                 ));
             }

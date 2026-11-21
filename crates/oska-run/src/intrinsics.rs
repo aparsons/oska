@@ -151,6 +151,43 @@ pub fn resolved(name: &IntrinsicName) -> Intrinsic {
     index.all[at as usize]
 }
 
+/// The prelude `Display` implementations an interpolation hole can show
+/// in place, without calling them ([`display_in_place`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InPlace {
+    /// `Display for Int`: the integer in decimal.
+    Int,
+    /// `Display for String`: the text itself.
+    Str,
+}
+
+/// Which of the [`InPlace`] implementations the call site `name` names,
+/// if one does: resolved and kept in `name` as [`resolved`] resolves it,
+/// so the site is resolved whether or not it is ever called (#572).
+pub(crate) fn display_in_place(name: &IntrinsicName) -> Option<InPlace> {
+    static PLACES: OnceLock<[Option<u32>; 2]> = OnceLock::new();
+    let index = index();
+    let [int, text] = *PLACES.get_or_init(|| {
+        [
+            index.by_name.get("Int.to_string").copied(),
+            index.by_name.get("String.to_string").copied(),
+        ]
+    });
+    let at = name.resolve_with(|name| {
+        *index
+            .by_name
+            .get(name)
+            .expect("`crate::run` refuses a call to a missing intrinsic")
+    });
+    if Some(at) == int {
+        Some(InPlace::Int)
+    } else if Some(at) == text {
+        Some(InPlace::Str)
+    } else {
+        None
+    }
+}
+
 /// Every module's table, in the order [`lookup`] prefers them, with the
 /// `std` module whose functions it holds, for a `std` module's table.
 const TABLES: [(Option<&str>, Table); 6] = [

@@ -86,12 +86,21 @@ fn text(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
 
 /// `TrustedHtml.new(markup)`: the markup, vouched for by its author.
 fn trusted_html_new(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    if !memory::metered() {
+        // The markup is the text itself, shared rather than copied (#572).
+        return memory::structure(TRUSTED_HTML, vec![args.swap_remove(0)], span);
+    }
     let text = args[0].as_str();
     markup(TRUSTED_HTML, text.len(), span, || text.to_string())
 }
 
 /// `Html.raw(markup)`: trusted markup, unescaped.
 fn html_raw(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    if !memory::metered() {
+        // The trusted markup's text, shared rather than copied (#572).
+        let markup = args[0].fields()[0].clone();
+        return memory::structure(HTML, vec![markup], span);
+    }
     let text = markup_of(&args[0]);
     markup(HTML, text.len(), span, || text.to_string())
 }

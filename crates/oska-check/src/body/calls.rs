@@ -711,9 +711,12 @@ impl Body<'_, '_, '_> {
                     .join_into(ty, joined, &self.items.untrusted_holders);
             }
         }
-        let what = format!("calling {}", callable.description);
-        for (ty, bound) in &callable.obligations {
-            self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
+        if !callable.obligations.is_empty() {
+            // Made only for a call with bounds to check (#572).
+            let what = format!("calling {}", callable.description);
+            for (ty, bound) in &callable.obligations {
+                self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
+            }
         }
         callable.ret
     }

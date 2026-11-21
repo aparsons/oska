@@ -219,6 +219,18 @@ pub(crate) fn text(text: &str, span: Span) -> Result<Value, Panic> {
     Ok(Value::str(text))
 }
 
+/// `part`, a piece of the text value `whole`, as a text value made at
+/// `span`: `whole` itself, shared, when `part` is all of it (#572), and
+/// otherwise a new text. Under `--max-memory` it is always a new text,
+/// charged as [`text`] charges it.
+#[inline]
+pub(crate) fn text_within(whole: &Value, part: &str, span: Span) -> Result<Value, Panic> {
+    if !metered() && part.len() == whole.as_str().len() {
+        return Ok(whole.clone());
+    }
+    text(part, span)
+}
+
 #[cold]
 #[inline(never)]
 fn text_metered(text: &str, span: Span) -> Result<Value, Panic> {
@@ -262,10 +274,47 @@ impl Literals {
     }
 }
 
+/// The most names [`shared_name`] keeps for a thread. The names it is
+/// given are the program's and the prelude's type and variant names, so
+/// a run keeps far fewer; past this, a name is copied as before.
+const SHARED_NAMES: usize = 4096;
+
+thread_local! {
+    /// Each type and variant name [`shared_name`] has made, by its
+    /// address, as [`Literals`] keeps texts.
+    static NAMES: RefCell<HashMap<usize, Rc<str>, BuildHasherDefault<AddressHasher>>> =
+        RefCell::default();
+}
+
+/// The type or variant name `name` as an `Rc<str>`, made once for each
+/// thread and then shared (#572): a struct or variant value holds its
+/// type's name, and making a value would otherwise copy it. Like
+/// [`Literals::text`], the address only finds the name: one whose bytes
+/// differ is made again. Nothing is charged for a name under
+/// `--max-memory` by its `Rc`, only by its length, so sharing it changes
+/// no charge.
+pub(crate) fn shared_name(name: &str) -> Rc<str> {
+    NAMES.with(|names| {
+        let mut names = names.borrow_mut();
+        let key = name.as_ptr() as usize;
+        if let Some(kept) = names.get_mut(&key) {
+            if **kept != *name {
+                *kept = Rc::from(name);
+            }
+            return Rc::clone(kept);
+        }
+        let made: Rc<str> = Rc::from(name);
+        if names.len() < SHARED_NAMES {
+            names.insert(key, Rc::clone(&made));
+        }
+        made
+    })
+}
+
 /// Hashes the addresses that key [`Literals`]: one multiply, where the
 /// standard hasher would hash eight bytes with SipHash on every literal.
 #[derive(Default)]
-struct AddressHasher(u64);
+pub(crate) struct AddressHasher(u64);
 
 impl Hasher for AddressHasher {
     fn write(&mut self, bytes: &[u8]) {
@@ -402,7 +451,7 @@ pub(crate) fn structure(ty: &str, fields: Vec<Value>, span: Span) -> Result<Valu
         return structure_metered(ty, fields, span);
     }
     Ok(Value::Struct {
-        ty: Rc::from(ty),
+        ty: shared_name(ty),
         fields: Rc::new(fields),
     })
 }
@@ -415,7 +464,7 @@ fn structure_metered(ty: &str, fields: Vec<Value>, span: Span) -> Result<Value, 
     let fields = Rc::new(fields);
     record(Held::Items(Rc::downgrade(&fields)), bytes);
     Ok(Value::Struct {
-        ty: Rc::from(ty),
+        ty: shared_name(ty),
         fields,
     })
 }

@@ -124,7 +124,7 @@ fn string_parse_int(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value,
 
 /// `String.trim(self)`: without leading and trailing whitespace.
 fn string_trim(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
-    memory::text(args[0].as_str().trim(), span)
+    memory::text_within(&args[0], args[0].as_str().trim(), span)
 }
 
 /// `String.to_lowercase(self)`: each character's own Unicode lower-case
@@ -197,17 +197,66 @@ fn string_replace(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value
     } else {
         0
     };
+    if !memory::metered() {
+        let mut matches = text.match_indices(from).peekable();
+        // Without a match the text is shared, not copied (#572).
+        if matches.peek().is_none() {
+            return Ok(args[0].clone());
+        }
+        if from.len() == to.len() {
+            return memory::text_of_len(text.len(), span, || {
+                replaced_in_place(text, matches.map(|(at, _)| at), to)
+            });
+        }
+    }
     let len = (text.len() - found * from.len()).saturating_add(found.saturating_mul(to.len()));
     memory::text_of_len(len, span, || text.replace(from, to))
 }
 
+/// `text` with the match at each of `starts` replaced by `to`, which is
+/// as long as what it replaces: the text copied once, then each match
+/// overwritten where it is ([`String::replace_range`] of the same
+/// length moves nothing after it), rather than copied piece by piece as
+/// [`str::replace`] does, two short copies for each match (#572).
+fn replaced_in_place(text: &str, starts: impl Iterator<Item = usize>, to: &str) -> String {
+    let mut replaced = text.to_string();
+    for at in starts {
+        replaced.replace_range(at..at + to.len(), to);
+    }
+    replaced
+}
+
 /// `String.join(self, parts)`: `parts` with `self` between each two.
 fn string_join(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
-    let parts: Vec<&str> = args[1].as_list().iter().map(Value::as_str).collect();
+    let parts = args[1].as_list();
     let separator = args[0].as_str();
-    let len = parts.iter().map(|part| part.len()).sum::<usize>()
+    let len = parts.iter().map(|part| part.as_str().len()).sum::<usize>()
         + separator.len() * parts.len().saturating_sub(1);
-    memory::text_of_len(len, span, || parts.join(separator))
+    memory::text_of_len(len, span, || {
+        let mut joined = String::with_capacity(len);
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                push_piece(&mut joined, separator);
+            }
+            push_piece(&mut joined, part.as_str());
+        }
+        joined
+    })
+}
+
+/// Push `piece` onto `text`. A piece of one character, such as each
+/// text `String.chars` makes, is pushed as that character: copying it as
+/// a slice costs a call to `memcpy` for one to four bytes, which on
+/// musl's x86_64 `memcpy` takes longer than a copy of 64 bytes (#572).
+/// An empty piece pushes nothing.
+#[inline]
+fn push_piece(text: &mut String, piece: &str) {
+    let mut chars = piece.chars();
+    match (chars.next(), chars.next()) {
+        (None, _) => {}
+        (Some(c), None) => text.push(c),
+        (Some(_), Some(_)) => text.push_str(piece),
+    }
 }
 
 /// `String.chars(self)`: each character as a text of its own.
@@ -285,7 +334,7 @@ fn string_slice(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, 
     // The byte offset of character `n`, or the end for the one past the
     // last.
     let offset = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
-    memory::text(&text[offset(start)..offset(end)], span)
+    memory::text_within(&args[0], &text[offset(start)..offset(end)], span)
 }
 
 /// The longest text `String.repeat` builds, in bytes.

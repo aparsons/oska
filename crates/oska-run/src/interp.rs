@@ -1600,8 +1600,10 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 Part::Hole { value, display, .. } => {
                     let span = value.span;
                     let value = self.eval(value, frame)?;
-                    let shown = self.call_with_one(display, value, span)?;
-                    text.push_str(shown.as_str());
+                    if !shown_in_place(text, display, &value) {
+                        let shown = self.call_with_one(display, value, span)?;
+                        text.push_str(shown.as_str());
+                    }
                 }
             }
         }
@@ -1648,6 +1650,32 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             text
         })?;
         Ok(text)
+    }
+}
+
+/// Push `value` as `display` shows it onto `text`, when `display` is the
+/// prelude's `Display` for `Int` or `String`, and say whether it was.
+/// The same text as calling `display`, without making a text value for
+/// the hole and copying it again (#572). Not used under `--max-memory`,
+/// whose interpolation charges each hole's text
+/// ([`Interpreter::interpolated_metered`]).
+#[inline]
+fn shown_in_place(text: &mut String, display: &Callee, value: &Value) -> bool {
+    use std::fmt::Write as _;
+    let Callee::Intrinsic(name) = display else {
+        return false;
+    };
+    match (intrinsics::display_in_place(name), value) {
+        (Some(intrinsics::InPlace::Int), Value::Int(n, _)) => {
+            // Writing to a `String` cannot fail.
+            let _ = write!(text, "{n}");
+            true
+        }
+        (Some(intrinsics::InPlace::Str), Value::Str(s)) => {
+            text.push_str(s);
+            true
+        }
+        _ => false,
     }
 }
 
