@@ -1,5 +1,6 @@
-//! Confined filesystem access for the Oska runtime: the one crate in the
-//! workspace allowed to use `unsafe` (ADR 0009).
+//! Confined filesystem access for the Oska runtime, and the musl build's
+//! allocator: the one crate in the workspace allowed to use `unsafe`
+//! (ADR 0009).
 //!
 //! `std` cannot open a path beneath a directory handle, and the workspace
 //! takes no crates from outside the repo, so this crate declares the
@@ -23,6 +24,13 @@
 //! junction swapped in at any component, at any moment, makes the open
 //! fail. On Windows the refusals are worded as on Unix.
 //!
+//! It also offers [`SizeClassAlloc`], the global allocator of the musl
+//! build of `oskac` (spec #521): size classes for small requests over
+//! memory from `std`'s system allocator, with no lock on a thread's fast
+//! path. Its only `unsafe` interface is the `GlobalAlloc` trait, which
+//! `oskac` names in a `#[global_allocator]` static without writing any
+//! `unsafe` itself.
+//!
 //! # Rules for `unsafe` here
 //!
 //! - Every `unsafe` block holds one unsafe operation and starts with a
@@ -31,6 +39,7 @@
 //! - Every foreign function is called only from a safe wrapper in this
 //!   crate. Nothing `unsafe` is public.
 
+mod heap;
 mod refusal;
 #[cfg(unix)]
 mod unix;
@@ -43,6 +52,7 @@ pub use wording::{
     WINDOWS_ERRORS,
 };
 
+pub use heap::SizeClassAlloc;
 #[cfg(unix)]
 pub use unix::{effective_uid, Dir};
 #[cfg(windows)]
