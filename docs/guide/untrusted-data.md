@@ -34,7 +34,7 @@ Text operations keep the flag. If any text input is untrusted, every text in the
 
 In your own code, a `String` parameter, field, or return type is trusted. Code that accepts raw input declares `Untrusted<String>`. User functions cannot be generic over trust.
 
-Bytes carry the same flag. `DirRead.read_bytes`, `FileRead.read_bytes` and `Connection.receive_bytes` give `Untrusted<Bytes>`, and `write_bytes` and `send_bytes` accept it. Untrusted bytes where trusted `Bytes` is required are `E0300`, as text is. Every `Bytes` operation keeps the flag: `slice`, `append`, `to_hex` and `to_text` of untrusted bytes are untrusted (`to_text()` gives `Option<Untrusted<String>>`), `to_bytes()` of untrusted text is `Untrusted<Bytes>`, and the integers that `at`, `len` and the endian reads such as `read_u32_be` give are trusted, so parsing a binary format needs no trust assertion until you vouch for the bytes themselves with `.assume_trusted()`.
+Bytes carry the same flag. `DirRead.read_bytes`, `FileRead.read_bytes` and `Connection.receive_bytes` give `Untrusted<Bytes>`, and `write_bytes` and `send_bytes` accept it. Untrusted bytes where trusted `Bytes` is required are `E0300`, as text is. Every `Bytes` operation keeps the flag: `slice`, `append`, `to_hex` and `to_text` of untrusted bytes are untrusted (`to_text()` gives `Option<Untrusted<String>>`), `to_bytes()` of untrusted text is `Untrusted<Bytes>`, and the integers that `at`, `len` and the endian reads such as `read_u32_be` give are trusted, so parsing a binary format needs no trust assertion until you vouch for the bytes themselves with `.assume_trusted()`. See [bytes and binary data](bytes.md).
 
 ## Validators and trust assertions
 
@@ -204,3 +204,5 @@ fn same(key: Secret<String>, offered: String) -> Bool {
 ```
 
 The fix attached to `E0351` rewrites `a == b` to `a.constant_time_eq(b)`, or to `a.constant_time_eq_secret(b)` when both sides are secrets.
+
+Secret integers, `Secret<Bool>` and `Secret<Bytes>`, which code computes on in constant time, are in [secrets and constant-time code](secrets.md).

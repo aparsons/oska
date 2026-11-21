@@ -82,15 +82,19 @@ _Avoid_: exception, crash
 ## Untrusted data
 
 **Untrusted value**:
-Text or bytes that came from outside the program, through a capability or a program input. Text operations keep a value untrusted. Converting it to a non-text or validated type makes it trusted.
+Text or bytes that came from outside the program, through a capability or a program input. Text and byte operations keep a value untrusted. Converting it to a validated type, or reading a number or a `Bool` out of it, gives a trusted value.
 _Avoid_: tainted, dirty, unsafe input
+
+**Bytes**:
+The prelude's buffer of raw bytes, for binary data that is not text. It is a value, copied on write like a `List`, and it carries the same trust flag as text.
+_Avoid_: byte array, blob, binary string
 
 **Validator**:
 A function that inspects an untrusted value and, only if the value passes its checks, returns a trusted value of a validated type, such as an `Email`.
 _Avoid_: sanitizer
 
 **Trust assertion**:
-An explicit, audited point where code declares untrusted text trusted, normally inside a validator.
+An explicit, audited point where code declares untrusted text or bytes trusted, normally inside a validator.
 _Avoid_: untaint, sanitize, cast
 
 **Audit site**:
@@ -98,12 +102,16 @@ A place in the source where code deliberately weakens a guarantee, such as a tru
 _Avoid_: escape hatch (informal)
 
 **Secret value**:
-A value whose contents are never displayed, logged, or interpolated. The only way to read it is an explicit, auditable exposure.
+A value whose contents are never displayed, logged, interpolated, or compared with `==`. Making a value secret is not an audit site; the only way to read it is an explicit, auditable exposure.
 _Avoid_: sensitive, private
 
 **Secret integer**:
-A secret value of a fixed-width unsigned integer type, such as `Secret<U32>`. Code may compute with it but never branch on it or index with it, so its value cannot affect timing.
+A secret value of a fixed-width unsigned integer type: `Secret<U8>`, `Secret<U32>` or `Secret<U64>`. Code may compute with it in constant time, but never branch on it, index with it, divide by it, shift by it, or order it.
 _Avoid_: constant-time int, CtU32
+
+**Constant time**:
+The property that no conditional branch, memory address, or variable-time instruction depends on a secret value, so the time code takes and the memory it touches do not reveal the secret. The checker's rules ask for it and the native backend keeps it; the interpreter computes the same values but promises no timing.
+_Avoid_: timing-safe, side-channel free
 
 **Sink**:
 An API where data leaves the program or affects how it behaves, such as SQL queries, process execution, HTML output, filesystem paths, network hosts, or logs.
