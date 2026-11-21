@@ -137,6 +137,8 @@ pub struct Interpreter<'p, 'h> {
     /// Under `--timeout`, its deadline. Boxed, so that a run without it
     /// keeps the interpreter as small as it was.
     deadline: Option<Box<Deadline>>,
+    /// The texts `String.chars` gives ASCII characters, shared (#501).
+    pub(crate) ascii_texts: crate::data::AsciiTexts,
 }
 
 /// The name of a frame of a panic's call stack: a function's, borrowed
@@ -201,6 +203,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             output_written: 0,
             fuel: u64::MAX,
             deadline: None,
+            ascii_texts: crate::data::AsciiTexts::default(),
         }
     }
 

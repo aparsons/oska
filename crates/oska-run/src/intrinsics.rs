@@ -44,7 +44,9 @@ pub enum Intrinsic {
     /// its receiver in place, given the call's other arguments.
     Mutating(fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>),
     /// One that calls back into the program, such as `List.map`, which
-    /// calls its closure: it gets the interpreter instead of the host.
+    /// calls its closure, or uses the interpreter's state, such as
+    /// `String.chars`'s shared texts: it gets the interpreter instead of
+    /// the host.
     HigherOrder(fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>),
 }
 
