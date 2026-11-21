@@ -53,6 +53,7 @@ mod memory;
 mod ops;
 mod panics;
 mod prng;
+mod secrets;
 pub mod snapshots;
 mod support;
 mod tasks;

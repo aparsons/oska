@@ -662,6 +662,16 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::BitNot { operand, int } => Ok(ops::bit_not(self.eval(operand, frame)?, *int)),
+            ExprKind::Select {
+                cond,
+                if_true,
+                if_false,
+            } => {
+                let cond = self.eval(cond, frame)?.as_bool();
+                let if_true = self.eval(if_true, frame)?;
+                let if_false = self.eval(if_false, frame)?;
+                Ok(crate::bytes::select(cond, if_true, if_false, expr.span)?)
+            }
             ExprKind::Range { start, end } => {
                 let start = self.eval(start, frame)?;
                 let end = self.eval(end, frame)?;

@@ -284,6 +284,25 @@ fn bytes_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic>
     Ok(Value::Bool(args[0].as_bytes() == args[1].as_bytes()))
 }
 
+/// The value `ct_select` picks: `if_true` when `cond` holds, else
+/// `if_false`. Two `Bytes` of different lengths panic with `P0042`.
+pub fn select(cond: bool, if_true: Value, if_false: Value, span: Span) -> Result<Value, Panic> {
+    if let (Value::Bytes(a), Value::Bytes(b)) = (&if_true, &if_false) {
+        if a.len() != b.len() {
+            return Err(Panic::new(
+                codes::BYTES_OUT_OF_RANGE,
+                format!(
+                    "cannot pick between buffers of {} and {} bytes without revealing which",
+                    a.len(),
+                    b.len()
+                ),
+                span,
+            ));
+        }
+    }
+    Ok(if cond { if_true } else { if_false })
+}
+
 /// `Bytes.hash(self)`: the 64-bit FNV-1a hash of the bytes, as an `Int`.
 fn bytes_hash(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let hash = args[0]

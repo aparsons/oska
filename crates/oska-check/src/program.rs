@@ -59,6 +59,7 @@ use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
 
 pub(crate) mod lower;
+pub mod secrets;
 
 /// A checked program: its functions, keyed by qualified name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -332,6 +333,17 @@ pub enum ExprKind {
     BitNot {
         operand: Box<Expr>,
         int: IntType,
+    },
+    /// A choice without a branch, as `ct_select` makes on a secret:
+    /// `cond`, `if_true` and `if_false` are all evaluated, in that order,
+    /// and the value is `if_true` when `cond` holds, otherwise
+    /// `if_false`. The two have one type: `Bool`, `U8`, `U32`, `U64` or
+    /// `Bytes`. Two `Bytes` of different lengths panic (`P0042`), which
+    /// depends on their public lengths only.
+    Select {
+        cond: Box<Expr>,
+        if_true: Box<Expr>,
+        if_false: Box<Expr>,
     },
     /// A local, by slot. Slots are numbered from 0 in each function's
     /// frame, in the order locals are bound: the binding parameters first.
@@ -948,6 +960,15 @@ pub fn walk<'p, B>(
         } => {
             walk(lhs, visit)?;
             walk(rhs, visit)
+        }
+        ExprKind::Select {
+            cond,
+            if_true,
+            if_false,
+        } => {
+            walk(cond, visit)?;
+            walk(if_true, visit)?;
+            walk(if_false, visit)
         }
         ExprKind::Neg { operand, .. }
         | ExprKind::BitNot { operand, .. }

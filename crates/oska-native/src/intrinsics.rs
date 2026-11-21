@@ -69,6 +69,8 @@ pub enum Check {
     BytesGrow(u8),
     /// `Bytes.append`: `P0043` on the word 0.
     BytesAppend,
+    /// `ct_select` between two `Bytes`: `P0042` on the word 0.
+    BytesSelect,
 }
 
 /// The prelude intrinsics the native backend implements, by the name the
@@ -88,6 +90,17 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     (
         "Secret.constant_time_eq_secret",
         Prelude::Runtime("secret_constant_time_eq_secret"),
+    ),
+    // Not the prelude's: what the checked program lowers `Secret<Bytes>`'s
+    // comparisons and `ct_select` to (`oska-check`'s `lower/secrets.rs`,
+    // and `ExprKind::Select` here).
+    (
+        "Bytes.constant_time_eq",
+        Prelude::Runtime("bytes_constant_time_eq"),
+    ),
+    (
+        "Bytes.ct_select",
+        Prelude::Checked("bytes_select", Check::BytesSelect),
     ),
     ("Clock.now_millis", Prelude::Runtime("clock_now_millis")),
     ("Random.next_int", Prelude::Runtime("random_next_int")),

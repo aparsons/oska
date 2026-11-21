@@ -858,6 +858,9 @@ impl Core<'_> {
             ExprKind::BitNot { int, .. } => {
                 return refuse(format!("the integer type `{}`", int.name()), span)
             }
+            ExprKind::Select { .. } => {
+                return refuse("a choice without a branch (`ct_select`)", span)
+            }
             ExprKind::Not(operand) => node("Not", vec![("operand", self.expr(operand)?)]),
             ExprKind::Binary { op, lhs, .. }
                 if !matches!(lhs.ty, Type::Unit | Type::Bool | Type::Int(IntType::Int)) =>

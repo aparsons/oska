@@ -22,6 +22,8 @@ Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; pla
 
 `Env.secret` returns a `Secret<String>`, which code cannot construct itself (`E0271`). A secret cannot be interpolated, nor can a value that holds one (`E0350`). It is not `Eq`, so `==` and `!=` on one are errors (`E0351`); compare it with `.constant_time_eq(text)`, which takes trusted or untrusted text, or with another secret through `.constant_time_eq_secret(other)`, which exposes neither. It is not `Display`, so it cannot be printed (`E0352`). The only way to read its value is `.expose()`, which returns trusted text; each call is a secret exposure, listed in the report's `audit` array.
 
+Secret integers (`Secret<U8>`, `Secret<U32>`, `Secret<U64>`), `Secret<Bool>` and `Secret<Bytes>` are made with `Secret.new(value)`, which is not an audit site: adding secrecy never weakens a guarantee. `expose()` is the only way out of any secret, and every call is listed in `audit`. On secret integers `+`, `-` and `*` wrap, and `& | ^ ~ << >>`, `rotl` and `rotr` work as on the public type; a public operand of the same type, a literal included, joins to a secret result. A shift or rotation amount must be public (`E0355`). Secret integers widen with `to_u32` and `to_u64` and narrow with `wrapping_to_u8` and `wrapping_to_u32`; there is no checked narrowing, which would panic on a secret. `ct_eq` compares two secret integers into a `Secret<Bool>`, which combines with `and`, `or`, `xor` and `not`, and `c.ct_select(a, b)` picks `a` when `c` holds and `b` otherwise, between two secret integers, `Secret<Bool>`s or `Secret<Bytes>`; it evaluates both (`E0223` for any other type). `Secret<Bytes>` has a public `len`, and `at`, `slice` and the 32- and 64-bit endian reads at public offsets, with secret results; `push`, `append` and the endian pushes take secrets; it compares with `constant_time_eq(bytes)` and `constant_time_eq_secret(other)`. No value of a secret can decide a branch (`E0353`), a memory address (`E0354`), a variable-time instruction or a panic (`E0355`), or an ordering (`E0356`), so no operation on a secret takes a path, reads memory, or panics depending on its value. The rules follow the types, so they hold through a generic function's result, a closure, a struct field, and a `List` element.
+
 Untrusted-ness carries through every route. Prelude text operations are trust-polymorphic: the prelude marks each with `#[follows_trust]`, an attribute only the prelude may write. Each call gets a fresh trust variable that its receiver and text arguments join into, and every text type in its result has that trust, so `untrusted.trim()` and `untrusted.lines()` are untrusted while `untrusted.len()` and `untrusted.contains("x")` are trusted `Int` and `Bool`. Any other function's receiver is checked like an argument. An interpolated string is untrusted when text in any hole is, and every hole must be `Display` (`E0265`). Inside a generic body, text that comes from a type parameter is untrusted: interpolating a `T`, and the text result of a call on a `T` receiver or with a `T` argument. A generic function or trait method also follows the trust of its type arguments at each call: when the result holds a fixed `String` and what any generic (or `Self`, in a qualified trait call) is instantiated with holds untrusted text, that text in the result is untrusted, so `fn show<T: Display>(x: T) -> String` cannot launder an untrusted `x`. An impl method may return trusted text where its trait declares `Untrusted<String>`. The `message` of `IoError`, `SqlError`, and `ProcError` is untrusted, and so is their text: a struct or enum **holds untrusted text** when a field is untrusted text or a type that holds it, at any depth, and such a value turns into untrusted text wherever it becomes text. That covers interpolating it, a generic's type argument, `Self` in a qualified trait call such as `Display.to_string(e)`, and a method of a prelude or `std` type, such as `e.to_string()` or `IoError.to_string(e)`, whose body the checker cannot see. A method the module declares is checked against its own signature, so its `to_string(self) -> String` cannot return `self.cause.to_string()` for an `IoError` field without `.assume_trusted()`. `==` and `!=` compare text of either trust, and a trait impl for `String` covers both. Where values meet, trusted and untrusted text join to untrusted rather than conflicting: `if` and `match` branches, the arguments of a generic function for one type parameter, and the elements of a list. Inference variables are solved to trust variables, and the checker keeps every flow between them, so text that has already been used where trusted `String` is required rejects untrusted text that arrives later, as with `names.push(arg)` after `greet(names.get(0)?)`. A mutating (`var self`) method's receiver takes back what the method writes into it, so `names.push(arg)` on a `var names: List<String>` rejects untrusted `arg` too.
 
 Contract clauses are type-checked here, and evaluated by the runtime on every call (`P0006`, `P0007`: see [the runtime reference](runtime.md)). `requires` and `ensures` conditions must be `Bool` (`E0281`), they see the parameters (and `self`), `ensures |r|` binds `r` to the return type, and a contract may call only pure functions (`E0280`). That covers what an operator dispatches to as well: `==` and `!=` call an `Eq` impl, an interpolation hole calls a `Display` impl, and a `?` inside a closure may call a `From` impl, so each is judged as a call with the operands' types. A `?` or `return` directly in a clause is an error (`E0282`), because a condition has no function to leave. A trait method's contract is checked even without a body, and it binds every impl of the method: a method of `impl Trait for Type` declares no contract of its own (`E0218`), and neither does `main` (`E0219`), which nothing calls.
@@ -796,8 +798,12 @@ A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when 
 | `E0340` | A module's export written unqualified, such as `Db` after a plain `use std.sql`, which imports only the module. Spans the name. | Qualify it with the module's name: `sql.Db`. | maybe |
 | `E0341` | Text where a sink literal type is required, such as a `String`, an `Untrusted<String>`, a string literal, or an interpolated string passed to `Db.query` as query text. Only a `sql"..."` literal makes an `SqlLiteral`, so SQL can't be built from text. Reported instead of `E0220`. Spans the expression. | None. | — |
 | `E0350` | A `Secret` interpolated into a string, such as `"Bearer {key}"`, or a value that holds one anywhere inside, such as a `List<Secret<String>>`, an `Option<Secret<String>>`, or a struct with a `Secret` field. Spans the hole, braces included. | None. | — |
-| `E0351` | A `Secret` compared with `==` or `!=`, on either side. Spans the comparison. Also reported, without a fix, where a `Secret` must be `Eq`: an `Eq` bound, or a call to `.eq`. | Rewrite `a == b` to `a.constant_time_eq(b)` and `a != b` to `!a.constant_time_eq(b)`, with the secret as the receiver (parenthesized when needed). When both sides are secrets, it rewrites to `a.constant_time_eq_secret(b)` instead, so nothing is exposed. | machine |
+| `E0351` | A `Secret` compared with `==` or `!=`, on either side. Spans the comparison. Also reported, without a fix, where a `Secret` must be `Eq`: an `Eq` bound, or a call to `.eq`. | Rewrite `a == b` to `a.constant_time_eq(b)` and `a != b` to `!a.constant_time_eq(b)`, with the secret as the receiver (parenthesized when needed). When both sides are secrets, it rewrites to `a.constant_time_eq_secret(b)` instead, so nothing is exposed. A secret integer rewrites to `a.ct_eq(b)` (`a.ct_eq(b).not()` for `!=`), and a `Secret<Bool>` to `a.xor(b).not()` (`a.xor(b)` for `!=`), with a public operand made secret by `Secret.new`. | machine |
 | `E0352` | A `Secret` used where it must be `Display`: a `Display` bound, or a call to `.to_string()`. Spans the call, or the method name. | None. | — |
+| `E0353` | A secret deciding a branch: the condition of an `if` or a `while`, a `requires` or `ensures` condition, a `match` scrutinee or guard, a range bound (as in `for i in 0..k`), or an operand of `&&`, `\|\|`, `implies` or `!`. Reported instead of `E0220` and `E0281`. Spans the condition, or the whole `&&`, `\|\|`, `implies` or `!` expression. | For `!a`, rewrite to `a.not()`; for `a && b` and `a \|\| b` with both operands secret, rewrite to `a.and(b)` and `a.or(b)`, which evaluate both. Otherwise none: combine secret conditions with `and`, `or`, `xor`, `not` and `ct_select`. | machine |
+| `E0354` | A secret deciding a memory address: a secret where a call's parameter is an `Int`, such as an index, an offset, a slice bound or a length (`List.at`, `Bytes.read_u32_be`, `Bytes.zeroed`), or a secret where it must be `Hash`, as a hash key: a `Hash` bound, or a call to `.hash()`. Reported instead of `E0220`. Spans the argument, the call, or the method name. | None: index with a public value. | — |
+| `E0355` | A secret deciding a variable-time instruction or a panic: an operand of `/` or `%`, or a secret shift amount (the right operand of `<<` or `>>`) or rotation amount (`rotl`, `rotr`). Spans the operation, or the amount of a rotation. | None. | — |
+| `E0356` | A secret ordered with `<`, `<=`, `>` or `>=`, on either side. Spans the comparison. | None: compare for equality with `ct_eq`, or read the values with `.expose()`. | — |
 | `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. No `std` module declares a private name yet: no program can reach this code, so it has no example. | None: the module keeps it private. | — |
 | `E0400` | `oska.toml` is malformed: a table header with no `]`, a key with no `=`, no value after `=`, a string that is not closed or has an unknown escape (`\u` and `\U` take exactly 4 and 8 hex digits), text after a value, a carriage return not followed by a line feed, a byte-order mark, or text that is not UTF-8. Spans the offending text; the manifest's path, line and column are in the report. A byte-order mark, or a bare carriage return, is reported alone. | Remove a byte-order mark. | machine |
 | `E0401` | `oska.toml` uses TOML outside the strict subset (tables, single-line strings, arrays of strings, comments). The message names the feature: dotted keys, dates, multiline strings, inline tables, arrays of tables, quoted keys, integers, floats, booleans, or nested arrays. Spans the unsupported text. | None. | — |
@@ -2369,6 +2375,62 @@ fn main(env: Env) {
 fn main(env: Env) {
     let key = env.secret("API_KEY")
     let text = key.expose()
+}
+```
+
+#### `E0353`
+
+```oska error=E0353
+fn pick(c: Secret<Bool>, a: U32, b: U32) -> U32 {
+    if c { a } else { b }
+}
+```
+
+```oska fixed=E0353
+fn pick(c: Secret<Bool>, a: U32, b: U32) -> Secret<U32> {
+    c.ct_select(Secret.new(a), Secret.new(b))
+}
+```
+
+#### `E0354`
+
+```oska error=E0354
+fn lookup(table: List<U8>, k: Secret<U32>) -> U8 {
+    table.at(k)
+}
+```
+
+```oska fixed=E0354
+fn lookup(table: List<U8>, i: Int) -> U8 {
+    table.at(i)
+}
+```
+
+#### `E0355`
+
+```oska error=E0355
+fn halve(k: Secret<U32>) -> Secret<U32> {
+    k / 2
+}
+```
+
+```oska fixed=E0355
+fn halve(k: Secret<U32>) -> Secret<U32> {
+    k >> 1
+}
+```
+
+#### `E0356`
+
+```oska error=E0356
+fn small(k: Secret<U32>) -> Bool {
+    k < 16
+}
+```
+
+```oska fixed=E0356
+fn small(k: Secret<U32>) -> Secret<Bool> {
+    (k >> 4).ct_eq(Secret.new(0))
 }
 ```
 

@@ -24,6 +24,7 @@ use crate::interp::{Interpreter, Stream};
 use crate::memory;
 use crate::ops;
 use crate::panics::{codes, Panic};
+use crate::secrets;
 use crate::tasks;
 use crate::testing;
 use crate::traits;
@@ -120,6 +121,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         int_methods::INTRINSICS,
         data::INTRINSICS,
         bytes::INTRINSICS,
+        secrets::INTRINSICS,
         tasks::INTRINSICS,
         traits::INTRINSICS,
         testing::INTRINSICS,
@@ -381,6 +383,12 @@ fn secret_expose(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, P
 
 /// `Secret.constant_time_eq(self, other)`.
 fn secret_constant_time_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    if let Value::Bytes(secret) = &args[0].fields()[0] {
+        return Ok(Value::Bool(bytes_constant_time_eq(
+            secret,
+            args[1].as_bytes(),
+        )));
+    }
     let secret = args[0].fields()[0].as_str();
     Ok(Value::Bool(constant_time_eq(secret, text(&args, 1))))
 }
@@ -391,9 +399,22 @@ fn secret_constant_time_eq_secret(
     args: Vec<Value>,
     _: Span,
 ) -> Result<Value, Panic> {
+    if let (Value::Bytes(a), Value::Bytes(b)) = (&args[0].fields()[0], &args[1].fields()[0]) {
+        return Ok(Value::Bool(bytes_constant_time_eq(a, b)));
+    }
     let a = args[0].fields()[0].as_str();
     let b = args[1].fields()[0].as_str();
     Ok(Value::Bool(constant_time_eq(a, b)))
+}
+
+/// Whether the buffers `a` and `b` are equal, every byte compared whatever
+/// the first difference.
+fn bytes_constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let diff = a
+        .iter()
+        .zip(b)
+        .fold(u8::from(a.len() != b.len()), |diff, (x, y)| diff | (x ^ y));
+    diff == 0
 }
 
 /// Whether `a` and `b` are equal, in time that depends on their lengths

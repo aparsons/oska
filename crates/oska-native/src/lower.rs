@@ -79,6 +79,7 @@ mod html;
 mod int_methods;
 mod lists;
 mod patterns;
+mod select;
 mod tasks;
 mod tests;
 mod traits;
@@ -88,7 +89,8 @@ use std::collections::{BTreeMap, HashMap};
 use oska_check::builtins;
 use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
-    trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
+    secrets, trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program,
+    Stmt, Type,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Frame, Span, MAX_FRAMES};
@@ -2160,6 +2162,14 @@ impl<'l, 'p> Body<'l, 'p> {
                     target: long,
                 });
             }
+            Check::BytesSelect => {
+                let label =
+                    self.panic_text(panics::BYTES_OUT_OF_RANGE, "panic_bytes_select", args, span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
             Check::BytesSlice | Check::BytesIndex | Check::BytesAppend => {
                 // `set`'s arguments are the bytes, the index and the byte:
                 // its report names only the first two.
@@ -2582,6 +2592,11 @@ impl<'l, 'p> Body<'l, 'p> {
             }
             ExprKind::Neg { operand, int } => self.negate(operand, *int, span),
             ExprKind::BitNot { operand, int } => self.bit_not(operand, *int),
+            ExprKind::Select {
+                cond,
+                if_true,
+                if_false,
+            } => self.select(expr, cond, if_true, if_false),
             ExprKind::Binary { op, lhs, rhs, int } => self.binary(*op, lhs, rhs, *int, span),
             ExprKind::Interpolated(parts) => self.interpolated(parts),
             ExprKind::Construct { ctor, fields } => self.construct(expr, ctor, fields),
@@ -2598,6 +2613,15 @@ impl<'l, 'p> Body<'l, 'p> {
                 type_args,
                 args,
             } => {
+                if let Some(kind) =
+                    secret_expansion(callee, |name| secrets::expand(name, args, &expr.ty, span))
+                {
+                    return self.expr(&Expr {
+                        kind,
+                        ty: expr.ty.clone(),
+                        span,
+                    });
+                }
                 if let Some(word) = self.borrowed_word(callee, args) {
                     return Ok(word);
                 }
@@ -2655,7 +2679,16 @@ impl<'l, 'p> Body<'l, 'p> {
                 type_args,
                 receiver,
                 args,
-            } => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
+            } => match secret_expansion(callee, |name| {
+                secrets::expand_mutating(name, receiver, args)
+            }) {
+                Some(kind) => self.expr(&Expr {
+                    kind,
+                    ty: expr.ty.clone(),
+                    span,
+                }),
+                None => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
+            },
             ExprKind::Try {
                 operand,
                 convert,
@@ -3393,6 +3426,21 @@ fn describe(kind: &ExprKind) -> String {
         ExprKind::Match { .. } => "`match`".to_string(),
         ExprKind::Unsupported(what) => what.clone(),
         _ => "this expression".to_string(),
+    }
+}
+
+/// A call of a secret's method, such as `Secret.rotl`, as the public
+/// operations on the values inside its secrets, which `expand` gives from
+/// the intrinsic's name (`oska-check`'s `program/secrets.rs`); `None` for
+/// any other call, and for a secret intrinsic implemented here, such as
+/// `Secret.expose`.
+fn secret_expansion(
+    callee: &Callee,
+    expand: impl FnOnce(&str) -> Option<ExprKind>,
+) -> Option<ExprKind> {
+    match callee {
+        Callee::Intrinsic(name) if name.starts_with("Secret.") => expand(name),
+        _ => None,
     }
 }
 

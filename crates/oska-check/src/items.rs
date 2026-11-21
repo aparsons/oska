@@ -699,6 +699,19 @@ impl Items {
             .find(|s| s.name == name)
     }
 
+    /// Every one of the type's own methods or associated functions named
+    /// `name`: more than one only where the prelude declares a method in
+    /// several `impl`s of one generic type for different type arguments,
+    /// such as `rotl` on `Secret<U8>` and `Secret<U32>`.
+    pub fn inherent_methods(&self, type_name: &str, name: &str) -> Vec<&FnSig> {
+        self.inherent
+            .get(type_name)
+            .into_iter()
+            .flatten()
+            .filter(|s| s.name == name)
+            .collect()
+    }
+
     /// The methods named `name` that the type's traits provide, one per
     /// trait.
     pub fn trait_methods_named(&self, type_name: &str, name: &str) -> Vec<&FnSig> {

@@ -527,14 +527,20 @@ impl Body<'_, '_, '_> {
         if let Ty::Param(_) = receiver {
             // A bound's method on a generic parameter: the parameter may
             // stand for untrusted text, so text in the result is untrusted.
-            self.follow_type_arg(&mut callable, receiver);
+            self.follow_type_arg(&mut callable, receiver.clone());
         }
         match sig.receiver {
             // A mutating method writes its arguments into its receiver.
             Receiver::VarSelf => {
                 self.mentioning(base, |body| body.apply(callable, args, expected, span))
             }
-            _ => self.apply(callable, args, expected, span),
+            _ => {
+                let ret = self.apply(callable, args, expected, span);
+                if name.name == "ct_select" && self.secret_inner(&receiver).is_some() {
+                    self.ct_select_type(&ret, span);
+                }
+                ret
+            }
         }
     }
 
@@ -571,8 +577,21 @@ impl Body<'_, '_, '_> {
         type_name: &str,
         name: &Ident,
     ) -> Option<FnSig> {
-        if let Some(sig) = self.items.inherent_method(type_name, &name.name) {
-            return Some(sig.clone());
+        let inherent = self.items.inherent_methods(type_name, &name.name);
+        if let [sig] = inherent.as_slice() {
+            return Some((*sig).clone());
+        }
+        if !inherent.is_empty() {
+            // One `impl` per type argument, as in `impl Secret<U32>`: the
+            // receiver's type arguments choose.
+            let receiver = self.infer.resolve(receiver);
+            if let Some(sig) = inherent.iter().find(|sig| {
+                sig.self_ty
+                    .as_ref()
+                    .is_some_and(|s| same_heads(s, &receiver))
+            }) {
+                return Some((*sig).clone());
+            }
         }
         let found = self.items.trait_methods_named(type_name, &name.name);
         match found.as_slice() {
@@ -692,11 +711,12 @@ impl Body<'_, '_, '_> {
             );
         }
         let mut arg_tys = Vec::new();
+        let rotation = matches!(callable.description.as_str(), "`rotl`" | "`rotr`");
         for (i, arg) in args.iter().enumerate() {
             let ty = match callable.params.get(i) {
                 Some((param, ty)) => {
                     self.label(arg, param.as_deref(), callable.labels);
-                    self.check(&arg.value, ty)
+                    self.argument(&arg.value, ty, rotation)
                 }
                 None => self.infer(&arg.value),
             };
@@ -807,5 +827,22 @@ impl Callable {
             params: self.params.into_iter().map(|(_, t)| t).collect(),
             ret: Box::new(self.ret),
         }
+    }
+}
+
+/// Whether `receiver` can be the `Self` of an `impl` for `self_ty`: their
+/// type arguments have the same heads, where `self_ty`'s is not a generic
+/// parameter.
+fn same_heads(self_ty: &Ty, receiver: &Ty) -> bool {
+    match (self_ty, receiver) {
+        (Ty::Named(a, a_args, _), Ty::Named(b, b_args, _)) => {
+            a == b
+                && a_args.len() == b_args.len()
+                && a_args.iter().zip(b_args).all(|(a, b)| match a {
+                    Ty::Param(_) => true,
+                    _ => a.head().is_some() && a.head() == b.head(),
+                })
+        }
+        _ => false,
     }
 }

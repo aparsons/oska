@@ -15,6 +15,8 @@
 //! and the trait's generics as parameters; lowering them into an impl
 //! substitutes the impl's types.
 
+mod secrets;
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -792,9 +794,10 @@ impl Lowering<'_> {
                 self.unsupported(expr.span, &format!("a `{tag}\"...\"` literal"))
             }
         };
+        let ty = self.type_at(expr.span);
         Expr {
-            kind,
-            ty: self.type_at(expr.span),
+            kind: self.secret(kind, &ty, expr.span),
+            ty,
             span: expr.span,
         }
     }
