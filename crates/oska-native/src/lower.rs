@@ -2381,7 +2381,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     .collect();
                 (Callee::Function(user), type_args)
             }
-            None => (Callee::Intrinsic(format!("{tag}.to_string")), Vec::new()),
+            None => (Callee::intrinsic(format!("{tag}.to_string")), Vec::new()),
         };
         self.call(&callee, &type_args, vec![value], &Type::String, span)
     }
