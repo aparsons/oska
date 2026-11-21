@@ -6,9 +6,11 @@
 //! table ([`INTRINSICS`] here). [`lookup`] searches every table. A
 //! method's receiver is its first argument.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use oska_check::builtins;
 use oska_check::limits;
@@ -102,10 +104,22 @@ pub const INTRINSICS: Table = &[
 /// A `std` module's function is called by its own name (`text`), or by
 /// its module-qualified name (`html.text`) when the program declares the
 /// same name itself; both find the same intrinsic.
+///
+/// The interpreter calls this on every intrinsic call, so the tables are
+/// indexed by name once, on the first call, not scanned each time.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
+    let index = index();
+    if let Some(intrinsic) = index.get(name) {
+        return Some(*intrinsic);
+    }
     let unqualified = builtins::std_modules()
         .filter_map(|path| path.rsplit('.').next())
-        .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'));
+        .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'))?;
+    index.get(unqualified).copied()
+}
+
+/// Every module's table, in the order [`lookup`] prefers them.
+fn tables() -> [Table; 6] {
     [
         INTRINSICS,
         data::INTRINSICS,
@@ -114,10 +128,19 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         testing::INTRINSICS,
         html::INTRINSICS,
     ]
-    .into_iter()
-    .flatten()
-    .find(|(n, _)| *n == name || Some(*n) == unqualified)
-    .map(|(_, intrinsic)| *intrinsic)
+}
+
+/// Every intrinsic by name, made once: where two tables share a name, the
+/// first table's.
+fn index() -> &'static HashMap<&'static str, Intrinsic> {
+    static INDEX: OnceLock<HashMap<&'static str, Intrinsic>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut index = HashMap::new();
+        for (name, intrinsic) in tables().into_iter().flatten() {
+            index.entry(*name).or_insert(*intrinsic);
+        }
+        index
+    })
 }
 
 /// Whether the intrinsic named `name` has a runtime implementation.
@@ -874,6 +897,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// [`lookup`] tries a qualified name (`html.text`) as written before
+    /// it drops the module. That finds what a scan of the tables for
+    /// either name would only while no intrinsic's own name starts with a
+    /// `std` module's name.
+    #[test]
+    fn no_intrinsic_is_named_with_a_std_modules_prefix() {
+        let modules: Vec<&str> = builtins::std_modules()
+            .filter_map(|path| path.rsplit('.').next())
+            .collect();
+        assert!(modules.contains(&"html"), "{modules:?}");
+        for (name, _) in super::tables().into_iter().flatten() {
+            for module in &modules {
+                assert!(
+                    !name.starts_with(&format!("{module}.")),
+                    "`{name}` starts with the std module name `{module}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_qualified_std_name_finds_the_same_intrinsic_as_its_own_name() {
+        assert!(matches!(lookup("text"), Some(Intrinsic::Plain(_))));
+        assert!(matches!(lookup("html.text"), Some(Intrinsic::Plain(_))));
+        assert!(
+            lookup("sql.text").is_some(),
+            "any std module's prefix is dropped"
+        );
+        assert!(lookup("html.no_such_function").is_none());
+        assert!(lookup("nohtml.text").is_none());
     }
 
     fn owner(name: &str) -> &str {
