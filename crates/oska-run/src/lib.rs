@@ -45,6 +45,7 @@ mod confine;
 mod data;
 mod host;
 mod html;
+mod int_methods;
 mod interp;
 mod intrinsics;
 mod memory;

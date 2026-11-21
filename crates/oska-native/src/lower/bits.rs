@@ -138,7 +138,7 @@ impl Body<'_, '_> {
     }
 
     /// `value` with the bits above `int`'s width cleared.
-    fn masked(&mut self, value: Temp, int: IntType) -> Temp {
+    pub(super) fn masked(&mut self, value: Temp, int: IntType) -> Temp {
         if layout::int_kind(int).bits == 64 {
             return value;
         }

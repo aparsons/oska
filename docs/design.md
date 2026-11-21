@@ -14,7 +14,7 @@ This is a working draft. Decisions that are hard to reverse are recorded in [`ad
 - **Memory safety** comes from value semantics and reference counting. There are no raw pointers, lifetimes, or shared mutable references ([ADR 0001](adr/0001-value-semantics-with-reference-counting.md)).
 - **No null:** absent values are `Option<T>`.
 - **Errors as values:** functions return `Result<T, E>`. Panics are not catchable.
-- **Checked integers:** `Int` is a 64-bit signed integer, and overflow panics. Sized types (`I32`, `U8`, …) convert only explicitly, wrapping and saturating arithmetic are explicit operations, and arbitrary-precision numbers use `BigInt`. The unsigned types `U8`, `U32` and `U64` have the bitwise operators `^ & | ~ << >>`, and a shift by the type's width or more panics. `Int` has none ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
+- **Checked integers:** `Int` is a 64-bit signed integer, and overflow panics. Sized types (`I32`, `U8`, …) convert only explicitly (`to_u8()` checked, `wrapping_to_u8()` keeping the low bits, between `Int`, `U8`, `U16`, `U32` and `U64`), wrapping and saturating arithmetic are explicit operations (`wrapping_add`, `wrapping_sub` and `wrapping_mul` on `U8`, `U32` and `U64`), and arbitrary-precision numbers use `BigInt`. The unsigned types `U8`, `U32` and `U64` have the bitwise operators `^ & | ~ << >>`, and a shift by the type's width or more panics. `Int` has none ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
 - **No implicit conversions,** with one exception: `?` converts an error type through an explicitly written `impl From<E1> for E2`.
 - **Immutable by default:** bindings are immutable (`let`) unless declared `var`.
 - **No global mutable state.** At module level you can only declare constants, functions, and types.
@@ -479,7 +479,7 @@ Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench
 
 | Code | Panic |
 | --- | --- |
-| `P0001` | integer overflow |
+| `P0001` | integer overflow, or a `to_<type>()` conversion given a value that does not fit its target, such as `300.to_u8()` |
 | `P0002` | index out of bounds |
 | `P0003` | `todo()` reached |
 | `P0004` | division by zero |

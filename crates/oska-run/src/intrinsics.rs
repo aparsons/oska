@@ -18,6 +18,7 @@ use crate::confine::{self, Intent};
 use crate::data;
 use crate::host::{Host, RootHandle};
 use crate::html;
+use crate::int_methods;
 use crate::interp::{Interpreter, Stream};
 use crate::memory;
 use crate::ops;
@@ -115,6 +116,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'));
     [
         INTRINSICS,
+        int_methods::INTRINSICS,
         data::INTRINSICS,
         tasks::INTRINSICS,
         traits::INTRINSICS,
