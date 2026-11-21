@@ -239,6 +239,7 @@ impl Connection {
     pub fn receive(self) -> Result<Untrusted<String>, IoError>
     // `send` and `receive` with bytes.
     pub fn send_bytes(self, body: Untrusted<Bytes>) -> Result<(), IoError>
+    // What the host sent back, as bytes from outside the program.
     pub fn receive_bytes(self) -> Result<Untrusted<Bytes>, IoError>
 }
 
@@ -297,27 +298,41 @@ impl Secret<String> {
 // widening and wrapping narrowing, but no checked narrowing, which would
 // panic on a secret value.
 impl Secret<U8> {
+    // The bits rotated left by `n`, as `U8.rotl` does.
     pub fn rotl(self, n: Int) -> Secret<U8>
+    // The bits rotated right by `n`, as `U8.rotr` does.
     pub fn rotr(self, n: Int) -> Secret<U8>
     // Whether the two are equal, as a secret.
     pub fn ct_eq(self, other: Secret<U8>) -> Secret<Bool>
+    // The same value as a secret `U32`.
     pub fn to_u32(self) -> Secret<U32>
+    // The same value as a secret `U64`.
     pub fn to_u64(self) -> Secret<U64>
 }
 
 impl Secret<U32> {
+    // The bits rotated left by `n`, as `U32.rotl` does.
     pub fn rotl(self, n: Int) -> Secret<U32>
+    // The bits rotated right by `n`, as `U32.rotr` does.
     pub fn rotr(self, n: Int) -> Secret<U32>
+    // Whether the two are equal, as a secret.
     pub fn ct_eq(self, other: Secret<U32>) -> Secret<Bool>
+    // The same value as a secret `U64`.
     pub fn to_u64(self) -> Secret<U64>
+    // The low 8 bits, as a secret `U8`.
     pub fn wrapping_to_u8(self) -> Secret<U8>
 }
 
 impl Secret<U64> {
+    // The bits rotated left by `n`, as `U64.rotl` does.
     pub fn rotl(self, n: Int) -> Secret<U64>
+    // The bits rotated right by `n`, as `U64.rotr` does.
     pub fn rotr(self, n: Int) -> Secret<U64>
+    // Whether the two are equal, as a secret.
     pub fn ct_eq(self, other: Secret<U64>) -> Secret<Bool>
+    // The low 8 bits, as a secret `U8`.
     pub fn wrapping_to_u8(self) -> Secret<U8>
+    // The low 32 bits, as a secret `U32`.
     pub fn wrapping_to_u32(self) -> Secret<U32>
 }
 
@@ -325,9 +340,13 @@ impl Secret<U64> {
 // combine conditions with `and`, `or`, `xor` and `not`, which evaluate
 // both operands.
 impl Secret<Bool> {
+    // Whether both hold.
     pub fn and(self, other: Secret<Bool>) -> Secret<Bool>
+    // Whether either holds.
     pub fn or(self, other: Secret<Bool>) -> Secret<Bool>
+    // Whether exactly one holds.
     pub fn xor(self, other: Secret<Bool>) -> Secret<Bool>
+    // Whether the condition does not hold.
     pub fn not(self) -> Secret<Bool>
     // `if_true` when the condition holds, otherwise `if_false`, without
     // a branch: both are evaluated. `T` is `U8`, `U32`, `U64`, `Bool` or
@@ -342,30 +361,43 @@ impl Secret<Bool> {
 // Like `Bytes`'s, each operation follows the trust of its inputs: a
 // secret of untrusted bytes gives untrusted results (#223).
 impl Secret<Bytes> {
+    // The number of bytes, which is public.
     #[follows_trust]
     pub fn len(self) -> Int
+    // The byte at `index`, as a secret.
     #[follows_trust]
     pub fn at(self, index: Int) -> Secret<U8>
+    // The bytes from `start` up to, but excluding, `end`, as a secret.
     #[follows_trust]
     pub fn slice(self, start: Int, end: Int) -> Secret<Bytes>
+    // The `U32` stored big-endian at byte `offset`, as a secret.
     #[follows_trust]
     pub fn read_u32_be(self, offset: Int) -> Secret<U32>
+    // The `U32` stored little-endian at byte `offset`, as a secret.
     #[follows_trust]
     pub fn read_u32_le(self, offset: Int) -> Secret<U32>
+    // The `U64` stored big-endian at byte `offset`, as a secret.
     #[follows_trust]
     pub fn read_u64_be(self, offset: Int) -> Secret<U64>
+    // The `U64` stored little-endian at byte `offset`, as a secret.
     #[follows_trust]
     pub fn read_u64_le(self, offset: Int) -> Secret<U64>
+    // `byte` added at the end.
     #[follows_trust]
     pub fn push(var self, byte: Secret<U8>)
+    // `other`'s bytes added at the end.
     #[follows_trust]
     pub fn append(var self, other: Secret<Bytes>)
+    // `value`'s bytes added at the end, in big-endian order.
     #[follows_trust]
     pub fn push_u32_be(var self, value: Secret<U32>)
+    // `value`'s bytes added at the end, in little-endian order.
     #[follows_trust]
     pub fn push_u32_le(var self, value: Secret<U32>)
+    // `value`'s bytes added at the end, in big-endian order.
     #[follows_trust]
     pub fn push_u64_be(var self, value: Secret<U64>)
+    // `value`'s bytes added at the end, in little-endian order.
     #[follows_trust]
     pub fn push_u64_le(var self, value: Secret<U64>)
     // Compare without leaking timing information: the time depends on
@@ -546,14 +578,19 @@ impl Bytes {
     // first (`_be`, big-endian, the network's order) or last (`_le`).
     #[follows_trust]
     pub fn read_u16_be(self, offset: Int) -> U16
+    // The `U16` stored little-endian at byte `offset`.
     #[follows_trust]
     pub fn read_u16_le(self, offset: Int) -> U16
+    // The `U32` stored big-endian at byte `offset`.
     #[follows_trust]
     pub fn read_u32_be(self, offset: Int) -> U32
+    // The `U32` stored little-endian at byte `offset`.
     #[follows_trust]
     pub fn read_u32_le(self, offset: Int) -> U32
+    // The `U64` stored big-endian at byte `offset`.
     #[follows_trust]
     pub fn read_u64_be(self, offset: Int) -> U64
+    // The `U64` stored little-endian at byte `offset`.
     #[follows_trust]
     pub fn read_u64_le(self, offset: Int) -> U64
     // Two lower-case hexadecimal digits a byte.
@@ -575,14 +612,19 @@ impl Bytes {
     // `value`'s bytes added at the end, in big- or little-endian order.
     #[follows_trust]
     pub fn push_u16_be(var self, value: U16)
+    // `value`'s bytes added at the end, in little-endian order.
     #[follows_trust]
     pub fn push_u16_le(var self, value: U16)
+    // `value`'s bytes added at the end, in big-endian order.
     #[follows_trust]
     pub fn push_u32_be(var self, value: U32)
+    // `value`'s bytes added at the end, in little-endian order.
     #[follows_trust]
     pub fn push_u32_le(var self, value: U32)
+    // `value`'s bytes added at the end, in big-endian order.
     #[follows_trust]
     pub fn push_u64_be(var self, value: U64)
+    // `value`'s bytes added at the end, in little-endian order.
     #[follows_trust]
     pub fn push_u64_le(var self, value: U64)
 }
@@ -709,58 +751,99 @@ impl Display for IoError {
 // `wrapping_to_<type>()`, from a wider unsigned type to a narrower one,
 // keeps the value's low bits instead.
 impl Int {
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
     pub fn to_u8(self) -> U8
+    // The same value as a `U16`; it panics (`P0001`) when it does not fit.
     pub fn to_u16(self) -> U16
+    // The same value as a `U32`; it panics (`P0001`) when it does not fit.
     pub fn to_u32(self) -> U32
+    // The same value as a `U64`; it panics (`P0001`) when it does not fit.
     pub fn to_u64(self) -> U64
 }
 
 impl U8 {
+    // The bits rotated left by `n`.
     pub fn rotl(self, n: Int) -> U8
+    // The bits rotated right by `n`.
     pub fn rotr(self, n: Int) -> U8
+    // The sum, wrapping around modulo 2^8.
     pub fn wrapping_add(self, other: U8) -> U8
+    // The difference, wrapping around modulo 2^8.
     pub fn wrapping_sub(self, other: U8) -> U8
+    // The product, wrapping around modulo 2^8.
     pub fn wrapping_mul(self, other: U8) -> U8
+    // The same value as an `Int`.
     pub fn to_int(self) -> Int
+    // The same value as a `U16`.
     pub fn to_u16(self) -> U16
+    // The same value as a `U32`.
     pub fn to_u32(self) -> U32
+    // The same value as a `U64`.
     pub fn to_u64(self) -> U64
 }
 
 impl U16 {
+    // The same value as an `Int`.
     pub fn to_int(self) -> Int
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
     pub fn to_u8(self) -> U8
+    // The same value as a `U32`.
     pub fn to_u32(self) -> U32
+    // The same value as a `U64`.
     pub fn to_u64(self) -> U64
+    // The low 8 bits, as a `U8`.
     pub fn wrapping_to_u8(self) -> U8
 }
 
 impl U32 {
+    // The bits rotated left by `n`.
     pub fn rotl(self, n: Int) -> U32
+    // The bits rotated right by `n`.
     pub fn rotr(self, n: Int) -> U32
+    // The sum, wrapping around modulo 2^32.
     pub fn wrapping_add(self, other: U32) -> U32
+    // The difference, wrapping around modulo 2^32.
     pub fn wrapping_sub(self, other: U32) -> U32
+    // The product, wrapping around modulo 2^32.
     pub fn wrapping_mul(self, other: U32) -> U32
+    // The same value as an `Int`.
     pub fn to_int(self) -> Int
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
     pub fn to_u8(self) -> U8
+    // The same value as a `U16`; it panics (`P0001`) when it does not fit.
     pub fn to_u16(self) -> U16
+    // The same value as a `U64`.
     pub fn to_u64(self) -> U64
+    // The low 8 bits, as a `U8`.
     pub fn wrapping_to_u8(self) -> U8
+    // The low 16 bits, as a `U16`.
     pub fn wrapping_to_u16(self) -> U16
 }
 
 impl U64 {
+    // The bits rotated left by `n`.
     pub fn rotl(self, n: Int) -> U64
+    // The bits rotated right by `n`.
     pub fn rotr(self, n: Int) -> U64
+    // The sum, wrapping around modulo 2^64.
     pub fn wrapping_add(self, other: U64) -> U64
+    // The difference, wrapping around modulo 2^64.
     pub fn wrapping_sub(self, other: U64) -> U64
+    // The product, wrapping around modulo 2^64.
     pub fn wrapping_mul(self, other: U64) -> U64
+    // The same value as an `Int`; it panics (`P0001`) when it does not fit.
     pub fn to_int(self) -> Int
+    // The same value as a `U8`; it panics (`P0001`) when it does not fit.
     pub fn to_u8(self) -> U8
+    // The same value as a `U16`; it panics (`P0001`) when it does not fit.
     pub fn to_u16(self) -> U16
+    // The same value as a `U32`; it panics (`P0001`) when it does not fit.
     pub fn to_u32(self) -> U32
+    // The low 8 bits, as a `U8`.
     pub fn wrapping_to_u8(self) -> U8
+    // The low 16 bits, as a `U16`.
     pub fn wrapping_to_u16(self) -> U16
+    // The low 32 bits, as a `U32`.
     pub fn wrapping_to_u32(self) -> U32
 }
 

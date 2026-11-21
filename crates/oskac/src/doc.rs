@@ -83,7 +83,9 @@ pub fn entries() -> Vec<Entry> {
 
 /// The entries `filter` selects: a whole module by its path (`std.sql`),
 /// or an item by its name (`List.push`), with a type's or trait's methods
-/// after it (`List`). A name may start with its module's path
+/// after it (`List`). A method named with its impl's type arguments
+/// (`Secret<U8>.rotl`) also matches its name without them (`Secret.rotl`,
+/// `Secret`). A name may start with its module's path
 /// (`std.sql.connect`). `None` when nothing matches.
 pub fn select(entries: Vec<Entry>, filter: &str) -> Option<Vec<Entry>> {
     if api::MODULES.contains(&filter) {
@@ -106,11 +108,13 @@ pub fn select(entries: Vec<Entry>, filter: &str) -> Option<Vec<Entry>> {
         .filter(|e| module.map_or(true, |m| e.item.module == m))
         .filter(|e| e.item.kind != Kind::Module)
         .filter(|e| {
-            e.item.name == name
-                || e.item
-                    .name
-                    .strip_prefix(name)
-                    .is_some_and(|rest| rest.starts_with('.'))
+            [e.item.name.clone(), e.item.unqualified_name()]
+                .iter()
+                .any(|n| {
+                    n == name
+                        || n.strip_prefix(name)
+                            .is_some_and(|rest| rest.starts_with('.'))
+                })
         })
         .collect();
     (!selected.is_empty()).then_some(selected)
