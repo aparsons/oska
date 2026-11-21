@@ -120,6 +120,34 @@ pub fn report(
     items: &Items,
     modules: &Modules,
 ) -> Vec<FunctionAuthority> {
+    entries(module, decls, items, modules, false)
+}
+
+/// As [`report`], with an entry for each trait method that has no body
+/// too, named `Trait.method`: what the API reference shows for a
+/// signature.
+pub(crate) fn signatures(
+    module: &Module,
+    decls: &Decls,
+    items: &Items,
+    modules: &Modules,
+) -> Vec<FunctionAuthority> {
+    entries(module, decls, items, modules, true)
+}
+
+/// The built-in capabilities a value of `ty` reaches, in order of first
+/// appearance.
+pub(crate) fn capabilities_of(ty: &Ty, decls: &Decls) -> Vec<String> {
+    reach(ty, decls, &[], &mut Vec::new()).capabilities
+}
+
+fn entries(
+    module: &Module,
+    decls: &Decls,
+    items: &Items,
+    modules: &Modules,
+    with_signatures: bool,
+) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
     for item in &module.items {
         match &item.kind {
@@ -157,7 +185,7 @@ pub fn report(
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        if f.body.is_some() {
+                        if f.body.is_some() || with_signatures {
                             let name = modules.function_name(
                                 method.span.start,
                                 Some(&t.name.name),
