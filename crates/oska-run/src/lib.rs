@@ -235,8 +235,10 @@ const IMPLEMENTED_MODULES: &[&str] = &[html::MODULE];
 /// Whether the runtime runs the `std` module at `path`, such as
 /// `std.html`: a program that imports one that it does not is refused
 /// (`E0371`). The API reference marks the others as checking only.
+/// A module written in Oska, such as `std.json`, runs as the program's
+/// own code does.
 pub fn runs_module(path: &str) -> bool {
-    IMPLEMENTED_MODULES.contains(&path)
+    IMPLEMENTED_MODULES.contains(&path) || oska_check::std_module_written_in_oska(path)
 }
 
 /// Whether the built-in capability named `name` has a runtime: a program

@@ -15,10 +15,10 @@
 // readers cannot disagree about one message.
 //
 // `encode` writes canonical JSON: no whitespace, object members in their
-// order, every number as its text, and every string escaped, `"` and `\`
-// and every character below U+0020 (line breaks included), U+2028 and
-// U+2029. Its output never holds a line break, so it is safe as one line
-// of a line-delimited stream.
+// order, every number as its text (an exponent written with `e`), and
+// every string escaped: `"`, `\`, every character below U+0020 (line
+// breaks included), U+2028 and U+2029. Its output never holds a line
+// break, so it is safe as one line of a line-delimited stream.
 //
 // `Schema` describes the JSON a program accepts, in the subset of JSON
 // Schema that both MCP and Claude's structured outputs take: closed

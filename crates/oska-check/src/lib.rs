@@ -87,6 +87,13 @@ pub use toolchain::{
     RT_SOURCE as STD_RT_SOURCE,
 };
 
+/// Whether `path` names a `std` module written in Oska, such as
+/// `std.json`: a program that imports it runs the module's code as its
+/// own, on every backend.
+pub fn std_module_written_in_oska(path: &str) -> bool {
+    link::is_std_path(path)
+}
+
 /// Whether `report` says the package needs a newer `oskac` (`E0407`). The
 /// one place that decides it: such a package is refused for that alone, by
 /// every command.

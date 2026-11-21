@@ -10,6 +10,7 @@ Where untrusted text comes from:
 
 - Anything read through a capability: `DirRead.read_to_string`, `FileRead.read_to_string`, `Stdin.read_line`, `Env.get`, and as bytes `DirRead.read_bytes` and `FileRead.read_bytes`.
 - **Program inputs**: `Args.get`.
+- Every string that `json.parse` reads from a document, keys included (`use std.json`). Its numbers and booleans are trusted values.
 - The `message` of an `IoError`, `SqlError`, or `ProcError`.
 
 The flow rule is one-way. Trusted text may go anywhere untrusted text is accepted. Untrusted text may never go where trusted `String` is required, and the checker reports `E0300`:

@@ -178,6 +178,16 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`std.json`",
+        Probe::Program(
+            "use std.json\n\n\
+             fn main(io: Stdout, env: Env) -> Result<(), IoError> {\n    \
+             let name = env.get(\"OSKA_PROBE_UNSET\").unwrap_or(\"ada\")\n    \
+             let value = json.Value.Object([json.Member(key: \"name\", value: json.Value.Text(name))])\n    \
+             io.println(json.encode(value))\n}\n",
+        ),
+    ),
+    (
         "`std.sql`",
         Probe::Program(
             "use std.sql\n\n\
