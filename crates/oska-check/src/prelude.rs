@@ -212,6 +212,19 @@ mod tests {
     #[test]
     fn every_name_in_each_std_module_resolves_once_imported() {
         for std in super::STD_MODULES {
+            if std.written_in_oska {
+                // Checked as a program's module, linked with the `std`
+                // modules written in Oska that it imports, as a program
+                // that imports it is.
+                let report = crate::check_module(std.source);
+                assert!(
+                    report.diagnostics.is_empty(),
+                    "{}: {:#?}",
+                    std.path,
+                    report.diagnostics
+                );
+                continue;
+            }
             let importer =
                 oska_syntax::parse_module(&format!("use {}", std.path)).expect("a use parses");
             let mut diagnostics = Vec::new();
