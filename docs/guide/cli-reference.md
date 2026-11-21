@@ -66,6 +66,11 @@ USAGE:
                                            does, with --release), and write
                                            each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac doc [module | item] [--format=json]
+                                           Print the API reference of the
+                                           prelude, std.html, std.sql and
+                                           std.proc, offline, or of one module
+                                           (std.sql) or item (List.push)
     oskac new <name> [--lib] [--no-agent-files] [--format=json]
                                            Lay out a new package in the
                                            directory <name>: oska.toml,
@@ -94,7 +99,7 @@ USAGE:
     oskac --help                           Print this help
 ```
 
-`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run`, `test`, `build`, `release` and `fix` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run`, `build` and `release` refuse. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
+`lex` and `parse` take exactly one source file, `explain` a code, and `doc` at most one module or item name. `check`, `run`, `test`, `build`, `release` and `fix` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run`, `build` and `release` refuse. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
@@ -538,3 +543,39 @@ With `--format=json` it prints one JSON object on one line, the same object that
 | `fix` | The same program fixed, or `null`. |
 
 Unlike the other commands, `explain` takes a code and not a file. A code that does not exist is an error with exit code 2. The message suggests the closest code when one is near, as in ``error: unknown diagnostic code `<code>`; did you mean `<closest>`?`` on standard error. With `--format=json` the error is one object on standard output instead: `{"error":"unknown code","code":"<code>","suggestion":"<closest>"}`, with `null` for a suggestion when nothing is near.
+
+## `oskac doc`
+
+`oskac doc [module | item] [--format=json]` prints the API reference: every public item of the prelude, `std.html`, `std.sql` and `std.proc`, in that order. It is the same reference as the `/api/` pages of the documentation site, but offline. It reads only the toolchain's own sources, built into `oskac`, and writes only to standard output. `std.rt`, the runtime's system-call layer, is not user API and is left out.
+
+```sh
+oskac doc                      # everything
+oskac doc std.sql              # one module
+oskac doc List                 # a type and its methods
+oskac doc List.push            # one method
+oskac doc std.sql.connect      # an item, with its module
+```
+
+An item is a function, a struct, an enum, a trait, a built-in capability, a method of a type or trait (`List.push`, `Eq.eq`), or an `impl Trait for Type` (`Display for IoError`). For each, the reference gives:
+
+- its signature, as the source declares it, on one line, without private fields;
+- its authority, in the authority report's words: `pure`, or each capability-bearing parameter with what it supplies, as `FsRead (self)`. A type names the capabilities a value of it carries;
+- whether it runs: an item of `std.sql` or `std.proc`, or one that needs a capability with no runtime yet, such as `NetConnect`, checks but does not run (see [What works today](what-works-today.md));
+- its description: the block of `//` comment lines directly above it in the source, with no blank line between. This is a reading convention of the toolchain's sources, not syntax.
+
+A module or item the reference does not have is an error with exit code 2: ``error: the reference has no module or item named `<name>`; ...`` on standard error, or with `--format=json` the object `{"error":"unknown item","item":"<name>"}` on standard output.
+
+### `doc --format=json`
+
+With `--format=json` it prints `{"items": [...]}`, one object per item and per line, in the order the text lists them. This shape is stable; `/api.json` on the documentation site holds the whole reference in it.
+
+| Field | Value |
+| --- | --- |
+| `module` | `"prelude"`, or the module's path, such as `"std.sql"`. |
+| `name` | The item's name: `"connect"`, `"List.push"`, `"Display for IoError"`. Each module also has one item of kind `module`, named by its path, whose `description` describes the module. |
+| `kind` | `"module"`, `"fn"`, `"struct"`, `"enum"`, `"trait"`, `"capability"`, `"method"` or `"impl"`. |
+| `signature` | The declaration on one line, such as `"pub fn push(var self, item: T)"`. Empty for a module. |
+| `description` | The comment above the item, as Markdown, with `\n\n` between paragraphs. Empty when there is none. |
+| `authority` | What the item can reach, in the authority report's words, as `"pure"` or `"NetConnect (net)"`. Empty for a module. |
+| `runs` | `false` when `oskac run`, `test` and `build` refuse a program that uses it (`E0370` or `E0371`); `true` otherwise. |
+| `url` | The item's page and anchor on oskalang.dev, as `"https://oskalang.dev/api/prelude.html#listpush"`. |

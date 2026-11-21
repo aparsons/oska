@@ -384,6 +384,8 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to_file(\"site/favicon.svg\")",
         "read.restrict_to_file(\"Cargo.toml\")",
         "read.restrict_to_file(\"site/authority.txt\")",
+        "read.restrict_to_file(\"site/api.json\")",
+        "read.restrict_to_file(\"site/lastmod.txt\")",
         "restrict_to(Path.new(\"_site\"))",
     ] {
         assert!(
@@ -470,6 +472,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
         "  FsRead -> FileRead: restrict_to_file \"CHANGELOG.md\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"site/favicon.svg\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"site/lastmod.txt\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
         "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
     ] {
@@ -1241,6 +1244,16 @@ fn only_the_home_page_has_structured_data_and_it_describes_the_software() {
         product.get("additionalProperty").get("value").str(),
         "curl -fsSL https://oskalang.dev/install.sh | sh"
     );
+    assert_eq!(
+        product.get("downloadUrl").str(),
+        "https://github.com/aparsons/oska/releases/latest"
+    );
+    let help = product.get("softwareHelp");
+    assert_eq!(help.get("@type").str(), "CreativeWork");
+    assert_eq!(help.get("url").str(), "https://oskalang.dev/guide/");
+    // No fabricated rating or offer.
+    let text = &site["index.html"];
+    assert!(!text.contains("aggregateRating") && !text.contains("\"offers\""));
 }
 
 #[test]
@@ -2076,6 +2089,37 @@ fn what_works_today_is_a_guide_listed_in_llms_txt() {
     );
 }
 
+// ---- The research index -----------------------------------------------------------------
+
+/// `docs/research/index.md` groups the notes by topic by hand, so a new
+/// note must be added to it: every research page has its own entry, a
+/// list item that starts with a link to it, under a topic heading.
+#[test]
+fn the_research_index_lists_every_note_under_a_topic() {
+    let site = real_site();
+    let index = &site["research/index.md"];
+    let notes: Vec<&String> = site
+        .keys()
+        .filter(|k| k.starts_with("research/") && k.ends_with(".md") && *k != "research/index.md")
+        .collect();
+    assert!(notes.len() > 10, "{notes:?}");
+    let first_topic = index.find("\n## ").expect("a topic heading");
+    let entries: Vec<(usize, &str)> = index
+        .match_indices("\n- [")
+        .map(|(at, _)| (at, index[at..].lines().nth(1).unwrap_or("")))
+        .collect();
+    for note in notes {
+        let name = note.trim_start_matches("research/");
+        let entry = entries.iter().find(|(_, line)| {
+            let target = line.split_once("](").map_or("", |(_, rest)| rest);
+            target.starts_with(&format!("{name})"))
+                || target.starts_with(&format!("/research/{name})"))
+        });
+        let (at, _) = entry.unwrap_or_else(|| panic!("research/index.md has no entry for {name}"));
+        assert!(*at > first_topic, "{name} is listed before any topic");
+    }
+}
+
 // ---- The real site: the corpus for agents (#189) ----------------------------------------
 
 #[test]
@@ -2160,4 +2204,34 @@ fn the_dead_targets_the_site_review_found_now_resolve() {
             assert!(!site[copy].contains(dead), "{copy} still has {dead}");
         }
     }
+}
+
+// ---- The real site: the API reference (#294) --------------------------------------------
+
+/// The real site, built from the `std.sql` part of the real reference
+/// (`common::site::real_inputs`), has its page, with a heading at each
+/// item's anchor, and republishes the items in `api.json`. `oskac`'s own
+/// tests build it from the whole reference.
+#[test]
+fn the_real_site_publishes_the_reference_with_an_anchor_per_item() {
+    let site = real_site();
+    let input = common::site::real_inputs()["site/api.json"].clone();
+    let reference = oska_syntax::parse_json(&input).expect("the reference is JSON");
+    let items = reference
+        .get("items")
+        .and_then(oska_syntax::JsonValue::as_array)
+        .expect("an items array");
+    let page = &site["api/std-sql.html"];
+    for item in items {
+        let url = item.get("url").and_then(|u| u.as_str()).expect("a url");
+        if let Some((_, anchor)) = url.split_once('#') {
+            assert!(page.contains(&format!("<h2 id=\"{anchor}\">")), "{url}");
+        }
+    }
+    assert_eq!(
+        oska_syntax::parse_json(&site["api.json"]).expect("api.json is JSON"),
+        reference
+    );
+    assert!(site["reference.html"].contains("<a href=\"/api/\">API reference</a>"));
+    assert!(llms_group(&site["llms.txt"], "API reference").contains("/api/std-sql.md"));
 }

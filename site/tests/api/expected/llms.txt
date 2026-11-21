@@ -1,0 +1,33 @@
+# Oska
+
+> A language.
+
+Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). `oskac build` compiles a program to an executable for Linux or macOS on any host: `--target` picks the platform (`linux-aarch64`, `linux-x86_64`, `macos-aarch64` or `macos-x86_64`), `--target all` writes all four, and without `--target` it builds for the host, or for `linux-aarch64` on Windows. On Linux and macOS, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which Windows uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).
+
+## Start here
+
+- [What works today](https://oskalang.dev/guide/what-works-today.md): What runs, and what only checks.
+
+## Guides
+
+- [Guides](https://oskalang.dev/guide/index.md)
+
+## API reference
+
+- [API reference](https://oskalang.dev/api/index.md): Every public item of the prelude, which every module sees, and of the std modules a program can use: its signature, its authority, whether it runs, and what it does. It is generated from the source...
+- [prelude](https://oskalang.dev/api/prelude.md): The prelude: what every module sees without use.
+- [std.sql](https://oskalang.dev/api/std-sql.md): The SQL sink. See <b>this</b>.
+
+## Docs
+
+- [Oska](https://oskalang.dev/index.md): A language.
+- [Glossary](https://oskalang.dev/glossary.md): A value.
+- [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
+
+## Machine-readable
+
+- [llms-full.txt](https://oskalang.dev/llms-full.txt): the documentation, as Markdown, in one file
+- [api.json](https://oskalang.dev/api.json): every item of the API reference, as `oskac doc --format=json` prints it: its module, name, kind, signature, description and authority, whether it runs, and the URL of its entry
+- [search.json](https://oskalang.dev/search.json): the search index
+- [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page
+- [latest.json](https://oskalang.dev/latest.json): the current version and the installers
