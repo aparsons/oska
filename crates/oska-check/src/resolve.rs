@@ -35,7 +35,7 @@ pub fn untrusted_without_trust_flag(ty: &Type, known: &dyn Fn(&str) -> bool) -> 
         }
     }
     Some(Diagnostic::new(
-        codes::UNTRUSTED_NOT_TEXT,
+        codes::UNTRUSTED_WITHOUT_TRUST_FLAG,
         "`Untrusted<...>` marks text and bytes only, `Untrusted<String>` or \
          `Untrusted<Bytes>`: trust is a flag on text and bytes, and other types are \
          always trusted; for text inside a container, write it inside, as in \

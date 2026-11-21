@@ -2048,7 +2048,10 @@ pub fn bytes_read(bytes: Bytes, offset: Int, width: Int, big: Bool) -> Int {
 
 // `bytes_read` for `Secret<Bytes>`'s `at` and endian reads: each byte it
 // reads is marked secret, so the native backend refuses to build code in
-// which a branch or an address depends on what it gives.
+// which a branch or an address depends on what it gives. It repeats
+// `bytes_read`'s body rather than share it: the backend's guard follows
+// a mark through a function whatever its arguments, so a shared body
+// with a flag for the mark would make every public read secret too.
 pub fn bytes_read_secret(bytes: Bytes, offset: Int, width: Int, big: Bool) -> Int {
     if !bytes_readable(bytes, offset, width) {
         return 0
@@ -2214,18 +2217,7 @@ pub fn bytes_eq(a: Bytes, b: Bytes) -> Bool {
 pub fn bytes_constant_time_eq(a: Bytes, b: Bytes) -> Bool {
     let left = rt_mem_bytes(a)
     let right = rt_mem_bytes(b)
-    let length = bytes_length(left)
-    let other = bytes_length(right)
-    var diff = rt_mem_xor(length, other)
-    let shorter = if length < other { length } else { other }
-    var i = 0
-    while i < shorter {
-        let x = rt_mem_conceal(rt_mem_load8(rt_mem_add(bytes_data(left), i)))
-        let y = rt_mem_conceal(rt_mem_load8(rt_mem_add(bytes_data(right), i)))
-        diff = rt_mem_or(diff, rt_mem_xor(x, y))
-        i = i + 1
-    }
-    rt_mem_expose(diff) == 0
+    equal_constant(bytes_data(left), bytes_length(left), bytes_data(right), bytes_length(right))
 }
 
 // `ct_select` between two `Secret<Bytes>`: a new buffer of `a`'s bytes
@@ -3841,14 +3833,21 @@ pub fn secret_constant_time_eq_secret(secret: Secret<String>, other: Secret<Stri
 // Whether the text objects `a` and `b` are equal, in time that depends on
 // their lengths but not on where they first differ.
 fn text_equal_constant(a: Int, b: Int) -> Bool {
-    let length = text_length(a)
-    let other = text_length(b)
+    equal_constant(text_data(a), text_length(a), text_data(b), text_length(b))
+}
+
+// Whether the `length` bytes at `left` equal the `other` bytes at
+// `right`: every byte of the shorter compared, each marked secret,
+// whatever the first difference, in time that depends on the lengths
+// only. `Secret<Bytes>`'s and `Secret<String>`'s constant-time
+// comparisons share it.
+fn equal_constant(left: Int, length: Int, right: Int, other: Int) -> Bool {
     var diff = rt_mem_xor(length, other)
     let shorter = if length < other { length } else { other }
     var i = 0
     while i < shorter {
-        let x = rt_mem_conceal(rt_mem_load8(rt_mem_add(text_data(a), i)))
-        let y = rt_mem_conceal(rt_mem_load8(rt_mem_add(text_data(b), i)))
+        let x = rt_mem_conceal(rt_mem_load8(rt_mem_add(left, i)))
+        let y = rt_mem_conceal(rt_mem_load8(rt_mem_add(right, i)))
         diff = rt_mem_or(diff, rt_mem_xor(x, y))
         i = i + 1
     }

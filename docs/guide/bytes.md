@@ -57,7 +57,7 @@ A mutating method needs a `var` binding:
 - `push_u16_be`, `push_u32_be` and `push_u64_be`, and their `_le` forms, add an integer's bytes in that order.
 - `set(i, byte)` replaces one byte, and panics (`P0002`) when `i` is out of bounds.
 
-`Bytes` is a value, like every Oska value. A mutating method changes a buffer that nothing else holds in place, and copies a shared one first, so appending in a loop is not quadratic and a copy never changes behind your back. A buffer that would grow past 256 MiB panics (`P0043`).
+`Bytes` is a value, like every Oska value. A mutating method changes a buffer that nothing else holds in place, and copies a shared one first, so appending in a loop is not quadratic and a copy never changes behind your back. A buffer that would grow past 256 MiB panics (`P0043`). That limit is not yet checked where a whole buffer comes in at once: `String.to_bytes` and the capabilities' `read_bytes` give a buffer of any length.
 
 ## Integers in a buffer
 

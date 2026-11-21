@@ -66,7 +66,8 @@ tag 904398296
 
 - `len()` is a public `Int`.
 - `at(i)`, `read_u32_be(offset)`, `read_u64_be(offset)` and their `_le` forms read at a public offset and give secret integers. `slice(start, end)` takes public bounds and gives `Secret<Bytes>`.
-- `push`, `append` and the endian pushes take secrets.
+- `push`, `append` and the 32- and 64-bit endian pushes take secrets.
+- There is no 16-bit read or push (`read_u16_be`, `push_u16_be` and the `_le` forms), because there is no `Secret<U16>` to give or take: `U16` has no bitwise operators to compute on a secret with. Read two bytes with `at` and combine them as `Secret<U32>`s instead.
 - `constant_time_eq(bytes)` compares it with trusted or untrusted bytes, and `constant_time_eq_secret(other)` with another secret. Both give a public `Bool` and look at every byte, so the time they take reveals only the result and the lengths.
 
 A panic in a `Secret<Bytes>` method, such as a read past the end (`P0042`), depends only on the public length and offset.
@@ -147,7 +148,7 @@ fn below(a: Secret<U32>, b: Secret<U32>) -> Bool {
 }
 ```
 
-**An equality (`E0351`).** `==` and `!=` on secrets. The fix rewrites `a == b` to `a.ct_eq(b)` for secret integers, and to `constant_time_eq` or `constant_time_eq_secret` for secret bytes and text.
+**An equality (`E0351`).** `==` and `!=` on secrets. The fix rewrites `a == b` to `a.ct_eq(b)` for secret integers, and to `constant_time_eq` or `constant_time_eq_secret` for secret bytes and text. For a secret integer or a `Secret<Bool>` the fix is `maybe`, not `machine`: `ct_eq` gives a `Secret<Bool>` where `==` gave a `Bool`, so a `Bool` position, as in the example below, then needs a change of its own.
 
 ```oska error=E0351
 fn same(a: Secret<U32>, b: Secret<U32>) -> Bool {

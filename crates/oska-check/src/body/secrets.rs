@@ -21,7 +21,7 @@
 //! (`body/audit.rs`).
 
 use oska_syntax::ast::{BinaryOp, Expr, ExprKind, Ident};
-use oska_syntax::{Diagnostic, Edit, Span};
+use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use super::{Body, Deferred};
 use crate::codes;
@@ -161,29 +161,33 @@ impl Body<'_, '_, '_> {
         other: &Expr,
         other_secret: bool,
     ) {
-        let fix = self.constant_time_eq(op, secret, other, other_secret);
+        let (fix, applicability) = self.constant_time_eq(op, secret, other, other_secret);
         self.out.diagnostics.push(
-            Diagnostic::new(codes::SECRET_COMPARED, COMPARED, expr.span).with_fix(
-                "compare in constant time",
-                vec![Edit {
-                    span: expr.span,
-                    replacement: fix,
-                }],
-            ),
+            Diagnostic::new(codes::SECRET_COMPARED, COMPARED, expr.span)
+                .with_fix(
+                    "compare in constant time",
+                    vec![Edit {
+                        span: expr.span,
+                        replacement: fix,
+                    }],
+                )
+                .applicable(applicability),
         );
     }
 
-    /// `secret.constant_time_eq(other)`, negated for `!=`. Two secrets
-    /// compare with `constant_time_eq_secret`, so neither is exposed. A
-    /// secret integer compares with `ct_eq`, and a `Secret<Bool>` with
-    /// `xor`, a public operand made secret with `Secret.new`.
+    /// `secret.constant_time_eq(other)`, negated for `!=`, and how safe it
+    /// is to apply. Two secrets compare with `constant_time_eq_secret`, so
+    /// neither is exposed. A secret integer compares with `ct_eq`, and a
+    /// `Secret<Bool>` with `xor`, a public operand made secret with
+    /// `Secret.new`: those give a `Secret<Bool>` where `==` gave a `Bool`,
+    /// so the fixed program may not check, and the fix is `maybe`.
     fn constant_time_eq(
         &self,
         op: BinaryOp,
         (secret, secret_ty): (&Expr, &Ty),
         other: &Expr,
         other_secret: bool,
-    ) -> String {
+    ) -> (String, Applicability) {
         let receiver = self.postfix_operand(secret);
         let argument = &self.src[other.span.start..other.span.end];
         let inner = self.secret_inner(secret_ty).map(|t| self.infer.resolve(&t));
@@ -199,7 +203,8 @@ impl Body<'_, '_, '_> {
                 ("ct_eq", op == BinaryOp::Ne)
             };
             let not = if not { ".not()" } else { "" };
-            return format!("{receiver}.{method}({argument}){not}");
+            let fix = format!("{receiver}.{method}({argument}){not}");
+            return (fix, Applicability::Maybe);
         }
         let not = if op == BinaryOp::Ne { "!" } else { "" };
         let method = if other_secret {
@@ -207,7 +212,8 @@ impl Body<'_, '_, '_> {
         } else {
             "constant_time_eq"
         };
-        format!("{not}{receiver}.{method}({argument})")
+        let fix = format!("{not}{receiver}.{method}({argument})");
+        (fix, Applicability::Machine)
     }
 
     /// The source of `expr`, parenthesized unless a method call can

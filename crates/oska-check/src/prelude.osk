@@ -360,6 +360,9 @@ impl Secret<Bool> {
 // secret. Out of bounds, a method panics as `Bytes`'s does.
 // Like `Bytes`'s, each operation follows the trust of its inputs: a
 // secret of untrusted bytes gives untrusted results (#223).
+// There are no 16-bit endian reads or pushes, because there is no
+// `Secret<U16>` for them to give or take: `U16` has no bitwise
+// operators to compute on a secret with.
 impl Secret<Bytes> {
     // The number of bytes, which is public.
     #[follows_trust]

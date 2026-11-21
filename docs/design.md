@@ -14,7 +14,7 @@ This is a working draft. Decisions that are hard to reverse are recorded in [`ad
 - **Memory safety** comes from value semantics and reference counting. There are no raw pointers, lifetimes, or shared mutable references ([ADR 0001](adr/0001-value-semantics-with-reference-counting.md)).
 - **No null:** absent values are `Option<T>`.
 - **Errors as values:** functions return `Result<T, E>`. Panics are not catchable.
-- **Checked integers:** `Int` is a 64-bit signed integer, and overflow panics. Sized types (`I32`, `U8`, …) convert only explicitly (`to_u8()` checked, `wrapping_to_u8()` keeping the low bits, between `Int`, `U8`, `U16`, `U32` and `U64`), wrapping and saturating arithmetic are explicit operations (`wrapping_add`, `wrapping_sub` and `wrapping_mul` on `U8`, `U32` and `U64`), and arbitrary-precision numbers use `BigInt`. The unsigned types `U8`, `U32` and `U64` have the bitwise operators `^ & | ~ << >>`, and a shift by the type's width or more panics. `Int` has none ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
+- **Checked integers:** `Int` is a 64-bit signed integer, and overflow panics. Sized types (`I32`, `U8`, …) convert only explicitly (`to_u8()` checked, `wrapping_to_u8()` keeping the low bits, between `Int`, `U8`, `U16`, `U32` and `U64`), wrapping and saturating arithmetic are explicit operations (`wrapping_add`, `wrapping_sub` and `wrapping_mul` on `U8`, `U32` and `U64`), and arbitrary-precision numbers use `BigInt`. The unsigned types `U8`, `U32` and `U64` have the bitwise operators `^ & | ~ << >>` and the rotations `rotl` and `rotr`; a shift or rotation by the type's width or more, or a rotation by a negative amount, panics (`P0008`). `Int` has none ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
 - **No implicit conversions,** with one exception: `?` converts an error type through an explicitly written `impl From<E1> for E2`.
 - **Immutable by default:** bindings are immutable (`let`) unless declared `var`.
 - **No global mutable state.** At module level you can only declare constants, functions, and types.
@@ -303,7 +303,7 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
   - A `Secret` has no `Display`; `dbg` prints it as `<redacted>`.
   - A `Secret` cannot be interpolated, nor can any value that holds one, such as a `List<Secret<String>>` or a struct with a `Secret` field.
   - A `Secret` cannot be compared with `==`, because that would leak timing information. Use `a.constant_time_eq(text)` instead, or `a.constant_time_eq_secret(b)` to compare two secrets without exposing either. A fix rewrites `==` to the right one.
-  - The only way to read a secret's value is `.expose()`, and the exposed value is trusted.
+  - The only way to read a secret's value is `.expose()`. It keeps the trust of what the secret holds: `env.secret` gives trusted text, and exposing a `Secret<Bytes>` made from untrusted bytes gives untrusted bytes.
   - Secret integers (`Secret<U8>`, `Secret<U32>`, `Secret<U64>`), `Secret<Bool>` and `Secret<Bytes>` are made with `Secret.new(value)`, which is not an audit site. Code computes on them with wrapping `+ - *`, the bitwise operators, rotations, `ct_eq` and `ct_select`, and the checker refuses a secret that would decide a branch (`E0353`), a memory address (`E0354`), a variable-time instruction or a panic (`E0355`), or an ordering (`E0356`).
 - **Audit.**
   - Every trust assertion (`.assume_trusted()`) and every secret exposure (`.expose()`) is an **audit site**.
@@ -484,8 +484,9 @@ Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench
 | `P0002` | index out of bounds |
 | `P0003` | `todo()` reached |
 | `P0004` | division by zero |
-| `P0042` | a `Bytes` slice or endian read out of bounds, or a negative length for `Bytes.zeroed` |
-| `P0043` | a `Bytes` that would grow past 256 MiB |
+| `P0008` | a shift or rotation by the type's width or more, or a rotation by a negative amount |
+| `P0042` | a `Bytes` slice or endian read out of bounds, a negative length for `Bytes.zeroed`, or `ct_select` between two `Secret<Bytes>` of different lengths |
+| `P0043` | a `Bytes` that would grow past 256 MiB (not yet checked for `String.to_bytes` or a capability's `read_bytes`) |
 
 - **When `main` returns `Err(e)`,** the runtime prints `e.to_string()` to stderr and exits with code **1**.
 - Exit code 1 means the program failed in a way it expected. Exit code 101 means it has a bug.
@@ -520,14 +521,14 @@ Once escape hatches exist, the following policy applies:
 ## Toolchain
 
 - **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for every supported platform, aarch64 and x86_64 Linux and macOS and x86_64 Windows, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default on each. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays, with `--interpret` and as the oracle the differential suite holds the native backend to, but not as a fallback: a program the native backend cannot compile is an error (`E0390`).
-- **The language is unfrozen, behind the parity gate.** New language features were frozen until every supported platform was native ([ADR 0014](adr/0014-every-supported-platform-builds-and-runs-natively.md)). With Windows native in v0.6.0 the gate is on and the freeze is over: a feature is done only when it works natively, with the same output and security guarantees, on all five platforms. The `Bytes` milestone is next in the queue, under the gate.
+- **The language is unfrozen, behind the parity gate.** New language features were frozen until every supported platform was native ([ADR 0014](adr/0014-every-supported-platform-builds-and-runs-natively.md)). With Windows native in v0.6.0 the gate is on and the freeze is over: a feature is done only when it works natively, with the same output and security guarantees, on all five platforms. The `Bytes` milestone is the first language work under the gate.
 - **Milestones.** Each is its own spec and release:
   1. Multi-file packages: `pkg.` paths, `pub(pkg)`, and an `oska.toml` with no dependencies yet (#88).
   2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
-  3. `Bytes`, the bitwise and wrapping operations, and secret integers: queued behind the parity gate, and the first language work after it.
-  4. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
-  5. git fetch, minimal version selection, the lockfile, and authority approval (#12).
-  6. Native backends for x86_64 Linux, macOS and Windows (v0.4.0 to v0.6.0), which turn the parity gate on.
+  3. Native backends for x86_64 Linux, macOS and Windows (v0.4.0 to v0.6.0), which turn the parity gate on.
+  4. `Bytes`, the bitwise and wrapping operations, and secret integers (#209), the first language work under the parity gate.
+  5. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
+  6. git fetch, minimal version selection, the lockfile, and authority approval (#12).
 - **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).
 - **Formatting:** deterministic, with a single canonical style.
 

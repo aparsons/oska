@@ -14,6 +14,7 @@
 mod common;
 
 use common::{assert_audit, assert_errors, assert_fix, assert_ok, check};
+use oska_syntax::Applicability;
 
 const TYPES: [&str; 3] = ["U8", "U32", "U64"];
 
@@ -468,6 +469,15 @@ fn attack_each_secret_ordering_is_e0356() {
 
 // ---- E0351: `==` on a secret, with the fix to `ct_eq` ----------------------
 
+/// The applicability of the fix of the first `code` diagnostic of `src`.
+fn fix_applicability(src: &str, code: &str) -> Applicability {
+    let report = check(src);
+    let diagnostic = report.diagnostics.iter().find(|d| d.code == code);
+    let fix = diagnostic.and_then(|d| d.fix.as_ref());
+    fix.unwrap_or_else(|| panic!("{code} on {src:?} should carry a fix"))
+        .applicability
+}
+
 #[test]
 fn attack_eq_on_secret_integers_is_e0351_fixed_to_ct_eq() {
     let src = "fn f(a: Secret<U32>, b: Secret<U32>) -> Bool {\n    a == b\n}";
@@ -482,6 +492,37 @@ fn attack_eq_on_secret_integers_is_e0351_fixed_to_ct_eq() {
         "E0351",
         "fn f(a: Secret<U8>, b: Secret<U8>) -> Bool {\n    a.ct_eq(b).not()\n}",
     );
+}
+
+#[test]
+fn e0351_fix_to_a_secret_bool_is_a_guess() {
+    // `ct_eq` and `xor` give a `Secret<Bool>`, which a `Bool` position
+    // refuses, so the fix is not safe to apply unread.
+    for src in [
+        "fn f(a: Secret<U32>, b: Secret<U32>) -> Bool {\n    a == b\n}",
+        "fn f(a: Secret<Bool>, b: Bool) -> Bool {\n    a != b\n}",
+    ] {
+        assert_eq!(
+            fix_applicability(src, "E0351"),
+            Applicability::Maybe,
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn e0351_machine_fix_on_secret_bytes_checks() {
+    for src in [
+        "fn f(a: Secret<Bytes>, b: Secret<Bytes>) -> Bool {\n    a == b\n}",
+        "fn f(a: Secret<Bytes>, b: Bytes) -> Bool {\n    a != b\n}",
+    ] {
+        assert_eq!(
+            fix_applicability(src, "E0351"),
+            Applicability::Machine,
+            "{src}"
+        );
+        assert_ok(&common::apply_fix(src, "E0351"));
+    }
 }
 
 #[test]

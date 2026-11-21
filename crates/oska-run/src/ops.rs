@@ -86,8 +86,9 @@ pub fn rotate(x: Value, n: Value, left: bool, span: Span) -> Result<Value, Panic
     Ok(Value::Int(value, int))
 }
 
-/// Every bit of an integer of type `int` set.
-fn mask(int: IntType) -> i128 {
+/// Every bit of an integer of type `int` set: an unsigned value `&` it
+/// is that value modulo 2 to the type's width.
+pub(crate) fn mask(int: IntType) -> i128 {
     (1i128 << int.bits()) - 1
 }
 

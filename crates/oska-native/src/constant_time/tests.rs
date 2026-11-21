@@ -512,7 +512,7 @@ mod programs {
     /// conversions, `Secret<Bool>`'s methods, `ct_eq`, `ct_select` and
     /// `Secret<Bytes>`'s methods; and the `std.rt` functions that handle
     /// secret bytes and secret arguments.
-    const SECRET_FUNCTIONS: [&str; 13] = [
+    const SECRET_FUNCTIONS: [&str; 12] = [
         "ops_u8",
         "ops_u32",
         "ops_u64",
@@ -523,8 +523,7 @@ mod programs {
         "buffers",
         "std.rt.bytes_read_secret",
         "std.rt.bytes_select",
-        "std.rt.bytes_constant_time_eq",
-        "std.rt.text_equal_constant",
+        "std.rt.equal_constant",
         "std.rt.bytes_push_int",
     ];
 

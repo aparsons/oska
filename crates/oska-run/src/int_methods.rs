@@ -15,6 +15,7 @@ use oska_syntax::Span;
 use crate::host::Host;
 use crate::intrinsics::Intrinsic::Plain;
 use crate::intrinsics::Table;
+use crate::ops::mask;
 use crate::panics::{codes, Panic};
 use crate::value::Value;
 
@@ -79,7 +80,7 @@ fn wrapping(args: Vec<Value>, op: fn(u128, u128) -> u128) -> Value {
     };
     // Both are unsigned, so non-negative.
     let exact = op(a as u128, b.as_int() as u128);
-    Value::Int(low_bits(exact as i128, int), int)
+    Value::Int(exact as i128 & mask(int), int)
 }
 
 fn to_int(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
@@ -136,10 +137,5 @@ fn wrapping_to_u32(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value,
 
 /// The low bits of the receiver, `args`, as an integer of type `to`.
 fn wrapping_to(args: Vec<Value>, to: IntType) -> Value {
-    Value::Int(low_bits(args[0].as_int(), to), to)
-}
-
-/// `n` modulo 2 to the width of `int`, an unsigned type.
-fn low_bits(n: i128, int: IntType) -> i128 {
-    n & ((1i128 << int.bits()) - 1)
+    Value::Int(args[0].as_int() & mask(to), to)
 }

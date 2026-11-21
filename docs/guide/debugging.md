@@ -83,8 +83,8 @@ Under the panic's line come its **frames**, the call stack that led to it, inner
 | `P0010` to `P0014` | A failed test assertion, `P0014` a missing or different snapshot. See [testing](testing.md). |
 | `P0020` | `Env.secret` asked for a variable that is not set. |
 | `P0021` | Calls nest too deep: runaway recursion. The program panics instead of overflowing the stack. |
-| `P0042` | A `Bytes` slice or endian read that runs past the end of the buffer, such as `read_u32_be(0)` on 3 bytes, or `Bytes.zeroed` with a negative length. Check `len()` first when the buffer may be short. |
-| `P0043` | A `Bytes` that would grow past 256 MiB. |
+| `P0042` | A `Bytes` slice or endian read that runs past the end of the buffer, such as `read_u32_be(0)` on 3 bytes, `Bytes.zeroed` with a negative length, or `ct_select` between two `Secret<Bytes>` of different lengths. Check `len()` first when the buffer may be short. |
+| `P0043` | A `Bytes` that would grow past 256 MiB. Not yet checked for `String.to_bytes` or a capability's `read_bytes`. |
 
 The full table is in the [runtime notes](../runtime.md#panics).
 
