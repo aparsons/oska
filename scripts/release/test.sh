@@ -470,6 +470,30 @@ test_stage_site_refuses_releases_without_a_key_to_check_them() {
   fi
 }
 
+# ---- The release page links its notes on the changelog (#514) ---------------
+
+test_stage_site_release_page_links_its_version_on_the_changelog() {
+  signed_release v1.10.0
+  mkdir site
+  OSKA_SITE_URL=https://example.test "$here/stage-site.sh" out site key.pub
+  grep -qF '<a href="https://example.test/changelog.html#v1100">What changed in 1.10.0</a>' \
+    site/releases/v1.10.0/index.html || fail "the release page does not link #v1100"
+}
+
+test_stage_site_pre_release_page_links_its_base_version_on_the_changelog() {
+  signed_release v1.10.0-rc.1
+  mkdir site
+  "$here/stage-site.sh" out site key.pub
+  page=site/releases/v1.10.0-rc.1/index.html
+  grep -qF '<a href="https://oskalang.dev/changelog.html#v1100">What changed in 1.10.0</a>' "$page" ||
+    fail "the pre-release page does not link its base version, #v1100"
+  if grep -q 'rc' <(grep -F changelog.html "$page"); then
+    fail "the changelog link names the pre-release"
+  fi
+}
+
+# ---- End of the changelog link tests (#514) ----------------------------------
+
 # Writes working fake binaries into ./builds: scripts that answer
 # --version, in text and JSON, with <version>, as the real oskac does.
 working_builds() {
