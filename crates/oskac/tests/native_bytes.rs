@@ -411,13 +411,17 @@ fn every_bounds_and_length_panic_matches_the_interpreter() {
 #[cfg(unix)]
 #[test]
 fn buffers_grow_in_place_and_are_freed() {
-    let src = r#"fn main(io: Stdout) {
+    let src = r#"fn grow() -> Int {
     var b = Bytes.new()
     var i = 0
     while i < 20000000 {
         b.push(7)
         i = i + 1
     }
+    b.len()
+}
+
+fn churn() -> Int {
     var total = 0
     var j = 0
     while j < 200000 {
@@ -427,15 +431,21 @@ fn buffers_grow_in_place_and_are_freed() {
         total = total + copy.len() + piece.to_hex().len()
         j = j + 1
     }
-    let n = b.len()
+    total
+}
+
+fn main(io: Stdout) {
+    let n = grow()
+    let total = churn()
     let _ = io.println("{n} {total}")
 }
 "#;
     let case = Case::file("bytes_grow_and_free", src);
     let (exe, dir) = differential::build_native(&case);
-    // At most 256 MiB, `main`'s stack reserved included: the 20 MB of
-    // bytes, doubling, need under 64 MiB, while 200,000 buffers of 3.5 KB
-    // never freed would need 700 MB.
+    // At most 256 MiB of address space, the stack reserved for the
+    // deepest calls of `main`'s frame included: the 20 MB of bytes,
+    // doubling, need under 64 MiB, while 200,000 buffers of 3.5 KB never
+    // freed would need 700 MB.
     let output = differential::run_within_memory(&exe, &dir, 256);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
