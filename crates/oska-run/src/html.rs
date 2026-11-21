@@ -9,7 +9,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics::Intrinsic::Plain;
-use crate::intrinsics::Table;
+use crate::intrinsics::{Args, Table};
 use crate::memory;
 use crate::panics::Panic;
 use crate::value::Value;
@@ -74,7 +74,7 @@ fn markup_of(value: &Value) -> &str {
 }
 
 /// `text(text)`: the text, escaped.
-fn text(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn text(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = args[0].as_str();
     let len = if memory::metered() {
         escaped_len(text)
@@ -85,26 +85,31 @@ fn text(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> 
 }
 
 /// `TrustedHtml.new(markup)`: the markup, vouched for by its author.
-fn trusted_html_new(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn trusted_html_new(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = args[0].as_str();
     markup(TRUSTED_HTML, text.len(), span, || text.to_string())
 }
 
 /// `Html.raw(markup)`: trusted markup, unescaped.
-fn html_raw(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn html_raw(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = markup_of(&args[0]);
     markup(HTML, text.len(), span, || text.to_string())
 }
 
 /// `Html.concat(self, other)`: `self`'s markup, then `other`'s.
-fn html_concat(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn html_concat(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let (first, second) = (markup_of(&args[0]), markup_of(&args[1]));
-    markup(HTML, first.len() + second.len(), span, || {
-        format!("{first}{second}")
+    let len = first.len() + second.len();
+    markup(HTML, len, span, || {
+        // Made at its length, not grown as `format!` would grow it.
+        let mut both = String::with_capacity(len);
+        both.push_str(first);
+        both.push_str(second);
+        both
     })
 }
 
 /// `Html.render(self)`: the markup, ready to send.
-fn html_render(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn html_render(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args[0].fields()[0].clone())
 }

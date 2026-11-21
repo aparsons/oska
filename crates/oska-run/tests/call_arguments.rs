@@ -80,6 +80,112 @@ fn every_kind_of_call_binds_its_arguments_to_the_same_slots() {
     assert_runs(CALLS, &[], "304 34 9 6087 11 27 11\n");
 }
 
+/// Intrinsic calls in every position: nested in another's arguments, in
+/// a function's arguments, in a closure `List.map` calls back into, on a
+/// place (`push`), and reached through a trait (`Display` in an
+/// interpolation, `From` behind `?`), so that one call's arguments are
+/// still being gathered while another's run.
+const INTRINSIC_CALLS: &str = r#"struct Celsius { degrees: Int }
+
+impl Display for Celsius {
+    fn to_string(self) -> String {
+        let d = self.degrees
+        "{d}C"
+    }
+}
+
+struct ParseError { text: String }
+
+struct AppError { message: String }
+
+impl From<ParseError> for AppError {
+    fn from(err: ParseError) -> AppError {
+        let text = err.text
+        AppError(message: "bad {text}")
+    }
+}
+
+fn parse(text: String) -> Result<Int, ParseError> {
+    match text.parse_int() {
+        Some(n) => Ok(n)
+        None => Err(ParseError(text: text))
+    }
+}
+
+fn total(texts: List<String>) -> Result<Int, AppError> {
+    var sum = 0
+    for text in texts {
+        sum = sum + parse(text.trim())?
+    }
+    Ok(sum)
+}
+
+fn shout(text: String, times: Int) -> String {
+    text.to_lowercase().repeat(times.to_string().len() + times)
+}
+
+fn main(io: Stdout) {
+    let words = "a,bb,ccc".split(",")
+    let lens = words.map(|w| w.len() * words.len())
+    var acc: List<Int> = List.new()
+    acc.push(lens.get(0).unwrap_or(0) + "x,y".split(",").len())
+    acc.push(shout("AB".slice(0, 1), lens.at(1)).len())
+    let warm = Celsius(degrees: acc.at(0) + acc.at(1))
+    let good = total([" 1", "2 ", " 3 "])
+    let bad = total(["4", "five"])
+    let n = match good {
+        Ok(n) => n
+        Err(_) => 0
+    }
+    let m = match bad {
+        Ok(_) => "unexpected"
+        Err(e) => e.message
+    }
+    let _ = io.println("{warm} {n} {m}")
+}
+"#;
+
+#[test]
+fn intrinsic_calls_see_their_own_arguments_however_they_nest() {
+    assert_runs(INTRINSIC_CALLS, &[], "12C 6 bad five\n");
+}
+
+/// Makes lists and texts through intrinsics, a mutating one included,
+/// and keeps them all, so the meter's sweep frees nothing.
+const KEEPS_INTRINSICS: &str = r#"fn main() {
+    let text = "a,bb,ccc"
+    let comma = ","
+    let words = text.split(comma)
+    let measure = |w: String| [w.len(), w.byte_len()]
+    let lens = words.map(measure)
+    var grown: List<Int> = List.new()
+    grown.push(words.len())
+    grown.push(lens.len())
+    let dash = "-"
+    let joined = dash.join(words)
+    let kept = "kept"
+    let all = [words, [kept]]
+}
+"#;
+
+/// The bytes `KEEPS_INTRINSICS` holds at its end, as the meter counted
+/// them before ticket #505 changed how intrinsics get their arguments.
+const KEEPS_INTRINSICS_BYTES: u64 = 2764;
+
+#[test]
+fn max_memory_charges_the_values_intrinsics_make_exactly_as_before() {
+    let fits = |limit| fits_in(KEEPS_INTRINSICS, limit);
+    assert!(
+        fits(KEEPS_INTRINSICS_BYTES),
+        "KEEPS_INTRINSICS should fit in {KEEPS_INTRINSICS_BYTES} bytes"
+    );
+    assert!(
+        !fits(KEEPS_INTRINSICS_BYTES - 1),
+        "KEEPS_INTRINSICS should not fit in {} bytes",
+        KEEPS_INTRINSICS_BYTES - 1
+    );
+}
+
 /// Makes lists and structs through every kind of call and keeps them all,
 /// the arguments' lists included, so nothing it charges is freed before
 /// it ends: the meter's sweep frees nothing, and the smallest limit it
@@ -125,24 +231,29 @@ fn main() {
 }
 "#;
 
-/// Whether `KEEPS` runs to its end under a memory limit of `limit` bytes.
-fn keeps_fits_in(limit: u64) -> bool {
+/// Whether `src` runs to its end under a memory limit of `limit` bytes.
+fn fits_in(src: &str, limit: u64) -> bool {
     let mut host = FakeHost::new();
     let limits = Limits {
         max_memory: Some(limit),
         ..Limits::NONE
     };
-    let outcome = run_with_limits(KEEPS, &mut host, &["prog.osk".to_string()], limits);
+    let outcome = run_with_limits(src, &mut host, &["prog.osk".to_string()], limits);
     assert!(
         outcome.diagnostics.is_empty(),
-        "KEEPS should check: {:#?}",
+        "{src} should check: {:#?}",
         outcome.diagnostics
     );
     match &outcome.panic {
         None => true,
         Some(panic) if panic.code == "P0040" => false,
-        Some(other) => panic!("KEEPS should run or stop with P0040, not {other:#?}"),
+        Some(other) => panic!("{src} should run or stop with P0040, not {other:#?}"),
     }
+}
+
+/// Whether `KEEPS` runs to its end under a memory limit of `limit` bytes.
+fn keeps_fits_in(limit: u64) -> bool {
+    fits_in(KEEPS, limit)
 }
 
 /// The bytes `KEEPS` holds at its end, as the meter counted them before

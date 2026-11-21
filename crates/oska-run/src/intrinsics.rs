@@ -36,18 +36,40 @@ use Intrinsic::{HigherOrder, Plain};
 /// A body-less prelude function's runtime implementation. Each gets the
 /// arguments, the receiver first for a method, and the call's span, for
 /// panics, and what else its kind needs.
+/// An intrinsic call's arguments, the receiver first for a method. The
+/// interpreter passes them in a buffer it reuses, so a call allocates no
+/// `Vec` of its own (#505): an intrinsic takes what it keeps out of it
+/// (`swap_remove`, `pop`, `std::mem::take` of an item), and what it
+/// leaves is dropped when the call returns, as it was when the intrinsic
+/// owned its arguments.
+pub struct Args(pub(crate) Vec<Value>);
+
+impl std::ops::Deref for Args {
+    type Target = Vec<Value>;
+
+    fn deref(&self) -> &Vec<Value> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Args {
+    fn deref_mut(&mut self) -> &mut Vec<Value> {
+        &mut self.0
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Intrinsic {
     /// One that needs only the host.
-    Plain(fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>),
+    Plain(fn(&mut dyn Host, &mut Args, Span) -> Result<Value, Panic>),
     /// A mutating method (`var self`), such as `List.push`: it changes
     /// its receiver in place, given the call's other arguments.
-    Mutating(fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>),
+    Mutating(fn(&mut Value, &mut Args, Span) -> Result<Value, Panic>),
     /// One that calls back into the program, such as `List.map`, which
     /// calls its closure, or uses the interpreter's state, such as
     /// `String.chars`'s shared texts: it gets the interpreter instead of
     /// the host.
-    HigherOrder(fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>),
+    HigherOrder(fn(&mut Interpreter<'_, '_>, &mut Args, Span) -> Result<Value, Panic>),
 }
 
 /// A table of intrinsics, by the qualified name the checked program calls
@@ -223,10 +245,10 @@ fn io_text(result: io::Result<String>, span: Span) -> Result<Value, Panic> {
 /// `Stdout.println(self, line)`: the line and a newline.
 fn stdout_println(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
-    let line = format!("{}\n", text(&args, 1));
+    let line = format!("{}\n", text(args, 1));
     let written = interp.write_output(Stream::Stdout, &line, span)?;
     io_unit(written, span)
 }
@@ -234,10 +256,10 @@ fn stdout_println(
 /// `Stderr.println(self, line)`: the line and a newline.
 fn stderr_println(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
-    let line = format!("{}\n", text(&args, 1));
+    let line = format!("{}\n", text(args, 1));
     let written = interp.write_output(Stream::Stderr, &line, span)?;
     io_unit(written, span)
 }
@@ -246,7 +268,7 @@ fn stderr_println(
 /// Under `--timeout` the wait ends at the deadline (`P0039`).
 fn stdin_read_line(
     interp: &mut Interpreter<'_, '_>,
-    _: Vec<Value>,
+    _: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     match interp.read_line(span)? {
@@ -260,7 +282,7 @@ fn stdin_read_line(
 
 /// `dbg(value)`: print `value` to stderr for debugging, and return it. A
 /// `Secret` prints as `<redacted>`, wherever it is.
-fn dbg(interp: &mut Interpreter<'_, '_>, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn dbg(interp: &mut Interpreter<'_, '_>, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let value = args.swap_remove(0);
     let mut line = String::from("[dbg] ");
     debug(&value, &mut line);
@@ -365,7 +387,7 @@ fn debug_text(text: &str, out: &mut String) {
 
 /// `Args.get(self, index)`: the argument at `index`, the program path at
 /// 0, or `None` past the end.
-fn args_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn args_get(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let Value::Args(all) = &args[0] else {
         unreachable!("the checker guarantees `Args`, found {:?}", args[0]);
     };
@@ -376,8 +398,8 @@ fn args_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic>
 }
 
 /// `Env.get(self, name)`: the variable, or `None` when it is not set.
-fn env_get(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let value = host.env_var(text(&args, 1));
+fn env_get(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let value = host.env_var(text(args, 1));
     let value = value.map(|v| memory::text(&v, span)).transpose()?;
     Ok(Value::option(value))
 }
@@ -391,10 +413,10 @@ fn env_get(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, P
 /// `--max-output` it quotes no more of it than the limit has left.
 fn env_secret(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
-    let name = text(&args, 1);
+    let name = text(args, 1);
     match interp.host().env_var(name) {
         Some(value) => memory::wrap(builtins::SECRET, memory::text(&value, span)?, span),
         None => {
@@ -414,20 +436,20 @@ fn env_secret(
 // ---- Secrets -----------------------------------------------------------
 
 /// `Secret.expose(self)`: the wrapped value.
-fn secret_expose(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn secret_expose(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args[0].fields()[0].clone())
 }
 
 /// `Secret.constant_time_eq(self, other)`.
-fn secret_constant_time_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn secret_constant_time_eq(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let secret = args[0].fields()[0].as_str();
-    Ok(Value::Bool(constant_time_eq(secret, text(&args, 1))))
+    Ok(Value::Bool(constant_time_eq(secret, text(args, 1))))
 }
 
 /// `Secret.constant_time_eq_secret(self, other)`.
 fn secret_constant_time_eq_secret(
     _: &mut dyn Host,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let a = args[0].fields()[0].as_str();
@@ -449,12 +471,12 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 // ---- Clock and randomness ----------------------------------------------
 
 /// `Clock.now_millis(self)`.
-fn clock_now_millis(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn clock_now_millis(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(host.now_millis()))
 }
 
 /// `Random.next_int(self)`: from 0 up to, but excluding, 2^63.
-fn random_next_int(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn random_next_int(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(i128::from(host.next_random() >> 1)))
 }
 
@@ -471,7 +493,7 @@ fn fs_cap(value: &Value) -> &FsCap {
 }
 
 /// `Path.new(raw)` and `Path.from(raw)`.
-fn path_new(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn path_new(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     memory::wrap(builtins::PATH, args.swap_remove(0), span)
 }
 
@@ -479,15 +501,15 @@ fn path_new(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value,
 /// directory capability with the same access, confined to `dir`, which
 /// the host opens now and holds. `dir` is trusted text, any path whose
 /// last component is not a symlink.
-fn fs_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(restricted(host, fs_cap(&args[0]), text(&args, 1)))
+fn fs_restrict_to(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(restricted(host, fs_cap(&args[0]), text(args, 1)))
 }
 
 /// `restrict_to(self, dir)` on `Dir`, `DirRead`, and `DirWrite`: the same
 /// capability narrowed to `dir`, a `Path` that may come from untrusted
 /// text. It is walked beneath the current root like any path read there
 /// (`confine.rs`), so a narrowing never widens.
-fn dir_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn dir_restrict_to(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(restricted(
         host,
         fs_cap(&args[0]),
@@ -518,15 +540,15 @@ fn restricted(host: &mut dyn Host, fs: &FsCap, dir: &str) -> Value {
 /// `restrict_to_file(self, file)` on `FsRead` and `FsWrite`: the file
 /// capability with the same access for the one file at `file`, trusted
 /// text. The host opens its parent now and holds it, with the file's name.
-fn fs_restrict_to_file(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(restricted_file(host, fs_cap(&args[0]), text(&args, 1)))
+fn fs_restrict_to_file(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(restricted_file(host, fs_cap(&args[0]), text(args, 1)))
 }
 
 /// `restrict_to_file(self, file)` on `DirRead` and `DirWrite`: the file
 /// capability for the file at `file`, a `Path` that may come from
 /// untrusted text. It is walked beneath the current root like any path
 /// read there (`confine.rs`), so a file never lies outside it.
-fn dir_restrict_to_file(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn dir_restrict_to_file(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(restricted_file(
         host,
         fs_cap(&args[0]),
@@ -572,12 +594,12 @@ fn attenuated_root(fs: &FsCap, opened: io::Result<RootHandle>, at: &str) -> Root
 }
 
 /// `read_only(self)` on `Fs` and `Dir`.
-fn fs_read_only(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_read_only(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(with_access(&args[0], Access::Read))
 }
 
 /// `write_only(self)` on `Fs` and `Dir`.
-fn fs_write_only(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_write_only(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(with_access(&args[0], Access::Write))
 }
 
@@ -632,7 +654,7 @@ fn root_for(fs: &FsCap, intent: Intent) -> io::Result<&RootHandle> {
 
 /// `DirRead.read_to_string(self, path)`: the path is walked beneath the
 /// root's handle (`confine.rs`).
-fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn fs_read_to_string(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
@@ -650,7 +672,7 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Resul
 /// `DirRead.list_dir(self, path)`: the names of the entries of the
 /// directory, sorted. The path is walked beneath the root's handle, and
 /// `.` lists the root.
-fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn fs_list_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
@@ -670,8 +692,8 @@ fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Valu
 
 /// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
 /// and is walked beneath the root's handle.
-fn fs_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let contents = text(&args, 2);
+fn fs_write(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let contents = text(args, 2);
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
@@ -682,7 +704,7 @@ fn fs_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, 
 
 /// `DirWrite.create_dir(self, path)`: confined like a write, so `path`
 /// ends in a plain name, and is walked beneath the root's handle.
-fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn fs_create_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
@@ -693,16 +715,16 @@ fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Va
 
 /// `FileRead.read_to_string(self)`: the file's text, opened by its name
 /// beneath the parent directory's handle (`confine.rs`).
-fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn file_read_to_string(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
     io_text(result, span)
 }
 
 /// `FileWrite.write(self, contents)`: creates the file, or replaces what
 /// it holds, opened by its name beneath the parent directory's handle.
-fn file_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn file_write(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let result =
-        file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], text(&args, 1)));
+        file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], text(args, 1)));
     io_unit(result, span)
 }
 
@@ -725,23 +747,23 @@ fn file_root(value: &Value) -> io::Result<&RootHandle> {
 // ---- Option and Result -------------------------------------------------
 
 /// `Option.is_some(self)`.
-fn option_is_some(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn option_is_some(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].is_variant(builtins::SOME)))
 }
 
 /// `Result.is_ok(self)`.
-fn result_is_ok(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn result_is_ok(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].is_variant(builtins::OK)))
 }
 
 /// `Option.unwrap_or(self, default)`.
-fn option_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn option_unwrap_or(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(unwrap_or(args, builtins::SOME))
 }
 
 /// `Option.ok_or(self, err)`: `Ok` of the value, or `Err(err)` when
 /// there is none.
-fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn option_ok_or(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let err = args.swap_remove(1);
     Ok(match args[0].is_variant(builtins::SOME) {
         true => Value::ok(args[0].fields()[0].clone()),
@@ -750,13 +772,13 @@ fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value
 }
 
 /// `Result.unwrap_or(self, default)`.
-fn result_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn result_unwrap_or(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(unwrap_or(args, builtins::OK))
 }
 
 /// The field of `args[0]` when it is the variant `present`, else
 /// `args[1]`, the default.
-fn unwrap_or(mut args: Vec<Value>, present: &str) -> Value {
+fn unwrap_or(args: &mut Args, present: &str) -> Value {
     let default = args.swap_remove(1);
     let value = args.swap_remove(0);
     if value.is_variant(present) {
@@ -768,7 +790,7 @@ fn unwrap_or(mut args: Vec<Value>, present: &str) -> Value {
 
 /// `todo()`: a placeholder for code not yet written, which panics when
 /// reached.
-fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn todo(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
     Err(Panic::new(
         codes::TODO,
         "reached `todo()`: this code is not written yet",
@@ -777,19 +799,19 @@ fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
 }
 
 /// `Int.to_string(self)`: the integer in decimal.
-fn int_to_string(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn int_to_string(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     memory::text(&args[0].as_int().to_string(), span)
 }
 
 /// `Untrusted<String>.assume_trusted(self)`: the text itself. Trust is a
 /// property the checker tracks; at runtime untrusted text is a plain
 /// string.
-fn string_assume_trusted(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_assume_trusted(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args.swap_remove(0))
 }
 
 /// `String.to_string(self)`: the text itself.
-fn string_to_string(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_to_string(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args.swap_remove(0))
 }
 
