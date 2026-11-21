@@ -442,18 +442,86 @@ pub struct Sched { handle: Int }
 #[capability]
 pub struct Spawn { handle: Int }
 
+// ---- Approval ------------------------------------------------------------
+
+// Someone who can say yes to a consequential action, such as a tool that
+// deletes a file or sends a message: a person at the terminal
+// (`Approver.terminal`), or a test's `t.approver`. Only an approver makes
+// an `Approval`, so a tool that takes one has proof that a person said
+// yes. Its fields are private, and it has no other constructor.
+pub cap struct Approver { stdin: Stdin, stderr: Stderr }
+
+impl Approver {
+    // An approver that asks the person at the terminal: it writes each
+    // question to `stderr`, never to standard output, which a pipeline or
+    // an MCP server may own, and reads the answer from `stdin`.
+    pub fn terminal(stdin: Stdin, stderr: Stderr) -> Approver
+    // Ask for a yes to the action `summary` describes, with `details`,
+    // such as the arguments a model chose for a tool. It shows
+    // `approval needed: ` and the summary, then each detail on a line of
+    // its own, indented, in double quotes, as `dbg` shows text: `"` and
+    // `\` escaped, and control, bidirectional and other invisible
+    // characters written as escapes such as `\n` and `\u{202e}`, so a
+    // detail cannot disguise itself. Then `approve? [y/N]`. Only `y` or
+    // `yes`, in any case and with any spaces around it, approves; any
+    // other answer, the end of input or a failed read or write is `None`.
+    pub fn confirm(self, summary: String, details: List<Untrusted<String>>) -> Option<Approval>
+}
+
+// A person's yes to one action: the summary and details they approved.
+// Only an `Approver` makes one. It is single use: the tool it is given to
+// calls `consume`, and every later `consume`, of it or of any copy of it,
+// is refused with `ApprovalError.Used`.
+pub struct Approval {
+    summary: String,
+    details: List<Untrusted<String>>,
+    handle: Int,
+}
+
+impl Approval {
+    // The summary that was approved.
+    pub fn summary(self) -> String
+    // The details that were approved.
+    pub fn details(self) -> List<Untrusted<String>>
+    // Whether it approved exactly this summary and these details. It does
+    // not use the approval.
+    pub fn matches(self, summary: String, details: List<Untrusted<String>>) -> Bool
+    // Use the approval for the action `summary` and `details` describe:
+    // `Ok` once, when it matches and has not been used. A used one is
+    // refused with `ApprovalError.Used`, and one given for a different
+    // action with `ApprovalError.Mismatch`, which leaves it unused.
+    pub fn consume(self, summary: String, details: List<Untrusted<String>>) -> Result<(), ApprovalError>
+}
+
+// Why `Approval.consume` refused an approval.
+pub enum ApprovalError {
+    // It was used already: one yes covers one action.
+    Used,
+    // It approved a different summary or different details.
+    Mismatch,
+}
+
+impl Display for ApprovalError {
+    // `approval already used: one approval covers one action`, or
+    // `approval does not match: it was given for a different action`.
+    fn to_string(self) -> String
+}
+
 // ---- Tests ---------------------------------------------------------------
 
 // The type of `t`, the built-in value in every `test` body. Its fields are
 // stand-in capabilities: an in-memory `fs`, a fixed `clock`, a seeded
-// `random`, and a recording `stdout`. An `#[integration]` test gets the
-// same `t`; the runtime decides which capabilities are real. A failed
-// assertion fails the test.
+// `random`, a recording `stdout`, and an `approver` that answers from the
+// test's script (`answer_approval`) and records what it was asked
+// (`approvals_asked`). An `#[integration]` test gets the same `t`; the
+// runtime decides which capabilities are real, and its `approver` still
+// answers from the script. A failed assertion fails the test.
 pub cap struct TestContext {
     pub fs: Fs,
     pub clock: Clock,
     pub random: Random,
     pub stdout: Stdout,
+    pub approver: Approver,
 }
 
 impl TestContext {
@@ -474,6 +542,13 @@ impl TestContext {
     // Every line printed to `stdout` so far in this test, one per
     // `println`, without its line break.
     pub fn printed(self) -> List<Untrusted<String>>
+    // Script `t.approver`'s answer to the next question it is asked:
+    // `true` approves, `false` refuses. Answers are given in the order
+    // they were scripted; a question with none left is refused.
+    pub fn answer_approval(self, yes: Bool)
+    // Every line `t.approver` has shown so far, without its line break,
+    // as the terminal approver writes them to standard error.
+    pub fn approvals_asked(self) -> List<Untrusted<String>>
 }
 
 // ---- Core types --------------------------------------------------------

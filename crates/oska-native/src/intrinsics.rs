@@ -29,6 +29,13 @@ pub enum Prelude {
     /// intrinsic whose function can write the program's text must be one,
     /// which a test checks.
     WriteLine(&'static str),
+    /// `Approver.confirm`: `std.rt`'s `approval_prompt` writes the
+    /// question first, from arguments 1 and 2, whose bytes are counted
+    /// under `--max-output` (`Body::spend_output`), and then a call of the
+    /// `std.rt` function of this name, with the arguments and the
+    /// question, which writes it to stderr (or records it, in a test) and
+    /// reads the answer.
+    Ask(&'static str),
     /// Its one argument is its result, as `String.to_string`'s is.
     Identity,
     /// Its result is field `n` of its struct receiver.
@@ -192,6 +199,24 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::Runtime("file_write_bytes"),
     ),
     ("TestContext.printed", Prelude::Runtime("test_printed")),
+    (
+        "TestContext.answer_approval",
+        Prelude::Runtime("test_answer_approval"),
+    ),
+    (
+        "TestContext.approvals_asked",
+        Prelude::Runtime("test_approvals_asked"),
+    ),
+    ("Approver.terminal", Prelude::Runtime("approver_terminal")),
+    ("Approver.confirm", Prelude::Ask("approver_confirm")),
+    ("Approval.summary", Prelude::Field(0)),
+    ("Approval.details", Prelude::Field(1)),
+    ("Approval.matches", Prelude::Runtime("approval_matches")),
+    ("Approval.consume", Prelude::Runtime("approval_consume")),
+    (
+        "ApprovalError.to_string",
+        Prelude::Runtime("approval_error_to_string"),
+    ),
     ("Bytes.new", Prelude::Runtime("bytes_new")),
     (
         "Bytes.zeroed",
@@ -1990,6 +2015,7 @@ mod tests {
         match implementation {
             Prelude::Runtime(f)
             | Prelude::WriteLine(f)
+            | Prelude::Ask(f)
             | Prelude::Checked(f, _)
             | Prelude::Mutating(f, _) => Some(f),
             Prelude::ByteRead { secret: false, .. } => Some("bytes_read"),
@@ -2066,9 +2092,10 @@ mod tests {
 
     /// `--max-output` fails closed: a prelude intrinsic whose `std.rt`
     /// function can write the program's text to stdout or stderr is a
-    /// [`Prelude::WriteLine`], which counts the bytes first, and the
-    /// lowering calls no other such function directly but `dbg_write`
-    /// and `main_failed`, which it counts at the call (`spend_output`).
+    /// [`Prelude::WriteLine`] or a [`Prelude::Ask`], which count the bytes
+    /// first, and the lowering calls no other such function directly but
+    /// `dbg_write` and `main_failed`, which it counts at the call
+    /// (`spend_output`).
     #[test]
     fn every_write_of_the_programs_text_is_counted_against_max_output() {
         let calls = rt_calls();
@@ -2077,12 +2104,12 @@ mod tests {
             let Some(function) = runtime_function(*implementation) else {
                 continue;
             };
-            let counted = matches!(implementation, Prelude::WriteLine(_));
-            write_lines += usize::from(counted);
+            let counted = matches!(implementation, Prelude::WriteLine(_) | Prelude::Ask(_));
+            write_lines += usize::from(matches!(implementation, Prelude::WriteLine(_)));
             assert_eq!(
                 writes_output(&calls, function),
                 counted,
-                "`{name}` (`{function}`) writes output exactly when it is a `Prelude::WriteLine`"
+                "`{name}` (`{function}`) writes output exactly when it is a `Prelude::WriteLine` or a `Prelude::Ask`"
             );
         }
         assert_eq!(write_lines, 2, "`Stdout.println` and `Stderr.println`");

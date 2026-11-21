@@ -26,6 +26,14 @@ pub const TASK: &str = "Task";
 /// The prelude's `Bytes`, a packed buffer laid out by each backend.
 pub const BYTES: &str = "Bytes";
 
+/// The prelude's `Approver`, a `cap struct` of `Stdin` and `Stderr`:
+/// `t.approver` is one, which each backend builds for a test.
+pub const APPROVER: &str = "Approver";
+
+/// The prelude's `Approval`: each backend keeps whether it was used in
+/// its runtime, and `dbg` shows `<approval>`.
+pub const APPROVAL: &str = "Approval";
+
 /// The prelude's `Path`.
 pub const PATH: &str = "Path";
 /// The prelude's `IoError`, the error of every I/O operation.
@@ -94,7 +102,8 @@ pub fn std_module_of(path: &str) -> Option<&'static str> {
 }
 
 /// The type of each field of the prelude's `TestContext`, `t` in a test,
-/// in declaration order: its built-in capabilities, such as `Fs`.
+/// in declaration order: its built-in capabilities, such as `Fs`, and
+/// the [`APPROVER`] `t.approver`.
 pub fn test_context_fields() -> &'static [&'static str] {
     static FIELDS: OnceLock<Vec<&'static str>> = OnceLock::new();
     FIELDS.get_or_init(|| {
@@ -142,6 +151,9 @@ mod tests {
 
     #[test]
     fn a_test_context_holds_its_capabilities_in_order() {
-        assert_eq!(test_context_fields(), ["Fs", "Clock", "Random", "Stdout"]);
+        assert_eq!(
+            test_context_fields(),
+            ["Fs", "Clock", "Random", "Stdout", "Approver"]
+        );
     }
 }
