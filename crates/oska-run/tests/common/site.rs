@@ -191,6 +191,7 @@ pub fn real_inputs() -> BTreeMap<String, String> {
     }
     for file in [
         "SECURITY.md",
+        "CHANGELOG.md",
         "GLOSSARY.md",
         "Cargo.toml",
         "site/style.css",

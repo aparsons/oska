@@ -1,0 +1,6 @@
+[
+  {"url": "/", "title": "Oska", "headings": [], "text": "Oska A language. What changed in each release is in the changelog."},
+  {"url": "/changelog.html", "title": "Changelog", "headings": ["Unreleased", "v1.10.0", "Security fixes", "v1.9.0"], "text": "Changelog Every release's notes, newest first. Unreleased - A change not yet released. Nothing to do yet. v1.10.0 Released 2026-11-20. v1.10.0 renames a flag. These are the changes you can see: - --old is now --new. Change your scripts. A tag in the notes, \u003cscript>alert(1)\u003c/script>, is shown as text. Security fixes - A path could escape its root. Upgrade now. v1.9.0 Released 2026-11-01. The first release in this fixture. - oskac exists. See the home page."},
+  {"url": "/glossary.html", "title": "Glossary", "headings": [], "text": "Glossary"},
+  {"url": "/reference.html", "title": "Reference", "headings": [], "text": "Reference How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides. - Glossary"}
+]
