@@ -104,8 +104,8 @@ USAGE:
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac doc [module | item] [--format=json]
                                            Print the API reference of the
-                                           prelude, std.html, std.sql and
-                                           std.proc, offline, or of one module
+                                           prelude and the std modules,
+                                           offline, or of one module
                                            (std.sql) or item (List.push)
     oskac new <name> [--lib] [--no-agent-files] [--format=json]
                                            Lay out a new package in the

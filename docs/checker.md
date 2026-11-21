@@ -94,6 +94,9 @@ A `std.*` module is also prelude-mode Oska source, `crates/oska-check/src/std/<n
 | `std.sql` | `SqlLiteral`, `Db` (`query`), `connect`, `Row` (`get`), `SqlError` | `sql"..."` has type `SqlLiteral` |
 | `std.proc` | `run`, `Output` (`status`, `stdout`), `ProcError` | None |
 | `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
+| `std.json` | `Value`, `Member`, `Number` (`from_int`, `parse`, `to_int`, `text`), `Error`, `Violation`, `DecodeError`, `parse`, `encode`, `decode`, `Schema` (`string`, `integer`, `number`, `boolean`, `one_of`, `list`, `object`, `describe`, `to_value`, `validate`), `Field` (`required`, `optional`), and the constants `MAX_LENGTH` and `MAX_DEPTH` | None |
+
+`std.json` is written in Oska, not declared in prelude mode: a program that imports it is checked and run with the module's source as one more module of the program, so every rule above holds for it, and its code runs on both backends as the program's own does. A single file keeps its own names, and the authority report and the audit sites list only the program's own: the module reaches no capability, and its one trust assertion, which vouches for a number's text or a plain key once each character is checked, is the toolchain's to review. A message names the module's items as code writes them, as `json.Value`. Its strings from `parse` are untrusted values, so a field of a parsed document is `E0300` in a structural position, and its numbers and booleans are trusted.
 
 A sink literal's tag names the module that provides it. The literal has the type that module declares for it, and the module must be imported (`E0310`). A tag no module provides is `E0311`. The sink modules are signature-only. `std.html` has a runtime: `text` escapes `&`, `<`, `>`, `"`, and `'`, so its output is safe in an element's content and in a quoted attribute value, and `TrustedHtml` markup passes through unescaped. `std.sql` and `std.proc` have none yet.
 

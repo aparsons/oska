@@ -87,6 +87,13 @@ pub use toolchain::{
     RT_SOURCE as STD_RT_SOURCE,
 };
 
+/// Whether `path` names a `std` module written in Oska, such as
+/// `std.json`: a program that imports it runs the module's code as its
+/// own, on every backend.
+pub fn std_module_written_in_oska(path: &str) -> bool {
+    link::is_std_path(path)
+}
+
 /// Whether `report` says the package needs a newer `oskac` (`E0407`). The
 /// one place that decides it: such a package is refused for that alone, by
 /// every command.
@@ -671,6 +678,11 @@ pub fn check_module(src: &str) -> CheckReport {
 /// diagnostic, with no functions.
 pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     match oska_syntax::parse_module(src) {
+        // A `std` module written in Oska is checked with the file, as one
+        // more module of the program (`link.rs`).
+        Ok(module) if !prelude::oska_std_imports(&module).is_empty() => {
+            package::check_single_with_std(src, options)
+        }
         Ok(module) => check_parsed(src, &module, options, link::Modules::default()),
         Err(err) => CheckReport {
             diagnostics: vec![err],
@@ -771,6 +783,11 @@ fn check_source(
         .collect();
     diagnostics.retain(|d| d.code == codes::TOOLCHAIN_ONLY || !refused.contains(&d.span));
     diagnostics.sort_by_key(|d| d.span.start);
+    // A `std` module written in Oska is the toolchain's code, its trust
+    // assertions reviewed there (`tests/std_json.rs` lists them): the
+    // report is about the program's own.
+    audit.retain(|site| !modules.in_std(site.span.start));
+    attenuations.retain(|a| !modules.in_std(a.span.start));
     audit.sort_by_key(|site| site.span.start);
     // A chain shares its start: the inner call, which ends first, is first.
     attenuations.sort_by_key(|a| (a.span.start, a.span.end));
