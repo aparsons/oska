@@ -46,6 +46,31 @@ use crate::ty;
 /// The first segment of a `use` path that names a module of this package.
 pub const PKG: &str = "pkg";
 
+/// The first segment of a `use` path that names a `std` module. A `std`
+/// module of Oska source (`prelude::StdKind::Source`) is linked in as a
+/// module whose path is its whole `use` path, such as `std.sha2`, and its
+/// items' keys are that path and the name, as in `std.sha2.sha256`: no
+/// package module's path starts with `std`, so none can clash.
+pub const STD: &str = "std";
+
+/// Whether the module at `module` is a `std` module linked in, not one of
+/// the package's.
+pub fn is_std_module(module: &str) -> bool {
+    module
+        .strip_prefix(STD)
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// The module at `module` as messages name it: `pkg.util.text`, or a
+/// `std` module's own path, such as `std.sha2`.
+pub fn module_display(module: &str) -> String {
+    if is_std_module(module) {
+        module.to_string()
+    } else {
+        format!("{PKG}.{module}")
+    }
+}
+
 /// One parsed module of a package, its spans offsets into the joined text.
 pub struct Parsed {
     /// The module path, such as `util.text`.
@@ -75,11 +100,17 @@ pub struct Linked {
 pub struct Modules {
     /// Each module's path and the span of its text.
     ranges: Vec<(String, Span)>,
+    /// Whether the package is one file, linked with the `std` modules of
+    /// Oska source it imports: its own items keep their names.
+    single_file: bool,
 }
 
 impl Modules {
-    pub fn new(ranges: Vec<(String, Span)>) -> Modules {
-        Modules { ranges }
+    pub fn new(ranges: Vec<(String, Span)>, single_file: bool) -> Modules {
+        Modules {
+            ranges,
+            single_file,
+        }
     }
 
     /// The path of the module whose text contains `offset`, such as
@@ -113,8 +144,12 @@ impl Modules {
     /// `impl util.Box` in `main` gives `pkg.util.Box.leak`, never
     /// `pkg.main.…`. A package's names start with `pkg.` so that none reads
     /// as a `std` module's, even a module named `html`.
+    ///
+    /// A single file linked with the `std` modules it imports names its
+    /// own functions as a single file does, and a `std` module's by its
+    /// key, as `std.sha2.sha256` and `std.sha2.Sha256.update`.
     pub fn function_name(&self, offset: usize, type_key: Option<&str>, name: &str) -> String {
-        if self.ranges.is_empty() {
+        if self.ranges.is_empty() || (self.single_file && self.at(offset) == ENTRY_MODULE) {
             return match type_key {
                 Some(ty) => format!("{ty}.{name}"),
                 None => name.to_string(),
@@ -170,15 +205,24 @@ impl<'a> ItemKey<'a> {
 
     /// The key a name of the joined module is, if it is one:
     /// `pkg.util.text.shout` is `shout` of `util.text`.
+    /// A `std` module's key is its module path and the name:
+    /// `std.sha2.sha256` is `sha256` of `std.sha2`.
     pub fn parse(joined: &'a str) -> Option<ItemKey<'a>> {
-        let rest = joined.strip_prefix(PKG)?.strip_prefix('.')?;
-        let (module, name) = rest.rsplit_once('.')?;
-        Some(ItemKey { module, name })
+        if let Some(rest) = joined.strip_prefix(PKG).and_then(|r| r.strip_prefix('.')) {
+            let (module, name) = rest.rsplit_once('.')?;
+            return Some(ItemKey { module, name });
+        }
+        let (module, name) = joined.rsplit_once('.')?;
+        is_std_module(module).then_some(ItemKey { module, name })
     }
 
     /// The name the item has in the joined module.
     pub fn joined(self) -> String {
-        format!("{PKG}.{}.{}", self.module, self.name)
+        if is_std_module(self.module) {
+            format!("{}.{}", self.module, self.name)
+        } else {
+            format!("{PKG}.{}.{}", self.module, self.name)
+        }
     }
 
     /// The item's own name, such as `shout`.
@@ -187,10 +231,15 @@ impl<'a> ItemKey<'a> {
     }
 
     /// The item as code in `module` names it: plainly in its own module,
-    /// and otherwise by its module path and name, as in `util.text.shout`.
+    /// and otherwise by its module path and name, as in `util.text.shout`,
+    /// or a `std` module's by the name its `use` binds, as in
+    /// `sha2.sha256`.
     pub fn in_module(self, module: &str) -> String {
         if self.module == module {
             self.name.to_string()
+        } else if is_std_module(self.module) {
+            let bound = self.module.rsplit('.').next().unwrap_or(self.module);
+            format!("{bound}.{}", self.name)
         } else {
             format!("{}.{}", self.module, self.name)
         }
@@ -229,7 +278,13 @@ impl Keys {
         let mut out = String::with_capacity(text.len());
         let mut copied = 0;
         let mut from = 0;
-        while let Some(found) = text[from..].find(PKG) {
+        let next_root = |from: usize| {
+            [PKG, STD]
+                .iter()
+                .filter_map(|root| text[from..].find(&format!("{root}.")))
+                .min()
+        };
+        while let Some(found) = next_root(from) {
             let at = from + found;
             from = at + PKG.len();
             let boundary = text[..at]
@@ -279,6 +334,17 @@ pub fn key(module: &str, name: &str) -> String {
     }
 }
 
+/// [`key`], except that in a single file linked with the `std` modules it
+/// imports (`single_file`), the file's own items keep their names, as they
+/// do when it is checked alone.
+fn declared_key(module: &str, name: &str, single_file: bool) -> String {
+    if single_file && module == ENTRY_MODULE {
+        name.to_string()
+    } else {
+        key(module, name)
+    }
+}
+
 /// The name an item declares, without its module: `Item` for
 /// `pkg.util.Item`.
 pub fn unqualified(name: &str) -> &str {
@@ -311,12 +377,17 @@ struct Scope {
     imports: Vec<(usize, Span)>,
 }
 
-/// Link `modules`, the parsed modules of a package, whose joined text is
-/// `text`.
-pub fn link(text: &str, modules: Vec<Parsed>) -> Linked {
+/// Link `modules`, the parsed modules of a package and the `std` modules
+/// of Oska source they import, whose joined text is `text`. With
+/// `single_file`, the package is one file, whose items keep their names.
+pub fn link(text: &str, modules: Vec<Parsed>, single_file: bool) -> Linked {
     let mut linker = Linker {
         paths: modules.iter().map(|m| m.module.clone()).collect(),
-        declared: modules.iter().map(|m| declared(text, m)).collect(),
+        declared: modules
+            .iter()
+            .map(|m| declared(text, m, single_file))
+            .collect(),
+        single_file,
         entry: modules.iter().position(|m| m.module == ENTRY_MODULE),
         module_starts: modules.iter().map(|m| m.ast.span.start).collect(),
         scopes: Vec::new(),
@@ -339,7 +410,7 @@ pub fn link(text: &str, modules: Vec<Parsed>) -> Linked {
             generics: Vec::new(),
         };
         for mut item in parsed.ast.items {
-            if is_pkg_use(&item) {
+            if is_pkg_use(&item) || rewriter.linker.is_linked_std_use(&item) {
                 continue;
             }
             rewriter.item(&mut item);
@@ -372,14 +443,14 @@ fn is_pkg_use(item: &Item) -> bool {
 }
 
 /// Every item `parsed` declares, by name.
-fn declared(text: &str, parsed: &Parsed) -> HashMap<String, Declared> {
+fn declared(text: &str, parsed: &Parsed, single_file: bool) -> HashMap<String, Declared> {
     let mut declared = HashMap::new();
     for item in &parsed.ast.items {
         let Some(name) = item_name(item) else {
             continue;
         };
         declared.entry(name.name.clone()).or_insert(Declared {
-            key: key(&parsed.module, &name.name),
+            key: declared_key(&parsed.module, &name.name, single_file),
             visibility: item.visibility,
             pub_at: crate::items::Declared::of(item).marker_at(text),
         });
@@ -438,6 +509,8 @@ struct Linker {
     /// Each module's path, in package order.
     paths: Vec<String>,
     declared: Vec<HashMap<String, Declared>>,
+    /// Whether the package is one file, whose items keep their names.
+    single_file: bool,
     /// The entry module, `main`, if the package has one.
     entry: Option<usize>,
     /// Where each module's text starts in the joined text.
@@ -519,8 +592,8 @@ impl Linker {
         let Some(first) = u.path.first() else {
             return;
         };
-        if first.name == "std" {
-            self.std_use(u, scope);
+        if first.name == STD {
+            self.std_use(index, u, scope);
             return;
         }
         if first.name != PKG {
@@ -534,6 +607,32 @@ impl Linker {
             self.unknown_module(&written, span);
             return;
         };
+        self.module_use(index, target, u, scope);
+    }
+
+    /// The module linked in for the `std` module at `path`, if it is one
+    /// of Oska source.
+    fn linked_std(&self, path: &str) -> Option<usize> {
+        if !is_std_module(path) {
+            return None;
+        }
+        self.paths.iter().position(|p| p == path)
+    }
+
+    /// Whether `item` is a `use` of a `std` module linked in, which
+    /// linking resolves and removes, as it does a `use pkg.…`.
+    fn is_linked_std_use(&self, item: &Item) -> bool {
+        let ItemKind::Use(u) = &item.kind else {
+            return false;
+        };
+        let written: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
+        self.linked_std(&written.join(".")).is_some()
+    }
+
+    /// `u`, written in module `index`, imports module `target`: as a
+    /// module bound by its last segment, or its items by name.
+    fn module_use(&mut self, index: usize, target: usize, u: &UseDecl, scope: &mut Scope) {
+        let span = path_span(&u.path);
         scope.imports.push((target, span));
         match &u.names {
             None => {
@@ -554,9 +653,14 @@ impl Linker {
         }
     }
 
-    fn std_use(&mut self, u: &UseDecl, scope: &mut Scope) {
+    fn std_use(&mut self, index: usize, u: &UseDecl, scope: &mut Scope) {
         let written: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
-        let Some(module) = prelude::std_module(&written.join(".")) else {
+        let written = written.join(".");
+        if let Some(target) = self.linked_std(&written) {
+            self.module_use(index, target, u, scope);
+            return;
+        }
+        let Some(module) = prelude::std_module(&written) else {
             return;
         };
         if !scope.std_modules.iter().any(|m| m.path == module.path) {
@@ -651,25 +755,46 @@ impl Linker {
     /// private to it. A private item still has its key, so that nothing
     /// else is reported about it.
     fn item_of(&mut self, index: usize, target: usize, name: &Ident) -> Option<String> {
+        let std_target = is_std_module(&self.paths[target]);
         let Some(declared) = self.declared[target].get(&name.name) else {
-            let mut candidates: Vec<&str> =
-                self.declared[target].keys().map(String::as_str).collect();
+            let mut candidates: Vec<&str> = self.declared[target]
+                .iter()
+                .filter(|(_, d)| !std_target || d.visibility == Visibility::Public)
+                .map(|(n, _)| n.as_str())
+                .collect();
             candidates.sort_unstable();
-            let module = &self.paths[target];
-            let diagnostic = suggest::unknown(
+            let module = module_display(&self.paths[target]);
+            let mut diagnostic = suggest::unknown(
                 codes::NOT_IN_MODULE,
-                format!("`{PKG}.{module}` has no item `{}`", name.name),
+                format!("`{module}` has no item `{}`", name.name),
                 &name.name,
                 name.span,
                 &candidates,
-            )
-            .with_related(
-                format!("the module `{PKG}.{module}` it looked in"),
-                Span::at(self.module_starts[target]),
             );
+            if !std_target {
+                diagnostic = diagnostic.with_related(
+                    format!("the module `{module}` it looked in"),
+                    Span::at(self.module_starts[target]),
+                );
+            }
             self.diagnostics.push(diagnostic);
             return None;
         };
+        // From any other module, another `std` module's included, a `std`
+        // module's items are visible only when they are `pub`, and it is
+        // not code a fix may edit.
+        if std_target && declared.visibility != Visibility::Public && target != index {
+            let diagnostic = Diagnostic::new(
+                codes::PRIVATE_ITEM,
+                format!(
+                    "`{}` is private to `{}`: only its `pub` items can be used",
+                    name.name, self.paths[target]
+                ),
+                name.span,
+            );
+            self.diagnostics.push(diagnostic);
+            return Some(declared.key.clone());
+        }
         if declared.visibility == Visibility::Private && target != index {
             let module = &self.paths[target];
             let diagnostic = Diagnostic::new(
@@ -708,9 +833,9 @@ impl Linker {
             reported.extend(cycle.iter().map(|(m, _)| *m));
             let mut names: Vec<String> = cycle
                 .iter()
-                .map(|(m, _)| format!("`{PKG}.{}`", self.paths[*m]))
+                .map(|(m, _)| format!("`{}`", module_display(&self.paths[*m])))
                 .collect();
-            names.push(format!("`{PKG}.{}`", self.paths[start]));
+            names.push(format!("`{}`", module_display(&self.paths[start])));
             let span = cycle.first().map_or(Span { start: 0, end: 0 }, |(_, s)| *s);
             self.diagnostics.push(Diagnostic::new(
                 codes::IMPORT_CYCLE,
@@ -814,7 +939,7 @@ impl Rewriter<'_> {
     fn item(&mut self, item: &mut Item) {
         let module = &self.linker.paths[self.module];
         if let Some(name) = item_name_mut(item) {
-            name.name = key(module, &name.name);
+            name.name = declared_key(module, &name.name, self.linker.single_file);
         }
         match &mut item.kind {
             ItemKind::Fn(f) => self.function(f),
@@ -1301,5 +1426,111 @@ impl Rewriter<'_> {
             vec![Edit::insert(module_start, format!("use {path}\n"))],
         );
         self.report(diagnostic, tag_span);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{link, Parsed};
+    use crate::codes;
+
+    /// Link modules given as `(path, source)`, joined as `package.rs`
+    /// joins them.
+    fn linked(modules: &[(&str, &str)]) -> super::Linked {
+        let mut text = String::new();
+        let mut parsed = Vec::new();
+        for (path, source) in modules {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            let start = text.len();
+            text.push_str(source);
+            let ast = oska_syntax::parse_module_at(&text, start).expect("the module parses");
+            parsed.push(Parsed {
+                module: path.to_string(),
+                ast,
+            });
+        }
+        link(&text, parsed, true)
+    }
+
+    /// `std` modules of Oska source may import each other, but not in a
+    /// cycle, which is refused naming each module as `use` names it. No
+    /// real `std` modules form one, so these are made up.
+    #[test]
+    fn a_cycle_of_std_modules_is_refused() {
+        let found = linked(&[
+            ("main", "use std.alpha\nfn main() {\n    alpha.a()\n}"),
+            ("std.alpha", "use std.beta\npub fn a() {\n    beta.b()\n}"),
+            ("std.beta", "use std.alpha\npub fn b() {\n    alpha.a()\n}"),
+        ]);
+        let cycles: Vec<&str> = found
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == codes::IMPORT_CYCLE)
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(cycles.len(), 1, "{:#?}", found.diagnostics);
+        assert!(
+            cycles[0].contains("`std.alpha` imports `std.beta` imports `std.alpha`"),
+            "{}",
+            cycles[0]
+        );
+    }
+
+    /// One `std` module uses another's `pub` items only, as any other
+    /// module does: a private item or a `pub(pkg)` one is refused, with no
+    /// fix.
+    #[test]
+    fn a_std_module_cannot_use_anothers_private_items() {
+        let found = linked(&[
+            ("main", "use std.alpha\nfn main() {\n    alpha.a()\n}"),
+            (
+                "std.alpha",
+                "use std.beta\npub fn a() {\n    beta.hidden()\n    beta.shared()\n}",
+            ),
+            ("std.beta", "fn hidden() { }\npub(pkg) fn shared() { }"),
+        ]);
+        let private: Vec<&str> = found
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == codes::PRIVATE_ITEM && d.fix.is_none())
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(private.len(), 2, "{:#?}", found.diagnostics);
+        assert_eq!(found.diagnostics.len(), 2, "{:#?}", found.diagnostics);
+        assert!(
+            private[0].contains("`hidden` is private to `std.beta`"),
+            "{}",
+            private[0]
+        );
+        assert!(
+            private[1].contains("`shared` is private to `std.beta`"),
+            "{}",
+            private[1]
+        );
+    }
+
+    /// Without a cycle, one `std` module's `use` of another links like a
+    /// package module's, and every name becomes the item's key; the
+    /// single file's own items keep their names.
+    #[test]
+    fn a_std_module_may_import_another() {
+        let found = linked(&[
+            ("main", "use std.alpha\nfn main() {\n    alpha.a()\n}"),
+            ("std.alpha", "use std.beta\npub fn a() {\n    beta.b()\n}"),
+            ("std.beta", "pub fn b() { }"),
+        ]);
+        assert!(found.diagnostics.is_empty(), "{:#?}", found.diagnostics);
+        let names: Vec<&str> = super::declared_names(&found.module).collect();
+        assert_eq!(names, ["main", "std.alpha.a", "std.beta.b"]);
+        assert!(
+            found
+                .module
+                .items
+                .iter()
+                .all(|item| !matches!(item.kind, oska_syntax::ast::ItemKind::Use(_))),
+            "the `use`s are resolved and removed"
+        );
     }
 }
