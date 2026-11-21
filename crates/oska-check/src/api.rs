@@ -26,7 +26,9 @@ pub const PRELUDE: &str = "prelude";
 /// The modules the reference documents, in the order it lists them.
 /// `std.rt` is left out: it is the runtime's system-call layer, not user
 /// API.
-pub const MODULES: &[&str] = &[PRELUDE, "std.html", "std.json", "std.sql", "std.proc"];
+pub const MODULES: &[&str] = &[
+    PRELUDE, "std.html", "std.json", "std.mcp", "std.sql", "std.proc",
+];
 
 /// What kind of item an entry is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

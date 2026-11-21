@@ -71,6 +71,12 @@ pub static STD_MODULES: &[StdModule] = &[
         sink_literal: None,
         written_in_oska: true,
     },
+    StdModule {
+        path: "std.mcp",
+        source: include_str!("std/mcp.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
 ];
 
 /// The `std` modules written in Oska that `module` imports, in the order

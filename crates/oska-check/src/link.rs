@@ -165,10 +165,14 @@ impl Modules {
     /// the same method of another impl (#123). In a package the type and
     /// the trait are named by their keys, and a prelude one plainly, as in
     /// `<Int as pkg.geo.Area>.area`: the orphan rule makes one of the two
-    /// the package's own, so the name is the package's alone.
+    /// the package's own, so the name is the package's alone. A trait of
+    /// a `std` module written in Oska is named by its `std` path, as in
+    /// `<Notes as std.mcp.Toolset>.call`: no package module's path starts
+    /// with `std`, so the name is still the package's alone.
     pub fn trait_method_name(&self, type_key: &str, trait_ref: &str, name: &str) -> String {
         let name = ItemKey::parse(name).map_or(name, |key| key.name);
-        crate::program::trait_method(type_key, trait_ref, name)
+        let trait_ref = trait_ref.replace(&format!("{PKG}.std."), "std.");
+        crate::program::trait_method(type_key, &trait_ref, name)
     }
 }
 

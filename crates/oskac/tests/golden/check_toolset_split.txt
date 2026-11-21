@@ -1,0 +1,14 @@
+fn <Notes as std.mcp.Toolset>.specs: DirRead, DirWrite, Stdout (self)
+fn <Notes as std.mcp.Toolset>.call: DirRead, DirWrite, Stdout (self)
+  tool "read_note": DirRead (self.notes)
+  tool "save_note": DirWrite (self.drafts)
+  tool "shout": Stdout (self.out); writes to the protocol stream (Stdout)
+  tool "forget": pure; no arm: runs the default arm
+  note: arm "shout" has no spec
+fn Notes.read: DirRead, DirWrite, Stdout (self)
+fn save: DirWrite (drafts)
+fn main: Fs (fs), Stdout (io)
+  crates/oskac/tests/fixtures/toolset_split.osk:57:16: Fs -> FsRead: read_only (bytes 1840..1854)
+  crates/oskac/tests/fixtures/toolset_split.osk:57:16: FsRead -> DirRead: restrict_to "notes" (bytes 1840..1875)
+  crates/oskac/tests/fixtures/toolset_split.osk:58:17: Fs -> FsWrite: write_only (bytes 1893..1908)
+  crates/oskac/tests/fixtures/toolset_split.osk:58:17: FsWrite -> DirWrite: restrict_to "drafts" (bytes 1893..1930)

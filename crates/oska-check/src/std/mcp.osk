@@ -1,0 +1,125 @@
+// `std.mcp`: tools that an agent can call. `use std.mcp`, then implement
+// `mcp.Toolset` for a `cap struct` whose fields are the narrowed
+// capabilities the tools need, and nothing else.
+//
+// A `Toolset` lists its tools with `specs` and runs one with `call`.
+// Write `call` as a `match` on the tool's name whose arms are string
+// literals, one per tool: the authority report then lists each tool with
+// the capabilities its arm reaches, under `call`, so a reviewer sees each
+// tool's blast radius, not the union of all of them. A `call` written any
+// other way gets one entry for the whole toolset, marked as not split per
+// tool.
+//
+// `std.mcp` adds no capability. A tool reaches only what its toolset
+// holds, and `main` builds the toolset from its own authority.
+
+// For maintainers: like `std.json`, this file is Oska source with
+// bodies, checked and run with each program that imports it as one more
+// module of the program. The comment block directly above a `pub` item
+// is its description in the API reference. The checker finds
+// implementations of `Toolset` by its name in this module
+// (`oska-check/src/authority/tools.rs`).
+
+use std.json
+
+// A set of tools: the specs that describe them, and the code that runs
+// one. The type that implements it should hold only the narrowed
+// capabilities its tools need.
+pub trait Toolset {
+    // The tools, in the order a client lists them. Build each with
+    // `ToolSpec.new`; a name written as a string literal lets the
+    // authority report check it against the arms of `call`.
+    fn specs(self) -> List<ToolSpec>
+
+    // Run the tool `name`, one of the names in `specs`, with `args`,
+    // arguments that match its input schema. Their strings are untrusted.
+    fn call(self, name: String, args: json.Value) -> ToolResult
+}
+
+// What a tool is: its name, an optional title, a description and the
+// schema of its arguments. It has no annotations: what a tool may do is
+// its authority, which the checker computes, not a claim.
+pub struct ToolSpec {
+    name: String,
+    title: Option<String>,
+    description: String,
+    input: json.Schema,
+}
+
+impl ToolSpec {
+    // The tool `name`, which `description` explains, taking arguments
+    // that match `input`, an object schema. A name is 1 to 128 ASCII
+    // letters, digits, `_` and `-`, so that it is valid both as an MCP
+    // tool and as a Claude API tool.
+    pub fn new(name: String, description: String, input: json.Schema) -> ToolSpec {
+        ToolSpec(name: name, title: None, description: description, input: input)
+    }
+
+    // The same spec with a title, a name for people to read.
+    pub fn with_title(self, title: String) -> ToolSpec {
+        ToolSpec(name: self.name, title: Some(title), description: self.description, input: self.input)
+    }
+
+    // The tool's name.
+    pub fn name(self) -> String {
+        self.name
+    }
+
+    // The tool's title, if it has one.
+    pub fn title(self) -> Option<String> {
+        self.title
+    }
+
+    // What the tool does, for the client and the model.
+    pub fn description(self) -> String {
+        self.description
+    }
+
+    // The schema the tool's arguments match.
+    pub fn input(self) -> json.Schema {
+        self.input
+    }
+}
+
+// What a tool call gives back: text content, structured content if there
+// is any, and whether the call failed. Build one with `text`, `json` or
+// `error`.
+pub struct ToolResult {
+    content: Untrusted<String>,
+    structured: Option<json.Value>,
+    failed: Bool,
+}
+
+impl ToolResult {
+    // A result whose content is `content`.
+    pub fn text(content: Untrusted<String>) -> ToolResult {
+        ToolResult(content: content, structured: None, failed: false)
+    }
+
+    // A result whose structured content is `value`. Its text content is
+    // `value` as JSON text, for clients that read only text.
+    pub fn json(value: json.Value) -> ToolResult {
+        ToolResult(content: json.encode(value), structured: Some(value), failed: false)
+    }
+
+    // A failed call, with `message` saying what went wrong, so that the
+    // caller can correct it and try again.
+    pub fn error(message: Untrusted<String>) -> ToolResult {
+        ToolResult(content: message, structured: None, failed: true)
+    }
+
+    // The text content.
+    pub fn content(self) -> Untrusted<String> {
+        self.content
+    }
+
+    // The structured content, if there is any.
+    pub fn structured(self) -> Option<json.Value> {
+        self.structured
+    }
+
+    // Whether the call failed.
+    pub fn is_error(self) -> Bool {
+        self.failed
+    }
+}

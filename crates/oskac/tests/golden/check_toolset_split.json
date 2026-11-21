@@ -1,0 +1,18 @@
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"<Notes as std.mcp.Toolset>.specs","authority":["DirRead","DirWrite","Stdout"],"via":[{"param":"self","capabilities":["DirRead","DirWrite","Stdout"]}],"pure":false},
+    {"name":"<Notes as std.mcp.Toolset>.call","authority":["DirRead","DirWrite","Stdout"],"via":[{"param":"self","capabilities":["DirRead","DirWrite","Stdout"]}],"pure":false,"toolset":{"split":true,"tools":[{"name":"read_note","arm":true,"authority":["DirRead"],"via":[{"param":"self.notes","capabilities":["DirRead"]}],"pure":false,"protocol_stream":false},{"name":"save_note","arm":true,"authority":["DirWrite"],"via":[{"param":"self.drafts","capabilities":["DirWrite"]}],"pure":false,"protocol_stream":false},{"name":"shout","arm":true,"authority":["Stdout"],"via":[{"param":"self.out","capabilities":["Stdout"]}],"pure":false,"protocol_stream":true},{"name":"forget","arm":false,"authority":[],"via":[],"pure":true,"protocol_stream":false}],"arms_without_spec":["shout"]}},
+    {"name":"Notes.read","authority":["DirRead","DirWrite","Stdout"],"via":[{"param":"self","capabilities":["DirRead","DirWrite","Stdout"]}],"pure":false},
+    {"name":"save","authority":["DirWrite"],"via":[{"param":"drafts","capabilities":["DirWrite"]}],"pure":false},
+    {"name":"main","authority":["Fs","Stdout"],"via":[{"param":"fs","capabilities":["Fs"]},{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":1840,"end":1854},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":1840,"end":1875},"source":"FsRead","result":"DirRead","root":"notes"},
+    {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":1893,"end":1908},"source":"Fs","result":"FsWrite","root":null},
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":1893,"end":1930},"source":"FsWrite","result":"DirWrite","root":"drafts"}
+  ],
+  "verdict": "ok"
+}

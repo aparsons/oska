@@ -188,6 +188,23 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`std.mcp`: `Toolset`, `ToolSpec` and `ToolResult`",
+        Probe::Program(
+            "use std.json\nuse std.mcp\n\n\
+             cap struct Tools { out: Stdout }\n\n\
+             impl mcp.Toolset for Tools {\n    \
+             fn specs(self) -> List<mcp.ToolSpec> {\n        \
+             [mcp.ToolSpec.new(\"say\", \"Say hello.\", json.Schema.object([]))]\n    }\n\n    \
+             fn call(self, name: String, args: json.Value) -> mcp.ToolResult {\n        \
+             match name {\n            \
+             \"say\" => mcp.ToolResult.json(json.Value.Text(\"hello\"))\n            \
+             _ => mcp.ToolResult.error(\"unknown tool\")\n        }\n    }\n}\n\n\
+             fn main(io: Stdout) -> Result<(), IoError> {\n    \
+             let tools = Tools(out: io)\n    \
+             io.println(tools.call(\"say\", json.Value.Null).content())\n}\n",
+        ),
+    ),
+    (
         "`std.sql`",
         Probe::Program(
             "use std.sql\n\n\
