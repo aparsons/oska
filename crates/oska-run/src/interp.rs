@@ -139,11 +139,18 @@ pub struct Interpreter<'p, 'h> {
     /// Under `--timeout`, its deadline. Boxed, so that a run without it
     /// keeps the interpreter as small as it was.
     deadline: Option<Box<Deadline>>,
-    /// Each function of the program called so far, by name, with the
-    /// room its arguments' `Vec` is given ([`room`]). Boxed, so that the
-    /// interpreter stays as small as it was.
-    functions: Box<HashMap<&'p str, (&'p Function, usize)>>,
+    /// The functions of the program called so far. Boxed, so that the
+    /// interpreter stays as small as it was: unboxed, it made the musl
+    /// build's `lists` benchmark about 12% slower, with the same
+    /// instructions (ticket #505).
+    functions: Box<Called<'p>>,
 }
+
+/// Each function of the program called so far, by name, with the room a
+/// call gives its arguments' `Vec` ([`room`]), so that a call looks it up
+/// once.
+#[derive(Default)]
+struct Called<'p>(HashMap<&'p str, (&'p Function, usize)>);
 
 /// The name of a frame of a panic's call stack: a function's, borrowed
 /// from the program, or one made at run time (a closure's, a test's).
@@ -1144,7 +1151,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// The function the program defines as `name`, with the room a call
     /// gives its arguments ([`room`]).
     fn function(&mut self, name: &str) -> (&'p Function, usize) {
-        if let Some(&found) = self.functions.get(name) {
+        if let Some(&found) = self.functions.0.get(name) {
             return found;
         }
         let (name, function) = self
@@ -1153,7 +1160,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             .get_key_value(name)
             .expect("`crate::run` refuses a call to a function the program lacks");
         let found = (function, room(function));
-        self.functions.insert(name, found);
+        self.functions.0.insert(name, found);
         found
     }
 
