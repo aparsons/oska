@@ -1146,6 +1146,39 @@ test_the_index_is_resigned_monthly_and_on_demand_from_main_only() {
   grep -q 'gh workflow run pages.yml --ref main' "$wf" || fail "does not publish through pages.yml"
 }
 
+# ---- Release notes in release.yml ------------------------------------------
+#
+# notes.sh itself is tested by scripts/release/notes-test.sh.
+
+test_the_release_workflow_writes_the_notes_before_signing() {
+  local wf=$here/../../.github/workflows/release.yml assemble step
+  assemble=$(job_text "$wf" assemble)
+  step=$(awk '/- name: Write the release notes$/ {p = 1; print; next} p && /^      - / {exit} p' <<<"$assemble")
+  [ -n "$step" ] || fail "assemble does not write the release notes"
+  grep -q '^        if:' <<<"$step" && fail "the notes step does not run on every event"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'scripts/release/notes.sh "$TAG" CHANGELOG.md site/oska-release.pub' <<<"$step" ||
+    fail "the notes step does not run notes.sh with the committed key"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'TAG: ${{ steps.tag.outputs.tag }}' <<<"$step" ||
+    fail "the notes step does not take the tag that assemble named"
+  grep -Eq '^    (environment|permissions):|secrets\.' <<<"$assemble" &&
+    fail "assemble holds a secret, an environment or a permission"
+  # Before the dry run signs and before the unsigned release is uploaded.
+  local notes dry upload
+  notes=$(grep -n 'name: Write the release notes' <<<"$assemble" | cut -d: -f1)
+  dry=$(grep -n 'name: Sign and verify with a throwaway key' <<<"$assemble" | cut -d: -f1)
+  upload=$(grep -n 'name: unsigned-' <<<"$assemble" | cut -d: -f1)
+  [ "$notes" -lt "$dry" ] && [ "$notes" -lt "$upload" ] ||
+    fail "the notes are written after the release is signed or uploaded"
+  local file
+  for file in "$here"/../../.github/workflows/*.yml; do
+    if grep -Eq 'gh release edit|--notes[ =]|--notes$' "$file"; then
+      fail "$(basename "$file") sets a release body other than from the notes file"
+    fi
+  done
+}
+
 # ---- /.well-known/security.txt ----------------------------------------------
 
 # The value of the field $1 in ./site/.well-known/security.txt.

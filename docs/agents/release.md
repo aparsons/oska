@@ -11,6 +11,8 @@ git tag vX.Y.Z on main ─▶ release.yml
   assemble   image.sh: the image from the two musl builds, its index digest in
              oskac-image-digest; SHA256SUMS: line 1 "# oska-release vX.Y.Z",
              then "<sha256>  <file>" per binary and for oskac-image-digest
+             notes.sh: the release notes, release-notes.md beside the release
+             (CHANGELOG.md's vX.Y.Z section and a footer); no section fails
   smoke-image  on ubuntu-24.04 / -arm: each musl build in alpine and in the image
              (smoke-image.sh: --version, oskac run and oskac build of hello.osk,
              oskac test of a one-test file)
@@ -19,7 +21,8 @@ git tag vX.Y.Z on main ─▶ release.yml
   publish    env "release": push-image.sh digest pushes the signed image to
              ghcr.io/aparsons/oskac by digest only, then GitHub Release
              vX.Y.Z with the index beside the files (the source pages.yml
-             fetches), then dispatch pages.yml on main
+             fetches), its body the notes assemble wrote, then dispatch
+             pages.yml on main
   tag-image  env "release", after publish: push-image.sh tags tags the image
              :vX.Y.Z (and :latest), so no tag names an unpublished release
 pages.yml ─▶ downloads every release, verify.sh each against site/oska-release.pub,
@@ -147,6 +150,17 @@ jq . release-index.json
 
 `scripts/release/verify-index.sh <dir> site/oska-release.pub` does the same checks, and the format check too, on a directory holding both files.
 
+## The release notes
+
+Each GitHub Release's body is its version's section of `CHANGELOG.md`, then a footer: the download page `https://oskalang.dev/releases/vX.Y.Z/`, the release key's fingerprint, the image as `ghcr.io/aparsons/oskac@sha256:…` and the version's anchor on `https://oskalang.dev/changelog.html`. `scripts/release/notes.sh <tag> CHANGELOG.md site/oska-release.pub [oskac-image-digest]` prints it.
+
+- **A pre-release uses its base version's section:** `vX.Y.Z-rc.N` takes `## vX.Y.Z`.
+- **Computed, not typed.** The fingerprint comes from `site/oska-release.pub` and the digest from the signed `oskac-image-digest`. Relative links in the section point at the tag's files on GitHub.
+- **Before signing.** `assemble` writes it to `release/release-notes.md`, beside `release/vX.Y.Z/`: `SHA256SUMS` does not list it and it is not uploaded as an asset. No section, an empty one, or a digest file that is not one `sha256:<hex>` line fails the run before `sign`, and the pull request's dry run the same way.
+- **Kept on `main`.** Each `/releases/vX.Y.Z/` page links its version's anchor on `/changelog.html`, built from `main`, so the Pages link check fails the deploy when a published tag has no `## vX.Y.Z` section there.
+- **Set once.** `publish` passes it to `gh release create --notes-file`, so it never goes through a command line. No workflow rewrites a body; a fix to old notes reaches `/changelog.html` at the next Pages deploy, and the GitHub body only by hand (`gh release edit vX.Y.Z --notes-file …`, with the output of `notes.sh`).
+- **Not signed.** The signature covers `SHA256SUMS`, not the notes.
+
 ## Repository configuration it depends on
 
 Nothing in the repo can check these settings, so verify them before a release.
@@ -160,7 +174,7 @@ Nothing in the repo can check these settings, so verify them before a release.
 
 ## Cutting a release
 
-1. **Bump `[workspace.package] version` in `Cargo.toml`** to `X.Y.Z` in a normal PR, refreshing `Cargo.lock`. Merge the PR once `scripts/check.sh` passes and the PR checks are green, including the Release dry run.
+1. **Bump `[workspace.package] version` in `Cargo.toml`** to `X.Y.Z` in a normal PR, refreshing `Cargo.lock`. In the same PR, rename `## Unreleased` in `CHANGELOG.md` to `## vX.Y.Z` and put `Released YYYY-MM-DD.` under it, the planned tag date; correct the date in a later PR if the tag is later. The Release dry run fails when `CHANGELOG.md` has no section for the version, or an empty one (`scripts/release/notes.sh`). The section must stay on `main` after the release: each `/releases/vX.Y.Z/` page links `/changelog.html#vXYZ`, and the Pages link check fails the deploy when `CHANGELOG.md` on `main` has no `## vX.Y.Z` section for a published tag. Merge the PR once `scripts/check.sh` passes and the PR checks are green, including the Release dry run.
 2. **Tag the merge commit:**
    ```
    git checkout main && git pull --ff-only
@@ -171,8 +185,9 @@ Nothing in the repo can check these settings, so verify them before a release.
 4. **Watch the Pages run that `publish` dispatches.** Its smoke job must end with `ok: https://oskalang.dev installs oskac X.Y.Z, and it runs`. Once an index is published, the line before it must read `the install verified release index serial N, which names X.Y.Z`. Its build job logs `published release index serial N`. A `::warning::` that the index expires within 30 days means the monthly re-sign has not run: see [The monthly re-sign](#the-monthly-re-sign).
    - The warning `no release is published` means the deploy ran before GitHub listed the new release ([#89](https://github.com/aparsons/oska/issues/89)).
    - Run `gh workflow run pages.yml --ref main` and check again.
+   - A link check failure on `changelog.html#vXYZ` from a `/releases/vX.Y.Z/` page means `CHANGELOG.md` on `main` has no `## vX.Y.Z` section (or its heading changed): add or restore it in a PR, then run `gh workflow run pages.yml --ref main`.
    - A `::warning::` that the index has expired, with the smoke job failing on `stale_index`, means the monthly re-sign has not run: run it now (see [The monthly re-sign](#the-monthly-re-sign)).
-5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version, with an "Upgrading to vX.Y.Z" section in the install guide. For the first release with the two Linux builds, that section already exists ("Upgrading to v0.6.0"; rename it if the release is not v0.6.0), and "Verify a release by hand" must download `oskac-linux-x86_64-gnu` in place of `oskac-linux-x86_64` once it names that release.
+5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version. The release's notes are already in `CHANGELOG.md` (step 1); nothing else is written after a release. For the first release with the two Linux builds, "Verify a release by hand" must download `oskac-linux-x86_64-gnu` in place of `oskac-linux-x86_64` once it names that release.
 
 ## Checking a published release
 
