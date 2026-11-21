@@ -140,6 +140,22 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`Approval` and `Approver`",
+        Probe::Tests(
+            "fn send(approval: Approval) -> Bool {\n    \
+             approval.consume(\"send\", [\"to: a\"]).is_ok()\n}\n\n\
+             test \"one yes, one use\" {\n    \
+             t.answer_approval(true)\n    \
+             match t.approver.confirm(\"send\", [\"to: a\"]) {\n        \
+             Some(a) => {\n            \
+             t.assert(send(a))\n            \
+             t.assert(!send(a))\n        \
+             }\n        \
+             None => t.fail(\"refused\")\n    \
+             }\n}\n",
+        ),
+    ),
+    (
         "Files: `Fs`, `FsRead`, `FsWrite`, and the directory and file capabilities",
         Probe::Program(
             "fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {\n    \
