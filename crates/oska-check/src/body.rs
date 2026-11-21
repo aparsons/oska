@@ -146,7 +146,7 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 // Inside its own trait, `Self` implements the trait.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param(ty::SELF.to_string()))
+                    .with_self(Ty::Param(ty::SELF.into()))
                     .with_key(ty::SELF, GenericKey(t.name.span))
                     .with_bound(Bound {
                         param: ty::SELF.to_string(),
@@ -154,7 +154,7 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                         args: t
                             .generics
                             .iter()
-                            .map(|g| Ty::Param(g.name.name.clone()))
+                            .map(|g| Ty::Param(g.name.name.as_str().into()))
                             .collect(),
                     });
                 for method in &t.methods {
@@ -597,7 +597,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 method: method.to_string(),
             }),
             Ty::Named(head, _, _) if in_prelude(head) && in_prelude(trait_name) => {
-                Some(Callee::Intrinsic(format!("{head}.{method}")))
+                Some(Callee::intrinsic(format!("{head}.{method}")))
             }
             Ty::Named(head, _, _) => Some(Callee::Function(program::trait_method(
                 head, trait_name, method,
@@ -1234,14 +1234,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 return Ty::Error;
             }
             Ty::Named(type_name, args, _) => {
-                if let Some(info) = self.items.structs.get(type_name) {
+                if let Some(info) = self.items.structs.get(type_name.as_str()) {
                     if let Some(field_ty) = info.fields.field(&name.name) {
                         if let Some(index) = info.fields.index(&name.name) {
                             self.out
                                 .resolutions
                                 .insert(name.span, Resolution::Field(index));
                             if self.discarded_field != Some(name.span) {
-                                self.out.field_reads.insert((type_name.clone(), index));
+                                self.out.field_reads.insert((type_name.to_string(), index));
                             }
                             if !self.field_visible(type_name, index, &name.name, name.span) {
                                 return Ty::Error;
@@ -1631,7 +1631,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
             let holds = matches
                 && imp.bounds.iter().all(|b| {
-                    let param = Ty::Param(b.param.clone()).substitute(&subst);
+                    let param = Ty::Param(b.param.as_str().into()).substitute(&subst);
                     let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
                     self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
                 });

@@ -133,7 +133,7 @@ pub fn program_type(ty: &Ty) -> Option<Type> {
             (ty::BOOL, _) => Type::Bool,
             (ty::STRING, _) => Type::String,
             _ => Type::Named {
-                name: name.clone(),
+                name: name.to_string(),
                 args: args.iter().map(program_type).collect::<Option<_>>()?,
             },
         },
@@ -145,7 +145,7 @@ pub fn program_type(ty: &Ty) -> Option<Type> {
             params: params.iter().map(program_type).collect::<Option<_>>()?,
             ret: Box::new(program_type(ret)?),
         },
-        Ty::Param(name) => Type::Param(name.clone()),
+        Ty::Param(name) => Type::Param(name.to_string()),
         Ty::Never => Type::Never,
         Ty::Var(_) | Ty::Error => return None,
     })
@@ -388,13 +388,12 @@ fn trait_subst(
             .map(|g| g.name.name.clone())
             .zip(info.trait_args.iter().cloned()),
     );
-    subst.extend(
-        declared
-            .generics
-            .iter()
-            .zip(&f.generics)
-            .map(|(d, own)| (d.name.name.clone(), Ty::Param(own.name.name.clone()))),
-    );
+    subst.extend(declared.generics.iter().zip(&f.generics).map(|(d, own)| {
+        (
+            d.name.name.clone(),
+            Ty::Param(own.name.name.as_str().into()),
+        )
+    }));
     subst
 }
 

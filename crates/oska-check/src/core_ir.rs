@@ -899,7 +899,7 @@ impl Core<'_> {
                 Callee::Intrinsic(name) if BUILTINS.contains(&name.as_str()) => node(
                     "Builtin",
                     vec![
-                        ("name", Json::Str(name.clone())),
+                        ("name", Json::Str(name.to_string())),
                         ("args", self.exprs(args)?),
                     ],
                 ),

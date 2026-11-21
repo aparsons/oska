@@ -143,7 +143,7 @@ impl Body<'_, '_> {
         let (callee, type_args) = self.resolve(callee, type_args, params.first(), expr.span)?;
         let (intrinsic, name) = match callee {
             Callee::Function(name) => (false, name),
-            Callee::Intrinsic(name) => (true, name),
+            Callee::Intrinsic(name) => (true, name.to_string()),
             Callee::Trait { .. } => return Err(self.refuse(expr.span, "a function value")),
         };
         let thunk = Instance::Thunk {
@@ -554,7 +554,7 @@ impl Body<'_, '_> {
         }
         let call = Expr {
             kind: ExprKind::Call {
-                callee: Callee::Intrinsic(name.to_string()),
+                callee: Callee::intrinsic(name),
                 type_args: type_args.to_vec(),
                 args: locals,
             },

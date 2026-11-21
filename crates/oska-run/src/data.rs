@@ -4,6 +4,9 @@
 //! `intrinsics.rs`, whose `lookup` searches every module's table. A list is a
 //! reference-counted vector (ADR 0001): reading one shares it.
 
+use std::cell::OnceCell;
+use std::rc::Rc;
+
 use oska_syntax::Span;
 
 use crate::host::Host;
@@ -22,7 +25,7 @@ pub const INTRINSICS: Table = &[
     ("List.len", Plain(list_len)),
     ("List.new", Plain(list_new)),
     ("String.byte_len", Plain(string_byte_len)),
-    ("String.chars", Plain(string_chars)),
+    ("String.chars", HigherOrder(string_chars)),
     ("String.contains", Plain(string_contains)),
     ("String.ends_with", Plain(string_ends_with)),
     ("String.join", Plain(string_join)),
@@ -212,18 +215,57 @@ fn string_join(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, 
 }
 
 /// `String.chars(self)`: each character as a text of its own.
-fn string_chars(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+///
+/// An ASCII character's text is the interpreter's shared one
+/// ([`AsciiTexts`]), so a long text costs no allocation and no copy per
+/// character. Under `--max-memory` each character is made and charged as
+/// a text of its own, as before, so the meter sees it freed when the
+/// list lets go of it.
+fn string_chars(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let text = args[0].as_str();
-    let count = if memory::metered() {
-        text.chars().count()
-    } else {
-        0
-    };
-    memory::list_of_len(count, span, || {
-        text.chars()
-            .map(|c| memory::text(c.encode_utf8(&mut [0; 4]), span))
-            .collect()
+    if memory::metered() {
+        return memory::list_of_len(text.chars().count(), span, || {
+            text.chars()
+                .map(|c| memory::text(c.encode_utf8(&mut [0; 4]), span))
+                .collect()
+        });
+    }
+    let ascii = &interp.ascii_texts;
+    memory::list_of_len(0, span, || {
+        Ok(text
+            .chars()
+            .map(|c| {
+                ascii
+                    .get(c)
+                    .unwrap_or_else(|| Value::str(c.encode_utf8(&mut [0; 4])))
+            })
+            .collect())
     })
+}
+
+/// The texts of the 128 ASCII characters, one interpreter's, made the
+/// first time `String.chars` needs them. A character taken from a text
+/// shares its text from here (#501).
+#[derive(Default)]
+pub(crate) struct AsciiTexts(OnceCell<Box<[Rc<str>]>>);
+
+impl AsciiTexts {
+    /// `c`'s shared text, if `c` is ASCII.
+    fn get(&self, c: char) -> Option<Value> {
+        if !c.is_ascii() {
+            return None;
+        }
+        let texts = self.0.get_or_init(|| {
+            (0..=127u8)
+                .map(|byte| Rc::from(char::from(byte).encode_utf8(&mut [0; 4]) as &str))
+                .collect()
+        });
+        Some(Value::Str(Rc::clone(&texts[c as usize])))
+    }
 }
 
 /// `String.slice(self, start, end)`: the characters from `start` up to,
@@ -289,4 +331,37 @@ fn string_repeat(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value
     memory::text_of_len(text.len() * times as usize, span, || {
         text.repeat(times as usize)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::AsciiTexts;
+    use crate::value::Value;
+
+    fn text(value: Option<Value>) -> Option<Rc<str>> {
+        match value {
+            Some(Value::Str(text)) => Some(text),
+            other => panic!("expected a text, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_ascii_character_is_one_shared_text_each_time() {
+        let ascii = AsciiTexts::default();
+        let first = text(ascii.get('a')).expect("'a' is ASCII");
+        let second = text(ascii.get('a')).expect("'a' is ASCII");
+        assert_eq!(&*first, "a");
+        assert!(Rc::ptr_eq(&first, &second), "both are the one shared text");
+        assert_eq!(text(ascii.get('\u{7f}')).as_deref(), Some("\u{7f}"));
+        assert_eq!(text(ascii.get('\0')).as_deref(), Some("\0"));
+    }
+
+    #[test]
+    fn a_character_past_ascii_has_no_shared_text() {
+        let ascii = AsciiTexts::default();
+        assert!(ascii.get('\u{80}').is_none());
+        assert!(ascii.get('é').is_none());
+    }
 }

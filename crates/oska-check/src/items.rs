@@ -178,11 +178,11 @@ impl FnSig {
                 .find(|candidate| !taken.contains(candidate))
                 .expect("some numbered name is free");
             taken.push(fresh.clone());
-            rename.push((name.clone(), Ty::Param(fresh.clone())));
+            rename.push((name.clone(), Ty::Param(fresh.as_str().into())));
             generics.push(fresh);
         }
         let renamed = |param: &str| match rename.iter().find(|(from, _)| from == param) {
-            Some((_, Ty::Param(to))) => to.clone(),
+            Some((_, Ty::Param(to))) => to.to_string(),
             _ => param.to_string(),
         };
         self.bounds = self
@@ -425,7 +425,7 @@ fn holds(ty: &Ty, holders: &HashSet<String>) -> bool {
     match ty {
         Ty::Named(name, args, trust) => {
             (ty.is_text() && *trust == Trust::Untrusted)
-                || holders.contains(name)
+                || holders.contains(name.as_str())
                 || args.iter().any(|a| holds(a, holders))
         }
         _ => false,
@@ -599,7 +599,7 @@ impl Items {
                     }
                 }
                 ItemKind::Trait(t) => {
-                    let self_ty = Ty::Param(ty::SELF.to_string());
+                    let self_ty = Ty::Param(ty::SELF.into());
                     let lower = Lower::in_scope(decls, in_prelude)
                         .with_generics(&t.generics)
                         .with_self(self_ty.clone());
@@ -959,7 +959,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 if let [ident] = segments.as_slice() {
                     let name = ident.name.as_str();
                     if self.generics.iter().any(|g| g == name) {
-                        return Ty::Param(name.to_string());
+                        return Ty::Param(name.into());
                     }
                     if name == ty::SELF {
                         return self.self_ty.clone().unwrap_or(Ty::Error);
