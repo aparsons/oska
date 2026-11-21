@@ -398,19 +398,70 @@ impl Display for IoError {
 // (`& | ^ ~ << >>`) and the rotations. A rotation moves the bits shifted
 // out at one end back in at the other. An amount below 0, or not below
 // the type's width, is a bug: it panics (`P0008`), as a shift's does.
+//
+// `+ - *` never wrap. `wrapping_add`, `wrapping_sub` and `wrapping_mul`
+// do: they keep the low bits of the result, arithmetic modulo 2 to the
+// type's width.
+//
+// Integer types convert only explicitly. `Int`, `U8`, `U16`, `U32` and
+// `U64` each convert to each other with `to_<type>()`: one that widens
+// never fails, and a value that does not fit its target panics (`P0001`).
+// `wrapping_to_<type>()`, from a wider unsigned type to a narrower one,
+// keeps the value's low bits instead.
+impl Int {
+    pub fn to_u8(self) -> U8
+    pub fn to_u16(self) -> U16
+    pub fn to_u32(self) -> U32
+    pub fn to_u64(self) -> U64
+}
+
 impl U8 {
     pub fn rotl(self, n: Int) -> U8
     pub fn rotr(self, n: Int) -> U8
+    pub fn wrapping_add(self, other: U8) -> U8
+    pub fn wrapping_sub(self, other: U8) -> U8
+    pub fn wrapping_mul(self, other: U8) -> U8
+    pub fn to_int(self) -> Int
+    pub fn to_u16(self) -> U16
+    pub fn to_u32(self) -> U32
+    pub fn to_u64(self) -> U64
+}
+
+impl U16 {
+    pub fn to_int(self) -> Int
+    pub fn to_u8(self) -> U8
+    pub fn to_u32(self) -> U32
+    pub fn to_u64(self) -> U64
+    pub fn wrapping_to_u8(self) -> U8
 }
 
 impl U32 {
     pub fn rotl(self, n: Int) -> U32
     pub fn rotr(self, n: Int) -> U32
+    pub fn wrapping_add(self, other: U32) -> U32
+    pub fn wrapping_sub(self, other: U32) -> U32
+    pub fn wrapping_mul(self, other: U32) -> U32
+    pub fn to_int(self) -> Int
+    pub fn to_u8(self) -> U8
+    pub fn to_u16(self) -> U16
+    pub fn to_u64(self) -> U64
+    pub fn wrapping_to_u8(self) -> U8
+    pub fn wrapping_to_u16(self) -> U16
 }
 
 impl U64 {
     pub fn rotl(self, n: Int) -> U64
     pub fn rotr(self, n: Int) -> U64
+    pub fn wrapping_add(self, other: U64) -> U64
+    pub fn wrapping_sub(self, other: U64) -> U64
+    pub fn wrapping_mul(self, other: U64) -> U64
+    pub fn to_int(self) -> Int
+    pub fn to_u8(self) -> U8
+    pub fn to_u16(self) -> U16
+    pub fn to_u32(self) -> U32
+    pub fn wrapping_to_u8(self) -> U8
+    pub fn wrapping_to_u16(self) -> U16
+    pub fn wrapping_to_u32(self) -> U32
 }
 
 // ---- Structured concurrency ---------------------------------------------

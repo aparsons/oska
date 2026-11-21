@@ -72,7 +72,7 @@ Under the panic's line come its **frames**, the call stack that led to it, inner
 
 | Code | Panic |
 | --- | --- |
-| `P0001` | Integer overflow. All integer types are checked, and arithmetic never wraps. |
+| `P0001` | Integer overflow, or a `to_<type>()` conversion given a value that does not fit its target, such as `300.to_u8()`. All integer types are checked, and arithmetic never wraps: call `wrapping_add`, `wrapping_sub`, `wrapping_mul` or `wrapping_to_<type>()` where wrapping is meant. |
 | `P0002` | `List.at` with an index below 0 or not below the length. Use `get` when the index may be out of bounds. |
 | `P0003` | `todo()` reached. |
 | `P0004` | Division or remainder by zero. |

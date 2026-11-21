@@ -75,6 +75,7 @@ mod closures;
 mod data;
 mod debug;
 mod html;
+mod int_methods;
 mod lists;
 mod patterns;
 mod tasks;
@@ -2504,6 +2505,9 @@ impl<'l, 'p> Body<'l, 'p> {
                         return Ok(value);
                     }
                     if let Some(value) = self.rotation_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.int_method_intrinsic(name, args, &values, span)? {
                         return Ok(value);
                     }
                     if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {
