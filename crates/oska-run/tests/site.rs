@@ -2112,6 +2112,29 @@ fn what_works_today_is_a_guide_listed_in_llms_txt() {
 
 // ---- The real site: the corpus for agents (#189) ----------------------------------------
 
+/// `docs/research/index.md` groups the notes by topic by hand, so a new
+/// note must be added to it: every research page is linked from the
+/// index, under a topic heading.
+#[test]
+fn the_research_index_lists_every_note_under_a_topic() {
+    let site = real_site();
+    let index = &site["research/index.md"];
+    let notes: Vec<&String> = site
+        .keys()
+        .filter(|k| k.starts_with("research/") && k.ends_with(".md") && *k != "research/index.md")
+        .collect();
+    assert!(notes.len() > 10, "{notes:?}");
+    let first_topic = index.find("\n## ").expect("a topic heading");
+    for note in notes {
+        let name = note.trim_start_matches("research/");
+        let at = index
+            .find(&format!("({name})"))
+            .or_else(|| index.find(&format!("(/research/{name})")))
+            .unwrap_or_else(|| panic!("research/index.md does not list {name}"));
+        assert!(at > first_topic, "{name} is listed before any topic");
+    }
+}
+
 #[test]
 fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
     let site = real_site();
