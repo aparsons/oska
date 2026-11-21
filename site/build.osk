@@ -78,6 +78,11 @@ cap struct Sources {
     // site/build.osk` printed for this program, which the Pages workflow
     // writes just before the build. Without it there is no authority page.
     authority: FileRead,
+    // `site/lastmod.txt`: one line per source file, its last commit date
+    // and its path (`2026-11-21 docs/index.md`), which the Pages workflow
+    // writes from git just before the build. Without it the sitemap has
+    // no `<lastmod>`.
+    lastmod: FileRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
@@ -92,6 +97,7 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
         favicon: read.restrict_to_file("site/favicon.svg"),
         setup: read.restrict_to("site/agent-setup"),
         authority: read.restrict_to_file("site/authority.txt"),
+        lastmod: read.restrict_to_file("site/lastmod.txt"),
     )
     // Writing is narrowed to the repository before anything is written,
     // then to `_site` once it exists (a narrowing needs its directory).
@@ -136,6 +142,17 @@ struct Site {
     assets: List<Asset>,
     // The generator's own authority report, or "" if there is none.
     authority: Untrusted<String>,
+    // When each source file last changed, from `site/lastmod.txt`; none
+    // if there is no such file.
+    dates: List<Dated>,
+}
+
+// The date a source file last changed, as `site/lastmod.txt` gives it.
+struct Dated {
+    // Its path in the repository, as a `Doc`'s `repo` names it.
+    repo: Untrusted<String>,
+    // `YYYY-MM-DD`, read as numbers, so it is trusted.
+    date: String,
 }
 
 // Every file of the site.
@@ -189,7 +206,7 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
         publish_setup(site, all)?
     }
     site.write(Path.new("robots.txt"), robots())?
-    site.write(Path.new("sitemap.xml"), sitemap(pages))?
+    site.write(Path.new("sitemap.xml"), sitemap(all, pages))?
     site.write(Path.new("latest.json"), latest_json(all.version))?
     site.write(Path.new("llms.txt"), llms_txt(all, pages))?
     site.write(Path.new("llms-full.txt"), llms_full(all, pages))?
@@ -310,7 +327,76 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         Ok(text) => text
         Err(_) => ""
     }
-    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority))
+    let dates = match sources.lastmod.read_to_string() {
+        Ok(text) => dates_of(text)
+        Err(_) => List.new()
+    }
+    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority, dates: dates))
+}
+
+// The lines of `site/lastmod.txt`: a date, one space, and a path. A line
+// whose date is not `YYYY-MM-DD` is skipped.
+fn dates_of(text: Untrusted<String>) -> List<Dated> {
+    var dates: List<Dated> = List.new()
+    for line in text.lines() {
+        if line.len() < 12 || line.slice(10, 11) != " " {
+            continue
+        }
+        let date = date_of(line.slice(0, 10))
+        if date != "" {
+            dates.push(Dated(repo: line.slice(11, line.len()), date: date))
+        }
+    }
+    dates
+}
+
+// `text` as a trusted `YYYY-MM-DD` date, or "" if it is not a real one:
+// four, two and two digits, a month from 1 to 12, and a day the month has.
+// Each part is read as a number, so what comes back is trusted.
+fn date_of(text: Untrusted<String>) -> String {
+    let parts = text.split("-")
+    if parts.len() != 3 || parts.at(0).len() != 4 || parts.at(1).len() != 2 || parts.at(2).len() != 2 {
+        return ""
+    }
+    for part in parts {
+        if !all_digits(part) {
+            return ""
+        }
+    }
+    let year = parts.at(0).parse_int().unwrap_or(0)
+    let month = parts.at(1).parse_int().unwrap_or(0)
+    let day = parts.at(2).parse_int().unwrap_or(0)
+    if year < 1000 || month < 1 || month > 12 || day < 1 || day > days_in(year, month) {
+        return ""
+    }
+    let mm = two_digits(month)
+    let dd = two_digits(day)
+    "{year}-{mm}-{dd}"
+}
+
+// Whether every character of `text` is an ASCII digit.
+fn all_digits(text: Untrusted<String>) -> Bool {
+    for c in text.chars() {
+        if !"0123456789".contains(c) {
+            return false
+        }
+    }
+    true
+}
+
+// The number of days in `month` (1 to 12) of `year`, in the Gregorian
+// calendar.
+fn days_in(year: Int, month: Int) -> Int {
+    if month == 2 {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+        return if leap { 29 } else { 28 }
+    }
+    if month == 4 || month == 6 || month == 9 || month == 11 { 30 } else { 31 }
+}
+
+// `n`, from 1 to 99, with a leading zero below 10.
+fn two_digits(n: Int) -> String {
+    if n < 10 { "0{n}" } else { "{n}" }
 }
 
 // The `version` in a `Cargo.toml`, as `major.minor.patch`: each part is
@@ -520,14 +606,41 @@ fn robots() -> String {
     "{group}\nAllow: /\n\nSitemap: {base}/sitemap.xml\n"
 }
 
-// `sitemap.xml`: the canonical URL of every page.
-fn sitemap(pages: List<Page>) -> Untrusted<String> {
+// `sitemap.xml`: the canonical URL of every page, and when its source
+// file last changed if `site/lastmod.txt` says. A page made from no one
+// file, such as a section's index or a code's page, has no `<lastmod>`.
+fn sitemap(all: Site, pages: List<Page>) -> Untrusted<String> {
     var out = markup("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n")
     for page in pages {
         let loc = canonical(page.path)
-        out = out.concat(wrap("<url><loc>", html.text(loc), "</loc></url>\n"))
+        let date = last_changed(all, page.path)
+        let lastmod = if date == "" { empty() } else { wrap("<lastmod>", html.text(date), "</lastmod>") }
+        out = out.concat(wrap("<url><loc>", html.text(loc), "</loc>")).concat(lastmod).concat(markup("</url>\n"))
     }
     out.concat(markup("</urlset>\n")).render()
+}
+
+// When the source file of the page at `page` last changed, or "" if the
+// page has no one source file or `site/lastmod.txt` does not list it. A
+// doc's page comes from the doc, and the agent-setup page from its prompt.
+// A code's page is one entry of a larger file, so that file's date is not
+// the code's, and it gets none.
+fn last_changed(all: Site, page: Untrusted<String>) -> String {
+    var source: Untrusted<String> = if page == "agent-setup.html" { "site/agent-setup/prompt.md" } else { "" }
+    for doc in all.docs {
+        if doc.page == page {
+            source = doc.repo
+        }
+    }
+    if source == "" {
+        return ""
+    }
+    for dated in all.dates {
+        if dated.repo == source {
+            return dated.date
+        }
+    }
+    ""
 }
 
 // The canonical URL of the page at `page`.
@@ -1058,13 +1171,15 @@ fn banner(version: String) -> html.Html {
 }
 
 // The home page's JSON-LD: schema.org's description of the software, for
-// search engines and agents. It is a data block, which no browser runs.
-// Every value in it is written here or is the version, which `version_of`
+// search engines and agents. The application's `downloadUrl` is the
+// latest release's page and its `softwareHelp` the guides. It has no
+// `offers` or rating: a free pre-alpha compiler has no honest rating.
+// It is a data block, which no browser runs. Every value in it is written here or is the version, which `version_of`
 // has read as numbers, so nothing needs escaping.
 fn structured_data(version: String) -> html.Html {
     let base = origin()
     let source = repository()
-    markup("<script type=\"application/ld+json\">\n\{\n  \"@context\": \"https://schema.org\",\n  \"@type\": \"SoftwareSourceCode\",\n  \"name\": \"Oska\",\n  \"description\": \"An AI-first, secure-by-default programming language.\",\n  \"url\": \"{base}/\",\n  \"codeRepository\": \"{source}\",\n  \"license\": \"https://spdx.org/licenses/Apache-2.0.html\",\n  \"version\": \"{version}\",\n  \"programmingLanguage\": \"Oska\",\n  \"targetProduct\": \{\n    \"@type\": \"SoftwareApplication\",\n    \"name\": \"oskac\",\n    \"applicationCategory\": \"DeveloperApplication\",\n    \"softwareVersion\": \"{version}\",\n    \"installUrl\": \"{base}/install.sh\",\n    \"additionalProperty\": \{\n      \"@type\": \"PropertyValue\",\n      \"name\": \"installCommand\",\n      \"value\": \"curl -fsSL {base}/install.sh | sh\"\n    \}\n  \}\n\}\n</script>\n")
+    markup("<script type=\"application/ld+json\">\n\{\n  \"@context\": \"https://schema.org\",\n  \"@type\": \"SoftwareSourceCode\",\n  \"name\": \"Oska\",\n  \"description\": \"An AI-first, secure-by-default programming language.\",\n  \"url\": \"{base}/\",\n  \"codeRepository\": \"{source}\",\n  \"license\": \"https://spdx.org/licenses/Apache-2.0.html\",\n  \"version\": \"{version}\",\n  \"programmingLanguage\": \"Oska\",\n  \"targetProduct\": \{\n    \"@type\": \"SoftwareApplication\",\n    \"name\": \"oskac\",\n    \"applicationCategory\": \"DeveloperApplication\",\n    \"softwareVersion\": \"{version}\",\n    \"installUrl\": \"{base}/install.sh\",\n    \"downloadUrl\": \"{source}/releases/latest\",\n    \"softwareHelp\": \{\n      \"@type\": \"CreativeWork\",\n      \"name\": \"Oska guides\",\n      \"url\": \"{base}/guide/\"\n    \},\n    \"additionalProperty\": \{\n      \"@type\": \"PropertyValue\",\n      \"name\": \"installCommand\",\n      \"value\": \"curl -fsSL {base}/install.sh | sh\"\n    \}\n  \}\n\}\n</script>\n")
 }
 
 // The site's navigation, with the link to `current`, the page it is on,

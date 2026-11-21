@@ -384,6 +384,7 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to_file(\"site/favicon.svg\")",
         "read.restrict_to_file(\"Cargo.toml\")",
         "read.restrict_to_file(\"site/authority.txt\")",
+        "read.restrict_to_file(\"site/lastmod.txt\")",
         "restrict_to(Path.new(\"_site\"))",
     ] {
         assert!(
@@ -470,6 +471,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
         "  FsRead -> FileRead: restrict_to_file \"CHANGELOG.md\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"site/favicon.svg\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"site/lastmod.txt\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
         "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
     ] {
@@ -1241,6 +1243,16 @@ fn only_the_home_page_has_structured_data_and_it_describes_the_software() {
         product.get("additionalProperty").get("value").str(),
         "curl -fsSL https://oskalang.dev/install.sh | sh"
     );
+    assert_eq!(
+        product.get("downloadUrl").str(),
+        "https://github.com/aparsons/oska/releases/latest"
+    );
+    let help = product.get("softwareHelp");
+    assert_eq!(help.get("@type").str(), "CreativeWork");
+    assert_eq!(help.get("url").str(), "https://oskalang.dev/guide/");
+    // No fabricated rating or offer.
+    let text = &site["index.html"];
+    assert!(!text.contains("aggregateRating") && !text.contains("\"offers\""));
 }
 
 #[test]
