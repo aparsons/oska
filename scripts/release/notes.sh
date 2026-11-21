@@ -20,7 +20,7 @@
 #
 # It fails closed, printing nothing: a tag that is not a version, an
 # unreadable file, no section for the version, two of them, a section with
-# nothing in it but its date, or a digest file that is not one line
+# nothing in it but its date and headings, or a digest file that is not one line
 # `sha256:<64 hex digits>` each stop it with a message.
 #
 # release.yml runs it in `assemble`, before anything is signed, and
@@ -69,12 +69,31 @@ if [ -n "$digest_file" ]; then
 fi
 
 # The lines under `## <version>` up to the next `## ` heading outside a
-# code block, without the blank lines around them. Exit 3: no such
-# heading; exit 4: more than one.
+# fenced code block, without the blank lines around them. A fence may be
+# indented (in a list item), and only a run of the same marker, at least
+# as long, closes it. Exit 3: no such heading; exit 4: more than one.
 status=0
 section=$(awk -v want="## $version" '
-  /^(```|~~~)/ { fence = !fence }
-  !fence && /^## / {
+  {
+    line = $0
+    sub(/^[ \t]+/, "", line)
+    # The run of three or more backticks or tildes the line starts with.
+    run = ""
+    if (line ~ /^(```|~~~)/) {
+      c = substr(line, 1, 1); k = 1
+      while (substr(line, k + 1, 1) == c) k++
+      run = substr(line, 1, k)
+    }
+  }
+  fence != "" {
+    # A closing fence: the opening marker, at least as long, then nothing.
+    if (run != "" && substr(run, 1, 1) == substr(fence, 1, 1) && length(run) >= length(fence) &&
+        substr(line, length(run) + 1) ~ /^[ \t]*$/) fence = ""
+    if (inside) lines[n++] = $0
+    next
+  }
+  run != "" { fence = run }
+  fence == "" && /^## / {
     sub(/[[:space:]]+$/, "")
     inside = ($0 == want)
     if (inside) found++
@@ -95,7 +114,8 @@ case $status in
   4) die "$changelog has more than one section '## $version'" ;;
   *) die "cannot read the section '## $version' of $changelog" ;;
 esac
-grep -Evq '^[[:space:]]*$|^Released [0-9]{4}-[0-9]{2}-[0-9]{2}\.$' <<<"$section" ||
+# Nothing but blank lines, the date and headings: no notes.
+grep -Evq '^[[:space:]]*$|^Released [0-9]{4}-[0-9]{2}-[0-9]{2}\.$|^[[:space:]]*#{1,6}([[:space:]].*)?$' <<<"$section" ||
   die "the section '## $version' of $changelog is empty"
 
 # A link into the repository, such as [x](docs/guide/install.md#a), is
