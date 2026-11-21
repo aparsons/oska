@@ -1,0 +1,20 @@
+.claude-plugin/marketplace.json: name
+.claude-plugin/marketplace.json: owner.name
+.claude-plugin/marketplace.json: metadata.description
+.claude-plugin/marketplace.json: plugins[].name
+.claude-plugin/marketplace.json: plugins[].source = ./plugins/oska
+.claude-plugin/marketplace.json: plugins[].description
+plugins/oska/.claude-plugin/plugin.json: name
+plugins/oska/.claude-plugin/plugin.json: version
+plugins/oska/.claude-plugin/plugin.json: description
+plugins/oska/.claude-plugin/plugin.json: author.name
+plugins/oska/hooks/hooks.json: hooks.PostToolUse[].matcher = Edit|Write|MultiEdit
+plugins/oska/hooks/hooks.json: hooks.PostToolUse[].hooks[].type = command
+plugins/oska/hooks/hooks.json: hooks.PostToolUse[].hooks[].command = oskac hook claude --event=post-edit
+plugins/oska/hooks/hooks.json: hooks.Stop[].hooks[].type = command
+plugins/oska/hooks/hooks.json: hooks.Stop[].hooks[].command = oskac hook claude --event=stop
+plugins/oska/hooks/hooks.json: hooks.Stop[].hooks[].timeout
+plugins/oska/skills/oska/SKILL.md
+plugins/oska/skills/oska/SKILL.md: name
+plugins/oska/skills/oska/SKILL.md: description
+plugins/oska/skills/oska/SKILL.md: paths

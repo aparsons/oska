@@ -14,7 +14,7 @@ pub const ELEMENTS: &[(&str, &[&str])] = &[
         &["charset", "name", "property", "content", "http-equiv"],
     ),
     ("title", &[]),
-    ("link", &["rel", "href", "type", "integrity", "crossorigin"]),
+    ("link", &["rel", "href", "type"]),
     ("script", &["type", "src"]),
     ("aside", &["aria-label"]),
     ("body", &[]),

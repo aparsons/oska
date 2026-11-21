@@ -56,6 +56,10 @@ const REPO: &[(&str, &str)] = &[
         "# Untrusted data\n\nInjection.\n",
     ),
     (
+        "docs/guide/threat-model.md",
+        "# Threat model\n\nWhere it stops.\n",
+    ),
+    (
         "docs/guide/what-works-today.md",
         "# What works today\n\nA table.\n",
     ),
@@ -135,6 +139,7 @@ fn llms_txt_starts_with_the_pages_an_agent_needs_first_in_order() {
             "guide/language-tour.md",
             "guide/capabilities.md",
             "guide/untrusted-data.md",
+            "guide/threat-model.md",
             "guide/agent-guide.md",
             "codes.json",
             "guide/what-works-today.md",
@@ -171,7 +176,7 @@ fn start_here_leaves_out_a_page_the_site_does_not_have() {
     let start = entry_urls(group(&site["llms.txt"], "Start here"));
     assert!(!start.iter().any(|u| u.contains("untrusted")), "{start:?}");
     assert!(!start.contains(&"codes.json".to_string()), "{start:?}");
-    assert_eq!(start.len(), 6, "{start:?}");
+    assert_eq!(start.len(), 7, "{start:?}");
 }
 
 #[test]
