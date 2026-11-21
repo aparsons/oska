@@ -2581,7 +2581,7 @@ fn setup_listing(all: Site) -> List<Listing> {
 
 // The page of the prompt: what it is, the prompt, and the files.
 fn setup_page(all: Site) -> Page {
-    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers the hooks, an authority baseline and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n<p>Using Claude Code? Install the <code>oska</code> plugin instead of copying the hook settings: in Claude Code, run <code>/plugin marketplace add aparsons/oska</code>, then <code>/plugin install oska@oska</code>. It turns on both hooks and adds the loop as a skill. See the <a href=\"/guide/agent-guide.html#the-claude-code-plugin\">agent guide</a>.</p>\n")
+    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers the hooks, an authority baseline and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n<p>Using Claude Code? Install the <code>oska</code> plugin instead of copying the hook settings: in Claude Code, run <code>/plugin marketplace add aparsons/oska</code>, then <code>/plugin install oska@oska</code>. It turns on both hooks and adds the loop as a skill. See the <a href=\"/guide/agent-guide.html\">agent guide</a>.</p>\n")
     var files = markup("<h2 id=\"files\">Files</h2>\n<ul>\n")
     for item in setup_listing(all) {
         let link = anchor_to("/{item.path}", html.text(item.label))
@@ -2613,7 +2613,7 @@ fn setup_group(all: Site) -> Untrusted<String> {
             entries = "{entries}- [{item.label}]({base}/{item.path}): {item.note}\n"
         }
     }
-    "\n## Set up an agent\n\n{entries}- Claude Code plugin (optional, instead of the hook settings): in Claude Code, `/plugin marketplace add aparsons/oska`, then `/plugin install oska@oska`. It runs both hooks and adds the loop as the `oska` skill ({base}/guide/agent-guide.md#the-claude-code-plugin)\n"
+    "\n## Set up an agent\n\n{entries}- Claude Code plugin (optional, instead of the hook settings): in Claude Code, `/plugin marketplace add aparsons/oska`, then `/plugin install oska@oska`. It runs both hooks and adds the loop as the `oska` skill ({base}/guide/agent-guide.md)\n"
 }
 
 // The raw files: the prompt as plain text (`agent-setup.md` is the page's

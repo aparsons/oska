@@ -41,6 +41,20 @@ const AGENT_FILES: [&str; 4] = [
     "oska-check.sh",
 ];
 
+/// The text of every file an agent reads: [`AGENT_FILES`], then every
+/// file of the Claude Code plugin, each with its name.
+fn agent_texts() -> Vec<(String, String)> {
+    let mut texts: Vec<(String, String)> = AGENT_FILES
+        .iter()
+        .map(|name| (name.to_string(), setup_file(name)))
+        .collect();
+    for file in plugin_files() {
+        let text = read(&repo_root().join(&file));
+        texts.push((file, text));
+    }
+    texts
+}
+
 fn oskac(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_oskac"))
         .args(args)
@@ -99,8 +113,8 @@ fn every_flag_the_agent_files_mention_exists_in_the_tool_they_are_for() {
     let ps1 = read(&repo_root().join("scripts/install/install.ps1"));
     assert!(oskac_flags.contains("--format") && installer_flags.contains("--json"));
     let mut checked = BTreeSet::new();
-    for name in AGENT_FILES {
-        for line in setup_file(name).lines() {
+    for (name, text) in agent_texts() {
+        for line in text.lines() {
             for flag in flags_in(line) {
                 // A line that runs the installer uses its flags, one that
                 // runs `oskac` uses `oskac`'s; any other line, either's.
@@ -161,8 +175,18 @@ fn every_oskac_command_the_agent_files_mention_exists() {
     let commands = oskac_commands();
     assert!(commands.contains("check") && commands.contains("explain"));
     let mut seen = BTreeSet::new();
-    for name in AGENT_FILES {
-        for code in code_lines(&setup_file(name)) {
+    for (name, text) in agent_texts() {
+        // In a JSON file, the code is the hooks' commands.
+        let lines = if name.ends_with(".json") {
+            text.lines()
+                .filter(|line| line.contains("\"command\""))
+                .map(str::to_string)
+                .collect()
+        } else {
+            code_lines(&text)
+        };
+        for code in lines {
+            let code = code.replace('"', " ");
             let words: Vec<&str> = code.split_whitespace().collect();
             for (at, word) in words.iter().enumerate() {
                 if *word != "oskac" && !word.ends_with("/oskac") {
@@ -328,8 +352,7 @@ fn nothing_is_piped_to_a_shell_but_the_official_installer() {
 
 #[test]
 fn the_agent_files_name_no_host_but_oskalang_dev_and_no_privileged_command() {
-    for name in AGENT_FILES {
-        let text = setup_file(name);
+    for (name, text) in agent_texts() {
         let mut rest = text.as_str();
         while let Some(at) = rest.find("http") {
             let url = &rest[at..];
@@ -1034,6 +1057,12 @@ fn plugin_files() -> Vec<String> {
     files
 }
 
+/// `text` with Windows line ends made Unix ones, for a clone that checks
+/// files out with CRLF.
+fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 fn repo_json(relative: &str) -> Json {
     Json::parse(&read(&repo_root().join(relative)))
 }
@@ -1139,7 +1168,18 @@ fn plugin_authority() -> String {
                 out.push_str(&format!("{file}: {path}\n"));
             }
         } else {
+            // A skill's front matter keys, such as `paths`.
             out.push_str(&format!("{file}\n"));
+            let text = lf(&read(&repo_root().join(&file)));
+            if let Some(front) = text
+                .strip_prefix("---\n")
+                .and_then(|rest| rest.split_once("\n---\n"))
+            {
+                for line in front.0.lines() {
+                    let key = line.split(':').next().unwrap_or(line);
+                    out.push_str(&format!("{file}: {key}\n"));
+                }
+            }
         }
     }
     out
@@ -1153,7 +1193,7 @@ fn the_plugin_authority_matches_its_reviewed_fixture() {
         std::fs::write(&fixture, &actual).expect("should write the fixture");
     }
     assert_eq!(
-        read(&fixture),
+        lf(&read(&fixture)),
         actual,
         "the plugin's files or keys changed; review the change, then rerun with \
          UPDATE_GOLDEN=1 cargo test -p oskac --test agent_setup and commit the fixture"
@@ -1161,7 +1201,7 @@ fn the_plugin_authority_matches_its_reviewed_fixture() {
 }
 
 #[test]
-fn the_plugin_requests_no_permission_and_holds_no_program() {
+fn the_plugin_grants_no_claude_code_permission_and_holds_no_program() {
     let allowed: BTreeSet<&str> = [
         // The marketplace.
         "name",
@@ -1170,7 +1210,7 @@ fn the_plugin_requests_no_permission_and_holds_no_program() {
         "description",
         "plugins",
         "source",
-        // The manifest.
+        // plugin.json.
         "version",
         "author",
         // The hooks.
@@ -1252,7 +1292,7 @@ Use when writing or changing Oska code, in .osk files or oska.toml.";
 fn generated_skill() -> String {
     format!(
         "---\nname: oska\ndescription: {SKILL_DESCRIPTION}\npaths: [\"**/*.osk\", \"**/oska.toml\"]\n---\n\n{}",
-        setup_file("AGENTS.template.md")
+        lf(&setup_file("AGENTS.template.md"))
     )
 }
 
@@ -1265,7 +1305,7 @@ fn the_skill_is_the_agents_template_with_front_matter() {
         std::fs::write(&path, &expected).expect("should write the skill");
     }
     assert!(
-        read(&path) == expected,
+        lf(&read(&path)) == expected,
         "{SKILL} differs from site/agent-setup/AGENTS.template.md with its front matter; \
          edit the template, not the skill, then regenerate it with \
          UPDATE_GOLDEN=1 cargo test -p oskac --test agent_setup and commit both"
@@ -1274,7 +1314,7 @@ fn the_skill_is_the_agents_template_with_front_matter() {
 
 #[test]
 fn the_skill_follows_the_agent_skills_format() {
-    let skill = read(&repo_root().join(SKILL));
+    let skill = lf(&read(&repo_root().join(SKILL)));
     let front = skill
         .strip_prefix("---\n")
         .and_then(|rest| rest.split_once("\n---\n"))

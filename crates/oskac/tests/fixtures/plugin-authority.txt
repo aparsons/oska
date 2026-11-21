@@ -15,3 +15,6 @@ plugins/oska/hooks/hooks.json: hooks.Stop[].hooks[].type = command
 plugins/oska/hooks/hooks.json: hooks.Stop[].hooks[].command = oskac hook claude --event=stop
 plugins/oska/hooks/hooks.json: hooks.Stop[].hooks[].timeout
 plugins/oska/skills/oska/SKILL.md
+plugins/oska/skills/oska/SKILL.md: name
+plugins/oska/skills/oska/SKILL.md: description
+plugins/oska/skills/oska/SKILL.md: paths
