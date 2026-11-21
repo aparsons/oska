@@ -21,6 +21,7 @@ use crate::value::Value;
 /// Every `Bytes` intrinsic, by qualified name.
 pub const INTRINSICS: Table = &[
     ("Bytes.append", Mutating(bytes_append)),
+    ("Bytes.assume_trusted", Plain(bytes_assume_trusted)),
     ("Bytes.at", Plain(bytes_at)),
     ("Bytes.eq", Plain(bytes_eq)),
     ("Bytes.from_hex", Plain(bytes_from_hex)),
@@ -271,6 +272,13 @@ fn bytes_to_text(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value
         Ok(text) => Ok(Value::some(memory::text(text, span)?)),
         Err(_) => Ok(Value::none()),
     }
+}
+
+/// `Untrusted<Bytes>.assume_trusted(self)`: the bytes themselves. Trust
+/// is a property the checker tracks; at run time untrusted bytes are
+/// plain bytes.
+fn bytes_assume_trusted(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(args.swap_remove(0))
 }
 
 /// `String.to_bytes(self)`: its UTF-8 encoding.

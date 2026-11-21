@@ -824,15 +824,25 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ),
                 span,
             ),
-            Mismatch::TrustLost => self.error(
-                codes::UNTRUSTED_TEXT,
-                format!(
-                    "expected `{expected}`, found `{actual}`: untrusted text cannot be used \
-                     where trusted text is required; check it with a validator, or vouch for \
-                     it with `.assume_trusted()`"
-                ),
-                span,
-            ),
+            Mismatch::TrustLost => {
+                // Bytes are named as bytes, and anything else as text.
+                let untrusted = actual.untrusted_names();
+                let bytes = !untrusted.is_empty()
+                    && untrusted.iter().all(|name| *name == crate::builtins::BYTES);
+                let (what, are) = match bytes {
+                    true => ("bytes", "are"),
+                    false => ("text", "is"),
+                };
+                self.error(
+                    codes::UNTRUSTED_TEXT,
+                    format!(
+                        "expected `{expected}`, found `{actual}`: untrusted {what} cannot be \
+                         used where trusted {what} {are} required; check it with a validator, \
+                         or vouch for it with `.assume_trusted()`"
+                    ),
+                    span,
+                )
+            }
             Mismatch::Types => self.error(
                 codes::MISMATCH,
                 format!("expected `{expected}`, found `{actual}`"),
