@@ -572,6 +572,12 @@ if step "release script tests" --fast-when 'scripts/release/*'; then
   bash scripts/release/test.sh
 fi
 
+if step "release notes tests" --fast-when 'scripts/release/*'; then
+  # scripts/release/notes.sh, the GitHub release body: the version's
+  # CHANGELOG.md section and a footer; it fails closed.
+  bash scripts/release/notes-test.sh
+fi
+
 if step "release image tests" --fast-when 'scripts/release/*'; then
   # The oskac container image builder (scripts/release/image.sh): the same
   # fake binaries give the same OCI bytes, and the layout holds only /oskac

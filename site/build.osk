@@ -4,9 +4,10 @@
 // Run `oskac check site/build.osk` for its authority report. `main` is
 // handed the filesystem read-only and write-only, and narrows each before
 // it reads or writes anything: reading to `docs/` and to the files the
-// site needs beside it (the security policy, the glossary, `Cargo.toml`
-// for the version, the stylesheet, the search script and the favicon),
-// each restricted to on its own, and writing to `_site/`, which it creates.
+// site needs beside it (the security policy, the changelog, the glossary,
+// `Cargo.toml` for the version, the stylesheet, the search script and the
+// favicon), each restricted to on its own, and writing to `_site/`, which
+// it creates.
 // The home page is `docs/index.md`; the README is the repository's front
 // page, for contributors, and the site does not read it.
 //
@@ -61,6 +62,10 @@ cap struct Sources {
     // `SECURITY.md`: the security policy, published as `security.html`.
     // Without it there is no security page.
     security: FileRead,
+    // `CHANGELOG.md`: every release's notes, published as `changelog.html`,
+    // with an anchor per version (`#v070` for `## v0.7.0`). Without it
+    // there is no changelog page.
+    changelog: FileRead,
     glossary: FileRead,
     style: FileRead,
     manifest: FileRead,
@@ -79,6 +84,7 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
     let sources = Sources(
         docs: read.restrict_to("docs"),
         security: read.restrict_to_file("SECURITY.md"),
+        changelog: read.restrict_to_file("CHANGELOG.md"),
         glossary: read.restrict_to_file("GLOSSARY.md"),
         style: read.restrict_to_file("site/style.css"),
         manifest: read.restrict_to_file("Cargo.toml"),
@@ -225,9 +231,9 @@ fn has_doc(all: Site, page: Untrusted<String>) -> Bool {
 }
 
 // The home page, `docs/index.md`, which every site has; the security
-// policy if there is one; the glossary; and every other `.md` file in
-// `docs/`, in its subdirectories (its sections), and in theirs, such as
-// `guide/examples`, except those `unpublished` names.
+// policy and the changelog if there are; the glossary; and every other
+// `.md` file in `docs/`, in its subdirectories (its sections), and in
+// theirs, such as `guide/examples`, except those `unpublished` names.
 fn gather(sources: Sources) -> Result<Site, IoError> {
     var docs: List<Doc> = List.new()
     let home = match sources.docs.read_to_string(Path.new("index.md")) {
@@ -239,6 +245,10 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
     docs.push(new_doc("docs/index.md", "index.html", "", home))
     match sources.security.read_to_string() {
         Ok(policy) => docs.push(new_doc("SECURITY.md", "security.html", "", policy))
+        Err(_) => {}
+    }
+    match sources.changelog.read_to_string() {
+        Ok(notes) => docs.push(new_doc("CHANGELOG.md", "changelog.html", "", notes))
         Err(_) => {}
     }
     let glossary = sources.glossary.read_to_string()?
@@ -1077,8 +1087,9 @@ fn structured_data(version: String) -> html.Html {
 // The site's navigation, with the link to `current`, the page it is on,
 // marked. After the home page it leads with tasks, in a fixed order:
 // install, learn, set up an agent, look up a code, report a
-// vulnerability; the internals are one step away, on the Reference page.
-// An entry whose page the site does not publish is left out.
+// vulnerability, see what changed in a release; the internals are one
+// step away, on the Reference page. An entry whose page the site does not
+// publish is left out.
 fn navigation(all: Site, current: Untrusted<String>) -> html.Html {
     var items = nav_item("index.html", "Oska", current)
     let entries = [
@@ -1089,6 +1100,7 @@ fn navigation(all: Site, current: Untrusted<String>) -> html.Html {
         ["agent-setup.html", "Agent setup"],
         ["codes/index.html", "Codes"],
         ["security.html", "Security"],
+        ["changelog.html", "Changelog"],
         ["reference.html", "Reference"],
     ]
     for entry in entries {

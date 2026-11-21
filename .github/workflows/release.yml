@@ -12,8 +12,10 @@
 #      from the two musl builds (scripts/release/image.sh, reproducible OCI
 #      bytes, SOURCE_DATE_EPOCH the commit's time) and lists the digest of
 #      its image index, oskac-image-digest, in SHA256SUMS, so the release
-#      signature covers the image. smoke-image then runs both musl builds
-#      in alpine and in that image, on x86_64 and aarch64;
+#      signature covers the image. It writes the release notes, the
+#      version's CHANGELOG.md section and a footer (scripts/release/notes.sh),
+#      and fails if the version has none. smoke-image then runs both musl
+#      builds in alpine and in that image, on x86_64 and aarch64;
 #   3. signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
 #      (`ssh-keygen -Y sign -n oska-release`) and verifies the result against
 #      site/oska-release.pub; then, with the same key, signs the next
@@ -24,7 +26,8 @@
 #      only (scripts/release/push-image.sh digest: it verifies the signed
 #      release, refuses a layout that is not the signed digest, pushes by
 #      digest and reads it back; any mismatch fails the release);
-#   5. stores the files, and the index beside them, in a GitHub Release.
+#   5. stores the files, and the index beside them, in a GitHub Release
+#      whose body is those notes.
 #      Users install from oskalang.dev, whose installers verify the
 #      signatures; the GitHub Release is the source the Pages workflow
 #      fetches from;
@@ -212,6 +215,18 @@ jobs:
           export SOURCE_DATE_EPOCH
           scripts/release/assemble.sh "$TAG" builds release "$RUNNER_TEMP/image"
           echo "image index: $(cat "release/$TAG/oskac-image-digest")"
+      # The GitHub Release's body: the version's CHANGELOG.md section and a
+      # footer (scripts/release/notes.sh). On every event, before anything
+      # is signed, so a version with no section fails the pull request's
+      # dry run and stops a tag before sign. Beside release/<tag>/, not in
+      # it: SHA256SUMS does not list it and publish does not upload it.
+      - name: Write the release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          scripts/release/notes.sh "$TAG" CHANGELOG.md site/oska-release.pub \
+            "release/$TAG/oskac-image-digest" >release/release-notes.md
+          cat release/release-notes.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: image-layout
@@ -388,15 +403,11 @@ jobs:
         run: |
           prerelease=()
           case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
-          # The install guide page, not one of its sections: the
-          # "Upgrading to vX.Y.Z" section is written after the release
-          # (runbook step 5), and a pre-release never gets one.
-          notes="Download from https://oskalang.dev/releases/$TAG/
-
-          What changed, and what to do when you upgrade: https://oskalang.dev/guide/install.html"
+          # The body assemble wrote, as a file: never on a command line.
+          # Set once, here; no workflow rewrites it.
           gh release create "$TAG" --verify-tag "${prerelease[@]}" \
             --title "oskac $TAG" \
-            --notes "$notes" \
+            --notes-file release/release-notes.md \
             release/"$TAG"/*
       # Events caused by GITHUB_TOKEN start no workflows, except a dispatch.
       - name: Publish to oskalang.dev

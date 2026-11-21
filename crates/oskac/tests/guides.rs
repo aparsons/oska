@@ -77,10 +77,12 @@ fn markdown_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// The guides, and the home page, which shows a program and its report.
+/// The guides, the home page, which shows a program and its report, and
+/// the changelog, whose release notes show migrations.
 fn guide_pages() -> Vec<PathBuf> {
     let mut pages = markdown_files(&repo_root().join("docs/guide"));
     pages.push(repo_root().join("docs/index.md"));
+    pages.push(repo_root().join("CHANGELOG.md"));
     pages
 }
 
