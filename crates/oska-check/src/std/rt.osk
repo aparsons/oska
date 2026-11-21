@@ -179,6 +179,10 @@ pub fn rt_mem_as_path(object: Int) -> Path
 // `object` (the reference passes, as for text).
 pub fn rt_mem_list(list: List<String>) -> Int
 pub fn rt_mem_as_list(object: Int) -> List<String>
+// The address of `bytes`' object, and the `Bytes` whose object is at
+// `object` (the reference passes, as for text).
+pub fn rt_mem_bytes(bytes: Bytes) -> Int
+pub fn rt_mem_as_bytes(object: Int) -> Bytes
 // The directory or file capability whose object is at `object`, as the
 // runtime's `Root` (the reference passes, as for text).
 pub fn rt_mem_as_root(object: Int) -> Root
@@ -1850,6 +1854,428 @@ pub fn string_join(separator: String, parts: List<String>) -> String {
         i = rt_mem_add(i, 1)
     }
     rt_mem_as_text(result)
+}
+
+// ---- Bytes -----------------------------------------------------------------
+//
+// A `Bytes` object is `[count][length][capacity][bytes...]`: room for
+// `capacity` bytes, a multiple of 8, the first `length` of them there. It
+// is a value: a method that changes one goes through `bytes_reserve`,
+// which writes in place only when the object is unshared (its count is 1)
+// and has room, and otherwise gives a copy of its own, so every other
+// holder keeps the old bytes. Each such method takes the object's address
+// and the place's reference to it, and gives back the address the place
+// holds afterwards, or the word 0, changing nothing, when the call is a
+// bug, for the generated code to panic.
+
+// The longest `Bytes`, in bytes: 256 MiB, as for text (`max_repeated_bytes`).
+fn max_bytes() -> Int {
+    268435456
+}
+
+fn bytes_data(object: Int) -> Int {
+    rt_mem_add(object, 24)
+}
+
+fn bytes_length(object: Int) -> Int {
+    rt_mem_load64(rt_mem_add(object, 8))
+}
+
+// A new bytes object with room for at least `capacity` bytes, and none
+// there yet: its address.
+fn bytes_alloc(capacity: Int) -> Int {
+    let room = rt_mem_and(rt_mem_add(capacity, 7), -8)
+    let object = alloc(rt_mem_add(24, room))
+    rt_mem_store64(rt_mem_add(object, 8), 0)
+    rt_mem_store64(rt_mem_add(object, 16), room)
+    object
+}
+
+// A new bytes object holding the `count` bytes at `from`: its address.
+fn bytes_copy_of(from: Int, count: Int) -> Int {
+    let object = bytes_alloc(count)
+    copy_bytes(bytes_data(object), from, count)
+    rt_mem_store64(rt_mem_add(object, 8), count)
+    object
+}
+
+// `Bytes.new`: an empty buffer.
+pub fn bytes_new() -> Bytes {
+    rt_mem_as_bytes(bytes_alloc(0))
+}
+
+// `Bytes.zeroed`: `length` zero bytes; for a negative length the word 0,
+// and for one past `max_bytes` the word -1, in place of a buffer, for the
+// generated code to panic (`P0042`, `P0043`).
+pub fn bytes_zeroed(length: Int) -> Bytes {
+    if length < 0 {
+        return rt_mem_as_bytes(0)
+    }
+    if length > max_bytes() {
+        return rt_mem_as_bytes(-1)
+    }
+    let room = rt_mem_and(rt_mem_add(length, 7), -8)
+    let size = rt_mem_add(24, room)
+    if rt_mem_add(size, 8) > largest_block() {
+        // A mapping of its own, fresh and so already zero: its pages are
+        // touched only as they are written.
+        let object = try_alloc(size)
+        if object == 0 {
+            out_of_memory()
+        }
+        rt_mem_store64(rt_mem_add(object, 8), length)
+        rt_mem_store64(rt_mem_add(object, 16), room)
+        return rt_mem_as_bytes(object)
+    }
+    // A block of a size class may have been used before: zero it.
+    let object = bytes_alloc(length)
+    let data = bytes_data(object)
+    var i = 0
+    while i < room {
+        rt_mem_store64(rt_mem_add(data, i), 0)
+        i = rt_mem_add(i, 8)
+    }
+    rt_mem_store64(rt_mem_add(object, 8), length)
+    rt_mem_as_bytes(object)
+}
+
+// The value of the hexadecimal digit `c`, in either case, or -1.
+fn hex_value(c: Int) -> Int {
+    if c >= 48 && c <= 57 {
+        return c - 48
+    }
+    if c >= 97 && c <= 102 {
+        return c - 87
+    }
+    if c >= 65 && c <= 70 {
+        return c - 55
+    }
+    -1
+}
+
+// `Bytes.from_hex`: the bytes two hexadecimal digits each spell, or `None`.
+pub fn bytes_from_hex(text: String) -> Option<Bytes> {
+    let source = rt_mem_text(text)
+    let length = text_length(source)
+    if rt_mem_and(length, 1) != 0 {
+        return None
+    }
+    let digits = text_data(source)
+    let count = rt_mem_shr(length, 1)
+    let object = bytes_alloc(count)
+    let data = bytes_data(object)
+    var i = 0
+    while i < count {
+        let high = hex_value(rt_mem_load8(rt_mem_add(digits, rt_mem_shl(i, 1))))
+        let low = hex_value(rt_mem_load8(rt_mem_add(digits, rt_mem_add(rt_mem_shl(i, 1), 1))))
+        if high < 0 || low < 0 {
+            free(object)
+            return None
+        }
+        rt_mem_store8(rt_mem_add(data, i), rt_mem_or(rt_mem_shl(high, 4), low))
+        i = rt_mem_add(i, 1)
+    }
+    rt_mem_store64(rt_mem_add(object, 8), count)
+    Some(rt_mem_as_bytes(object))
+}
+
+// `Bytes.len`.
+pub fn bytes_len(bytes: Bytes) -> Int {
+    bytes_length(rt_mem_bytes(bytes))
+}
+
+// `Bytes.get`: the byte at `index` (an `Option<U8>`, which is laid out as
+// an `Option<Int>` is), or `None`.
+pub fn bytes_get(bytes: Bytes, index: Int) -> Option<Int> {
+    let object = rt_mem_bytes(bytes)
+    if index < 0 || index >= bytes_length(object) {
+        return None
+    }
+    Some(rt_mem_load8(rt_mem_add(bytes_data(object), index)))
+}
+
+// Whether the `width` bytes at `offset` all lie inside `bytes`: the
+// generated code panics when they do not, before `bytes_read`.
+pub fn bytes_readable(bytes: Bytes, offset: Int, width: Int) -> Bool {
+    let length = bytes_length(rt_mem_bytes(bytes))
+    offset >= 0 && offset <= length && length - offset >= width
+}
+
+// The unsigned integer the `width` bytes at `offset` store, most
+// significant byte first when `big`, which `bytes_readable` has vouched
+// lie inside `bytes`: `Bytes.at` and the endian reads.
+pub fn bytes_read(bytes: Bytes, offset: Int, width: Int, big: Bool) -> Int {
+    let at = rt_mem_add(bytes_data(rt_mem_bytes(bytes)), offset)
+    var n = 0
+    var i = 0
+    while i < width {
+        let k = if big { i } else { rt_mem_sub(rt_mem_sub(width, 1), i) }
+        n = rt_mem_or(rt_mem_shl(n, 8), rt_mem_load8(rt_mem_add(at, k)))
+        i = rt_mem_add(i, 1)
+    }
+    n
+}
+
+// Panic (`P0002`): `index` out of bounds in `Bytes.at` or `Bytes.set`.
+pub fn panic_bytes_index(start: String, end: String, object: Int, index: Int) {
+    panic_message(start, end, bytes_index_message("", object, index))
+}
+
+pub fn bytes_index_message(head: String, object: Int, index: Int) -> String {
+    let i = int_text(index, false)
+    let n = int_text(bytes_length(object), false)
+    "{head}index {i} is out of bounds for bytes of length {n}"
+}
+
+// Panic (`P0042`): an endian read past the end.
+pub fn panic_bytes_read(start: String, end: String, object: Int, offset: Int, width: Int) {
+    panic_message(start, end, bytes_read_message("", object, offset, width))
+}
+
+pub fn bytes_read_message(head: String, object: Int, offset: Int, width: Int) -> String {
+    let w = int_text(width, false)
+    let o = int_text(offset, false)
+    let n = int_text(bytes_length(object), false)
+    "{head}cannot read {w} bytes at offset {o} of a buffer of {n} bytes"
+}
+
+// `Bytes.slice`: the bytes from `start` up to `end`, or, when they are out
+// of range, the word 0 in place of a buffer, for the generated code to
+// panic (`P0042`).
+pub fn bytes_slice(bytes: Bytes, start: Int, end: Int) -> Bytes {
+    let object = rt_mem_bytes(bytes)
+    if start < 0 || end < start || end > bytes_length(object) {
+        return rt_mem_as_bytes(0)
+    }
+    rt_mem_as_bytes(bytes_copy_of(rt_mem_add(bytes_data(object), start), end - start))
+}
+
+// Panic (`P0042`): a slice out of range.
+pub fn panic_bytes_slice(start: String, end: String, object: Int, from: Int, to: Int) {
+    panic_message(start, end, bytes_slice_message("", object, from, to))
+}
+
+pub fn bytes_slice_message(head: String, object: Int, from: Int, to: Int) -> String {
+    let a = int_text(from, false)
+    let b = int_text(to, false)
+    let n = int_text(bytes_length(object), false)
+    "{head}cannot slice bytes {a}..{b} of a buffer of {n} bytes"
+}
+
+// Panic (`P0042`): `Bytes.zeroed` of a negative length.
+pub fn panic_bytes_negative(start: String, end: String, length: Int) {
+    panic_message(start, end, bytes_negative_message("", length))
+}
+
+pub fn bytes_negative_message(head: String, length: Int) -> String {
+    let n = int_text(length, false)
+    "{head}cannot make a buffer of {n} bytes"
+}
+
+// Panic (`P0043`): `Bytes.zeroed` of a length past `max_bytes`.
+pub fn panic_bytes_long(start: String, end: String, length: Int) {
+    panic_message(start, end, bytes_long_message("", length))
+}
+
+pub fn bytes_long_message(head: String, length: Int) -> String {
+    let n = int_text(length, false)
+    "{head}a buffer of {n} bytes is too long"
+}
+
+// Panic (`P0043`): adding `extra` bytes to the buffer at `object` would
+// take it past `max_bytes`.
+pub fn panic_bytes_grow(start: String, end: String, object: Int, extra: Int) {
+    panic_message(start, end, bytes_grow_message("", object, extra))
+}
+
+pub fn bytes_grow_message(head: String, object: Int, extra: Int) -> String {
+    bytes_long_message(head, rt_mem_add(bytes_length(object), extra))
+}
+
+// Panic (`P0043`): appending the buffer at `other` would take the one at
+// `object` past `max_bytes`.
+pub fn panic_bytes_append(start: String, end: String, object: Int, other: Int) {
+    panic_message(start, end, bytes_append_message("", object, other))
+}
+
+pub fn bytes_append_message(head: String, object: Int, other: Int) -> String {
+    bytes_grow_message(head, object, bytes_length(other))
+}
+
+// `Bytes.to_hex`: two lower-case hexadecimal digits a byte.
+pub fn bytes_to_hex(bytes: Bytes) -> String {
+    let object = rt_mem_bytes(bytes)
+    let length = bytes_length(object)
+    let data = bytes_data(object)
+    let out = text_new(rt_mem_shl(length, 1))
+    let digits = text_data(out)
+    var i = 0
+    while i < length {
+        let b = rt_mem_load8(rt_mem_add(data, i))
+        let at = rt_mem_add(digits, rt_mem_shl(i, 1))
+        rt_mem_store8(at, hex_digit(rt_mem_shr(b, 4)))
+        rt_mem_store8(rt_mem_add(at, 1), hex_digit(rt_mem_and(b, 15)))
+        i = rt_mem_add(i, 1)
+    }
+    rt_mem_as_text(out)
+}
+
+// `dbg` of a `Bytes`: `Bytes(` and its hexadecimal digits, then `)`.
+pub fn debug_bytes(bytes: Bytes) -> String {
+    let digits = bytes_to_hex(bytes)
+    "Bytes({digits})"
+}
+
+// `Bytes.to_text`: the text the bytes encode in UTF-8, or `None`.
+pub fn bytes_to_text(bytes: Bytes) -> Option<String> {
+    let object = rt_mem_bytes(bytes)
+    let length = bytes_length(object)
+    if !utf8_valid(bytes_data(object), length) {
+        return None
+    }
+    Some(text_from(bytes_data(object), length))
+}
+
+// `String.to_bytes`: the text's UTF-8 encoding.
+pub fn string_to_bytes(text: String) -> Bytes {
+    let object = rt_mem_text(text)
+    rt_mem_as_bytes(bytes_copy_of(text_data(object), text_length(object)))
+}
+
+// `Bytes.eq`: the same bytes.
+pub fn bytes_eq(a: Bytes, b: Bytes) -> Bool {
+    let left = rt_mem_bytes(a)
+    let right = rt_mem_bytes(b)
+    let length = bytes_length(left)
+    length == bytes_length(right) && bytes_equal(bytes_data(left), bytes_data(right), length)
+}
+
+// `Bytes.hash`: the 64-bit FNV-1a hash of the bytes.
+pub fn bytes_hash(bytes: Bytes) -> Int {
+    let object = rt_mem_bytes(bytes)
+    let length = bytes_length(object)
+    let data = bytes_data(object)
+    // FNV-1a's offset basis, 0xcbf29ce484222325, as a signed word.
+    var h = -3750763034362895579
+    var i = 0
+    while i < length {
+        h = rt_mem_mul(rt_mem_xor(h, rt_mem_load8(rt_mem_add(data, i))), 1099511628211)
+        i = rt_mem_add(i, 1)
+    }
+    h
+}
+
+// The bytes object at `object`, which a place holds a reference to,
+// unshared and with room for `extra` more bytes: `object` itself when it is
+// that already. Otherwise a new one, at least twice as large when `object`
+// has no room. The bytes move to it from an unshared `object`, which is
+// freed; from a shared or static one they are copied, and `object` is
+// counted once less. The word 0, changing nothing, when the buffer would
+// grow past `max_bytes`.
+fn bytes_reserve(object: Int, extra: Int) -> Int {
+    let count = rt_mem_load64(object)
+    let length = bytes_length(object)
+    let capacity = rt_mem_load64(rt_mem_add(object, 16))
+    let needed = rt_mem_add(length, extra)
+    if needed > max_bytes() {
+        return 0
+    }
+    if count == 1 && needed <= capacity {
+        return object
+    }
+    var larger = capacity
+    if needed > capacity {
+        larger = rt_mem_shl(capacity, 1)
+        if larger < needed {
+            larger = needed
+        }
+        if larger < 8 {
+            larger = 8
+        }
+    }
+    let copy = bytes_alloc(larger)
+    copy_bytes(bytes_data(copy), bytes_data(object), length)
+    rt_mem_store64(rt_mem_add(copy, 8), length)
+    if count == 1 {
+        free(object)
+    } else if count > 0 {
+        rt_mem_store64(object, rt_mem_sub(count, 1))
+    }
+    copy
+}
+
+// `Bytes.push`: the byte `byte` added at the end of the buffer at `object`.
+pub fn bytes_push(object: Int, byte: Int) -> Int {
+    bytes_push_int(object, byte, 1, false)
+}
+
+// `Bytes.append`: the bytes of the buffer at `other` added at the end of
+// the one at `object`. `other` may be `object` itself, shared, so it is
+// copied from after the reserve, which leaves it in place.
+pub fn bytes_append(object: Int, other: Int) -> Int {
+    let extra = bytes_length(other)
+    let target = bytes_reserve(object, extra)
+    if target == 0 {
+        return 0
+    }
+    let length = bytes_length(target)
+    copy_bytes(rt_mem_add(bytes_data(target), length), bytes_data(other), extra)
+    rt_mem_store64(rt_mem_add(target, 8), rt_mem_add(length, extra))
+    target
+}
+
+// `Bytes.set`: the byte at `index` of the buffer at `object` replaced by
+// `byte`; the word 0 when `index` is out of bounds (`P0002`).
+pub fn bytes_set(object: Int, index: Int, byte: Int) -> Int {
+    if index < 0 || index >= bytes_length(object) {
+        return 0
+    }
+    let target = bytes_reserve(object, 0)
+    rt_mem_store8(rt_mem_add(bytes_data(target), index), byte)
+    target
+}
+
+// The low `width` bytes of `value` added at the end of the buffer at
+// `object`, most significant first when `big`.
+fn bytes_push_int(object: Int, value: Int, width: Int, big: Bool) -> Int {
+    let target = bytes_reserve(object, width)
+    if target == 0 {
+        return 0
+    }
+    let length = bytes_length(target)
+    let at = rt_mem_add(bytes_data(target), length)
+    var i = 0
+    while i < width {
+        let k = if big { rt_mem_sub(rt_mem_sub(width, 1), i) } else { i }
+        rt_mem_store8(rt_mem_add(at, k), rt_mem_shr(value, rt_mem_shl(i, 3)))
+        i = rt_mem_add(i, 1)
+    }
+    rt_mem_store64(rt_mem_add(target, 8), rt_mem_add(length, width))
+    target
+}
+
+pub fn bytes_push_u16_be(object: Int, value: Int) -> Int {
+    bytes_push_int(object, value, 2, true)
+}
+
+pub fn bytes_push_u16_le(object: Int, value: Int) -> Int {
+    bytes_push_int(object, value, 2, false)
+}
+
+pub fn bytes_push_u32_be(object: Int, value: Int) -> Int {
+    bytes_push_int(object, value, 4, true)
+}
+
+pub fn bytes_push_u32_le(object: Int, value: Int) -> Int {
+    bytes_push_int(object, value, 4, false)
+}
+
+pub fn bytes_push_u64_be(object: Int, value: Int) -> Int {
+    bytes_push_int(object, value, 8, true)
+}
+
+pub fn bytes_push_u64_le(object: Int, value: Int) -> Int {
+    bytes_push_int(object, value, 8, false)
 }
 
 // ---- Lower case ------------------------------------------------------------

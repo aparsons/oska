@@ -483,6 +483,8 @@ Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench
 | `P0002` | index out of bounds |
 | `P0003` | `todo()` reached |
 | `P0004` | division by zero |
+| `P0042` | a `Bytes` slice or endian read out of bounds, or a negative length for `Bytes.zeroed` |
+| `P0043` | a `Bytes` that would grow past 256 MiB |
 
 - **When `main` returns `Err(e)`,** the runtime prints `e.to_string()` to stderr and exits with code **1**.
 - Exit code 1 means the program failed in a way it expected. Exit code 101 means it has a bug.

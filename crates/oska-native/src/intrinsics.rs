@@ -37,6 +37,17 @@ pub enum Prelude {
     /// 0 (or, for [`Check::Repeat`], also -1) in place of its result when
     /// the call is a bug, for the generated code to panic as `check` says.
     Checked(&'static str, Check),
+    /// `Bytes.at` (`width` 1, panicking with `P0002`) or an endian read
+    /// of `width` bytes: `std.rt`'s `bytes_readable` first, which gives
+    /// 0 when the bytes do not all lie inside the buffer, for the
+    /// generated code to panic, then `bytes_read`.
+    ByteRead { width: u8, big: bool },
+    /// A mutating method of `Bytes`: a call of the `std.rt` function of
+    /// this name with the receiver's object (and the place's reference to
+    /// it) and the other arguments, which gives the object the place
+    /// holds afterwards, or the word 0, changing nothing, for the
+    /// generated code to panic as `check` says.
+    Mutating(&'static str, Check),
 }
 
 /// The panics a [`Prelude::Checked`] call may end in.
@@ -48,6 +59,16 @@ pub enum Check {
     Repeat,
     /// `Env.secret`: `P0020` on the word 0.
     Secret,
+    /// `Bytes.zeroed`: `P0042` on the word 0, `P0043` on -1.
+    Zeroed,
+    /// `Bytes.slice`: `P0042` on the word 0.
+    BytesSlice,
+    /// `Bytes.set`: `P0002` on the word 0.
+    BytesIndex,
+    /// A `Bytes` push of this many bytes: `P0043` on the word 0.
+    BytesGrow(u8),
+    /// `Bytes.append`: `P0043` on the word 0.
+    BytesAppend,
 }
 
 /// The prelude intrinsics the native backend implements, by the name the
@@ -147,6 +168,108 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ),
     ("FileWrite.write", Prelude::Runtime("file_write")),
     ("TestContext.printed", Prelude::Runtime("test_printed")),
+    ("Bytes.new", Prelude::Runtime("bytes_new")),
+    (
+        "Bytes.zeroed",
+        Prelude::Checked("bytes_zeroed", Check::Zeroed),
+    ),
+    ("Bytes.from_hex", Prelude::Runtime("bytes_from_hex")),
+    ("Bytes.len", Prelude::Runtime("bytes_len")),
+    ("Bytes.get", Prelude::Runtime("bytes_get")),
+    (
+        "Bytes.at",
+        Prelude::ByteRead {
+            width: 1,
+            big: true,
+        },
+    ),
+    (
+        "Bytes.slice",
+        Prelude::Checked("bytes_slice", Check::BytesSlice),
+    ),
+    (
+        "Bytes.read_u16_be",
+        Prelude::ByteRead {
+            width: 2,
+            big: true,
+        },
+    ),
+    (
+        "Bytes.read_u16_le",
+        Prelude::ByteRead {
+            width: 2,
+            big: false,
+        },
+    ),
+    (
+        "Bytes.read_u32_be",
+        Prelude::ByteRead {
+            width: 4,
+            big: true,
+        },
+    ),
+    (
+        "Bytes.read_u32_le",
+        Prelude::ByteRead {
+            width: 4,
+            big: false,
+        },
+    ),
+    (
+        "Bytes.read_u64_be",
+        Prelude::ByteRead {
+            width: 8,
+            big: true,
+        },
+    ),
+    (
+        "Bytes.read_u64_le",
+        Prelude::ByteRead {
+            width: 8,
+            big: false,
+        },
+    ),
+    ("Bytes.to_hex", Prelude::Runtime("bytes_to_hex")),
+    ("Bytes.to_text", Prelude::Runtime("bytes_to_text")),
+    ("Bytes.eq", Prelude::Runtime("bytes_eq")),
+    ("Bytes.hash", Prelude::Runtime("bytes_hash")),
+    ("String.to_bytes", Prelude::Runtime("string_to_bytes")),
+    (
+        "Bytes.push",
+        Prelude::Mutating("bytes_push", Check::BytesGrow(1)),
+    ),
+    (
+        "Bytes.set",
+        Prelude::Mutating("bytes_set", Check::BytesIndex),
+    ),
+    (
+        "Bytes.append",
+        Prelude::Mutating("bytes_append", Check::BytesAppend),
+    ),
+    (
+        "Bytes.push_u16_be",
+        Prelude::Mutating("bytes_push_u16_be", Check::BytesGrow(2)),
+    ),
+    (
+        "Bytes.push_u16_le",
+        Prelude::Mutating("bytes_push_u16_le", Check::BytesGrow(2)),
+    ),
+    (
+        "Bytes.push_u32_be",
+        Prelude::Mutating("bytes_push_u32_be", Check::BytesGrow(4)),
+    ),
+    (
+        "Bytes.push_u32_le",
+        Prelude::Mutating("bytes_push_u32_le", Check::BytesGrow(4)),
+    ),
+    (
+        "Bytes.push_u64_be",
+        Prelude::Mutating("bytes_push_u64_be", Check::BytesGrow(8)),
+    ),
+    (
+        "Bytes.push_u64_le",
+        Prelude::Mutating("bytes_push_u64_le", Check::BytesGrow(8)),
+    ),
 ];
 
 /// `name` without the module a `std` function is called by when the
@@ -1089,6 +1212,8 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_path", Runtime::Identity),
     ("rt_mem_list", Runtime::Identity),
     ("rt_mem_as_list", Runtime::Identity),
+    ("rt_mem_bytes", Runtime::Identity),
+    ("rt_mem_as_bytes", Runtime::Identity),
     ("rt_mem_as_root", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
     ("rt_mem_depth", Runtime::Depth),
@@ -1806,7 +1931,11 @@ mod tests {
     /// The `std.rt` function a prelude intrinsic calls, if it calls one.
     fn runtime_function(implementation: Prelude) -> Option<&'static str> {
         match implementation {
-            Prelude::Runtime(f) | Prelude::WriteLine(f) | Prelude::Checked(f, _) => Some(f),
+            Prelude::Runtime(f)
+            | Prelude::WriteLine(f)
+            | Prelude::Checked(f, _)
+            | Prelude::Mutating(f, _) => Some(f),
+            Prelude::ByteRead { .. } => Some("bytes_read"),
             Prelude::Identity | Prelude::Field(_) => None,
         }
     }

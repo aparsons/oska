@@ -311,6 +311,61 @@ impl<T> List<T> {
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
 }
 
+// A packed buffer of bytes: a value, like `List`, copied on write. A
+// mutating method changes a `Bytes` that nothing else holds in place, and
+// copies one that is shared first, so appending in a loop is not
+// quadratic. Its representation is built in.
+//
+// An index out of bounds in `at` or `set` panics (`P0002`), as in
+// `List.at`. A slice or an endian read that does not lie wholly inside
+// the buffer panics (`P0042`), and so does a negative length for
+// `zeroed`. A buffer that would grow past 256 MiB panics (`P0043`).
+pub struct Bytes { handle: Int }
+
+impl Bytes {
+    // An empty buffer.
+    pub fn new() -> Bytes
+    // A buffer of `len` zero bytes.
+    pub fn zeroed(len: Int) -> Bytes
+    // The bytes that `text` spells in hexadecimal, two digits a byte, in
+    // either case; `None` when it spells none.
+    pub fn from_hex(text: String) -> Option<Bytes>
+    // The number of bytes.
+    pub fn len(self) -> Int
+    // The byte at `index`, or `None` when the index is out of bounds.
+    pub fn get(self, index: Int) -> Option<U8>
+    // The byte at `index`.
+    pub fn at(self, index: Int) -> U8
+    // The bytes from `start` up to, but excluding, `end`.
+    pub fn slice(self, start: Int, end: Int) -> Bytes
+    // The integer stored at byte `offset`, its most significant byte
+    // first (`_be`, big-endian, the network's order) or last (`_le`).
+    pub fn read_u16_be(self, offset: Int) -> U16
+    pub fn read_u16_le(self, offset: Int) -> U16
+    pub fn read_u32_be(self, offset: Int) -> U32
+    pub fn read_u32_le(self, offset: Int) -> U32
+    pub fn read_u64_be(self, offset: Int) -> U64
+    pub fn read_u64_le(self, offset: Int) -> U64
+    // Two lower-case hexadecimal digits a byte.
+    pub fn to_hex(self) -> String
+    // The text the bytes encode in UTF-8, or `None` when they are not
+    // UTF-8.
+    pub fn to_text(self) -> Option<String>
+    // `byte` added at the end.
+    pub fn push(var self, byte: U8)
+    // The byte at `index` replaced by `byte`.
+    pub fn set(var self, index: Int, byte: U8)
+    // `other`'s bytes added at the end.
+    pub fn append(var self, other: Bytes)
+    // `value`'s bytes added at the end, in big- or little-endian order.
+    pub fn push_u16_be(var self, value: U16)
+    pub fn push_u16_le(var self, value: U16)
+    pub fn push_u32_be(var self, value: U32)
+    pub fn push_u32_le(var self, value: U32)
+    pub fn push_u64_be(var self, value: U64)
+    pub fn push_u64_le(var self, value: U64)
+}
+
 // `start..end`, which excludes `end`.
 pub struct Range<T> { pub start: T, pub end: T }
 
@@ -363,6 +418,8 @@ impl String {
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>
+    // Its UTF-8 encoding.
+    pub fn to_bytes(self) -> Bytes
 }
 
 impl Untrusted<String> {
@@ -518,11 +575,15 @@ impl Eq for IoError { fn eq(self, other: IoError) -> Bool }
 impl<T: Eq> Eq for Option<T> { fn eq(self, other: Option<T>) -> Bool }
 impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Bool }
 impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
+impl Eq for Bytes { fn eq(self, other: Bytes) -> Bool }
 
 pub trait Hash {
     #[follows_trust]
     fn hash(self) -> Int
 }
+
+// The 64-bit FNV-1a hash of the bytes, the same on every platform.
+impl Hash for Bytes { fn hash(self) -> Int }
 
 pub trait Display {
     #[follows_trust]

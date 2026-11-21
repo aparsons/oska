@@ -42,7 +42,7 @@ use crate::NOWHERE;
 /// The types whose `Eq` impl is the prelude's, by type tag.
 const PRELUDE_EQ: &[&str] = &[
     "()", "Bool", "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "String", "Path",
-    "IoError", "Option", "Result", "List",
+    "IoError", "Option", "Result", "List", "Bytes",
 ];
 
 /// The interpreter's type tag of values of the concrete type `ty`, which
@@ -182,6 +182,9 @@ impl Body<'_, '_> {
             Type::String => self.call_runtime("string_eq", vec![a, b], NOWHERE),
             Type::Named { name, .. } if name == builtins::PATH => {
                 self.call_runtime("path_eq", vec![a, b], NOWHERE)
+            }
+            Type::Named { name, .. } if name == builtins::BYTES => {
+                self.call_runtime("bytes_eq", vec![a, b], NOWHERE)
             }
             Type::Named { name, .. } if name == builtins::IO_ERROR => {
                 let a = self.load(a, layout::struct_field(0));
