@@ -138,7 +138,7 @@ tag 7, checksum 2479420452
 
 ## Bytes from outside
 
-Bytes from a capability carry the trust flag that text does (see [untrusted data](untrusted-data.md)). `DirRead.read_bytes(path)` and `FileRead.read_bytes()` give `Untrusted<Bytes>`, with no newline translation, and `DirWrite.write_bytes(path, contents)` and `FileWrite.write_bytes(contents)` write trusted or untrusted bytes. `Connection.send_bytes` and `receive_bytes` are declared beside `send` and `receive`.
+Bytes from a capability carry the trust flag that text does (see [untrusted data](untrusted-data.md)). `DirRead.read_bytes(path)` and `FileRead.read_bytes()` give `Untrusted<Bytes>`, with no newline translation, and `DirWrite.write_bytes(path, contents)` and `FileWrite.write_bytes(contents)` write trusted or untrusted bytes. `Connection.send_bytes` and `receive_bytes` are declared beside `send` and `receive`, but the network has no runtime yet, so a program that asks for `Net` is refused (`E0370`).
 
 - Every `Bytes` operation keeps the flag: `slice`, `append`, `to_hex` and `to_text` of untrusted bytes are untrusted, and `to_text()` gives `Option<Untrusted<String>>`.
 - The integers and `Bool`s it gives are trusted: `len`, `at`, `get` and the endian reads. Parsing a binary format needs no trust assertion.
