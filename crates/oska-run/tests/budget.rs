@@ -89,7 +89,7 @@ fn a_debit_spends_what_the_reply_used_and_returns_the_rest() {
     match small.reserve(400) {
         Ok(r) => {
             io.println(left(small))?
-            r.debit(150)
+            r.debit(150, 0, 0, 0)
         }
         Err(e) => io.println(e.to_string())?
     }
@@ -110,7 +110,7 @@ fn copies_of_a_budget_draw_from_the_same_counters() {
             "    let small = budget.limit(1000, 3)
     let copy = small
     match copy.reserve(100) {
-        Ok(r) => r.debit(100)
+        Ok(r) => r.debit(100, 0, 0, 0)
         Err(e) => io.println(e.to_string())?
     }
     io.println(left(small))?
@@ -129,7 +129,7 @@ fn a_reservation_must_fit_what_every_ancestor_has_left() {
     let first = parent.limit(800, 5)
     let second = parent.limit(800, 5)
     match first.reserve(700) {
-        Ok(r) => r.debit(700)
+        Ok(r) => r.debit(700, 0, 0, 0)
         Err(e) => io.println(e.to_string())?
     }
     io.println(left(second))?
@@ -150,7 +150,7 @@ fn the_last_call_may_overshoot_by_what_its_reply_used_beyond_the_reservation() {
         &program(
             "    let small = budget.limit(1000, 5)
     match small.reserve(1000) {
-        Ok(r) => r.debit(1200)
+        Ok(r) => r.debit(1200, 0, 0, 0)
         Err(e) => io.println(e.to_string())?
     }
     io.println(left(small))?
@@ -161,7 +161,8 @@ fn the_last_call_may_overshoot_by_what_its_reply_used_beyond_the_reservation() {
     }",
         ),
         &[],
-        "0 tokens, 4 calls left\n1200 tokens, 1 calls spent\nreserved\n",
+        "0 tokens, 4 calls left\n1200 tokens, 1 calls spent\n\
+         over budget: asked for 0 tokens and 1 call, with 0 tokens and 4 calls left\n",
     );
 }
 
@@ -174,7 +175,7 @@ fn a_released_reservation_spends_nothing_and_settles_only_once() {
         Ok(r) => {
             r.release()
             r.release()
-            r.debit(300)
+            r.debit(300, 0, 0, 0)
         }
         Err(e) => io.println(e.to_string())?
     }
@@ -229,7 +230,7 @@ fn t_budget_has_fixed_limits_and_a_readable_spent_count() {
         "{HELPERS}
 fn ask(budget: Budget, tokens: Int) -> Result<(), OverBudget> {{
     let r = budget.reserve(tokens)?
-    r.debit(tokens)
+    r.debit(tokens, 0, 0, 0)
     Ok(())
 }}
 
@@ -253,5 +254,74 @@ test \"stops when over budget\" {{
         statuses,
         [TestStatus::Passed, TestStatus::Passed],
         "{report:#?}"
+    );
+}
+
+/// Attack: a reservation of no tokens on a budget with none left must not
+/// let a reply spend past the limit again and again.
+#[test]
+fn a_budget_with_no_tokens_left_refuses_even_a_reservation_of_none() {
+    assert_runs(
+        &program(
+            "    let small = budget.limit(100, 5)
+    for _ in 0..5 {
+        match small.reserve(0) {
+            Ok(r) => r.debit(1000, 0, 0, 0)
+            Err(_) => {}
+        }
+    }
+    io.println(spent(small))?",
+        ),
+        &[],
+        "1000 tokens, 1 calls spent\n",
+    );
+}
+
+#[test]
+fn the_unlimited_root_takes_reservations_up_to_the_largest_int_and_returns_them() {
+    assert_runs(
+        &program(
+            "    let most = 9223372036854775807
+    for _ in 0..3 {
+        match budget.reserve(most) {
+            Ok(r) => r.release()
+            Err(e) => io.println(e.to_string())?
+        }
+    }
+    var held = List.new()
+    for _ in 0..3 {
+        match budget.reserve(most) {
+            Ok(r) => held.push(r)
+            Err(e) => io.println(e.to_string())?
+        }
+    }
+    for r in held {
+        r.debit(most, 0, 0, 0)
+    }
+    io.println(left(budget))?
+    io.println(spent(budget))?
+    io.println(left(budget.limit(10, 1)))?",
+        ),
+        &[],
+        "unlimited tokens, unlimited calls left\n\
+         9223372036854775807 tokens, 3 calls spent\n\
+         10 tokens, 1 calls left\n",
+    );
+}
+
+#[test]
+fn a_debit_counts_input_output_and_cache_tokens() {
+    assert_runs(
+        &program(
+            "    let small = budget.limit(1000, 3)
+    match small.reserve(300) {
+        Ok(r) => r.debit(120, 80, 40, 10)
+        Err(e) => io.println(e.to_string())?
+    }
+    io.println(spent(small))?
+    io.println(left(small))?",
+        ),
+        &[],
+        "250 tokens, 1 calls spent\n750 tokens, 2 calls left\n",
     );
 }

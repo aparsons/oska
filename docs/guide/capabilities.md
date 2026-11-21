@@ -215,14 +215,14 @@ test "a directory capability refuses to climb out" {
 
 ## Budgets
 
-A `Budget` is the authority to spend model tokens and calls. `std.llm` takes one for every request, so a function that can call a model says so in its signature. `main`'s budget is unlimited. `budget.limit(tokens, calls)` gives a child budget that draws from its parent and is clamped to what the parent has left, so narrowing a budget never widens it, and the authority report lists each `limit` call as an attenuation. Tokens are counted, not money, because prices differ by model and change.
+A `Budget` is the authority to spend model tokens and calls. `std.llm` takes one for every request, so a function that can call a model says so in its signature. `main`'s budget is unlimited. `budget.limit(tokens, calls)` gives a child budget that draws from its parent and is clamped to what the parent has left, so attenuating a budget never widens it, and the authority report lists each `limit` call as an attenuation. Tokens are counted, not money, because prices differ by model and change.
 
-A budget's counters live in the runtime, not in its value, so every copy of a budget draws from the same counters. Before a request, `reserve(tokens)` holds that many tokens and one call. It returns `OverBudget` when the budget, or any budget it was narrowed from, has less left, and then nothing is spent. The `Reservation` it returns is settled once: `debit(used)` spends the call and the tokens the reply used and returns the rest, and `release()` returns everything for a request that was never sent. `remaining()` gives the tokens and calls left (`None` where there is no limit), and `spent()` what was spent.
+A budget's counters live in the runtime, not in its value, so every copy of a budget draws from the same counters. Before a request, `reserve(tokens)` holds that many tokens and one call. It returns `OverBudget` when the budget, or any budget it was limited from, has less left or no tokens left at all, and then nothing is spent. The `Reservation` it returns is settled once: `debit(input, output, cache_creation, cache_read)` spends the call and every token the reply used, cache tokens included, and returns the rest, and `release()` returns everything for a request that was never sent. `remaining()` gives the tokens and calls left (`None` where there is no limit), and `spent()` what was spent.
 
 ```oska tests
 fn ask(budget: Budget, tokens: Int) -> Result<(), OverBudget> {
     let reservation = budget.reserve(tokens)?
-    reservation.debit(tokens)
+    reservation.debit(tokens, 0, 0, 0)
     Ok(())
 }
 
@@ -234,7 +234,11 @@ test "a child budget stops at its limit" {
 }
 ```
 
-Input tokens are known only after a reply, so a reply can use more tokens than were reserved. They are spent all the same: a budget can end over its limit by at most what its last reply used beyond its reservation, and it then refuses every further request that asks for tokens.
+Input tokens are known only after a reply, so a reply can use more tokens than were reserved. They are spent all the same: a budget can end over its limit by at most what its last reply used beyond its reservation, and a budget with no tokens left refuses every further reservation, even one of no tokens.
+
+`reserve`, `debit` and `release` are for model clients such as `std.llm`. A program that debits less than a reply used cheats only itself: it can never spend more than the budget it was given allows.
+
+Natively, the counters of a budget that `limit` makes stay allocated until the program ends, so a program that calls `limit` in a long loop keeps 64 bytes for each call. Under `--max-memory` the native backend counts those bytes and the interpreter does not.
 
 ## Bundling capabilities: `cap struct`
 

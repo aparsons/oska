@@ -26,6 +26,17 @@ _Avoid_: restricted Fs, sandboxed filesystem
 **File capability**:
 A capability confined to a single file, such as `FileRead`. Using it takes no path.
 
+**Budget**:
+The capability to spend model tokens and calls, which a model client such as `std.llm` takes. Its counters live in the runtime, so every copy of a budget draws from the same ones. `main`'s is unlimited, and `limit` attenuates it to a child budget that draws from its parent and never has more than the parent has left. It counts tokens, not money.
+_Avoid_: quota, allowance (for the capability), wallet
+
+**Reservation**:
+The tokens and one call that a budget holds for a request before it is sent. It is settled once: a debit spends what the reply used and returns the rest, and a release returns everything. A reservation the budget, or any budget it was limited from, cannot cover is refused with `OverBudget`, before anything is spent.
+
+**Spend**:
+To use up tokens and calls of a budget: what a reservation's debit does. What a budget has spent includes what every budget limited from it has spent.
+_Avoid_: charge, consume (for budgets)
+
 **Capability-bearing type**:
 A type that is a capability or that contains one, directly or transitively. This includes containment through type arguments, as in `List<Stdout>`, and closures that capture a capability.
 

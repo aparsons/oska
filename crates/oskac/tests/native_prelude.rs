@@ -574,7 +574,7 @@ const CALLS: &[(&str, Run, &str)] = &[
         Run::Main,
         r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
     match budget.reserve(20) {
-        Ok(r) => r.debit(30)
+        Ok(r) => r.debit(30, 0, 0, 0)
         Err(_) => {}
     }
     io.println(shown(budget.spent().tokens == 30))

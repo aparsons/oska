@@ -11,7 +11,7 @@ use oska_check::AttenuationRoot;
 const SPENDER: &str = "fn spend(budget: Budget) -> Bool {
     match budget.reserve(100) {
         Ok(r) => {
-            r.debit(80)
+            r.debit(80, 0, 0, 0)
             true
         }
         Err(_) => false

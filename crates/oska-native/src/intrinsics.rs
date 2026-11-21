@@ -1311,6 +1311,33 @@ mod tests {
         assert_eq!(declared_sorted, implemented_sorted);
     }
 
+    /// `std.rt` builds and reads a `Reservation` as its own `Hold`, so the
+    /// two must have the same fields, of the same types, in order.
+    #[test]
+    fn a_reservation_is_laid_out_as_std_rt_s_hold() {
+        use oska_check::program::TypeDeclKind;
+        let fields = |program: &oska_check::program::Program, name: &str| match &program
+            .types
+            .get(name)
+            .map(|decl| &decl.kind)
+        {
+            Some(TypeDeclKind::Struct(fields)) => {
+                fields.iter().map(|f| f.ty.to_string()).collect::<Vec<_>>()
+            }
+            other => panic!("`{name}` is not a struct: {other:?}"),
+        };
+        let rt = oska_check::check_toolchain_rt()
+            .program
+            .expect("std.rt should check");
+        let user = oska_check::check_module(
+            "fn main(budget: Budget) {\n    let _ = budget.reserve(1)\n}\n",
+        )
+        .program
+        .expect("the program should check");
+        assert_eq!(fields(&rt, "Hold"), ["Int", "Int", "Bool"]);
+        assert_eq!(fields(&user, "Reservation"), fields(&rt, "Hold"));
+    }
+
     #[test]
     fn every_platform_table_the_backend_gives_is_a_std_rt_table() {
         let report = oska_check::check_toolchain_rt();

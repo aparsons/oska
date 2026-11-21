@@ -3,10 +3,10 @@
 //! A budget's counters live in the interpreter, not in its value: a
 //! [`Capability::Budget`] is only the number of its counters, so every
 //! copy of a budget draws from the same ones. Each budget but the root
-//! has a parent, the budget `limit` narrowed it from. A budget's limit is
+//! has a parent, the budget `limit` was called on. A budget's limit is
 //! clamped to what its parent had left when it was made, and a
 //! reservation must fit what it and every ancestor has left, so a
-//! narrowed budget never spends more than any budget above it.
+//! limited budget never spends more than any budget above it.
 //!
 //! The root, number [`ROOT`], is `main`'s and is unlimited; a test's is
 //! `t.budget`, with [`TEST_TOKENS`] and [`TEST_CALLS`].
@@ -16,6 +16,7 @@
 
 use std::rc::Rc;
 
+use oska_check::builtins;
 use oska_syntax::Span;
 
 use crate::interp::Interpreter;
@@ -166,7 +167,10 @@ impl Budgets {
     ) -> Result<usize, (Option<i128>, Option<i128>)> {
         let tokens = tokens.max(0);
         let (tokens_left, calls_left) = self.left(budget);
-        if tokens_left.is_some_and(|l| l < tokens) || calls_left.is_some_and(|l| l < 1) {
+        // A budget with no tokens left refuses even a reservation of none:
+        // otherwise every call could overshoot it again.
+        let short = |left: Option<i128>, asked: i128| left.is_some_and(|l| l < asked.max(1));
+        if short(tokens_left, tokens) || short(calls_left, 1) {
             return Err((tokens_left, calls_left));
         }
         for n in self.chain(budget) {
@@ -192,8 +196,10 @@ impl Budgets {
         self.reservations[id].open = false;
         for n in self.chain(hold.budget) {
             let node = &mut self.nodes[n];
-            node.tokens.reserved -= hold.tokens;
-            node.calls.reserved -= 1;
+            // Never below 0: an unlimited budget's reservations stop at the
+            // largest `Int`, so they may add up to less than is returned.
+            node.tokens.reserved = (node.tokens.reserved - hold.tokens).max(0);
+            node.calls.reserved = (node.calls.reserved - 1).max(0);
             if let Some(used) = used {
                 node.tokens.spent = (node.tokens.spent + used.max(0)).min(MAX);
                 node.calls.spent = (node.calls.spent + 1).min(MAX);
@@ -266,7 +272,17 @@ fn budget_reserve(
 ) -> Result<Value, Panic> {
     let asked = args[1].as_int();
     Ok(match interp.budgets.reserve(budget(&args[0]), asked) {
-        Ok(id) => Value::ok(record("Reservation", vec![Value::int(id as i128)])),
+        // The layout native code has (`std.rt`'s `Hold`), but `handle` is
+        // the number of its record here, which holds whether it is open:
+        // the `open` field is never read.
+        Ok(id) => Value::ok(record(
+            builtins::RESERVATION,
+            vec![
+                Value::int(id as i128),
+                Value::int(asked.max(0)),
+                Value::Bool(true),
+            ],
+        )),
         Err(left) => Value::err(record(
             "OverBudget",
             vec![Value::int(asked.max(0)), allowance(left)],
@@ -279,15 +295,17 @@ fn reservation(value: &Value) -> usize {
     value.field(0).as_int() as usize
 }
 
-/// `Reservation.debit(self, tokens)`.
+/// `Reservation.debit(self, input, output, cache_creation, cache_read)`:
+/// every count, each at least 0, spent as tokens.
 fn reservation_debit(
     interp: &mut Interpreter<'_, '_>,
     args: Vec<Value>,
     _: Span,
 ) -> Result<Value, Panic> {
+    let used = args[1..].iter().map(|n| n.as_int().max(0)).sum::<i128>();
     interp
         .budgets
-        .settle(reservation(&args[0]), Some(args[1].as_int()));
+        .settle(reservation(&args[0]), Some(used.min(MAX)));
     Ok(Value::Unit)
 }
 

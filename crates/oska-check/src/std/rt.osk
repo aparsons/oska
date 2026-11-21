@@ -3917,14 +3917,16 @@ pub fn random_next_int(random: Random) -> Int {
 // never freed: a budget is a capability, which the generated code does
 // not count.
 //
-// A `Reservation` is the object `Hold`, `[count][node][tokens][open]`, which
-// is wider than the prelude's one private field: only `std.rt` reads it,
-// and `open` is written in place, so every copy sees it settled.
+// A `Reservation` is the object `Hold`, `[count][node][tokens][open]`, laid
+// out as the prelude's `Reservation { handle, tokens, open }`, whose
+// private fields only `std.rt` reads (`oska-native`'s test
+// `a_reservation_is_laid_out_as_std_rt_s_hold` keeps the two alike).
+// `open` is written in place, so every copy sees it settled.
 
 struct Hold {
     node: Int,
     tokens: Int,
-    open: Int,
+    open: Bool,
 }
 
 // The node of the budget `budget`.
@@ -3974,6 +3976,18 @@ fn budget_add(node: Int, offset: Int, n: Int) {
         sum = was + n
     }
     rt_mem_store64(rt_mem_add(node, offset), sum)
+}
+
+// Take `n`, at least 0, from the word at `offset`, stopping at 0: an
+// unlimited budget's reservations stop at the largest `Int`, so they may
+// add up to less than is returned.
+fn budget_take(node: Int, offset: Int, n: Int) {
+    let was = budget_word(node, offset)
+    var rest = 0
+    if was > n {
+        rest = was - n
+    }
+    rt_mem_store64(rt_mem_add(node, offset), rest)
 }
 
 // What `node` itself has left of the amount whose limit is at `limit`
@@ -4059,7 +4073,9 @@ pub fn budget_reserve(budget: Int, tokens: Int) -> Result<Hold, OverBudget> {
     let asked = budget_clamp(tokens, -1)
     let tokens_left = budget_left(node, 16)
     let calls_left = budget_left(node, 24)
-    if (tokens_left >= 0 && tokens_left < asked) || calls_left == 0 {
+    // A budget with no tokens left refuses even a reservation of none:
+    // otherwise every call could overshoot it again.
+    if (tokens_left >= 0 && (tokens_left < asked || tokens_left == 0)) || calls_left == 0 {
         return Err(OverBudget(asked: asked, left: budget_allowance(node)))
     }
     var at = node
@@ -4068,12 +4084,25 @@ pub fn budget_reserve(budget: Int, tokens: Int) -> Result<Hold, OverBudget> {
         budget_add(at, 56, 1)
         at = budget_word(at, 8)
     }
-    Ok(Hold(node: node, tokens: asked, open: 1))
+    Ok(Hold(node: node, tokens: asked, open: true))
 }
 
-// `Reservation.debit`.
-pub fn reservation_debit(hold: Int, tokens: Int) {
-    budget_settle(hold, budget_clamp(tokens, -1), true)
+// `Reservation.debit`: every count, each at least 0, spent as tokens,
+// stopping at the largest `Int`.
+pub fn reservation_debit(hold: Int, input: Int, output: Int, cache_creation: Int, cache_read: Int) {
+    var used = budget_sum(budget_clamp(input, -1), budget_clamp(output, -1))
+    used = budget_sum(used, budget_clamp(cache_creation, -1))
+    used = budget_sum(used, budget_clamp(cache_read, -1))
+    budget_settle(hold, used, true)
+}
+
+// `a + b`, both at least 0, stopping at the largest `Int`.
+fn budget_sum(a: Int, b: Int) -> Int {
+    let most = 9223372036854775807
+    if a > most - b {
+        return most
+    }
+    a + b
 }
 
 // `Reservation.release`.
@@ -4092,8 +4121,8 @@ fn budget_settle(hold: Int, used: Int, spend: Bool) {
     let reserved = budget_word(hold, 16)
     var at = budget_word(hold, 8)
     while at != 0 {
-        rt_mem_store64(rt_mem_add(at, 48), budget_word(at, 48) - reserved)
-        rt_mem_store64(rt_mem_add(at, 56), budget_word(at, 56) - 1)
+        budget_take(at, 48, reserved)
+        budget_take(at, 56, 1)
         if spend {
             budget_add(at, 32, used)
             budget_add(at, 40, 1)
