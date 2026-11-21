@@ -95,6 +95,7 @@ A `std.*` module is a file `crates/oska-check/src/std/<name>.osk`, registered in
 | `std.proc` | `run`, `Output` (`status`, `stdout`), `ProcError` | None |
 | `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
 | `std.sha2` | `sha256`, `sha512`, `sha256_secret`, `Sha256`, `Sha512`, `Sha256Secret` (each `new`, `update`, `finish`) | None |
+| `std.ed25519` | `PublicKey` (`from_bytes`, `to_bytes`), `verify` | None |
 
 A sink literal's tag names the module that provides it. The literal has the type that module declares for it, and the module must be imported (`E0310`). A tag no module provides is `E0311`. The sink modules are signature-only. `std.html` has a runtime: `text` escapes `&`, `<`, `>`, `"`, and `'`, so its output is safe in an element's content and in a quoted attribute value, and `TrustedHtml` markup passes through unescaped. `std.sql` and `std.proc` have none yet.
 

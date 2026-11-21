@@ -1,0 +1,558 @@
+// `std.ed25519`: verifying Ed25519 signatures (RFC 8032, section 5.1), as
+// `ed25519.verify(key, message, signature)`. A module sees it only after
+// `use std.ed25519`. There is no signing and no key generation.
+//
+// Verification is strict, so one message has one valid signature
+// encoding per signer, and a key or a signature that RFC 8032 calls
+// invalid is refused: the key and `R` must be canonical encodings (`y`
+// below the field prime `p`, and no sign bit on an `x` of zero) of
+// points that decompress, `S` must be below the group order `L`, and the
+// signature holds when `[S]B - [k]A` encodes to exactly `R`, the
+// cofactorless equation OpenSSH checks. A key or an `R` of small order
+// (a point `P` with `[8]P` the identity) is refused too: with one, a
+// single signature could verify for many messages.
+//
+// Every input is public, so the arithmetic here is variable-time over
+// public integers: it holds nothing secret. Every function is a pure
+// function, and the module has no audit site: no `expose()` and no
+// `.assume_trusted()`. A `PublicKey` is trusted with no assertion, as it
+// is built from integers read out of the bytes and checked.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by RFC 8032's test vectors (section 7.1) and Wycheproof's Ed25519
+// vectors, on the interpreter and natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+//
+// A field element mod p = 2^255 - 19 is a `List<U64>` of ten limbs in
+// radix 2^25.5: limb `i` holds bits from `ceil(25.5 * i)`, 26 bits for an
+// even `i` and 25 for an odd one, as in the reference implementation
+// "ref10". There is no 128-bit integer, so products are 64 bits, and
+// limbs are kept small enough that no sum of them overflows: every
+// operation ends with `carry`, which leaves each limb below 2^26 (even)
+// or 2^25 (odd), except limb 1, below 2^25 + 2^16. The arithmetic is
+// checked, so a limb out of those bounds panics rather than giving a
+// wrong answer. There are no negative limbs: the signed integer types
+// have no bitwise operators, so `sub` adds 2p first.
+
+use std.sha2
+
+// An Ed25519 public key: a point of the curve, loaded from its 32-byte
+// encoding by `from_bytes`, which checks it.
+pub struct PublicKey { point: Point, encoding: Bytes }
+
+impl PublicKey {
+    // The key `bytes` encode, or `None` unless they are 32 bytes that
+    // canonically encode a point of the curve (RFC 8032, section 5.1.3)
+    // whose order is not small. A key from untrusted bytes needs no trust
+    // assertion: its integers are read out of the bytes and checked.
+    pub fn from_bytes(bytes: Untrusted<Bytes>) -> Option<PublicKey> {
+        match decode_point(bytes) {
+            Some(point) => Some(PublicKey(point: point, encoding: encode_point(point)))
+            None => None
+        }
+    }
+
+    // The key's 32-byte encoding, the bytes `from_bytes` accepted.
+    pub fn to_bytes(self) -> Bytes {
+        self.encoding
+    }
+}
+
+// Whether `signature` is `key`'s Ed25519 signature of `message`, checked
+// as RFC 8032, section 5.1.7, says: 64 bytes, `R` a canonical encoding of
+// a point that is not of small order, `S` below the group order `L`, and
+// `[S]B - [k]A` encoding to exactly `R`, where `k` is the SHA-512 digest
+// of `R`, the key and the message, reduced mod `L`. Any other signature,
+// of any length, is `false`.
+pub fn verify(key: PublicKey, message: Untrusted<Bytes>, signature: Untrusted<Bytes>) -> Bool {
+    if signature.len() != 64 {
+        return false
+    }
+    let r = signature.slice(0, 32)
+    let s = signature.slice(32, 64)
+    if !decode_point(r).is_some() || !below_order(s) {
+        return false
+    }
+    var hasher = sha2.Sha512.new()
+    hasher.update(r)
+    hasher.update(key.encoding)
+    hasher.update(message)
+    let k = reduce_mod_order(hasher.finish())
+    let check = double_scalar_mul(scalar_bytes(s), base_point(), k, negate(key.point))
+    encode_point(check) == scalar_bytes(r)
+}
+
+// ---- Scalars --------------------------------------------------------------
+//
+// A scalar is 32 bytes, little-endian, as the encodings hold it.
+
+// The group order L = 2^252 + 27742317777372353535851937790883648493,
+// little-endian.
+fn order_bytes() -> Bytes {
+    Bytes.from_hex("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010").unwrap_or(Bytes.new())
+}
+
+// The same bytes, trusted: the integers of a scalar, read out of it.
+fn scalar_bytes(s: Untrusted<Bytes>) -> Bytes {
+    var out = Bytes.new()
+    for i in 0..s.len() {
+        out.push(s.at(i))
+    }
+    out
+}
+
+// Whether the 32-byte little-endian `s` is below L (RFC 8032, section
+// 5.1.7, step 1).
+fn below_order(s: Untrusted<Bytes>) -> Bool {
+    let order = order_bytes()
+    var i = 31
+    while i >= 0 {
+        if s.at(i) != order.at(i) {
+            return s.at(i) < order.at(i)
+        }
+        i = i - 1
+    }
+    false
+}
+
+// L in eight 32-bit limbs, least significant first.
+fn order_limbs() -> List<U64> {
+    [1559614445, 1477600026, 2734136534, 350157278, 0, 0, 0, 268435456]
+}
+
+// The 64-byte little-endian `digest` mod L, as 32 bytes: the remainder
+// is built a bit at a time from the top, doubling and subtracting L
+// whenever it reaches L, so it stays below L throughout.
+fn reduce_mod_order(digest: Bytes) -> Bytes {
+    let order = order_limbs()
+    var r: List<U64> = [0, 0, 0, 0, 0, 0, 0, 0]
+    var bit = 511
+    while bit >= 0 {
+        let byte = digest.at(bit / 8)
+        var carry = ((byte >> (bit % 8).to_u8()) & 1).to_u64()
+        var doubled: List<U64> = List.new()
+        for i in 0..8 {
+            let limb = r.at(i) * 2 + carry
+            doubled.push(limb & 4294967295)
+            carry = limb >> 32
+        }
+        r = subtract_if_at_least(doubled, order)
+        bit = bit - 1
+    }
+    var out = Bytes.new()
+    for limb in r {
+        out.push_u32_le(limb.to_u32())
+    }
+    out
+}
+
+// `a - b` if `a` is at least `b`, and otherwise `a`, for two numbers in
+// 32-bit limbs.
+fn subtract_if_at_least(a: List<U64>, b: List<U64>) -> List<U64> {
+    var diff: List<U64> = List.new()
+    var borrow: U64 = 0
+    for i in 0..a.len() {
+        let limb = a.at(i) + 4294967296 - b.at(i) - borrow
+        diff.push(limb & 4294967295)
+        borrow = 1 - (limb >> 32)
+    }
+    if borrow == 0 { diff } else { a }
+}
+
+// Bit `i` of the little-endian scalar `s`.
+fn bit_of(s: Bytes, i: Int) -> Bool {
+    ((s.at(i / 8) >> (i % 8).to_u8()) & 1) == 1
+}
+
+// ---- Points ---------------------------------------------------------------
+//
+// A point of the twisted Edwards curve -x^2 + y^2 = 1 + d x^2 y^2, in
+// extended coordinates: x = X/Z, y = Y/Z and x y = T/Z (RFC 8032,
+// section 5.1.4).
+
+struct Point { x: List<U64>, y: List<U64>, z: List<U64>, t: List<U64> }
+
+// The neutral element, (0, 1).
+fn identity() -> Point {
+    Point(x: zero(), y: one(), z: one(), t: zero())
+}
+
+// The base point B of RFC 8032, section 5.1.
+fn base_point() -> Point {
+    Point(
+        x: [52811034, 25909283, 16144682, 17082669, 27570973, 30858332, 40966398, 8378388, 20764389, 8758491],
+        y: [40265304, 26843545, 13421772, 20132659, 26843545, 6710886, 53687091, 13421772, 40265318, 26843545],
+        z: one(),
+        t: [28827043, 27438313, 39759291, 244362, 8635006, 11264893, 19351346, 13413597, 16611511, 27139452]
+    )
+}
+
+// -P.
+fn negate(p: Point) -> Point {
+    Point(x: neg(p.x), y: p.y, z: p.z, t: neg(p.t))
+}
+
+// P + Q, by the formulas of RFC 8032, section 5.1.4, which hold for any
+// two points, equal or not.
+fn add_points(p: Point, q: Point) -> Point {
+    let a = mul(sub(p.y, p.x), sub(q.y, q.x))
+    let b = mul(add(p.y, p.x), add(q.y, q.x))
+    let c = mul(mul(p.t, d2()), q.t)
+    let zz = mul(p.z, q.z)
+    let dd = add(zz, zz)
+    let e = sub(b, a)
+    let f = sub(dd, c)
+    let g = add(dd, c)
+    let h = add(b, a)
+    Point(x: mul(e, f), y: mul(g, h), z: mul(f, g), t: mul(e, h))
+}
+
+// 2P, by the doubling formulas of RFC 8032, section 5.1.4.
+fn double(p: Point) -> Point {
+    let a = mul(p.x, p.x)
+    let b = mul(p.y, p.y)
+    let zz = mul(p.z, p.z)
+    let c = add(zz, zz)
+    let h = add(a, b)
+    let xy = add(p.x, p.y)
+    let e = sub(h, mul(xy, xy))
+    let g = sub(a, b)
+    let f = add(c, g)
+    Point(x: mul(e, f), y: mul(g, h), z: mul(f, g), t: mul(e, h))
+}
+
+// [a]P + [b]Q for scalars `a` and `b` below 2^256, both at once: one
+// doubling a bit, from the top, and an addition for each bit set.
+fn double_scalar_mul(a: Bytes, p: Point, b: Bytes, q: Point) -> Point {
+    let both = add_points(p, q)
+    var acc = identity()
+    var i = 255
+    while i >= 0 {
+        acc = double(acc)
+        let in_a = bit_of(a, i)
+        let in_b = bit_of(b, i)
+        if in_a && in_b {
+            acc = add_points(acc, both)
+        } else if in_a {
+            acc = add_points(acc, p)
+        } else if in_b {
+            acc = add_points(acc, q)
+        }
+        i = i - 1
+    }
+    acc
+}
+
+// Whether `p` is of small order: [8]P is the neutral element, whose x is
+// 0. No point of the curve has order 16, so [8]P is never the other
+// point with x of 0, (0, -1), of order 2.
+fn small_order(p: Point) -> Bool {
+    is_zero(double(double(double(p))).x)
+}
+
+// The point `bytes` encode, if they are 32 bytes that canonically encode
+// a point of the curve that is not of small order (RFC 8032, section
+// 5.1.3).
+fn decode_point(bytes: Untrusted<Bytes>) -> Option<Point> {
+    if bytes.len() != 32 {
+        return None
+    }
+    let sign = (bytes.at(31) >> 7) == 1
+    let y = field_from_bytes(bytes)
+    if !is_canonical(y) {
+        return None
+    }
+    // x^2 = (y^2 - 1) / (d y^2 + 1) = u / v. The candidate root is
+    // x = u v^3 (u v^7)^((p - 5) / 8) (step 3).
+    let yy = mul(y, y)
+    let u = sub(yy, one())
+    let v = add(mul(d(), yy), one())
+    let v3 = mul(mul(v, v), v)
+    let v7 = mul(mul(v3, v3), v)
+    var x = mul(mul(u, v3), pow_p58(mul(u, v7)))
+    let vxx = mul(v, mul(x, x))
+    if !equal(vxx, u) {
+        if !equal(vxx, neg(u)) {
+            return None
+        }
+        x = mul(x, sqrt_minus_one())
+    }
+    // Step 4: an x of 0 with the sign bit set is not an encoding.
+    if is_zero(x) && sign {
+        return None
+    }
+    if is_odd(x) != sign {
+        x = neg(x)
+    }
+    let point = Point(x: x, y: y, z: one(), t: mul(x, y))
+    if small_order(point) {
+        return None
+    }
+    Some(point)
+}
+
+// The 32-byte encoding of `p` (RFC 8032, section 5.1.2): y, with the low
+// bit of x in the top bit.
+fn encode_point(p: Point) -> Bytes {
+    let z_inverse = invert(p.z)
+    var out = field_to_bytes(mul(p.y, z_inverse))
+    if is_odd(mul(p.x, z_inverse)) {
+        out.set(31, out.at(31) | 128)
+    }
+    out
+}
+
+// ---- The field GF(2^255 - 19) -----------------------------------------------
+
+// The masks of a 26-bit and a 25-bit limb.
+const MASK26: U64 = 67108863
+const MASK25: U64 = 33554431
+
+fn zero() -> List<U64> {
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+fn one() -> List<U64> {
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+// The curve constant d = -121665 / 121666.
+fn d() -> List<U64> {
+    [56195235, 13857412, 51736253, 6949390, 114729, 24766616, 60832955, 30306712, 48412415, 21499315]
+}
+
+// 2d.
+fn d2() -> List<U64> {
+    [45281625, 27714825, 36363642, 13898781, 229458, 15978800, 54557047, 27058993, 29715967, 9444199]
+}
+
+// A square root of -1: 2^((p - 1) / 4).
+fn sqrt_minus_one() -> List<U64> {
+    [34513072, 25610706, 9377949, 3500415, 12389472, 33281959, 41962654, 31548777, 326685, 11406482]
+}
+
+// 2p, limb by limb: added before a subtraction, so no limb goes below 0.
+fn two_p() -> List<U64> {
+    [134217690, 67108862, 134217726, 67108862, 134217726, 67108862, 134217726, 67108862, 134217726, 67108862]
+}
+
+// The low 255 bits of the 32-byte little-endian `bytes`, as a field
+// element whose limbs are each below 2^26 or 2^25. Limb `i` starts at bit
+// `ceil(25.5 * i)` and is read from the 32 bits at the byte holding it.
+fn field_from_bytes(bytes: Untrusted<Bytes>) -> List<U64> {
+    [
+        bytes.read_u32_le(0).to_u64() & MASK26,
+        (bytes.read_u32_le(3).to_u64() >> 2) & MASK25,
+        (bytes.read_u32_le(6).to_u64() >> 3) & MASK26,
+        (bytes.read_u32_le(9).to_u64() >> 5) & MASK25,
+        (bytes.read_u32_le(12).to_u64() >> 6) & MASK26,
+        bytes.read_u32_le(16).to_u64() & MASK25,
+        (bytes.read_u32_le(19).to_u64() >> 1) & MASK26,
+        (bytes.read_u32_le(22).to_u64() >> 3) & MASK25,
+        (bytes.read_u32_le(25).to_u64() >> 4) & MASK26,
+        (bytes.read_u32_le(28).to_u64() >> 6) & MASK25
+    ]
+}
+
+// Whether `f`, as `field_from_bytes` gives it, is below p: it is at least p
+// only when every limb above the lowest is all ones and the lowest is at
+// least 2^26 - 19.
+fn is_canonical(f: List<U64>) -> Bool {
+    for i in 1..10 {
+        let full = if i % 2 == 0 { MASK26 } else { MASK25 }
+        if f.at(i) != full {
+            return true
+        }
+    }
+    f.at(0) < 67108845
+}
+
+// The limbs `h`, of any size up to 2^63, carried so that each is below
+// 2^26 or 2^25 again, except limb 1, below 2^25 + 2^16. The carry out of
+// limb 9, worth 2^255, comes back into limb 0 as 19, as 2^255 = 19 mod p.
+fn carry(h: List<U64>) -> List<U64> {
+    var out: List<U64> = List.new()
+    var c: U64 = 0
+    for i in 0..10 {
+        let limb = h.at(i) + c
+        if i % 2 == 0 {
+            out.push(limb & MASK26)
+            c = limb >> 26
+        } else {
+            out.push(limb & MASK25)
+            c = limb >> 25
+        }
+    }
+    let low = out.at(0) + c * 19
+    [
+        low & MASK26, out.at(1) + (low >> 26), out.at(2), out.at(3), out.at(4),
+        out.at(5), out.at(6), out.at(7), out.at(8), out.at(9)
+    ]
+}
+
+fn add(f: List<U64>, g: List<U64>) -> List<U64> {
+    var h: List<U64> = List.new()
+    for i in 0..10 {
+        h.push(f.at(i) + g.at(i))
+    }
+    carry(h)
+}
+
+// f - g, as f + 2p - g: each limb of `g` is below the same limb of 2p.
+fn sub(f: List<U64>, g: List<U64>) -> List<U64> {
+    let two_p = two_p()
+    var h: List<U64> = List.new()
+    for i in 0..10 {
+        h.push(f.at(i) + two_p.at(i) - g.at(i))
+    }
+    carry(h)
+}
+
+fn neg(f: List<U64>) -> List<U64> {
+    sub(zero(), f)
+}
+
+// f * g. Limb `i` of `f` times limb `j` of `g` lands at limb `i + j`,
+// doubled when `i` and `j` are both odd, as their bit offsets then sum to
+// one more than that limb's; a product past limb 9 comes back times 19.
+// With limbs below 2^26, each sum is below 2^60.
+fn mul(f: List<U64>, g: List<U64>) -> List<U64> {
+    let f0 = f.at(0)
+    let f1 = f.at(1)
+    let f2 = f.at(2)
+    let f3 = f.at(3)
+    let f4 = f.at(4)
+    let f5 = f.at(5)
+    let f6 = f.at(6)
+    let f7 = f.at(7)
+    let f8 = f.at(8)
+    let f9 = f.at(9)
+    let g0 = g.at(0)
+    let g1 = g.at(1)
+    let g2 = g.at(2)
+    let g3 = g.at(3)
+    let g4 = g.at(4)
+    let g5 = g.at(5)
+    let g6 = g.at(6)
+    let g7 = g.at(7)
+    let g8 = g.at(8)
+    let g9 = g.at(9)
+    let f1_2 = f1 * 2
+    let f3_2 = f3 * 2
+    let f5_2 = f5 * 2
+    let f7_2 = f7 * 2
+    let f9_2 = f9 * 2
+    let g1_19 = g1 * 19
+    let g2_19 = g2 * 19
+    let g3_19 = g3 * 19
+    let g4_19 = g4 * 19
+    let g5_19 = g5 * 19
+    let g6_19 = g6 * 19
+    let g7_19 = g7 * 19
+    let g8_19 = g8 * 19
+    let g9_19 = g9 * 19
+    let h0 = f0 * g0 + f1_2 * g9_19 + f2 * g8_19 + f3_2 * g7_19 + f4 * g6_19 + f5_2 * g5_19 + f6 * g4_19 + f7_2 * g3_19 + f8 * g2_19 + f9_2 * g1_19
+    let h1 = f0 * g1 + f1 * g0 + f2 * g9_19 + f3 * g8_19 + f4 * g7_19 + f5 * g6_19 + f6 * g5_19 + f7 * g4_19 + f8 * g3_19 + f9 * g2_19
+    let h2 = f0 * g2 + f1_2 * g1 + f2 * g0 + f3_2 * g9_19 + f4 * g8_19 + f5_2 * g7_19 + f6 * g6_19 + f7_2 * g5_19 + f8 * g4_19 + f9_2 * g3_19
+    let h3 = f0 * g3 + f1 * g2 + f2 * g1 + f3 * g0 + f4 * g9_19 + f5 * g8_19 + f6 * g7_19 + f7 * g6_19 + f8 * g5_19 + f9 * g4_19
+    let h4 = f0 * g4 + f1_2 * g3 + f2 * g2 + f3_2 * g1 + f4 * g0 + f5_2 * g9_19 + f6 * g8_19 + f7_2 * g7_19 + f8 * g6_19 + f9_2 * g5_19
+    let h5 = f0 * g5 + f1 * g4 + f2 * g3 + f3 * g2 + f4 * g1 + f5 * g0 + f6 * g9_19 + f7 * g8_19 + f8 * g7_19 + f9 * g6_19
+    let h6 = f0 * g6 + f1_2 * g5 + f2 * g4 + f3_2 * g3 + f4 * g2 + f5_2 * g1 + f6 * g0 + f7_2 * g9_19 + f8 * g8_19 + f9_2 * g7_19
+    let h7 = f0 * g7 + f1 * g6 + f2 * g5 + f3 * g4 + f4 * g3 + f5 * g2 + f6 * g1 + f7 * g0 + f8 * g9_19 + f9 * g8_19
+    let h8 = f0 * g8 + f1_2 * g7 + f2 * g6 + f3_2 * g5 + f4 * g4 + f5_2 * g3 + f6 * g2 + f7_2 * g1 + f8 * g0 + f9_2 * g9_19
+    let h9 = f0 * g9 + f1 * g8 + f2 * g7 + f3 * g6 + f4 * g5 + f5 * g4 + f6 * g3 + f7 * g2 + f8 * g1 + f9 * g0
+    carry([h0, h1, h2, h3, h4, h5, h6, h7, h8, h9])
+}
+
+// f squared `n` times: f^(2^n).
+fn square_times(f: List<U64>, n: Int) -> List<U64> {
+    var h = f
+    for _ in 0..n {
+        h = mul(h, h)
+    }
+    h
+}
+
+// f^(2^250 - 1), the common start of `pow_p58` and `invert`, by the
+// addition chain of ref10. Each name `f_a_b` is f^(2^a - 2^b).
+fn pow_2_250_1(f: List<U64>) -> List<U64> {
+    let f2 = mul(f, f)
+    let f9 = mul(f, square_times(f2, 2))
+    let f11 = mul(f2, f9)
+    let f_5_0 = mul(f9, mul(f11, f11))
+    let f_10_0 = mul(square_times(f_5_0, 5), f_5_0)
+    let f_20_0 = mul(square_times(f_10_0, 10), f_10_0)
+    let f_40_0 = mul(square_times(f_20_0, 20), f_20_0)
+    let f_50_0 = mul(square_times(f_40_0, 10), f_10_0)
+    let f_100_0 = mul(square_times(f_50_0, 50), f_50_0)
+    let f_200_0 = mul(square_times(f_100_0, 100), f_100_0)
+    mul(square_times(f_200_0, 50), f_50_0)
+}
+
+// f^((p - 5) / 8) = f^(2^252 - 3).
+fn pow_p58(f: List<U64>) -> List<U64> {
+    mul(square_times(pow_2_250_1(f), 2), f)
+}
+
+// 1 / f, as f^(p - 2) = f^(2^255 - 21); 0 for 0.
+fn invert(f: List<U64>) -> List<U64> {
+    let f2 = mul(f, f)
+    let f11 = mul(f2, mul(f, square_times(f2, 2)))
+    mul(square_times(pow_2_250_1(f), 5), f11)
+}
+
+// The canonical 32-byte little-endian encoding of `f`, below p, with the
+// top bit clear.
+fn field_to_bytes(f: List<U64>) -> Bytes {
+    // After two carries every limb is below its 2^26 or 2^25, so f is
+    // below 2^255, and f is at least p exactly when f + 19 reaches 2^255.
+    let h = carry(carry(f))
+    var q: U64 = 19
+    for i in 0..10 {
+        q = (h.at(i) + q) >> (if i % 2 == 0 { 26 } else { 25 })
+    }
+    // Then f - p is f + 19 less the 2^255 bit, which the last mask drops.
+    var limbs: List<U64> = List.new()
+    var c = q * 19
+    for i in 0..10 {
+        let limb = h.at(i) + c
+        if i % 2 == 0 {
+            limbs.push(limb & MASK26)
+            c = limb >> 26
+        } else {
+            limbs.push(limb & MASK25)
+            c = limb >> 25
+        }
+    }
+    // Pack the limbs' 255 bits, eight at a time, least significant first.
+    var out = Bytes.new()
+    var acc: U64 = 0
+    var bits: U64 = 0
+    for i in 0..10 {
+        acc = acc | (limbs.at(i) << bits)
+        bits = bits + (if i % 2 == 0 { 26 } else { 25 })
+        while bits >= 8 {
+            out.push((acc & 255).to_u8())
+            acc = acc >> 8
+            bits = bits - 8
+        }
+    }
+    out.push(acc.to_u8())
+    out
+}
+
+fn equal(f: List<U64>, g: List<U64>) -> Bool {
+    field_to_bytes(f) == field_to_bytes(g)
+}
+
+fn is_zero(f: List<U64>) -> Bool {
+    field_to_bytes(f) == Bytes.zeroed(32)
+}
+
+// Whether `f`, reduced below p, is odd: the sign of an x coordinate.
+fn is_odd(f: List<U64>) -> Bool {
+    (field_to_bytes(f).at(0) & 1) == 1
+}
