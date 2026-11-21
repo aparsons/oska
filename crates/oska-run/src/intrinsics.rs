@@ -3,11 +3,12 @@
 //!
 //! To add one: write a function with the signature of one of the
 //! [`Intrinsic`] kinds and add it, wrapped in its kind, to its module's
-//! table ([`INTRINSICS`] here). [`lookup`] searches every table. A
+//! table ([`INTRINSICS`] here), and a new module's table to `TABLES`.
+//! [`lookup`] finds an intrinsic by name in an index of every table,
+//! made once; [`resolved`] finds a call site's once and keeps it there. A
 //! method's receiver is its first argument.
 
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -15,6 +16,7 @@ use std::sync::OnceLock;
 
 use oska_check::builtins;
 use oska_check::limits;
+use oska_check::program::IntrinsicName;
 use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
@@ -104,89 +106,71 @@ pub const INTRINSICS: Table = &[
 ///
 /// A `std` module's function is called by its own name (`text`), or by
 /// its module-qualified name (`html.text`) when the program declares the
-/// same name itself; both find the same intrinsic.
-///
-/// The interpreter calls this on every intrinsic call, so the tables are
-/// indexed by name once, on the first call, not scanned each time.
+/// same name itself; both find the same intrinsic. A qualified name finds
+/// only its own module's functions: `sql.text` finds nothing.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
     let index = index();
-    if let Some(intrinsic) = index.get(name) {
-        return Some(*intrinsic);
-    }
-    let unqualified = builtins::std_modules()
-        .filter_map(|path| path.rsplit('.').next())
-        .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'))?;
-    index.get(unqualified).copied()
+    index.by_name.get(name).map(|&at| index.all[at as usize])
 }
 
-/// Every module's table, in the order [`lookup`] prefers them.
-fn tables() -> [Table; 6] {
-    [
-        INTRINSICS,
-        data::INTRINSICS,
-        tasks::INTRINSICS,
-        traits::INTRINSICS,
-        testing::INTRINSICS,
-        html::INTRINSICS,
-    ]
+/// The intrinsic a call site names, looked up on the site's first call
+/// and kept in its [`IntrinsicName`], so a call site that runs many times
+/// looks its name up once (#502).
+pub fn resolved(name: &IntrinsicName) -> Intrinsic {
+    let index = index();
+    let at = name.resolve_with(|name| {
+        *index
+            .by_name
+            .get(name)
+            .expect("`crate::run` refuses a call to a missing intrinsic")
+    });
+    index.all[at as usize]
 }
 
-/// Every intrinsic by name.
-type Index = HashMap<&'static str, Intrinsic, BuildHasherDefault<NameHasher>>;
+/// Every module's table, in the order [`lookup`] prefers them, with the
+/// `std` module whose functions it holds, for a `std` module's table.
+const TABLES: [(Option<&str>, Table); 6] = [
+    (None, INTRINSICS),
+    (None, data::INTRINSICS),
+    (None, tasks::INTRINSICS),
+    (None, traits::INTRINSICS),
+    (None, testing::INTRINSICS),
+    (Some("std.html"), html::INTRINSICS),
+];
 
-/// Every intrinsic by name, made once: where two tables share a name, the
-/// first table's.
+/// Every intrinsic, and where each is in it by every name a call site
+/// can name it by.
+struct Index {
+    all: Vec<Intrinsic>,
+    by_name: HashMap<String, u32>,
+}
+
+/// The [`Index`], made once. Where two tables share a name, the first
+/// table's intrinsic has it. A `std` module's function also has its
+/// module-qualified name, `html.text` for `text`.
 fn index() -> &'static Index {
     static INDEX: OnceLock<Index> = OnceLock::new();
     INDEX.get_or_init(|| {
-        let mut index = Index::default();
-        for (name, intrinsic) in tables().into_iter().flatten() {
-            index.entry(*name).or_insert(*intrinsic);
+        let mut index = Index {
+            all: Vec::new(),
+            by_name: HashMap::new(),
+        };
+        for (module, table) in TABLES {
+            let module = module.map(|path| path.rsplit('.').next().unwrap_or(path));
+            for &(name, intrinsic) in table {
+                let at = u32::try_from(index.all.len()).expect("fewer than 2^32 intrinsics");
+                index.all.push(intrinsic);
+                index.by_name.entry(name.to_string()).or_insert(at);
+                if let Some(module) = module {
+                    index
+                        .by_name
+                        .entry(format!("{module}.{name}"))
+                        .or_insert(at);
+                }
+            }
         }
         index
     })
-}
-
-/// The hash of [`Index`], a word at a time in the manner of rustc's
-/// FxHash: the default hasher took most of [`lookup`]'s time. Names are
-/// short, and the index holds only the prelude's names and never grows,
-/// so a name chosen to collide costs a longer probe on one lookup, not a
-/// flood: no protection against collisions is needed.
-#[derive(Default)]
-struct NameHasher(u64);
-
-impl NameHasher {
-    fn add(&mut self, word: u64) {
-        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
-    }
-}
-
-impl Hasher for NameHasher {
-    /// A name of 8 bytes or more is hashed by its first and last 8 bytes
-    /// and its length, with no loop and no copy: names that share both
-    /// ends still differ in their bytes, which the map compares.
-    fn write(&mut self, bytes: &[u8]) {
-        let word = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
-        if bytes.len() >= 8 {
-            self.add(word(0));
-            self.add(word(bytes.len() - 8));
-            self.add(bytes.len() as u64);
-        } else {
-            for &byte in bytes {
-                self.add(u64::from(byte));
-            }
-        }
-    }
-
-    fn write_u8(&mut self, byte: u8) {
-        self.add(u64::from(byte));
-    }
-
-    /// Rotated, as rustc-hash does: the multiply leaves the low bits,
-    /// which pick the bucket, depending only on the low bytes.
-    fn finish(&self) -> u64 {
-        self.0.rotate_left(26)
-    }
 }
 
 /// Whether the intrinsic named `name` has a runtime implementation.
@@ -945,17 +929,24 @@ mod tests {
         }
     }
 
-    /// [`lookup`] tries a qualified name (`html.text`) as written before
-    /// it drops the module. That finds what a scan of the tables for
-    /// either name would only while no intrinsic's own name starts with a
-    /// `std` module's name.
+    /// The index gives a `std` module's function its qualified name
+    /// (`html.text`) too, so no intrinsic's own name may look like one,
+    /// and every module `TABLES` names must be a real `std` module.
     #[test]
     fn no_intrinsic_is_named_with_a_std_modules_prefix() {
+        for (module, _) in super::TABLES {
+            if let Some(module) = module {
+                assert!(
+                    builtins::std_modules().any(|m| m == module),
+                    "`{module}` is not a std module"
+                );
+            }
+        }
         let modules: Vec<&str> = builtins::std_modules()
             .filter_map(|path| path.rsplit('.').next())
             .collect();
         assert!(modules.contains(&"html"), "{modules:?}");
-        for (name, _) in super::tables().into_iter().flatten() {
+        for (name, _) in super::TABLES.iter().flat_map(|(_, table)| table.iter()) {
             for module in &modules {
                 assert!(
                     !name.starts_with(&format!("{module}.")),
@@ -970,8 +961,8 @@ mod tests {
         assert!(matches!(lookup("text"), Some(Intrinsic::Plain(_))));
         assert!(matches!(lookup("html.text"), Some(Intrinsic::Plain(_))));
         assert!(
-            lookup("sql.text").is_some(),
-            "any std module's prefix is dropped"
+            lookup("sql.text").is_none(),
+            "`text` is std.html's, not std.sql's"
         );
         assert!(lookup("html.no_such_function").is_none());
         assert!(lookup("nohtml.text").is_none());
@@ -1083,7 +1074,7 @@ mod access_tests {
 
     fn call(name: &str, args: Vec<Expr>) -> Expr {
         at(ExprKind::Call {
-            callee: Callee::Intrinsic(name.to_string()),
+            callee: Callee::intrinsic(name),
             type_args: Vec::new(),
             args,
         })

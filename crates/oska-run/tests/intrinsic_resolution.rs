@@ -4,7 +4,11 @@
 
 mod common;
 
+use std::ops::ControlFlow;
+
 use common::assert_runs;
+use oska_check::program::{walk, Callee, Program, Visit};
+use oska_run::FakeHost;
 
 #[test]
 fn an_intrinsic_called_on_every_iteration_gives_the_same_result_each_time() {
@@ -53,4 +57,51 @@ fn a_trait_method_in_generic_code_reaches_the_prelude_intrinsic_or_the_programs_
                }\n    \
                Ok(())\n}\n";
     assert_runs(src, &[], &"<7>\n<(1, 2)>\n".repeat(3));
+}
+
+/// The intrinsic call sites in `program`'s `main`, by name, and whether
+/// each has been resolved.
+fn intrinsic_sites(program: &Program) -> Vec<(String, bool)> {
+    let mut sites = Vec::new();
+    let _ = walk::<()>(&program.functions["main"].body, &mut |visit| {
+        if let Visit::Callee(Callee::Intrinsic(name), _) = visit {
+            sites.push((name.to_string(), name.resolved().is_some()));
+        }
+        ControlFlow::Continue(())
+    });
+    sites
+}
+
+#[test]
+fn running_a_program_resolves_each_intrinsic_call_site_it_reaches_and_keeps_it() {
+    let src = "fn main(io: Stdout) -> Result<(), IoError> {\n    \
+               var total = 0\n    \
+               for i in 0..3 {\n        \
+               total = total + i.to_string().len()\n    \
+               }\n    \
+               if total > 100 {\n        \
+               io.println(\"never\")?\n    \
+               }\n    \
+               io.println(\"{total}\")\n}\n";
+    let report = oska_check::check_module(src);
+    let program = report.program.expect("the program checks");
+    let before = intrinsic_sites(&program);
+    assert!(before.iter().all(|(_, resolved)| !resolved), "{before:?}");
+
+    let outcome = oska_run::run_program(&program, &mut FakeHost::new(), &["main.osk".into()]);
+    assert_eq!(outcome.stdout, "3\n");
+
+    let after = intrinsic_sites(&program);
+    let resolved = |name: &str| {
+        after
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, r)| *r)
+            .collect::<Vec<_>>()
+    };
+    // `i.to_string()` and the `{total}` hole.
+    assert_eq!(resolved("Int.to_string"), [true, true], "{after:?}");
+    assert_eq!(resolved("String.len"), [true], "{after:?}");
+    // The first `println` is never reached, so it is never resolved.
+    assert_eq!(resolved("Stdout.println"), [false, true], "{after:?}");
 }

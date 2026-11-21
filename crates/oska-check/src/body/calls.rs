@@ -490,7 +490,7 @@ impl Body<'_, '_, '_> {
                 let qualified = format!("{type_name}.{}", name.name);
                 let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
                 Some(if intrinsic {
-                    Callee::Intrinsic(qualified)
+                    Callee::intrinsic(qualified)
                 } else {
                     Callee::Function(qualified)
                 })
@@ -792,7 +792,7 @@ pub(super) enum MemberUse<'e> {
 /// body-less prelude function, otherwise the function itself.
 pub(super) fn target(sig: &FnSig, name: String) -> Callee {
     if sig.intrinsic {
-        Callee::Intrinsic(name)
+        Callee::intrinsic(name)
     } else {
         Callee::Function(name)
     }

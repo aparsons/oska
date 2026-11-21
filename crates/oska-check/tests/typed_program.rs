@@ -139,7 +139,7 @@ fn calls_into_prelude_generics_record_their_type_arguments() {
                \x20   r.unwrap_or(0)\n\
                }\n";
     let program = program(src);
-    let intrinsic = |name: &str| Callee::Intrinsic(name.to_string());
+    let intrinsic = |name: &str| Callee::intrinsic(name);
     assert_eq!(
         type_args_of(&program, "f", &intrinsic("List.map")),
         [vec![int(), Type::Bool]],

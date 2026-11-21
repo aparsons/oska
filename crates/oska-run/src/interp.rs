@@ -1127,7 +1127,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 self.leave();
                 result
             }
-            Callee::Intrinsic(name) => match intrinsic(name) {
+            Callee::Intrinsic(name) => match intrinsics::resolved(name) {
                 Intrinsic::Plain(run) => run(self.host, args, span),
                 Intrinsic::HigherOrder(run) => run(self, args, span),
                 Intrinsic::Mutating(run) => {
@@ -1159,7 +1159,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         if self.program.functions.contains_key(&name) {
             Callee::Function(name)
         } else {
-            Callee::Intrinsic(format!("{tag}.{method}"))
+            Callee::intrinsic(format!("{tag}.{method}"))
         }
     }
 
@@ -1241,7 +1241,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 *receiver = after.expect("a method keeps its receiver");
                 Ok(value)
             }
-            Callee::Intrinsic(name) => match intrinsic(name) {
+            Callee::Intrinsic(name) => match intrinsics::resolved(name) {
                 Intrinsic::Mutating(run) => run(receiver, args, span),
                 Intrinsic::Plain(_) | Intrinsic::HigherOrder(_) => unreachable!(
                     "the checker calls only a `var self` method on a place, and every \
@@ -1433,11 +1433,6 @@ fn body_end(body: &Expr) -> Span {
             end: body.span.end,
         },
     }
-}
-
-/// The intrinsic named `name`.
-fn intrinsic(name: &str) -> Intrinsic {
-    intrinsics::lookup(name).expect("`crate::run` refuses a call to a missing intrinsic")
 }
 
 /// The items of a list, one at a time.

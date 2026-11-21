@@ -233,7 +233,7 @@ mod tests {
             40,
             52,
             ExprKind::Call {
-                callee: Callee::Intrinsic("Scope.spawn".to_string()),
+                callee: Callee::intrinsic("Scope.spawn"),
                 type_args: vec![Type::Unit],
                 args: vec![at(40, 41, ExprKind::Local(0)), task],
             },
