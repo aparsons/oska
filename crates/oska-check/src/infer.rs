@@ -123,6 +123,16 @@ struct Rules {
 pub struct Infer {
     /// The solution of each variable, by index.
     solutions: Vec<Option<Ty>>,
+    /// The variables solved since [`Infer::flow`] began, so that a failed
+    /// attempt can be undone (the [`Flags`] stores log their own changes).
+    /// Unification only ever adds: it solves an unsolved variable, adds
+    /// flag variables and edges, and raises or pins flag variables. So
+    /// undoing an attempt reverts exactly what it logged, without a copy
+    /// of the whole context.
+    solved: Vec<u32>,
+    /// Whether [`Infer::flow`] is running, so that it cannot run inside
+    /// itself: the inner call would clear the logs the outer one needs.
+    in_flow: bool,
     /// The trust variables.
     trust: Flags,
     /// The capability variables.
@@ -358,6 +368,43 @@ impl Infer {
         self.flow(actual, expected).is_ok()
     }
 
+    /// Start logging changes, so that an attempt can be undone. What
+    /// changed before is kept. Panics, in every build, if a flow is
+    /// already running.
+    fn begin_attempts(&mut self) {
+        assert!(!self.in_flow, "Infer::flow must not run inside itself");
+        self.in_flow = true;
+        self.forget_changes();
+    }
+
+    /// Undo every change since [`Infer::begin_attempts`].
+    fn undo_attempt(&mut self) {
+        for v in self.solved.drain(..) {
+            self.solutions[v as usize] = None;
+        }
+        self.trust.undo();
+        self.caps.undo();
+    }
+
+    /// Keep every change since [`Infer::begin_attempts`].
+    fn end_attempts(&mut self) {
+        self.forget_changes();
+        self.in_flow = false;
+    }
+
+    fn forget_changes(&mut self) {
+        self.solved.clear();
+        self.trust.forget();
+        self.caps.forget();
+    }
+
+    /// Solve the unsolved variable `v` to `ty`.
+    fn solve(&mut self, v: u32, ty: Ty) {
+        debug_assert!(self.solutions[v as usize].is_none());
+        self.solutions[v as usize] = Some(ty);
+        self.solved.push(v);
+    }
+
     /// [`Infer::unify`], saying why it failed.
     pub fn flow(&mut self, actual: &Ty, expected: &Ty) -> Result<(), Mismatch> {
         let attempts = [
@@ -394,18 +441,22 @@ impl Infer {
                 Some(Mismatch::TrustLost),
             ),
         ];
-        let saved = self.clone();
+        self.begin_attempts();
+        let mut result = Err(Mismatch::Types);
         for (rules, mismatch) in attempts {
             let ok = self.unify_inner(actual, expected, Polarity::Positive, rules);
             if ok && mismatch.is_none() {
-                return Ok(());
+                result = Ok(());
+                break;
             }
-            *self = saved.clone();
+            self.undo_attempt();
             if let (true, Some(mismatch)) = (ok, mismatch) {
-                return Err(mismatch);
+                result = Err(mismatch);
+                break;
             }
         }
-        Err(Mismatch::Types)
+        self.end_attempts();
+        result
     }
 
     fn unify_inner(&mut self, a: &Ty, b: &Ty, polarity: Polarity, rules: Rules) -> bool {
@@ -419,7 +470,7 @@ impl Infer {
                     return false;
                 }
                 let solution = self.generalize(other);
-                self.solutions[*v as usize] = Some(solution.clone());
+                self.solve(*v, solution.clone());
                 self.unify_inner(&solution, other, polarity, rules)
             }
             (other, Ty::Var(v)) => {
@@ -427,7 +478,7 @@ impl Infer {
                     return false;
                 }
                 let solution = self.generalize(other);
-                self.solutions[*v as usize] = Some(solution.clone());
+                self.solve(*v, solution.clone());
                 self.unify_inner(other, &solution, polarity, rules)
             }
             (Ty::Named(n1, a1, t1), Ty::Named(n2, a2, t2)) => {
@@ -520,5 +571,91 @@ mod tests {
             Err(Mismatch::CapLost)
         );
         assert_eq!(infer.flow(&plain, &Ty::Unit), Err(Mismatch::Types));
+    }
+
+    /// Types with every kind of flag and variable, for the undo tests:
+    /// each alone, and each as the first field of a pair whose second
+    /// field is an `Int` or a `Bool`, so that a flow between two pairs
+    /// can change a flag or solve a variable and then fail.
+    fn mixed_types(infer: &mut Infer) -> Vec<Ty> {
+        let text = |trust| Ty::string().with_trust(trust);
+        let fns = |cap| Ty::list(func(cap, vec![]));
+        let mut fields = vec![
+            Ty::int(),
+            text(Trust::Trusted),
+            text(Trust::Untrusted),
+            fns(Cap::Plain),
+            fns(Cap::Bearing),
+        ];
+        for _ in 0..2 {
+            let var = infer.fresh();
+            let trust = infer.fresh_trust();
+            let cap = infer.fresh_cap();
+            fields.push(Ty::list(var.clone()));
+            fields.push(text(trust));
+            fields.push(fns(cap));
+            fields.push(func(cap, vec![var.clone()]));
+            fields.push(var);
+        }
+        let mut types = fields.clone();
+        for field in fields {
+            for second in [Ty::int(), Ty::bool()] {
+                types.push(Ty::generic("Pair", vec![field.clone(), second]));
+            }
+        }
+        types
+    }
+
+    #[test]
+    fn a_failed_flow_leaves_the_context_as_it_was() {
+        // Every type flowed into every other, in a fresh context and in
+        // one that earlier flows have already joined (so that variables
+        // are solved and flags linked). Each flow that fails must leave
+        // the context exactly as it was.
+        let mut failed = 0;
+        for setup in [0, 1, 2] {
+            let mut fresh = Infer::default();
+            let types = mixed_types(&mut fresh);
+            for (i, setup_ty) in types.iter().enumerate().take(setup * 6) {
+                let _ = fresh.flow(setup_ty, &types[(i * 7 + setup) % types.len()]);
+            }
+            for a in &types {
+                for b in &types {
+                    let mut infer = fresh.clone();
+                    let before = format!("{infer:?}");
+                    if infer.flow(a, b).is_err() {
+                        failed += 1;
+                        assert_eq!(format!("{infer:?}"), before, "flow {a:?} into {b:?}");
+                    }
+                }
+            }
+        }
+        assert!(failed > 1000, "only {failed} flows failed");
+    }
+
+    #[test]
+    #[should_panic(expected = "must not run inside itself")]
+    fn a_flow_cannot_start_while_another_is_running() {
+        let mut infer = Infer::default();
+        infer.begin_attempts();
+        infer.flow(&Ty::int(), &Ty::int()).ok();
+    }
+
+    #[test]
+    fn a_flow_keeps_what_it_solved_when_it_succeeds() {
+        let mut infer = Infer::default();
+        let var = infer.fresh();
+        let trust = infer.fresh_trust();
+        let pair = Ty::generic("Pair", vec![Ty::string().with_trust(trust), var.clone()]);
+        let untrusted = Ty::generic(
+            "Pair",
+            vec![Ty::string().with_trust(Trust::Untrusted), Ty::int()],
+        );
+        assert_eq!(infer.flow(&untrusted, &pair), Ok(()));
+        assert_eq!(infer.resolve(&var), Ty::int());
+        assert_eq!(
+            infer.resolve(&Ty::string().with_trust(trust)),
+            Ty::string().with_trust(Trust::Untrusted)
+        );
     }
 }
