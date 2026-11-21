@@ -405,6 +405,18 @@ Run E's musl `loop` figure, 5 ms against 998 ms for the glibc build, is not a ru
 
 The allocator removed the allocation-bound part of the x86_64 gap too: `recursion` went from about 1.1x to 1.0x, `lists` stays at about 1.0x, the site build from about 1.28x to about 1.15x, and `oskac build` from about 1.4x to about 1.19x. The workloads that copy the most short texts did not move: `text` is 2.20x and 2.23x and `bulk-text` 2.00x on the two Intel runners, as before (section 7's Intel run had 2.73x and 1.96x), and 1.19x and 1.39x on the AMD runner. **Inference:** this is cause 3, musl's x86_64 `memcpy` (`rep movsq` with byte loops around it), which costs most on these Intel processors. The same workloads on aarch64, where musl's `memcpy` is not slow (section 5), are now at 0.89x and 1.04x, so the copies, not the allocations, are what is left.
 
+### Memory
+
+The security review of ticket #523 found two ways the allocator makes the musl build use more memory than the glibc build, with two repro programs. Each was re-measured on this session's x86_64 VM, as peak resident memory of one run, with the security review's glibc and musl builds of the ticket branch before the fix below, and the musl build with the fix (Rust 1.100.0, release profile).
+
+| Repro | glibc | musl, before the fix | musl, with the exit hook |
+| --- | ---: | ---: | ---: |
+| `oskac test --interpret` of 3,000 test blocks, each filling lists of texts in 63 sizes | 22 MiB | 229 MiB | 20 MiB |
+| `oskac run --interpret --max-memory=150000000` of twenty lists of 100,000 texts, one size class at a time | 144 MiB | 698 MiB | 698 MiB |
+
+- **Threads that end.** `oskac test` runs each test block on a thread of its own, and an ending thread left the blocks on its free lists unused, up to about 140 KiB a thread (about 70 KiB a thread in the first repro). The allocator now gives an ending thread's lists back to the shared pool through an exit hook (`heap.rs`, "A thread's exit gives its lists back"), and the first repro is back at the glibc build's figure. `crates/oska-sys/tests/allocator_threads.rs` is its test: 400 threads, one after another, took 128 regions of 256 KiB without the hook.
+- **One class after another.** A freed block stays in its size class, so the heap holds the sum of each class's peak, not the most the program holds at once: about 4.8 times the glibc build in the second repro, and up to 20 times (the number of classes) in the worst case. `--max-memory` charges values, not the heap, so it no longer bounds the musl build's memory by itself. This is documented in `heap.rs` and [ADR 0009](../adr/0009-oska-sys-is-the-only-crate-with-unsafe.md), not fixed: bounding it means giving whole regions back or moving free memory between classes, which needs a different allocator design.
+
 ### Verdict
 
 With the allocator, the musl build still does not meet the 1.10x threshold of spec #521 on every workload.

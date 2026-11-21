@@ -37,7 +37,9 @@
 //!   `// SAFETY:` comment stating the invariant it relies on (clippy's
 //!   `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block`).
 //! - Every foreign function is called only from a safe wrapper in this
-//!   crate. Nothing `unsafe` is public.
+//!   crate. Nothing `unsafe` is public, except the methods of the
+//!   standard `GlobalAlloc` trait on [`SizeClassAlloc`] (ADR 0009), which
+//!   only the compiler's `#[global_allocator]` glue calls.
 
 mod heap;
 mod refusal;

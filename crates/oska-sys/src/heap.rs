@@ -20,8 +20,8 @@
 //!   back to the allocator it came from.
 //! - **Regions.** Blocks are carved from regions of [`REGION`] bytes
 //!   that [`System`] allocates. A region is never given back: its blocks
-//!   are reused for the life of the process. The allocator makes no
-//!   system call of its own.
+//!   are reused for the life of the process. Beyond [`System`], the
+//!   allocator calls out only to arm a thread's exit hook (below).
 //! - **No lock on the fast path.** Each thread keeps a free list for
 //!   each class in a thread-local [`Cache`]. `alloc` pops from it and
 //!   `dealloc` pushes onto it, whichever thread allocated the block: a
@@ -32,10 +32,41 @@
 //!   one batch of blocks, or to carve a new batch from the current
 //!   region. So the lock is taken at most once per [`batch`] calls, and
 //!   memory freed on one thread is reused on another.
-//! - **What a thread's exit leaves.** The thread-local cache has no
-//!   destructor (registering one may allocate, inside the allocator), so
-//!   the blocks on an exiting thread's lists are not reused. That is at
-//!   most twice a batch per class, under 4 KiB per class.
+//! - **A thread's exit gives its lists back.** `oskac test` runs each
+//!   test block on a thread of its own, so a program can start and end
+//!   thousands of threads. When a block first joins a thread's lists,
+//!   the thread arms an exit hook ([`exit_hook`]): a `pthread` key on
+//!   Unix, a fiber-local slot on Windows, each with a destructor the C
+//!   library or the system calls as the thread ends. The hook moves
+//!   every list of the thread into the shared pool's loose lists
+//!   ([`flush`]), which `take_batch` draws on as it does on whole
+//!   batches. `std`'s `thread_local!` destructors are not used: one
+//!   registers itself by pushing onto a `Vec`, which allocates, and if
+//!   that happened inside this allocator while another thread-local was
+//!   registering, `std` would abort. Arming a key or a slot allocates
+//!   nothing through this allocator. A block that joins a thread's list
+//!   after the hook ran (another thread-local's destructor freeing a
+//!   value) arms it again on Unix, and the C library runs it again, up
+//!   to its limit of rounds (4 on musl, glibc and macOS). Only blocks
+//!   freed after the last round (on Windows, after the hook ran) stay on
+//!   the thread's lists unused: a few, at most what a thread's last
+//!   destructors free. A thread whose hook could not be armed (the
+//!   system out of keys), or, on Windows, that found the pool's lock
+//!   taken for [`exit_hook`]'s whole wait, strands its lists: under
+//!   twice a batch per class, so under 8 KiB per class.
+//! - **Memory follows each class's peak.** A freed block stays in its
+//!   class for the life of the process; it is never split, merged or
+//!   handed to another class. So the heap holds, for each class, the
+//!   most blocks that class ever had live at once, whatever the other
+//!   classes hold now. A program that fills one class, frees it, then
+//!   fills the next, and so on, makes the heap the sum of every class's
+//!   peak rather than the largest live set: up to [`CLASSES`] (20) times
+//!   the memory it ever holds at once, and in the security review's
+//!   repro (twenty lists of 100,000 texts, one size class at a time,
+//!   section 8 of the research note) about 5 times what the glibc build
+//!   takes. `--max-memory` charges a program's values, not this heap,
+//!   so it bounds what the program holds at once but no longer bounds
+//!   the process's memory by itself.
 //!
 //! # Soundness
 //!
@@ -45,7 +76,10 @@
 //! the next batch. Every block is at least [`ALIGN`] (16) bytes and
 //! 16-aligned, so both words fit and are aligned. A free block is
 //! reachable from exactly one list: one thread's cache (touched only by
-//! that thread) or the shared pool (touched only under its lock). It is
+//! that thread, its exit hook included, which runs on the ending thread
+//! itself) or the shared pool's batches and loose lists (touched only
+//! under its lock). An ending thread's lists move to the pool whole,
+//! under the lock, and leave its cache empty. It is
 //! handed out by being removed from that list, and returns to a list
 //! only through `dealloc` or `realloc`, whose callers promise the
 //! program no longer uses it. Regions are carved by a bump pointer under
@@ -61,8 +95,9 @@
 //! refusing a region or a large block) returns null, as `GlobalAlloc`
 //! asks.
 //!
-//! A child made by `fork` gets a copy of the lock as it was; if another
-//! thread held it then, the child must not allocate before `exec`.
+//! A child made by `fork` gets a copy of the lock as it was, and of the
+//! exit hook's key ([`hook_key`]); if another thread held the lock, or
+//! was making the key, then, the child must not allocate before `exec`.
 //! `std::process::Command`, the only way `oskac` starts a process, does
 //! not allocate between the two.
 //!
@@ -146,7 +181,9 @@ fn class_of(layout: Layout) -> Option<usize> {
 }
 
 /// How many blocks of `class` move between a thread's cache and the
-/// shared pool at once: about 4 KiB, and between 4 and 64 blocks.
+/// shared pool at once: as many blocks as fit in 4 KiB, but at most 64,
+/// so a batch is 4 KiB or a little less, except in the classes of 16 to
+/// 48 bytes, where the cap of 64 blocks makes it 1 to 3 KiB.
 fn batch(class: usize) -> usize {
     (4096 / SIZES[class]).clamp(4, 64)
 }
@@ -162,6 +199,10 @@ struct Pool {
     /// exactly [`batch`] blocks linked through their first word; its
     /// first block's second word holds the next batch, or null.
     batches: [*mut u8; CLASSES],
+    /// For each class, the first block of a list of free blocks given
+    /// back by threads that ended ([`flush`]), of any length, linked
+    /// through their first word, or null.
+    loose: [*mut u8; CLASSES],
     /// The start of the unused part of the current region, or null
     /// before the first region.
     next: *mut u8,
@@ -191,6 +232,7 @@ static SHARED: Shared = Shared {
     busy: AtomicBool::new(false),
     pool: UnsafeCell::new(Pool {
         batches: [ptr::null_mut(); CLASSES],
+        loose: [ptr::null_mut(); CLASSES],
         next: ptr::null_mut(),
         left: 0,
     }),
@@ -202,17 +244,42 @@ static SHARED: Shared = Shared {
 /// not: nothing in it allocates through this allocator. It must not
 /// panic either, which would leave the lock held; nothing in it does.
 fn with_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
-    while SHARED
-        .busy
-        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
+    while !try_lock() {
         std::hint::spin_loop();
         std::thread::yield_now();
     }
-    // SAFETY: this thread set `busy`, so until it clears it below no
-    // other thread reaches `pool` (see `Shared`'s `Sync`), and this is
-    // the only reference to it.
+    locked(f)
+}
+
+/// As [`with_pool`], but gives up, returning `None` without running `f`,
+/// if the lock is still taken after `tries` tries.
+#[cfg_attr(not(windows), allow(dead_code))] // only Windows' exit hook gives up
+fn try_with_pool<R>(tries: usize, f: impl FnOnce(&mut Pool) -> R) -> Option<R> {
+    for _ in 0..tries {
+        if try_lock() {
+            return Some(locked(f));
+        }
+        std::hint::spin_loop();
+        std::thread::yield_now();
+    }
+    None
+}
+
+/// Sets the pool's lock if no thread holds it, and says whether it did.
+fn try_lock() -> bool {
+    SHARED
+        .busy
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+}
+
+/// Runs `f` on the pool, then clears its lock. Called only by
+/// [`with_pool`] and [`try_with_pool`], right after this thread set the
+/// lock ([`try_lock`]).
+fn locked<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
+    // SAFETY: this thread set `busy` (see the callers), so until it clears
+    // it below no other thread reaches `pool` (see `Shared`'s `Sync`),
+    // and this is the only reference to it.
     let pool = unsafe { &mut *SHARED.pool.get() };
     let result = f(pool);
     SHARED.busy.store(false, Ordering::Release);
@@ -226,6 +293,10 @@ struct Cache {
     heads: [Cell<*mut u8>; CLASSES],
     /// For each class, the number of blocks on this thread's list.
     counts: [Cell<usize>; CLASSES],
+    /// Whether this thread's exit hook is armed ([`exit_hook::arm`]), or
+    /// was tried and could not be: false until a block first joins this
+    /// thread's lists, and again once the hook has run.
+    armed: Cell<bool>,
 }
 
 #[allow(clippy::declare_interior_mutable_const)] // copied into each array slot, never shared
@@ -235,11 +306,14 @@ const NO_COUNT: Cell<usize> = Cell::new(0);
 
 thread_local! {
     // `const` and no destructor: a plain thread-local variable, which
-    // never allocates and is never torn down while the thread runs.
+    // never allocates and is never torn down while the thread runs, so
+    // the allocator works in every thread-local destructor, its own exit
+    // hook ([`flush`]) included.
     static CACHE: Cache = const {
         Cache {
             heads: [NO_BLOCK; CLASSES],
             counts: [NO_COUNT; CLASSES],
+            armed: Cell::new(false),
         }
     };
 }
@@ -313,6 +387,29 @@ fn take_batch(class: usize) -> (*mut u8, usize) {
             // Its blocks are linked and null-terminated already.
             return (first, wanted, true);
         }
+        let loose = pool.loose[class];
+        if !loose.is_null() {
+            // Take up to `wanted` blocks from the front of the loose
+            // list: a walk of at most 64 blocks.
+            let mut last = loose;
+            let mut count = 1;
+            while count < wanted {
+                // SAFETY: `last` is a block of the loose list, a free
+                // block, and this thread holds the pool's lock.
+                let next = unsafe { next_of(last) };
+                if next.is_null() {
+                    break;
+                }
+                last = next;
+                count += 1;
+            }
+            // SAFETY: as above.
+            pool.loose[class] = unsafe { next_of(last) };
+            // SAFETY: `last` is a free block now detached from the loose
+            // list, so only this thread reaches it.
+            unsafe { set_next(last, ptr::null_mut()) };
+            return (loose, count, true);
+        }
         if pool.left < size {
             // The rest of the old region, smaller than one block, is
             // never used. `System` is the C library's allocator, which
@@ -353,6 +450,17 @@ fn take_batch(class: usize) -> (*mut u8, usize) {
 }
 
 impl Cache {
+    /// Arms this thread's exit hook, unless it is armed already: called
+    /// whenever blocks join this thread's lists.
+    fn arm(&self) {
+        if !self.armed.get() {
+            // Set first, and kept even if arming fails, so a thread with
+            // no hook does not try again on every call.
+            self.armed.set(true);
+            exit_hook::arm();
+        }
+    }
+
     /// A free block of `class`, from this thread's list, or null.
     fn pop(&self, class: usize) -> *mut u8 {
         let mut head = self.heads[class].get();
@@ -363,6 +471,7 @@ impl Cache {
             }
             head = start;
             self.counts[class].set(count);
+            self.arm();
         }
         // SAFETY: `head` is the first block of this thread's list, a free
         // block whose first word was set when it joined the list.
@@ -386,6 +495,7 @@ impl Cache {
         self.heads[class].set(block);
         let count = self.counts[class].get() + 1;
         self.counts[class].set(count);
+        self.arm();
         let batch = batch(class);
         if count >= 2 * batch {
             // Detach the first `batch` blocks of the list.
@@ -411,6 +521,217 @@ impl Cache {
                 pool.batches[class] = first;
             });
         }
+    }
+}
+
+/// The exit hook ([`exit_hook`]) of an ending thread, the caller: moves
+/// every list of its cache into the shared pool's loose lists, and marks
+/// the hook as run, so a block that joins a list afterwards arms it
+/// again where the system allows ([`exit_hook::REARMS`]).
+fn flush() {
+    let _ = CACHE.try_with(|cache| {
+        // Nothing below allocates, so no block joins a list while this
+        // runs.
+        cache.armed.set(!exit_hook::REARMS);
+        exit_hook::with_pool_at_exit(|pool| {
+            for class in 0..CLASSES {
+                let first = cache.heads[class].replace(ptr::null_mut());
+                cache.counts[class].set(0);
+                if first.is_null() {
+                    continue;
+                }
+                // The list is under twice a batch long: a walk of under
+                // 128 blocks.
+                let mut last = first;
+                loop {
+                    // SAFETY: `last` is a block of the list just taken
+                    // from this thread's cache, a free block that only
+                    // this thread reaches.
+                    let next = unsafe { next_of(last) };
+                    if next.is_null() {
+                        break;
+                    }
+                    last = next;
+                }
+                // SAFETY: `last` ends that list, which only this thread
+                // reaches until it joins the pool here, under the lock.
+                unsafe { set_next(last, pool.loose[class]) };
+                pool.loose[class] = first;
+            }
+        });
+    });
+}
+
+/// The number of a thread's exit hook, made once for the process by
+/// `make` (which returns `None` if the system has none to give), kept in
+/// [`HOOK_KEY`]: `None` if it could not be made.
+fn hook_key(make: fn() -> Option<usize>) -> Option<usize> {
+    loop {
+        match HOOK_KEY.compare_exchange(NO_KEY, MAKING_KEY, Ordering::Acquire, Ordering::Acquire) {
+            Ok(_) => {
+                let state = make().and_then(|key| key.checked_add(FIRST_KEY));
+                HOOK_KEY.store(state.unwrap_or(NO_HOOK), Ordering::Release);
+                return state.map(|state| state - FIRST_KEY);
+            }
+            Err(MAKING_KEY) => {
+                std::hint::spin_loop();
+                std::thread::yield_now();
+            }
+            Err(NO_HOOK) => return None,
+            Err(state) => return state.checked_sub(FIRST_KEY),
+        }
+    }
+}
+
+/// [`HOOK_KEY`] before the key is made.
+const NO_KEY: usize = 0;
+/// [`HOOK_KEY`] while one thread makes the key.
+const MAKING_KEY: usize = 1;
+/// [`HOOK_KEY`] when the system gave no key.
+const NO_HOOK: usize = 2;
+/// [`HOOK_KEY`] holds the key plus this, once it is made.
+const FIRST_KEY: usize = 3;
+
+/// The state of the process's exit-hook key ([`hook_key`]).
+static HOOK_KEY: AtomicUsize = AtomicUsize::new(NO_KEY);
+
+/// A thread's exit hook on Unix: a `pthread` key whose destructor
+/// ([`flush`]) the C library calls as a thread that set it ends, and
+/// again, up to `PTHREAD_DESTRUCTOR_ITERATIONS` (4) rounds, if the
+/// thread set it again meanwhile. The C library never calls this
+/// allocator, so neither call here allocates through it. Not called when
+/// the process exits, so it never waits for a lock that a thread ended
+/// by `exit` held.
+#[cfg(unix)]
+mod exit_hook {
+    use super::{hook_key, with_pool, Pool};
+    use std::ffi::c_void;
+    use std::os::raw::c_int;
+    use std::ptr::NonNull;
+
+    /// `pthread_key_t`.
+    #[cfg(target_os = "linux")]
+    type Key = std::os::raw::c_uint;
+    /// `pthread_key_t`.
+    #[cfg(target_os = "macos")]
+    type Key = std::os::raw::c_ulong;
+
+    extern "C" {
+        /// `int pthread_key_create(pthread_key_t *key, void
+        /// (*destructor)(void *))`.
+        fn pthread_key_create(
+            key: *mut Key,
+            destructor: Option<extern "C" fn(*mut c_void)>,
+        ) -> c_int;
+        /// `int pthread_setspecific(pthread_key_t key, const void
+        /// *value)`.
+        fn pthread_setspecific(key: Key, value: *const c_void) -> c_int;
+    }
+
+    /// The hook runs again if the thread arms it while it runs.
+    pub const REARMS: bool = true;
+
+    /// Makes the process's key, with [`run`] as its destructor.
+    fn make() -> Option<usize> {
+        let mut key: Key = 0;
+        // SAFETY: `key` is a valid place for the new key, and `run` may be
+        // called with any value.
+        let made = unsafe { pthread_key_create(&mut key, Some(run)) };
+        if made == 0 {
+            usize::try_from(key).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Arms the calling thread's hook: sets its value of the key to a
+    /// marker, never read, only not null, as the destructor runs only
+    /// for a thread whose value is not null.
+    pub fn arm() {
+        let Some(key) = hook_key(make).and_then(|key| Key::try_from(key).ok()) else {
+            return;
+        };
+        // SAFETY: `key` was made by `pthread_key_create` and never deleted.
+        let _ = unsafe { pthread_setspecific(key, NonNull::<c_void>::dangling().as_ptr()) };
+    }
+
+    /// The key's destructor.
+    extern "C" fn run(_marker: *mut c_void) {
+        super::flush();
+    }
+
+    /// Runs `f` on the shared pool, waiting for its lock: an ending thread
+    /// on Unix runs while every other thread runs too, so whoever holds
+    /// the lock leaves it.
+    pub fn with_pool_at_exit(f: impl FnOnce(&mut Pool)) {
+        with_pool(f);
+    }
+}
+
+/// A thread's exit hook on Windows: a fiber-local slot whose callback
+/// ([`flush`]) the system calls as a thread that set it ends. The system
+/// may call it while the process exits too, after it has ended every
+/// other thread, perhaps one that held the pool's lock; so this hook
+/// gives up after a while instead of waiting for the lock, and leaves the
+/// thread's lists unused. It is not armed again once it has run.
+#[cfg(windows)]
+mod exit_hook {
+    use super::{hook_key, try_with_pool, Pool};
+    use std::ffi::c_void;
+    use std::ptr::NonNull;
+
+    // Linked by name, with no import library: `kernel32` is in every
+    // Windows process.
+    #[link(name = "kernel32", kind = "raw-dylib")]
+    extern "system" {
+        /// `DWORD FlsAlloc(PFLS_CALLBACK_FUNCTION callback)`.
+        #[link_name = "FlsAlloc"]
+        fn fls_alloc(callback: Option<extern "system" fn(*const c_void)>) -> u32;
+        /// `BOOL FlsSetValue(DWORD index, PVOID value)`.
+        #[link_name = "FlsSetValue"]
+        fn fls_set_value(index: u32, value: *const c_void) -> i32;
+    }
+
+    /// `FLS_OUT_OF_INDEXES`, `FlsAlloc`'s failure.
+    const FLS_OUT_OF_INDEXES: u32 = u32::MAX;
+
+    /// How many times an ending thread tries the pool's lock.
+    const TRIES: usize = 10_000;
+
+    /// The hook is not armed again once it has run.
+    pub const REARMS: bool = false;
+
+    /// Makes the process's slot, with [`run`] as its callback.
+    fn make() -> Option<usize> {
+        // SAFETY: `run` may be called with any value.
+        let index = unsafe { fls_alloc(Some(run)) };
+        if index == FLS_OUT_OF_INDEXES {
+            None
+        } else {
+            usize::try_from(index).ok()
+        }
+    }
+
+    /// Arms the calling thread's hook: sets its value of the slot to a
+    /// marker, never read, only not null, as the callback runs only for a
+    /// thread whose value is not null.
+    pub fn arm() {
+        let Some(index) = hook_key(make).and_then(|index| u32::try_from(index).ok()) else {
+            return;
+        };
+        // SAFETY: `index` was made by `FlsAlloc` and never freed.
+        let _ = unsafe { fls_set_value(index, NonNull::<c_void>::dangling().as_ptr()) };
+    }
+
+    /// The slot's callback.
+    extern "system" fn run(_marker: *const c_void) {
+        super::flush();
+    }
+
+    /// Runs `f` on the shared pool if its lock comes free within
+    /// [`TRIES`] tries, and otherwise does nothing.
+    pub fn with_pool_at_exit(f: impl FnOnce(&mut Pool)) {
+        let _ = try_with_pool(TRIES, f);
     }
 }
 

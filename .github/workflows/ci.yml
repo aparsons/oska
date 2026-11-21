@@ -130,9 +130,10 @@ jobs:
         run: scripts/release/check-linux-build.sh musl "target/$TARGET/release/oskac"
       # The confinement escape tests, the stress tests of the musl build's
       # allocator (crates/oska-sys/tests/allocator.rs, ticket #523) and the
-      # interpreter, then the native backend's parity with the interpreter,
-      # all run by the musl build. The parity tests run this `oskac`, so
-      # its interpreter runs long programs on that allocator.
+      # interpreter, then the differential suite (the native backend
+      # against the interpreter), all run by the musl build. The
+      # differential suite runs this `oskac`, so its interpreter runs long
+      # programs on that allocator.
       - run: cargo test --locked --target "$TARGET" -p oska-sys -p oska-run
       - run: cargo test --locked --target "$TARGET" -p oskac --test native_files --test native_parity --test native_default
       # oskac's own unit tests, among them the check that the musl build,
