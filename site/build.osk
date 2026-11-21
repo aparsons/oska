@@ -231,9 +231,9 @@ fn has_doc(all: Site, page: Untrusted<String>) -> Bool {
 }
 
 // The home page, `docs/index.md`, which every site has; the security
-// policy and the changelog if there are; the glossary; and every other `.md` file in
-// `docs/`, in its subdirectories (its sections), and in theirs, such as
-// `guide/examples`, except those `unpublished` names.
+// policy and the changelog if there are; the glossary; and every other
+// `.md` file in `docs/`, in its subdirectories (its sections), and in
+// theirs, such as `guide/examples`, except those `unpublished` names.
 fn gather(sources: Sources) -> Result<Site, IoError> {
     var docs: List<Doc> = List.new()
     let home = match sources.docs.read_to_string(Path.new("index.md")) {
@@ -1087,8 +1087,9 @@ fn structured_data(version: String) -> html.Html {
 // The site's navigation, with the link to `current`, the page it is on,
 // marked. After the home page it leads with tasks, in a fixed order:
 // install, learn, set up an agent, look up a code, report a
-// vulnerability, see what changed in a release; the internals are one step away, on the Reference page.
-// An entry whose page the site does not publish is left out.
+// vulnerability, see what changed in a release; the internals are one
+// step away, on the Reference page. An entry whose page the site does not
+// publish is left out.
 fn navigation(all: Site, current: Untrusted<String>) -> html.Html {
     var items = nav_item("index.html", "Oska", current)
     let entries = [

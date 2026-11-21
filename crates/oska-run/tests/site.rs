@@ -442,6 +442,17 @@ fn without_an_authority_report_there_is_no_authority_page() {
     assert!(!site.contains_key("authority.md"));
 }
 
+// ---- The changelog (#514) --------------------------------------------------------------
+
+#[test]
+fn without_a_changelog_there_is_no_changelog_page() {
+    let site = build_ok(&[]);
+    assert!(!site.contains_key("changelog.html"));
+    assert!(!navigation(&site["index.html"])
+        .iter()
+        .any(|(href, _)| href == "/changelog.html"));
+}
+
 #[test]
 fn the_real_site_shows_the_generator_s_own_report_linked_from_the_capabilities_guide() {
     let site = real_site();
@@ -2031,19 +2042,13 @@ fn the_real_navigation_and_reference_page_reach_every_section() {
 fn the_real_changelog_page_has_an_anchor_for_every_released_version() {
     let site = real_site();
     let page = &site["changelog.html"];
-    for anchor in ["v010", "v020", "v030", "v040", "v050", "v060"] {
-        assert!(
-            page.contains(&format!("<h2 id=\"{anchor}\">")),
-            "changelog.html has no #{anchor}"
-        );
-    }
     let changelog = std::fs::read_to_string(common::site::repository_root().join("CHANGELOG.md"))
         .expect("CHANGELOG.md should be readable");
     let versions: Vec<&str> = changelog
         .lines()
         .filter_map(|line| line.strip_prefix("## v"))
         .collect();
-    assert!(versions.len() >= 6, "{versions:?}");
+    assert!(!versions.is_empty(), "CHANGELOG.md has no `## v` heading");
     for version in versions {
         let anchor = format!("v{}", version.replace('.', ""));
         assert!(
