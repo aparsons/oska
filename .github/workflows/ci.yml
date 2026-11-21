@@ -71,6 +71,15 @@ jobs:
       # The pinned ShellCheck check.sh's shellcheck step verifies; runner
       # images ship different releases.
       - run: scripts/shellcheck/install.sh "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # Claude Code, for check.sh's `claude plugin validate` step (spec #206):
+      # its official install script, at a pinned version so the validator's
+      # rules change only in a reviewed PR. It installs into ~/.local/bin,
+      # already on PATH above. Without it the step fails here, never skips.
+      # DISABLE_AUTOUPDATER stays set for the later steps, so check.sh runs
+      # the pinned version.
+      - run: |
+          echo "DISABLE_AUTOUPDATER=1" >> "$GITHUB_ENV"
+          curl -fsSL https://claude.ai/install.sh | DISABLE_AUTOUPDATER=1 bash -s 2.1.330
       # The pinned Lean and TLC check.sh's formal step runs (ADRs 0018,
       # 0019), checked against their pinned checksums; the runner's Java runs
       # TLC. Without them the step fails here, never skips.

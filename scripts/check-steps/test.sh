@@ -2,7 +2,7 @@
 # Tests for scripts/check.sh's step registry: `--list` prints the steps in
 # the order a run prints their headers, so the list cannot drift from the
 # steps that run. Each case runs the real check.sh in a scratch tree where
-# every script it calls, cargo and shellcheck are stubs that log their name,
+# every script it calls, cargo, shellcheck and claude are stubs that log their name,
 # so a whole run takes well under a second.
 #
 #   scripts/check-steps/test.sh
@@ -62,7 +62,7 @@ grep -oE 'scripts/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.sh' "$repo_root/scripts/check.s
     printf '%s' "$stub" >"$tree/$path"
     chmod +x "$tree/$path"
   done
-for tool in cargo shellcheck pwsh; do
+for tool in cargo shellcheck pwsh claude; do
   printf '%s' "$stub" >"$tree/bin/$tool"
   chmod +x "$tree/bin/$tool"
 done
