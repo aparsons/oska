@@ -198,6 +198,13 @@ pub fn real_inputs() -> BTreeMap<String, String> {
         inputs.insert(file.to_string(), text);
     }
     inputs.insert("site/authority.txt".to_string(), generator_authority());
+    // The Pages workflow writes the whole reference with `oskac doc
+    // --format=json`, which this crate cannot run: these tests use the part
+    // of it that `oskac`'s own tests hold to the command's output, the
+    // `std.sql` module. `oskac`'s tests build the site from all of it.
+    let api = std::fs::read_to_string(root.join("crates/oskac/tests/golden/doc_std_sql.json"))
+        .expect("the std.sql reference golden file");
+    inputs.insert("site/api.json".to_string(), api);
     inputs
 }
 

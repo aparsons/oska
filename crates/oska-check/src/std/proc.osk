@@ -1,10 +1,14 @@
-// `std.proc`: the process sink. Signature-only, like `std.sql`; the
-// runtime implementation comes with the interpreter (#9).
+// `std.proc`: start other programs. It checks but has no runtime yet:
+// `oskac run` refuses a program that imports it (`E0371`).
 //
 // Starting a process needs the `Spawn` capability. The program name is a
 // **structural position**: it must be trusted text. The arguments are a
 // **data position**: each is passed to the program as one argument, never
 // through a shell, so untrusted text can't inject a command.
+
+// For maintainers: like the prelude, this file is parsed in prelude mode
+// and is signature-only. The comment block directly above a `pub` item is
+// its description in the API reference.
 
 // Run `program` with `args` and wait for it to finish.
 pub fn run(spawn: Spawn, program: String, args: List<Untrusted<String>>) -> Result<Output, ProcError>
@@ -20,6 +24,7 @@ impl Output {
     pub fn stdout(self) -> Untrusted<String>
 }
 
+// Why a process could not be run.
 pub struct ProcError { pub message: Untrusted<String> }
 
 impl Display for ProcError {
