@@ -13,6 +13,8 @@
 /site/authority.txt
 # The API reference `oskac doc --format=json` prints, which it writes too
 /site/api.json
+# Each source file's last commit date, which the workflow writes too
+/site/lastmod.txt
 # The tracked files the link checker reads, which the workflow writes too
 /site/tracked.txt
 

@@ -26,7 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # The whole history, so each file's last commit date is its own
+      # (site/lastmod.txt, below), not the date of the commit checked out.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --release --locked -p oskac
       # The generator publishes its own authority report, as the checker
@@ -35,6 +39,18 @@ jobs:
       # The API reference, as this `oskac` prints it, which the generator
       # publishes at /api/ and /api.json.
       - run: ./target/release/oskac doc --format=json > site/api.json
+      # Each published source file's last commit date, for the sitemap's
+      # <lastmod>: one `YYYY-MM-DD path` line per file.
+      - name: Write site/lastmod.txt
+        run: |
+          set -euo pipefail
+          git ls-files -z -- docs SECURITY.md CHANGELOG.md GLOSSARY.md site/agent-setup/prompt.md \
+            > "$RUNNER_TEMP/sources"
+          while IFS= read -r -d '' file; do
+            date=$(git log -1 --format=%cs -- "$file")
+            [ -n "$date" ] || { echo "no commit date for $file" >&2; exit 1; }
+            printf '%s %s\n' "$date" "$file"
+          done < "$RUNNER_TEMP/sources" > site/lastmod.txt
       - run: ./target/release/oskac run site/build.osk
       # Releases are stored in GitHub Releases (see release.yml). Fetch them
       # all, verify each against the committed key, and publish them under

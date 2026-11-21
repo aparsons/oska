@@ -437,9 +437,20 @@ test_it_fails_closed_without_the_agent_cli_or_the_harness() {
   setup
   # A PATH with the tools the driver uses, but no `claude`.
   mkdir tools
-  local tool
+  # Each tool is the first one on PATH that is a program, not a script: a
+  # script needs its interpreter, such as `sh`, which this PATH lacks.
+  # Hosted agent sessions put an `rm` wrapper script first on PATH.
+  local tool found candidate
   for tool in bash env jq git timeout awk date mkdir cp mv cat find sort xargs dirname mktemp rm cmp sha256sum sed; do
-    ln -s "$(command -v "$tool")" "tools/$tool"
+    found=
+    while IFS= read -r candidate; do
+      if [ "$(head -c 2 "$candidate")" != '#!' ]; then
+        found=$candidate
+        break
+      fi
+    done < <(type -a -P "$tool")
+    [ -n "$found" ] || fail "no program for $tool on PATH"
+    ln -s "$found" "tools/$tool"
   done
   local status=0
   PATH=$PWD/tools drive --live --yes >out 2>&1 || status=$?
