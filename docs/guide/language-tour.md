@@ -273,6 +273,35 @@ Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_le
 
 Text also carries a trust flag: text from outside the program is an **untrusted value**. That is why a plain `String` parameter is a **structural position**. See [untrusted data and secrets](untrusted-data.md).
 
+## Bytes and secrets
+
+Binary data is **Bytes**, not text. `Bytes.from_hex`, `Bytes.zeroed(len)` and `"text".to_bytes()` make a buffer; `at`, `slice` and the endian reads such as `read_u32_be(offset)` read it, and `push`, `append` and the endian pushes such as `push_u16_be(value)` build one on a `var` binding. Bytes read through a capability are `Untrusted<Bytes>`, and keep the flag as text does. See [bytes and binary data](bytes.md).
+
+Key material is a **secret value**. `Secret.new(value)` makes a `Secret<U8>`, `Secret<U32>`, `Secret<U64>`, `Secret<Bool>` or `Secret<Bytes>`. A **secret integer** wraps on `+`, `-` and `*`, and has the bitwise operators and rotations, but the checker refuses it as a condition, an index, a divisor, a shift amount or an ordering, and the native backend checks that no branch or memory address depends on it. That is what **constant time** means here; [secrets and constant-time code](secrets.md#what-constant-time-means-here) lists what it does not cover. `ct_eq` compares into a `Secret<Bool>`, `ct_select` chooses without a branch, and `.expose()` is the only way out.
+
+```oska
+fn round(key: Secret<U32>, data: Bytes) -> Secret<U32> {
+    let word = data.read_u32_be(0)
+    ((key ^ word) + 1).rotl(8)
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    var data = Bytes.new()
+    data.push_u32_be(258)
+    let key: Secret<U32> = Secret.new(1)
+    let out = round(key, data).expose().to_int()
+    let hex = data.to_hex()
+    io.println("{hex} {out}")?
+    Ok(())
+}
+```
+
+```console cmd=run
+00000102 66560
+```
+
+See [secrets and constant-time code](secrets.md).
+
 ## Contracts
 
 `requires` and `ensures` clauses sit between a function's return type and its body, one per line. `ensures |r| ...` binds the return value. A contract may call only pure functions.
