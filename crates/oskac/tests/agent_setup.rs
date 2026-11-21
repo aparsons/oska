@@ -1208,23 +1208,110 @@ fn the_plugin_requests_no_permission_and_holds_no_program() {
                 );
             }
         }
-        for word in [
-            "permissions",
-            "allowed-tools",
-            "allowedTools",
-            "\"allow\"",
-            "\"deny\"",
-            "\"env\"",
-            "mcpServers",
-            "lspServers",
-            "agents",
-            "bypass",
-            "apiKey",
-            "curl",
-            "wget",
-            "CLAUDE_PLUGIN_ROOT",
-        ] {
+        // Nothing fetches or sends data, and no file reaches into the
+        // plugin's own directory for a program to run.
+        for word in ["curl", "wget", "CLAUDE_PLUGIN_ROOT", "allowed-tools"] {
             assert!(!text.contains(word), "{file} mentions `{word}`");
         }
+        if file.ends_with(".json") {
+            for word in [
+                "permissions",
+                "allowedTools",
+                "\"allow\"",
+                "\"deny\"",
+                "\"env\"",
+                "mcpServers",
+                "lspServers",
+                "agents",
+                "bypass",
+                "apiKey",
+            ] {
+                assert!(!text.contains(word), "{file} mentions `{word}`");
+            }
+        }
     }
+}
+
+// ---- The plugin's `oska` skill (#211) ---------------------------------------------------------
+
+/// The skill, in the plugin's default skills directory.
+const SKILL: &str = "plugins/oska/skills/oska/SKILL.md";
+
+/// When the skill applies, in the words an agent matches a task against.
+/// Every enabled plugin's skill descriptions sit in the agent's context on
+/// every turn, so it stays short.
+const SKILL_DESCRIPTION: &str = "Check, fix, run and test Oska code with oskac. \
+Use when writing or changing Oska code, in .osk files or oska.toml.";
+
+/// The skill as the generator writes it: front matter in the Agent Skills
+/// format, then the `AGENTS.md` template unchanged, which stays the one
+/// hand-written copy of the guidance. `paths` loads the skill on its own
+/// only for Oska files; an agent that does not know the key ignores it.
+fn generated_skill() -> String {
+    format!(
+        "---\nname: oska\ndescription: {SKILL_DESCRIPTION}\npaths: [\"**/*.osk\", \"**/oska.toml\"]\n---\n\n{}",
+        setup_file("AGENTS.template.md")
+    )
+}
+
+#[test]
+fn the_skill_is_the_agents_template_with_front_matter() {
+    let path = repo_root().join(SKILL);
+    let expected = generated_skill();
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        std::fs::create_dir_all(path.parent().expect("a directory")).expect("should create it");
+        std::fs::write(&path, &expected).expect("should write the skill");
+    }
+    assert!(
+        read(&path) == expected,
+        "{SKILL} differs from site/agent-setup/AGENTS.template.md with its front matter; \
+         edit the template, not the skill, then regenerate it with \
+         UPDATE_GOLDEN=1 cargo test -p oskac --test agent_setup and commit both"
+    );
+}
+
+#[test]
+fn the_skill_follows_the_agent_skills_format() {
+    let skill = read(&repo_root().join(SKILL));
+    let front = skill
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .expect("front matter between `---` lines")
+        .0;
+    let field = |key: &str| {
+        front
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+            .unwrap_or_else(|| panic!("a `{key}` field"))
+    };
+    // The name: lowercase letters, digits and hyphens, the directory's name.
+    let name = field("name");
+    assert_eq!(name, "oska");
+    assert!(name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+    assert!(SKILL.ends_with(&format!("/{name}/SKILL.md")));
+    // The description: within the format's 1024 characters, and short
+    // enough to cost little on every turn.
+    let description = field("description");
+    assert!(
+        description.len() <= 200,
+        "a {}-character description",
+        description.len()
+    );
+    // A plain YAML scalar: a `: ` or ` #` inside it would end it early.
+    assert!(!description.contains(": ") && !description.contains(" #"));
+    for word in ["Oska", ".osk", "oska.toml"] {
+        assert!(description.contains(word), "the description names {word}");
+    }
+    assert!(skill.lines().count() < 500, "a body of reasonable length");
+    // The only model-invocable skill: its standing cost is one description.
+    let skills_dir = repo_root().join("plugins/oska/skills");
+    let skills: Vec<_> = std::fs::read_dir(&skills_dir)
+        .expect("a skills directory")
+        .collect();
+    assert_eq!(skills.len(), 1, "one skill in the plugin");
+    // The front matter names no host and no Claude Code feature but `paths`,
+    // so the body is the vendor-neutral template and nothing more.
+    assert!(!front.contains("http") && !front.to_lowercase().contains("claude"));
 }
