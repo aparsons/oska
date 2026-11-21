@@ -597,7 +597,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 method: method.to_string(),
             }),
             Ty::Named(head, _, _) if in_prelude(head) && in_prelude(trait_name) => {
-                Some(Callee::Intrinsic(format!("{head}.{method}")))
+                Some(Callee::intrinsic(format!("{head}.{method}")))
             }
             Ty::Named(head, _, _) => Some(Callee::Function(program::trait_method(
                 head, trait_name, method,

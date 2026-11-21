@@ -442,7 +442,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
         40,
         52,
         ExprKind::Call {
-            callee: Callee::Intrinsic("Scope.spawn".to_string()),
+            callee: Callee::intrinsic("Scope.spawn"),
             type_args: vec![Type::Unit],
             args: vec![
                 Expr {
