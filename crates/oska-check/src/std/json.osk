@@ -110,12 +110,9 @@ pub fn parse(text: Untrusted<String>) -> Result<Value, Error> {
 // `value` as canonical JSON text, on one line. It is untrusted, as the
 // strings in `value` may be.
 pub fn encode(value: Value) -> Untrusted<String> {
-    var out = Encoder(bytes: Bytes.new())
+    var out = Encoder(parts: [])
     out.value(value)
-    match out.bytes.to_text() {
-        Some(text) => text
-        None => ""
-    }
+    "".join(out.parts)
 }
 
 // Parse `text`, check it against `schema`, and give the checked value to
@@ -158,7 +155,7 @@ impl Number {
     // The number as an `Int`, or `None` when it has a fraction or an
     // exponent, or does not fit.
     pub fn to_int(self) -> Option<Int> {
-        if self.text.contains(".") || self.text.contains("e") || self.text.contains("E") {
+        if self.text.contains(".") || self.text.contains("e") {
             return None
         }
         self.text.parse_int()
@@ -167,6 +164,34 @@ impl Number {
     // The number's decimal text, as JSON writes it.
     pub fn text(self) -> String {
         self.text
+    }
+
+    // Whether the number has no fractional part, however it is written:
+    // `3`, `3.0`, `30e-1` and `1e400` do, `3.5` and `1e-400` do not.
+    fn is_integral(self) -> Bool {
+        let parts = self.text.split("e")
+        let mantissa = parts.at(0).replace("-", "").split(".")
+        let whole = mantissa.at(0)
+        let fraction = mantissa.get(1).unwrap_or("")
+        let digits = "{whole}{fraction}".chars()
+        var significant = false
+        var zeros = 0
+        for digit in digits {
+            if digit == "0" {
+                zeros = zeros + 1
+            } else {
+                significant = true
+                zeros = 0
+            }
+        }
+        if !significant {
+            return true
+        }
+        let exponent = parts.get(1).unwrap_or("0").replace("+", "")
+        match exponent.parse_int() {
+            Some(e) => e - fraction.len() + zeros >= 0
+            None => !exponent.starts_with("-")
+        }
     }
 }
 
@@ -238,34 +263,22 @@ impl Value {
 
     // The string member `key`, if there is one.
     pub fn text(self, key: Untrusted<String>) -> Option<Untrusted<String>> {
-        match self.get(key) {
-            Some(value) => value.as_text()
-            None => None
-        }
+        self.get(key).unwrap_or(Value.Null).as_text()
     }
 
     // The integer member `key`, if there is one and it fits an `Int`.
     pub fn int(self, key: Untrusted<String>) -> Option<Int> {
-        match self.get(key) {
-            Some(value) => value.as_int()
-            None => None
-        }
+        self.get(key).unwrap_or(Value.Null).as_int()
     }
 
     // The boolean member `key`, if there is one.
     pub fn bool(self, key: Untrusted<String>) -> Option<Bool> {
-        match self.get(key) {
-            Some(value) => value.as_bool()
-            None => None
-        }
+        self.get(key).unwrap_or(Value.Null).as_bool()
     }
 
     // The items of the list member `key`, if there is one.
     pub fn list(self, key: Untrusted<String>) -> Option<List<Value>> {
-        match self.get(key) {
-            Some(value) => value.as_list()
-            None => None
-        }
+        self.get(key).unwrap_or(Value.Null).as_list()
     }
 
     // The object member `key`, if there is one.
@@ -282,12 +295,17 @@ impl Value {
 // A description of the JSON a program accepts. Build one with `string`,
 // `integer`, `number`, `boolean`, `one_of`, `list` and `object`; its
 // fields are private.
-pub struct Schema {
-    kind: String,
-    description: String,
-    choices: List<String>,
-    items: List<Schema>,
-    fields: List<Field>,
+pub struct Schema { kind: Kind, description: String }
+
+// What a schema accepts. A string's choices are empty when any string
+// will do.
+enum Kind {
+    Text(List<String>),
+    Integer,
+    Number,
+    Boolean,
+    List(Schema),
+    Object(List<Field>),
 }
 
 // A field of an object schema: its name, its schema, and whether it is
@@ -309,174 +327,191 @@ impl Field {
 impl Schema {
     // Any string.
     pub fn string() -> Schema {
-        Schema.of("string", [], [], [])
+        Schema(kind: Kind.Text([]), description: "")
     }
 
-    // A number that is an integer and fits an `Int`.
+    // A number with no fractional part, such as `3`, `3.0` or `3e2`, of
+    // any size, as JSON Schema's `integer`. `Value.as_int` gives an `Int`
+    // only for one written without a fraction or an exponent that fits.
     pub fn integer() -> Schema {
-        Schema.of("integer", [], [], [])
+        Schema(kind: Kind.Integer, description: "")
     }
 
     // Any number.
     pub fn number() -> Schema {
-        Schema.of("number", [], [], [])
+        Schema(kind: Kind.Number, description: "")
     }
 
     // `true` or `false`.
     pub fn boolean() -> Schema {
-        Schema.of("boolean", [], [], [])
+        Schema(kind: Kind.Boolean, description: "")
     }
 
     // A string that is one of `choices`.
     pub fn one_of(choices: List<String>) -> Schema {
-        Schema.of("string", choices, [], [])
+        Schema(kind: Kind.Text(choices), description: "")
     }
 
     // A list whose every item matches `items`.
     pub fn list(items: Schema) -> Schema {
-        Schema.of("array", [], [items], [])
+        Schema(kind: Kind.List(items), description: "")
     }
 
     // An object with `fields`, in order, and no other member.
     pub fn object(fields: List<Field>) -> Schema {
-        Schema.of("object", [], [], fields)
-    }
-
-    fn of(kind: String, choices: List<String>, items: List<Schema>, fields: List<Field>) -> Schema {
-        Schema(kind: kind, description: "", choices: choices, items: items, fields: fields)
+        Schema(kind: Kind.Object(fields), description: "")
     }
 
     // The same schema with a description, which tells a model or a client
     // what the value means.
     pub fn describe(self, text: String) -> Schema {
-        Schema(
-            kind: self.kind,
-            description: text,
-            choices: self.choices,
-            items: self.items,
-            fields: self.fields,
-        )
+        Schema(kind: self.kind, description: text)
     }
 
     // The schema as JSON Schema: `type`, then `description` when there is
     // one, then `enum`, `items`, or an object's `properties`, `required`
     // and `additionalProperties: false`.
     pub fn to_value(self) -> Value {
-        var members: List<Member> = [Member(key: "type", value: Value.Text(self.kind))]
+        let kind = match self.kind {
+            Kind.Text(_) => "string"
+            Kind.Integer => "integer"
+            Kind.Number => "number"
+            Kind.Boolean => "boolean"
+            Kind.List(_) => "array"
+            Kind.Object(_) => "object"
+        }
+        var members: List<Member> = [Member(key: "type", value: Value.Text(kind))]
         if self.description != "" {
             members.push(Member(key: "description", value: Value.Text(self.description)))
         }
-        if self.choices.len() > 0 {
-            var choices: List<Value> = []
-            for choice in self.choices {
-                choices.push(Value.Text(choice))
-            }
-            members.push(Member(key: "enum", value: Value.List(choices)))
-        }
-        for items in self.items {
-            members.push(Member(key: "items", value: items.to_value()))
-        }
-        if self.kind == "object" {
-            var properties: List<Member> = []
-            var required: List<Value> = []
-            for field in self.fields {
-                properties.push(Member(key: field.name, value: field.schema.to_value()))
-                if field.required {
-                    required.push(Value.Text(field.name))
+        match self.kind {
+            Kind.Text(choices) => {
+                if choices.len() > 0 {
+                    var values: List<Value> = []
+                    for choice in choices {
+                        values.push(Value.Text(choice))
+                    }
+                    members.push(Member(key: "enum", value: Value.List(values)))
                 }
             }
-            members.push(Member(key: "properties", value: Value.Object(properties)))
-            members.push(Member(key: "required", value: Value.List(required)))
-            members.push(Member(key: "additionalProperties", value: Value.Bool(false)))
+            Kind.List(items) => members.push(Member(key: "items", value: items.to_value()))
+            Kind.Object(fields) => {
+                var properties: List<Member> = []
+                var required: List<Value> = []
+                for field in fields {
+                    properties.push(Member(key: field.name, value: field.schema.to_value()))
+                    if field.required {
+                        required.push(Value.Text(field.name))
+                    }
+                }
+                members.push(Member(key: "properties", value: Value.Object(properties)))
+                members.push(Member(key: "required", value: Value.List(required)))
+                members.push(Member(key: "additionalProperties", value: Value.Bool(false)))
+            }
+            _ => {}
         }
         Value.Object(members)
     }
 
     // `Ok` when `value` matches the schema, or the first violation, in
-    // document order.
+    // document order. A member the schema does not name is a violation
+    // at its own path: `$.name` when its key is a plain name, or
+    // `$.(member 3)`, its place in the object counted from 1, when not.
     pub fn validate(self, value: Value) -> Result<(), Violation> {
         self.check(value, "$")
     }
 
     fn check(self, value: Value, path: String) -> Result<(), Violation> {
-        if self.kind == "string" {
-            let text = match value.as_text() {
-                Some(text) => text
-                None => {
-                    return Schema.expected(path, "a string")
+        match self.kind {
+            Kind.Text(choices) => {
+                let text = match value.as_text() {
+                    Some(text) => text
+                    None => {
+                        return Schema.expected(path, "a string")
+                    }
                 }
-            }
-            if self.choices.len() == 0 {
-                return Ok(())
-            }
-            for choice in self.choices {
-                if text == choice {
+                if choices.len() == 0 {
                     return Ok(())
                 }
+                for choice in choices {
+                    if text == choice {
+                        return Ok(())
+                    }
+                }
+                Schema.expected(path, "one of the schema's choices")
             }
-            return Schema.expected(path, "one of the schema's choices")
-        }
-        if self.kind == "integer" {
-            return match value.as_int() {
-                Some(_) => Ok(())
-                None => Schema.expected(path, "an integer")
+            Kind.Integer => {
+                match value {
+                    Value.Number(number) => {
+                        if number.is_integral() {
+                            return Ok(())
+                        }
+                    }
+                    _ => {}
+                }
+                Schema.expected(path, "an integer")
             }
-        }
-        if self.kind == "number" {
-            return match value {
-                Value.Number(_) => Ok(())
-                _ => Schema.expected(path, "a number")
-            }
-        }
-        if self.kind == "boolean" {
-            return match value.as_bool() {
-                Some(_) => Ok(())
-                None => Schema.expected(path, "a boolean")
-            }
-        }
-        if self.kind == "array" {
-            let items = match value.as_list() {
-                Some(items) => items
-                None => {
-                    return Schema.expected(path, "a list")
+            Kind.Number => {
+                match value {
+                    Value.Number(_) => Ok(())
+                    _ => Schema.expected(path, "a number")
                 }
             }
-            for schema in self.items {
+            Kind.Boolean => {
+                match value.as_bool() {
+                    Some(_) => Ok(())
+                    None => Schema.expected(path, "a boolean")
+                }
+            }
+            Kind.List(schema) => {
+                let items = match value.as_list() {
+                    Some(items) => items
+                    None => {
+                        return Schema.expected(path, "a list")
+                    }
+                }
                 var index = 0
                 for item in items {
                     let at = "{path}[{index}]"
                     schema.check(item, at)?
                     index = index + 1
                 }
+                Ok(())
             }
-            return Ok(())
+            Kind.Object(fields) => Schema.check_object(fields, value, path)
         }
+    }
+
+    fn check_object(fields: List<Field>, value: Value, path: String) -> Result<(), Violation> {
         let members = match value.as_members() {
             Some(members) => members
             None => {
                 return Schema.expected(path, "an object")
             }
         }
+        var place = 0
         for member in members {
-            var known = false
-            for field in self.fields {
-                if member.key == field.name {
-                    known = true
+            place = place + 1
+            var found = false
+            for field in fields {
+                if !found && member.key == field.name {
+                    found = true
+                    let at = "{path}.{field.name}"
+                    field.schema.check(member.value, at)?
                 }
             }
-            if !known {
-                return Schema.expected(path, "no member the schema does not name")
+            if !found {
+                let name = match plain_name(member.key) {
+                    Some(name) => name
+                    None => "(member {place})"
+                }
+                return Schema.expected("{path}.{name}", "no member by this name")
             }
         }
-        for field in self.fields {
-            let at = "{path}.{field.name}"
-            match value.get(field.name) {
-                Some(member) => field.schema.check(member, at)?
-                None => {
-                    if field.required {
-                        return Schema.expected(at, "a required member")
-                    }
-                }
+        for field in fields {
+            if field.required && !value.get(field.name).is_some() {
+                let at = "{path}.{field.name}"
+                return Schema.expected(at, "a required member")
             }
         }
         Ok(())
@@ -485,6 +520,32 @@ impl Schema {
     fn expected(path: String, expected: String) -> Result<(), Violation> {
         Err(Violation(path: path, expected: expected))
     }
+}
+
+// `key`, when it is a plain name of 1 to 64 ASCII letters, digits, `_`
+// and `-`, which can stand in a violation's path as it is.
+fn plain_name(key: Untrusted<String>) -> Option<String> {
+    let bytes = key.to_bytes()
+    if bytes.len() == 0 || bytes.len() > 64 {
+        return None
+    }
+    for at in 0..bytes.len() {
+        let byte = bytes.at(at).to_int()
+        let letter = (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+        let digit = byte >= 48 && byte <= 57
+        if !letter && !digit && byte != 95 && byte != 45 {
+            return None
+        }
+    }
+    Some(vouch(key))
+}
+
+// The one trust assertion of `std.json`, for text its callers have
+// checked character by character: a number's text, which the parser
+// validated against JSON's grammar, and a key that `plain_name` found to
+// be a plain name. Neither can hold anything but the characters checked.
+fn vouch(checked: Untrusted<String>) -> String {
+    checked.assume_trusted()
 }
 
 // ---- Reading ---------------------------------------------------------
@@ -661,7 +722,9 @@ impl Parser {
                 self.at = self.at + 1
                 return match out.to_text() {
                     Some(text) => Ok(text)
-                    None => self.fail("invalid escape")
+                    // Unreachable: the input is text, cut only at ASCII
+                    // bytes, and every escape adds a scalar value's UTF-8.
+                    None => self.fail("invalid text")
                 }
             }
             if byte == 92 {
@@ -739,71 +802,61 @@ impl Parser {
         Ok(value)
     }
 
-    // The number at the current byte, in JSON's grammar.
+    // The number at the current byte, in JSON's grammar. Its text is
+    // vouched for once the grammar has checked every character, with any
+    // exponent written `e`.
     fn number(var self) -> Result<Value, Error> {
         let start = self.at
-        var text: List<String> = []
         if self.peek() == 45 {
-            text.push("-")
             self.at = self.at + 1
         }
         let first = self.peek()
         if first == 48 {
-            text.push("0")
             self.at = self.at + 1
         } else if first >= 49 && first <= 57 {
-            text.push(self.digits())
+            let _ = self.digits()
         } else {
             return Err(Error(offset: start, reason: "invalid number"))
         }
         if self.peek() == 46 {
             self.at = self.at + 1
-            let fraction = self.digits()
-            if fraction == "" {
+            if self.digits() == 0 {
                 return Err(Error(offset: start, reason: "invalid number"))
             }
-            text.push(".")
-            text.push(fraction)
         }
         let e = self.peek()
         if e == 101 || e == 69 {
             self.at = self.at + 1
-            text.push("e")
             let sign = self.peek()
-            if sign == 43 {
-                text.push("+")
-                self.at = self.at + 1
-            } else if sign == 45 {
-                text.push("-")
+            if sign == 43 || sign == 45 {
                 self.at = self.at + 1
             }
-            let exponent = self.digits()
-            if exponent == "" {
+            if self.digits() == 0 {
                 return Err(Error(offset: start, reason: "invalid number"))
             }
-            text.push(exponent)
         }
-        Ok(Value.Number(Number(text: "".join(text))))
+        match self.bytes.slice(start, self.at).to_text() {
+            Some(text) => Ok(Value.Number(Number(text: vouch(text.replace("E", "e")))))
+            // Unreachable: every byte read is an ASCII digit, sign, `.`,
+            // `e` or `E`.
+            None => Err(Error(offset: start, reason: "invalid number"))
+        }
     }
 
-    // The decimal digits at the current byte, read, as trusted text: each
-    // is written from a literal, not copied from the input.
-    fn digits(var self) -> String {
-        var out: List<String> = []
+    // Read the decimal digits at the current byte; how many there were.
+    fn digits(var self) -> Int {
+        var count = 0
         while true {
             let byte = self.peek()
             if byte < 48 || byte > 57 {
-                return "".join(out)
+                return count
             }
-            out.push(DIGITS.at(byte - 48))
+            count = count + 1
             self.at = self.at + 1
         }
-        "".join(out)
+        count
     }
 }
-
-// The decimal digits, by value.
-const DIGITS: List<String> = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
 // `point`, a Unicode scalar value, encoded in UTF-8.
 fn utf8(point: Int) -> Bytes {
@@ -925,94 +978,96 @@ fn compare(a: Untrusted<Bytes>, b: Untrusted<Bytes>) -> Int {
 
 // ---- Writing ---------------------------------------------------------
 
-// The state of `encode`: the bytes written so far.
-struct Encoder { bytes: Untrusted<Bytes> }
+// The state of `encode`: the pieces of text written so far.
+struct Encoder { parts: List<Untrusted<String>> }
 
 impl Encoder {
     fn value(var self, value: Value) {
         match value {
-            Value.Null => self.bytes.append("null".to_bytes())
+            Value.Null => self.parts.push("null")
             Value.Bool(flag) => {
                 if flag {
-                    self.bytes.append("true".to_bytes())
+                    self.parts.push("true")
                 } else {
-                    self.bytes.append("false".to_bytes())
+                    self.parts.push("false")
                 }
             }
-            Value.Number(number) => self.bytes.append(number.text.to_bytes())
+            Value.Number(number) => self.parts.push(number.text)
             Value.Text(text) => self.string(text)
             Value.List(items) => {
-                self.bytes.push(91)
+                self.parts.push("[")
                 var first = true
                 for item in items {
                     if !first {
-                        self.bytes.push(44)
+                        self.parts.push(",")
                     }
                     first = false
                     self.value(item)
                 }
-                self.bytes.push(93)
+                self.parts.push("]")
             }
             Value.Object(members) => {
-                self.bytes.push(123)
+                self.parts.push("\{")
                 var first = true
                 for member in members {
                     if !first {
-                        self.bytes.push(44)
+                        self.parts.push(",")
                     }
                     first = false
                     self.string(member.key)
-                    self.bytes.push(58)
+                    self.parts.push(":")
                     self.value(member.value)
                 }
-                self.bytes.push(125)
+                self.parts.push("\}")
             }
         }
     }
 
-    // `text` as a JSON string: quoted, with `"`, `\`, every byte below
-    // 0x20, U+2028 and U+2029 escaped. Runs between escapes are copied
-    // whole.
+    // `text` as a JSON string: quoted, with `"`, `\`, every character
+    // below U+0020, U+2028 and U+2029 escaped. Runs between escapes are
+    // copied whole.
     fn string(var self, text: Untrusted<String>) {
-        let bytes = text.to_bytes()
-        self.bytes.push(34)
+        self.parts.push("\"")
         var run = 0
         var at = 0
-        while at < bytes.len() {
-            let byte = bytes.at(at).to_int()
-            var width = 0
-            var escape = ""
-            if byte == 34 {
-                escape = "\\\""
-                width = 1
-            } else if byte == 92 {
-                escape = "\\\\"
-                width = 1
-            } else if byte < 32 {
-                escape = control_escape(byte)
-                width = 1
-            } else if byte == 226 && at + 2 < bytes.len() && bytes.at(at + 1).to_int() == 128 {
-                let last = bytes.at(at + 2).to_int()
-                if last == 168 {
-                    escape = "\\u2028"
-                    width = 3
-                } else if last == 169 {
-                    escape = "\\u2029"
-                    width = 3
-                }
+        for c in text.chars() {
+            let escape = escape_of(c)
+            if escape != "" {
+                self.parts.push(text.slice(run, at))
+                self.parts.push(escape)
+                run = at + 1
             }
-            if width > 0 {
-                self.bytes.append(bytes.slice(run, at))
-                self.bytes.append(escape.to_bytes())
-                at = at + width
-                run = at
-            } else {
-                at = at + 1
-            }
+            at = at + 1
         }
-        self.bytes.append(bytes.slice(run, at))
-        self.bytes.push(34)
+        self.parts.push(text.slice(run, at))
+        self.parts.push("\"")
     }
+}
+
+// The escape JSON writes for the character `c`, or `""` when it is
+// written as it is.
+fn escape_of(c: Untrusted<String>) -> String {
+    let bytes = c.to_bytes()
+    let first = bytes.at(0).to_int()
+    if first == 34 {
+        return "\\\""
+    }
+    if first == 92 {
+        return "\\\\"
+    }
+    if first < 32 {
+        return control_escape(first)
+    }
+    if bytes.len() == 3 && first == 226 && bytes.at(1).to_int() == 128 {
+        let last = bytes.at(2).to_int()
+        if last == 168 {
+            return "\\u2028"
+        }
+        if last == 169 {
+            return "\\u2029"
+        }
+    }
+    ""
 }
 
 // The escape JSON writes for the control character `byte`, below 0x20:

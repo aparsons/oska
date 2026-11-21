@@ -4,6 +4,12 @@
 //! surrogates, duplicate keys, the depth and length limits, integers that
 //! do not fit), the accessors, building values, and the schema builder,
 //! validator and `decode`. The output is the same, byte for byte, on both.
+//!
+//! `fixtures/json_test_suite` is the `test_parsing` corpus of Nicolas
+//! Seriot's JSONTestSuite (MIT, its `LICENSE` beside it), at commit
+//! `1ef36fa01286573e846ac449e8683f8833c5b26a`: every `y_` file must parse,
+//! every `n_` file must be refused, and an `i_` file may go either way,
+//! all without a panic.
 
 #![cfg(any(
     all(
@@ -14,6 +20,8 @@
 ))]
 
 mod differential;
+
+use std::path::Path;
 
 use differential::{assert_same, Case};
 
@@ -318,6 +326,11 @@ fn main(io: Stdout) -> Result<(), IoError> {
     validated(io, schema, "\{\"x\":1,\"y\":2,\"on\":\"yes\"\}")
     validated(io, schema, "[1]")
     validated(io, schema, "\{\"x\":99999999999999999999,\"y\":2\}")
+    validated(io, schema, "\{\"x\":2.0,\"y\":3e2\}")
+    validated(io, schema, "\{\"x\":1e400,\"y\":-0.0\}")
+    validated(io, schema, "\{\"x\":30e-1,\"y\":1e-400\}")
+    validated(io, schema, "\{\"x\":1,\"y\":2,\"a b\":true\}")
+    decoded(io, schema, "\{\"x\":2.0,\"y\":2\}")
     Ok(())
 }
 "#;
@@ -354,13 +367,18 @@ decode {"x":1,"y":2,"label":"here"}: 1,2 here
 decode {"x":1}: $.y: expected a required member
 decode {"x":1,: invalid JSON at byte 7: unexpected end of input
 validate {"x":1,"y":2.5}: $.y: expected an integer
-validate {"x":1,"y":2,"extra":true}: $: expected no member the schema does not name
+validate {"x":1,"y":2,"extra":true}: $.extra: expected no member by this name
 validate {"x":1,"y":2,"kind":"star"}: $.kind: expected one of the schema's choices
 validate {"x":1,"y":2,"kind":"dot","on":true}: ok
 validate {"x":1,"y":2,"weights":[1,2.5,"3"]}: $.weights[2]: expected a number
 validate {"x":1,"y":2,"on":"yes"}: $.on: expected a boolean
 validate [1]: $: expected an object
-validate {"x":99999999999999999999,"y":2}: $.x: expected an integer
+validate {"x":99999999999999999999,"y":2}: ok
+validate {"x":2.0,"y":3e2}: ok
+validate {"x":1e400,"y":-0.0}: ok
+validate {"x":30e-1,"y":1e-400}: $.y: expected an integer
+validate {"x":1,"y":2,"a b":true}: $.(member 3): expected no member by this name
+decode {"x":2.0,"y":2}: 0,2 none
 "#
     );
     assert_eq!(outcome.exit_code, Some(0));
@@ -388,4 +406,91 @@ fn modules_of_a_package_share_the_module() {
         ],
     ));
     assert_eq!(outcome.stdout, "{\"ping\":true}\n");
+}
+
+/// Parses every file under `suite`, printing `<name> ok`, `<name>
+/// refused` or, for bytes that are not UTF-8, `<name> not text`.
+const SUITE: &str = r#"use std.json
+
+fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
+    let suite = fs.restrict_to("suite")
+    for name in suite.list_dir(Path.new("."))? {
+        let bytes = suite.read_bytes(Path.from(name))?
+        let outcome = match bytes.to_text() {
+            Some(text) => match json.parse(text) {
+                Ok(_) => "ok"
+                Err(_) => "refused"
+            }
+            None => "not text"
+        }
+        io.println("{name} {outcome}")?
+    }
+    Ok(())
+}
+"#;
+
+/// The suite's `y_` files that `std.json` refuses by design: a key that
+/// occurs twice in one object is an error, not "last wins" (spec #229).
+const DUPLICATE_KEYS: [&str; 2] = [
+    "y_object_duplicated_key.json",
+    "y_object_duplicated_key_and_value.json",
+];
+
+/// The suite's files, in a sorted list.
+fn suite_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/json_test_suite/test_parsing")
+}
+
+fn suite_names() -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(suite_dir())
+        .expect("the suite should list")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Copy the suite's files, byte for byte, into `suite` under `root`.
+fn copy_suite(root: &Path) {
+    let into = root.join("suite");
+    std::fs::create_dir_all(&into).expect("the suite directory should be made");
+    for name in suite_names() {
+        std::fs::copy(suite_dir().join(&name), into.join(&name)).expect("a suite file should copy");
+    }
+}
+
+#[test]
+fn the_json_test_suite_is_parsed_as_it_requires() {
+    let names = suite_names();
+    assert!(names.len() > 300, "{names:?}");
+    let case = Case::file("json_test_suite", SUITE).with_setup(copy_suite);
+    let outcome = assert_same(&case);
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    let mut wrong = Vec::new();
+    let mut seen = Vec::new();
+    for line in outcome.stdout.lines() {
+        let (name, result) = line.split_once(' ').expect("a line names a file");
+        seen.push(name.to_string());
+        let fine = match &name[..2] {
+            _ if DUPLICATE_KEYS.contains(&name) => result == "refused",
+            "y_" => result == "ok",
+            "n_" => result != "ok",
+            _ => true,
+        };
+        if !fine {
+            wrong.push(line.to_string());
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, names);
+    assert!(
+        wrong.is_empty(),
+        "files parsed against the suite: {wrong:#?}"
+    );
 }

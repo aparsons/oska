@@ -783,6 +783,11 @@ fn check_source(
         .collect();
     diagnostics.retain(|d| d.code == codes::TOOLCHAIN_ONLY || !refused.contains(&d.span));
     diagnostics.sort_by_key(|d| d.span.start);
+    // A `std` module written in Oska is the toolchain's code, its trust
+    // assertions reviewed there (`tests/std_json.rs` lists them): the
+    // report is about the program's own.
+    audit.retain(|site| !modules.in_std(site.span.start));
+    attenuations.retain(|a| !modules.in_std(a.span.start));
     audit.sort_by_key(|site| site.span.start);
     // A chain shares its start: the inner call, which ends first, is first.
     attenuations.sort_by_key(|a| (a.span.start, a.span.end));

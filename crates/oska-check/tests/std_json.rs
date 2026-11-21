@@ -44,6 +44,59 @@ fn a_parsed_string_is_refused_as_a_sink_literal() {
     assert_eq!(codes, ["E0341"], "{:#?}", report.diagnostics);
 }
 
+/// A function that parses `raw` and binds `name`, a string field of it,
+/// before `body`, with `params` after `raw`.
+fn field_in(params: &str, body: &str) -> String {
+    format!(
+        "fn use_it(raw: Untrusted<String>{params}) {{\n    \
+         let value = json.parse(raw).unwrap_or(json.Value.Null)\n    \
+         let name = value.text(\"name\").unwrap_or(\"\")\n\
+         {body}}}\n"
+    )
+}
+
+#[test]
+fn a_parsed_string_is_refused_in_every_structural_position() {
+    let cases = [
+        (
+            "use std.proc",
+            ", spawn: Spawn",
+            "    let _ = proc.run(spawn, name, [])\n",
+        ),
+        (
+            "use std.html",
+            "",
+            "    let _ = html.TrustedHtml.new(name)\n",
+        ),
+        (
+            "use std.sql",
+            ", net: NetConnect",
+            "    let _ = sql.connect(net, name)\n",
+        ),
+        (
+            "",
+            ", net: NetConnect",
+            "    let _ = net.connect(name, 443)\n",
+        ),
+        ("", ", fs: FsRead", "    let _ = fs.restrict_to(name)\n"),
+        (
+            "",
+            ", fs: FsRead",
+            "    let _ = fs.restrict_to_file(name)\n",
+        ),
+        ("", ", fs: FsWrite", "    let _ = fs.restrict_to(name)\n"),
+        (
+            "",
+            ", fs: FsWrite",
+            "    let _ = fs.restrict_to_file(name)\n",
+        ),
+    ];
+    for (import, params, body) in cases {
+        let src = format!("use std.json\n{import}\n\n{}", field_in(params, body));
+        assert_errors(&src, &[("E0300", "name")]);
+    }
+}
+
 #[test]
 fn a_parsed_string_is_refused_as_a_path_root() {
     let src = with_field("    let _ = Path.new(name)\n");
@@ -185,4 +238,32 @@ fn a_single_file_keeps_refusing_pkg_paths() {
     let alone = check("use pkg.util\n\nfn main() {}\n");
     let alone: Vec<&str> = alone.diagnostics.iter().map(|d| d.code).collect();
     assert_eq!(codes, alone);
+}
+
+/// `std.json`'s own source, checked as a program's module.
+const JSON_SOURCE: &str = include_str!("../src/std/json.osk");
+
+#[test]
+fn the_module_holds_one_audited_trust_assertion_and_no_authority() {
+    // The authority and audit reports leave a `std` module written in
+    // Oska out, so this checks it as code of its own: it must reach no
+    // capability, and vouch for text in one place only.
+    let report = check(JSON_SOURCE);
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let reaching: Vec<&str> = report
+        .functions
+        .iter()
+        .filter(|f| !f.pure || !f.authority.is_empty())
+        .map(|f| f.name.as_str())
+        .collect();
+    assert!(
+        reaching.is_empty(),
+        "functions that reach authority: {reaching:?}"
+    );
+    let sites: Vec<&str> = report
+        .audit
+        .iter()
+        .map(|site| &JSON_SOURCE[site.span.start..site.span.end])
+        .collect();
+    assert_eq!(sites, ["checked.assume_trusted()"]);
 }
