@@ -1,21 +1,19 @@
 # Research
 
-Each note answers one question, with its sources and the date it was written. Notes are background for decisions, not documentation: a note can propose a feature that Oska does not have, and a later decision can overrule it. What Oska does today is in the [guides](../guide/index.md); what the project decided is in the [decision records](../adr/).
-
-The notes are grouped by topic. Within a topic, read them from the top.
+Each note answers one question, with its sources and the date it was written. A later decision can overrule a note; what the project decided is in the [decision records](../adr/). The notes are grouped by topic. Within a topic, read them from the top.
 
 ## The language and what it is for
 
-- [Designing a secure-by-default, AI-first language](2026-11-ai-first-secure-language.md) (2026-11-08): the research the language started from. Four foundations: memory safety, capabilities with no ambient authority, effects in every signature, and checks an agent can act on.
+- [Designing a secure-by-default, AI-first language](2026-11-ai-first-secure-language.md) (2026-11-08): the research the language started from. Four foundations: memory safety, capabilities with no ambient authority, effects in every signature, and machine-checked contracts with designs that make whole classes of vulnerability impossible to write.
 - [AI inside Oska programs, and around the toolchain](2026-11-ai-in-oska.md) (2026-11-12): how capabilities and untrusted text answer the OWASP risks of LLM applications, such as prompt injection, by design rather than by prompting.
 - [How long until Oska can replace Rust?](2026-11-oska-replacing-rust.md) (2026-11-17): what is missing before Oska can replace Rust for command-line tools and services, and for this repository's own code.
-- [An operating system built with Oska](2026-11-oska-operating-system.md) (2026-11-19): what an OS-like environment for Oska and AI agents could look like, and a staged roadmap. Mostly proposals.
+- [An operating system built with Oska](2026-11-oska-operating-system.md) (2026-11-19): what an operating system, or an environment like one, for Oska and AI agents could look like, and a staged roadmap. Mostly proposals.
 - [A secure-by-default `std.json`](2026-11-json-parser.md) (2026-11-19): how `std.json` should parse, with the lessons of nine JSON parsers. Strict by default, with every limit on.
 
 ## Agents and code mode
 
 - [Tooling for AI-driven development](2026-11-ai-driven-development.md) (2026-11-12): what Oska's agent loop already has (stable codes, exact spans, fixes an agent can apply) and what would improve it.
-- [Should agents write throwaway scripts in Oska instead of Python?](2026-11-agent-scripting-python-vs-oska.md) (2026-11-15): not yet. Speed is not the reason; Oska lacks JSON, maps and floating-point numbers for most of those scripts.
+- [Should agents write throwaway scripts in Oska instead of Python?](2026-11-agent-scripting-python-vs-oska.md) (2026-11-15): not yet. Speed is not the reason: 7 of the 29 uses need JSON or SQLite, which Oska cannot do yet, and the rest come out 2 to 6 times longer in Oska.
 - [What "code mode" is, and how Oska fits it](2026-11-code-mode.md) (2026-11-19): code mode means the model writes a program that calls its tools, run in a sandbox. Anthropic's and Cloudflare's forms of it, and where Oska could serve.
 - [The changes Oska needs for code mode](2026-11-code-mode-changes.md) (2026-11-19): the follow-up to the note above. The changes, ranked by value for their cost.
 
@@ -24,7 +22,7 @@ The notes are grouped by topic. Within a topic, read them from the top.
 - [Calling macOS through libSystem](2026-11-macos-libsystem-calls.md) (2026-11-17): how `std.rt` calls macOS, which has no stable system-call numbers. Accepted before the macOS backend was built; see [ADR 0015](../adr/0015-macos-intrinsics-are-libsystem-calls.md).
 - [Calling Windows through kernel32 and ntdll](2026-11-windows-kernel32-calls.md) (2026-11-19): the same question for Windows, which has no file descriptors, signals or `errno`. Accepted before the Windows backend was built; see [ADR 0020](../adr/0020-windows-intrinsics-are-kernel32-and-ntdll-calls.md).
 - [An `oskac` that does not need glibc](2026-11-oskac-without-glibc.md) (2026-11-19): how the Linux `oskac` can run on any Linux, a `FROM scratch` container included, by building it for musl. See [ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md).
-- [Why the musl build of `oskac` is slower](2026-11-musl-oskac-performance.md) (2026-11-20): the time goes to musl's C library (its allocator, returning memory to the kernel, and `memcpy`), not to Oska's code, and the cheapest fixes.
+- [Why the musl build of `oskac` is slower](2026-11-musl-oskac-performance.md) (2026-11-20): the time goes to musl's C library (its allocator, returning memory to the kernel, and `memcpy`), but the cheapest fix is in Oska: allocate and copy less. Measured on x86_64 only; aarch64 is pending.
 
 ## Installing, releases and the site
 

@@ -2110,11 +2110,11 @@ fn what_works_today_is_a_guide_listed_in_llms_txt() {
     );
 }
 
-// ---- The real site: the corpus for agents (#189) ----------------------------------------
+// ---- The research index -----------------------------------------------------------------
 
 /// `docs/research/index.md` groups the notes by topic by hand, so a new
-/// note must be added to it: every research page is linked from the
-/// index, under a topic heading.
+/// note must be added to it: every research page has its own entry, a
+/// list item that starts with a link to it, under a topic heading.
 #[test]
 fn the_research_index_lists_every_note_under_a_topic() {
     let site = real_site();
@@ -2125,15 +2125,23 @@ fn the_research_index_lists_every_note_under_a_topic() {
         .collect();
     assert!(notes.len() > 10, "{notes:?}");
     let first_topic = index.find("\n## ").expect("a topic heading");
+    let entries: Vec<(usize, &str)> = index
+        .match_indices("\n- [")
+        .map(|(at, _)| (at, index[at..].lines().nth(1).unwrap_or("")))
+        .collect();
     for note in notes {
         let name = note.trim_start_matches("research/");
-        let at = index
-            .find(&format!("({name})"))
-            .or_else(|| index.find(&format!("(/research/{name})")))
-            .unwrap_or_else(|| panic!("research/index.md does not list {name}"));
-        assert!(at > first_topic, "{name} is listed before any topic");
+        let entry = entries.iter().find(|(_, line)| {
+            let target = line.split_once("](").map_or("", |(_, rest)| rest);
+            target.starts_with(&format!("{name})"))
+                || target.starts_with(&format!("/research/{name})"))
+        });
+        let (at, _) = entry.unwrap_or_else(|| panic!("research/index.md has no entry for {name}"));
+        assert!(*at > first_topic, "{name} is listed before any topic");
     }
 }
+
+// ---- The real site: the corpus for agents (#189) ----------------------------------------
 
 #[test]
 fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
