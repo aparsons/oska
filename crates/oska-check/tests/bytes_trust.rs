@@ -17,7 +17,8 @@ fn assert_error(src: &str, code: &str, text: &str, fragment: &str) {
 }
 
 /// The message fragment of `E0300` for untrusted bytes in a `Bytes` slot.
-const LOST: &str = "expected `Bytes`, found `Untrusted<Bytes>`";
+const LOST: &str =
+    "expected `Bytes`, found `Untrusted<Bytes>`: untrusted bytes cannot be used where trusted bytes are required";
 
 /// A program with `fn keep(b: Bytes)`, a trusted slot, and `fn f` whose
 /// parameters are `params` and whose body is `body`.
@@ -194,6 +195,21 @@ fn bytes_that_untrusted_bytes_were_appended_to_are_untrusted() {
     );
 }
 
+#[test]
+fn a_var_started_empty_can_gather_untrusted_bytes() {
+    // As `var s = ""` can later hold untrusted text, a `var` started from
+    // `Bytes.new()` or `Bytes.zeroed(n)` takes untrusted bytes, and is
+    // untrusted from then on.
+    for start in ["Bytes.new()", "Bytes.zeroed(2)"] {
+        assert_ok(&format!(
+            "fn take(b: Untrusted<Bytes>) {{\n}}\n\
+             fn f(file: FileRead) -> Result<(), IoError> {{\n    \
+             let raw = file.read_bytes()?\n    var gathered = {start}\n    gathered.append(raw)\n    \
+             take(gathered)\n    var swapped = {start}\n    swapped = raw\n    take(swapped)\n    Ok(())\n}}"
+        ));
+    }
+}
+
 // ---- The trust assertion ---------------------------------------------------
 
 #[test]
@@ -237,6 +253,26 @@ fn untrusted_of_a_list_of_bytes_is_still_an_error() {
         "Untrusted<List<U8>>",
         "marks text and bytes only",
     );
+}
+
+// ---- Sinks ---------------------------------------------------------------------
+
+#[test]
+fn bytes_where_a_sink_literal_is_required_are_a_plain_type_mismatch() {
+    // Only text gets `E0341`'s advice to write a literal: bytes are no
+    // kind of text, so they are the wrong type, trusted or not.
+    for bytes in ["raw", "Bytes.new()"] {
+        assert_error(
+            &format!(
+                "use std.sql\n\
+                 fn f(db: sql.Db, raw: Untrusted<Bytes>) -> Result<List<sql.Row>, sql.SqlError> {{\n    \
+                 db.query({bytes}, [])\n}}"
+            ),
+            "E0220",
+            bytes,
+            "expected `SqlLiteral`, found `",
+        );
+    }
 }
 
 // ---- Laundering ---------------------------------------------------------------
@@ -326,13 +362,13 @@ fn a_trait_method_on_trusted_bytes_rejects_untrusted_bytes() {
 // ---- Oska Core -----------------------------------------------------------------
 
 /// The Lean model of Oska Core needs no change for trust on bytes: the
-/// core IR export refuses each new byte method of a directory capability,
-/// and `.assume_trusted()` on bytes, as a built-in outside Oska Core, and
-/// the file capabilities are outside it already, so no program it accepts
-/// can reach one. Each probe's call is the first construct the export
-/// meets (it looks at a callee before its arguments), and the refusal
-/// must name the method or the type, so a byte method let into Oska Core
-/// fails here.
+/// core IR export refuses each new byte method of a capability, and
+/// `.assume_trusted()` on bytes, as a built-in outside Oska Core, so no
+/// program it accepts can reach one. Each probe's call is the first
+/// construct the export meets (it looks at a callee before its arguments,
+/// the receiver among them, so a file capability made in the body is not
+/// refused first), and the refusal must name the method, so a byte method
+/// let into Oska Core fails here.
 #[test]
 fn no_oska_core_program_can_reach_a_byte_capability_method() {
     const PROBES: &[(&str, &str, &str)] = &[
@@ -346,11 +382,15 @@ fn no_oska_core_program_can_reach_a_byte_capability_method() {
             "d.write_bytes(Path.from(\"a\"), Bytes.new())",
             "the built-in `DirWrite.write_bytes`",
         ),
-        ("f: FileRead", "f.read_bytes()", "the type `FileRead`"),
         (
-            "f: FileWrite",
-            "f.write_bytes(Bytes.new())",
-            "the type `FileWrite`",
+            "d: DirRead",
+            "d.restrict_to_file(Path.from(\"a\")).read_bytes()",
+            "the built-in `FileRead.read_bytes`",
+        ),
+        (
+            "d: DirWrite",
+            "d.restrict_to_file(Path.from(\"a\")).write_bytes(Bytes.new())",
+            "the built-in `FileWrite.write_bytes`",
         ),
         (
             "d: DirRead",

@@ -131,3 +131,37 @@ fn byte_reads_and_writes_are_confined_beneath_the_root() {
     );
     assert!(!outcome.tree.contains_key("outside/planted.bin"));
 }
+
+/// Linux only, as `native_files.rs`'s test for text: macOS overcommits
+/// memory without limit, so a terabyte reserves there and the read goes
+/// on until the system kills the process. A file no memory holds is an
+/// `IoError`, "out of memory", on both backends, not the end of the
+/// process: the native runtime reads into the `Bytes` it returns with a
+/// fallible allocation, as the interpreter reserves its buffer.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_too_large_to_hold_as_bytes_is_an_io_error_not_the_end_of_the_process() {
+    let policy = std::fs::read_to_string("/proc/sys/vm/overcommit_memory").unwrap_or_default();
+    if policy.trim() == "1" {
+        eprintln!("skipped: memory is overcommitted without limit here");
+        return;
+    }
+    let src = format!(
+        "fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {{\n    \
+         let big = fs.read_only().restrict_to(\"../sparse\")\n    \
+         io.println(hex(big.read_bytes(Path.new(\"big\"))))?\n    \
+         io.println(hex(big.restrict_to_file(Path.new(\"big\")).read_bytes()))?\n    \
+         Ok(())\n}}\n{SHOWN}"
+    );
+    // Outside the trees the harness compares, which it reads whole.
+    let case = Case::file("bytes_files_sparse", &src).with_setup(|dir| {
+        let sparse = dir.parent().expect("the case directory").join("sparse");
+        std::fs::create_dir_all(&sparse).expect("create the sparse directory");
+        let big = std::fs::File::create(sparse.join("big")).expect("create the sparse file");
+        big.set_len(1 << 40).expect("size the sparse file");
+    });
+    assert_eq!(
+        same(&case).stdout,
+        "REFUSED: out of memory\nREFUSED: out of memory\n"
+    );
+}

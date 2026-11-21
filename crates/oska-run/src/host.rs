@@ -736,10 +736,20 @@ impl FakeHost {
         }
     }
 
-    /// The text of the file at `path`, relative to `/`, if there is one
-    /// and it is UTF-8.
+    /// The text of the file at `path`, relative to `/`, if there is one.
+    /// `None` means no file at all, so a test can assert that nothing was
+    /// written there.
+    ///
+    /// # Panics
+    ///
+    /// When the file's bytes are not UTF-8: read those with
+    /// [`FakeHost::file_bytes`].
     pub fn file(&self, path: &str) -> Option<&str> {
-        std::str::from_utf8(self.file_bytes(path)?).ok()
+        let bytes = self.file_bytes(path)?;
+        match std::str::from_utf8(bytes) {
+            Ok(text) => Some(text),
+            Err(_) => panic!("the file at {path} is not UTF-8: read it with `file_bytes`"),
+        }
     }
 
     /// The bytes of the file at `path`, relative to `/`, if there is one.

@@ -15,7 +15,7 @@ use crate::ty;
 /// means nothing; text inside a container is written
 /// `List<Untrusted<String>>`. `known` says whether a name is a type in
 /// scope: an unknown argument is reported as unknown instead.
-pub fn untrusted_not_text(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Diagnostic> {
+pub fn untrusted_without_trust_flag(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Diagnostic> {
     let TypeKind::Path { segments, args } = &ty.kind else {
         return None;
     };
@@ -27,7 +27,9 @@ pub fn untrusted_not_text(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Dia
     }
     if let TypeKind::Path { segments, .. } = &arg.kind {
         match segments.as_slice() {
-            [name] if ty::is_text_name(&name.name) || name.name == ty::UNTRUSTED => return None,
+            [name] if ty::carries_trust_flag(&name.name) || name.name == ty::UNTRUSTED => {
+                return None
+            }
             [name] if !known(&name.name) => return None,
             _ => {}
         }
@@ -204,7 +206,7 @@ impl Resolver<'_, '_> {
                 self.path(segments, Expect::Type);
                 let known =
                     |name: &str| self.is_type_variable(name) || self.decls.get(name).is_some();
-                if let Some(diagnostic) = untrusted_not_text(ty, &known) {
+                if let Some(diagnostic) = untrusted_without_trust_flag(ty, &known) {
                     self.diagnostics.push(diagnostic);
                 }
                 for arg in args {

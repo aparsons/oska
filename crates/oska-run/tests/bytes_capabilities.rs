@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{fs_program, run_differential, test_fake};
+use common::{assert_refused, fs_program, run_differential, test_fake};
 use oska_run::{FakeHost, TestStatus};
 
 /// What the program running `body` with [`common::fs_program`]'s
@@ -166,4 +166,29 @@ fn a_test_writes_and_reads_back_bytes_that_are_not_utf8() {
         !report.tests.is_empty() && report.tests.iter().all(|t| t.status == TestStatus::Passed),
         "{src}\n{report:#?}"
     );
+}
+
+/// `FakeHost::file` answers `None` only when there is no file at all, so
+/// a test's `assert_eq!(host.file(path), None)` proves that nothing was
+/// written there, bytes that are not UTF-8 included.
+#[test]
+#[should_panic(expected = "is not UTF-8")]
+fn the_text_of_a_fake_file_that_is_not_utf8_is_never_taken_for_no_file() {
+    let host = FakeHost::new().with_file_bytes("escape.txt", NOT_UTF8);
+    let _ = host.file("escape.txt");
+}
+
+/// `Connection.send_bytes` and `receive_bytes` are declared, but no
+/// runtime has `Net` yet: a program that reaches them is refused before
+/// it starts, as one that reaches `send` and `receive` is.
+#[test]
+fn a_program_sending_or_receiving_bytes_is_refused_before_it_starts() {
+    for call in ["c.send_bytes(Bytes.zeroed(1))", "c.receive_bytes().is_ok()"] {
+        let src = format!(
+            "fn talk(c: Connection) -> Result<(), IoError> {{\n    let _ = {call}\n    Ok(())\n}}\n\
+             fn main(net: Net) -> Result<(), IoError> {{\n    \
+             let c = net.connect_only().connect(\"example.com\", 443)?\n    talk(c)\n}}\n"
+        );
+        assert_refused(&src, "E0370");
+    }
 }

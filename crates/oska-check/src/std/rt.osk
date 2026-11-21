@@ -5022,11 +5022,12 @@ fn lone_file(fd: Int, names: List<String>) -> Result<(), IoError> {
 
 // ---- Reading and writing ---------------------------------------------------
 
-// A text object holding the bytes of the regular file reached by walking
-// `names` beneath `root`, not yet known to be UTF-8: its address.
-fn read_raw_beneath(root: Int, names: List<String>) -> Result<Int, IoError> {
+// An object holding the bytes of the regular file reached by walking
+// `names` beneath `root`: its address. It is a bytes object when `bytes`,
+// and otherwise a text object not yet known to be UTF-8.
+fn read_raw_beneath(root: Int, names: List<String>, bytes: Bool) -> Result<Int, IoError> {
     let fd = open_file(root, names, file_read_flags())?
-    let object = read_all(fd)
+    let object = read_all(fd, bytes)
     close(fd)
     object
 }
@@ -5041,17 +5042,30 @@ fn text_checked(object: Int) -> Result<String, IoError> {
     Ok(rt_mem_as_text(object))
 }
 
-// The bytes the text object at `object`, read from outside, holds, as a
-// `Bytes`; the object is freed.
-fn bytes_of_raw(object: Int) -> Bytes {
-    let bytes = bytes_copy_of(text_data(object), text_length(object))
-    free(object)
-    rt_mem_as_bytes(bytes)
+// A new object with room for `capacity` bytes, a bytes object when
+// `bytes` and a text object otherwise, or 0 when no memory holds it
+// (`try_alloc`): its address. Either keeps its length at offset 8.
+fn raw_try_new(capacity: Int, bytes: Bool) -> Int {
+    if !bytes {
+        return text_try_new(capacity)
+    }
+    let room = bytes_room(capacity)
+    let object = try_alloc(rt_mem_add(24, room))
+    if object == 0 {
+        return 0
+    }
+    bytes_init(object, room)
 }
 
-// Everything left to read from `fd`, in a text object that may not be
-// UTF-8: its address.
-fn read_all(fd: Int) -> Result<Int, IoError> {
+// Where the bytes of the object `raw_try_new` made at `object` begin.
+fn raw_data(object: Int, bytes: Bool) -> Int {
+    if bytes { bytes_data(object) } else { text_data(object) }
+}
+
+// Everything left to read from `fd`, in a new object, a bytes object when
+// `bytes` and otherwise a text object that may not be UTF-8: its address.
+// The bytes are read into it once, never copied whole into another.
+fn read_all(fd: Int, bytes: Bool) -> Result<Int, IoError> {
     // Room for the whole file, as `fstat` sizes it, and a little more.
     // Rust reserves it fallibly: a buffer no memory holds (a sparse file of
     // a terabyte) is an `IoError`, "out of memory", not the end of the
@@ -5071,24 +5085,24 @@ fn read_all(fd: Int) -> Result<Int, IoError> {
         }
         free(buffer)
     }
-    var object = text_try_new(capacity)
+    var object = raw_try_new(capacity, bytes)
     if object == 0 {
         return Err(io_error_text("out of memory"))
     }
     var length = 0
     while true {
         if length == capacity {
-            let larger = text_try_new(rt_mem_shl(capacity, 1))
+            let larger = raw_try_new(rt_mem_shl(capacity, 1), bytes)
             if larger == 0 {
                 free(object)
                 return Err(io_error_text("out of memory"))
             }
-            copy_bytes(text_data(larger), text_data(object), length)
+            copy_bytes(raw_data(larger, bytes), raw_data(object, bytes), length)
             free(object)
             object = larger
             capacity = rt_mem_shl(capacity, 1)
         }
-        let into = rt_mem_add(text_data(object), length)
+        let into = rt_mem_add(raw_data(object, bytes), length)
         let got = if on_windows() { win_read(fd, into, io_count(capacity - length)) } else { rt_sys_read(fd, into, io_count(capacity - length)) }
         if interrupted(got) {
             continue
@@ -5548,19 +5562,19 @@ fn file_names(root: Root) -> List<String> {
 
 // `DirRead.read_to_string(path)`.
 pub fn dir_read_to_string(root: Root, path: Path) -> Result<String, IoError> {
-    let object = dir_read_raw(root, path)?
+    let object = dir_read_raw(root, path, false)?
     text_checked(object)
 }
 
 // `DirRead.read_bytes(path)`.
 pub fn dir_read_bytes(root: Root, path: Path) -> Result<Bytes, IoError> {
-    let object = dir_read_raw(root, path)?
-    Ok(bytes_of_raw(object))
+    let object = dir_read_raw(root, path, true)?
+    Ok(rt_mem_as_bytes(object))
 }
 
-// A text object holding the bytes of the file a `DirRead` reaches at
-// `path`, not yet known to be UTF-8: its address.
-fn dir_read_raw(root: Root, path: Path) -> Result<Int, IoError> {
+// An object holding the bytes of the file a `DirRead` reaches at `path`,
+// as `read_raw_beneath` makes one: its address.
+fn dir_read_raw(root: Root, path: Path, bytes: Bool) -> Result<Int, IoError> {
     usable(root)?
     let raw = path_text(path)
     let names = confine_names(raw)?
@@ -5568,10 +5582,10 @@ fn dir_read_raw(root: Root, path: Path) -> Result<Int, IoError> {
         return Err(io_error_text("`{raw}` names the directory capability's root itself, not a file"))
     }
     if faking() {
-        return fake_read(fake_walk(root.path, names)?)
+        return fake_read(fake_walk(root.path, names)?, bytes)
     }
     win_check_names(names)?
-    read_raw_beneath(root.handle, names)
+    read_raw_beneath(root.handle, names, bytes)
 }
 
 // `DirRead.list_dir(path)`: `.` lists the root.
@@ -5631,24 +5645,24 @@ pub fn dir_create_dir(root: Root, path: Path) -> Result<(), IoError> {
 
 // `FileRead.read_to_string()`.
 pub fn file_read_to_string(root: Root) -> Result<String, IoError> {
-    let object = file_read_raw(root)?
+    let object = file_read_raw(root, false)?
     text_checked(object)
 }
 
 // `FileRead.read_bytes()`.
 pub fn file_read_bytes(root: Root) -> Result<Bytes, IoError> {
-    let object = file_read_raw(root)?
-    Ok(bytes_of_raw(object))
+    let object = file_read_raw(root, true)?
+    Ok(rt_mem_as_bytes(object))
 }
 
-// A text object holding the bytes of a `FileRead`'s file, not yet known
-// to be UTF-8: its address.
-fn file_read_raw(root: Root) -> Result<Int, IoError> {
+// An object holding the bytes of a `FileRead`'s file, as
+// `read_raw_beneath` makes one: its address.
+fn file_read_raw(root: Root, bytes: Bool) -> Result<Int, IoError> {
     usable(root)?
     if faking() {
-        return fake_read(root.path)
+        return fake_read(root.path, bytes)
     }
-    read_raw_beneath(root.handle, file_names(root))
+    read_raw_beneath(root.handle, file_names(root), bytes)
 }
 
 // `FileWrite.write(contents)`.
@@ -6005,17 +6019,21 @@ fn fake_restrict_to_file_beneath(root: Root, raw: String, names: List<String>) -
     }
 }
 
-// A new text object holding the bytes of the file at `path`, which may
-// not be UTF-8: its address.
-fn fake_read(path: String) -> Result<Int, IoError> {
+// A new object holding the bytes of the file at `path`, as
+// `read_raw_beneath` makes one: its address.
+fn fake_read(path: String, bytes: Bool) -> Result<Int, IoError> {
     let at = fake_file(path)
     if at < 0 {
         return Err(fake_not_found(path))
     }
     let object = rt_mem_text(word_list(37).at(at))
     let length = text_length(object)
-    let copy = text_new(length)
-    copy_bytes(text_data(copy), text_data(object), length)
+    let copy = raw_try_new(length, bytes)
+    if copy == 0 {
+        return Err(io_error_text("out of memory"))
+    }
+    copy_bytes(raw_data(copy, bytes), text_data(object), length)
+    rt_mem_store64(rt_mem_add(copy, 8), length)
     Ok(copy)
 }
 

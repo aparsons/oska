@@ -1,0 +1,14 @@
+{
+  "diagnostics": [
+    {"code":"E0300","message":"expected `Bytes`, found `Untrusted<Bytes>`: untrusted bytes cannot be used where trusted bytes are required; check it with a validator, or vouch for it with `.assume_trusted()`","path":"crates/oskac/tests/fixtures/bytes_trust.osk","span":{"start":355,"end":371},"line":11,"column":22,"end_line":11,"end_column":38,"severity":"error","url":"https://oskalang.dev/codes/E0300","related":[],"suggestions":[]}
+  ],
+  "functions": [
+    {"name":"remember","authority":[],"via":[],"pure":true},
+    {"name":"main","authority":["Stdout","FsRead"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"read","capabilities":["FsRead"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [
+    {"function":"main","method":"restrict_to_file","path":"crates/oskac/tests/fixtures/bytes_trust.osk","span":{"start":287,"end":319},"source":"FsRead","result":"FileRead","root":"key.bin"}
+  ],
+  "verdict": "diagnostics"
+}

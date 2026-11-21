@@ -330,12 +330,20 @@ impl<T> List<T> {
 //
 // Every method follows trust: bytes or text it gives are untrusted when
 // the receiver or a `Bytes` or `String` argument is, and the integers it
-// reads are trusted, as `len` of untrusted text is (#223).
+// reads are trusted, as `len` of untrusted text is (#223). `new` and
+// `zeroed` take no bytes or text; they follow trust so that what they
+// give starts with a trust of its own, as a string literal does, and a
+// `var` they start can take untrusted bytes later (`var buf =
+// Bytes.new()` then `buf.append(raw)`).
 //
 // An index out of bounds in `at` or `set` panics (`P0002`), as in
 // `List.at`. A slice or an endian read that does not lie wholly inside
 // the buffer panics (`P0042`), and so does a negative length for
-// `zeroed`. A buffer that would grow past 256 MiB panics (`P0043`).
+// `zeroed`. A buffer that would grow past 256 MiB panics (`P0043`). The
+// cap is not yet checked where a buffer is made whole from outside the
+// buffer methods: `String.to_bytes` and the capabilities' `read_bytes`
+// give every byte, however many, and a read that no memory holds is an
+// `IoError`.
 pub struct Bytes { handle: Int }
 
 impl Bytes {
