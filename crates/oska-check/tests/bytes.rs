@@ -146,50 +146,80 @@ fn bytes_are_eq_and_hash_in_generic_code() {
     );
 }
 
+/// Every operation of `Bytes`, as the statement a probe makes of it on
+/// `q.data`, a `Bytes` held at a place, with `n` an `Int`, and the
+/// built-in the checked program calls.
+const PROBES: &[(&str, &str)] = &[
+    ("let v = Bytes.new()", "Bytes.new"),
+    ("let v = Bytes.zeroed(n)", "Bytes.zeroed"),
+    ("let v = Bytes.from_hex(\"00ff\")", "Bytes.from_hex"),
+    ("let v = \"text\".to_bytes()", "String.to_bytes"),
+    ("let v = q.data.len()", "Bytes.len"),
+    ("let v = q.data.get(n)", "Bytes.get"),
+    ("let v = q.data.at(n)", "Bytes.at"),
+    ("let v = q.data.slice(n, n)", "Bytes.slice"),
+    ("let v = q.data.read_u16_be(n)", "Bytes.read_u16_be"),
+    ("let v = q.data.read_u16_le(n)", "Bytes.read_u16_le"),
+    ("let v = q.data.read_u32_be(n)", "Bytes.read_u32_be"),
+    ("let v = q.data.read_u32_le(n)", "Bytes.read_u32_le"),
+    ("let v = q.data.read_u64_be(n)", "Bytes.read_u64_be"),
+    ("let v = q.data.read_u64_le(n)", "Bytes.read_u64_le"),
+    ("let v = q.data.to_hex()", "Bytes.to_hex"),
+    ("let v = q.data.to_text()", "Bytes.to_text"),
+    ("let v = q.data == q.data", "Bytes.eq"),
+    ("let v = q.data.hash()", "Bytes.hash"),
+    ("q.data.push(1)", "Bytes.push"),
+    ("q.data.set(n, 1)", "Bytes.set"),
+    ("q.data.append(q.data)", "Bytes.append"),
+    ("q.data.push_u16_be(1)", "Bytes.push_u16_be"),
+    ("q.data.push_u16_le(1)", "Bytes.push_u16_le"),
+    ("q.data.push_u32_be(1)", "Bytes.push_u32_be"),
+    ("q.data.push_u32_le(1)", "Bytes.push_u32_le"),
+    ("q.data.push_u64_be(1)", "Bytes.push_u64_be"),
+    ("q.data.push_u64_le(1)", "Bytes.push_u64_le"),
+];
+
 /// The Lean model of Oska Core needs no change for `Bytes`: the core IR
-/// export refuses a value of the type wherever it appears (it names only
-/// the module's own types), so no program it accepts can reach any
-/// operation of `Bytes`.
+/// export refuses a call of each of its operations as a built-in outside
+/// Oska Core, so no program it accepts can reach one.
+///
+/// Each probe is written so that the operation is the first construct the
+/// export meets: the function's parameters and its `var` hold only a
+/// struct of the module, declared after it (so its own refusal, of its
+/// `Bytes` field, comes later in the source), and the export looks at a
+/// call's callee before its arguments. The refusal must name the
+/// operation, so a `Bytes` built-in let into Oska Core fails here.
 #[test]
 fn no_oska_core_program_can_reach_a_bytes_operation() {
-    let export = |src: &str| {
-        let report = oska_check::check_module(src);
+    let mut probed: Vec<&str> = Vec::new();
+    for (statement, builtin) in PROBES {
+        let src = format!(
+            "fn probe(p: Packet, n: Int) {{\n    var q = p\n    {statement}\n}}\n\n\
+             fn main() {{\n}}\n\nstruct Packet {{ data: Bytes }}\n"
+        );
+        let report = oska_check::check_module(&src);
         let program = report
             .program
             .unwrap_or_else(|| panic!("{src} should check: {:#?}", report.diagnostics));
-        oska_check::core_ir::export(&program)
-    };
-    assert!(export("fn main() {\n    let n = 0\n}").is_ok());
-    let refusal = export("fn main() {\n    let b = Bytes.new()\n}")
-        .expect_err("a `Bytes` is outside Oska Core");
-    assert!(
-        refusal.construct.contains("`Bytes"),
-        "{}",
-        refusal.construct
-    );
-    for (operation, ty) in OPERATIONS {
-        assert!(
-            export(&program(&format!("    let v = {operation}"))).is_err(),
-            "{operation} should be outside Oska Core"
+        let refusal = oska_check::core_ir::export(&program)
+            .expect_err("a program with a `Bytes` operation is outside Oska Core");
+        assert_eq!(
+            refusal.construct,
+            format!("the built-in `{builtin}`"),
+            "{statement}: {refusal}"
         );
-        // Even where no `Bytes` is bound to a name: every operation but
-        // the mutating ones, which need a place.
-        if ty != &"()" {
-            let alone = operation
-                .split(' ')
-                .map(|word| word.replacen("b.", "Bytes.new().", 1))
-                .map(|word| {
-                    if word == "b" {
-                        "Bytes.new()".to_string()
-                    } else {
-                        word
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            let src = program(&format!("    let v = {alone}"))
-                .replace("var b = Bytes.new()", "let m = 0");
-            assert!(export(&src).is_err(), "{alone} should be outside Oska Core");
-        }
+        probed.push(builtin);
+    }
+    // Every operation the prelude gives `Bytes` is probed.
+    for (operation, _) in OPERATIONS {
+        let method = match operation.split_once('(') {
+            Some((call, _)) => call.rsplit('.').next().unwrap_or_default(),
+            // `==` and `!=`.
+            None => "eq",
+        };
+        assert!(
+            probed.iter().any(|b| b.ends_with(&format!(".{method}"))),
+            "`{operation}` has no probe"
+        );
     }
 }

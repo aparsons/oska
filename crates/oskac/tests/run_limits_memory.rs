@@ -292,6 +292,81 @@ fn a_program_that_allocates_and_frees_under_the_limit_runs_to_the_end() {
     }
 }
 
+/// Grows a `Bytes` to 3 MiB a byte at a time, in place, and makes and
+/// lets go of many slices of it: within an 8 MiB limit on both backends.
+const BYTES_FIT: &str = r#"fn main(io: Stdout) {
+    var b = Bytes.new()
+    var i = 0
+    while i < 3145728 {
+        b.push(1)
+        i = i + 1
+    }
+    var total = 0
+    var j = 0
+    while j < 2000 {
+        total = total + b.slice(j, j + 100000).len()
+        j = j + 1
+    }
+    let n = b.len()
+    let _ = io.println("{n} {total}")
+}
+"#;
+
+/// Appends a chunk to a `Bytes` without end.
+const BYTES_GROW: &str = r#"fn main() {
+    let chunk = Bytes.zeroed(4096)
+    var b = Bytes.new()
+    while true {
+        b.append(chunk)
+    }
+}
+"#;
+
+/// Keeps changed copies of a shared 3 MiB `Bytes`: each change copies it.
+const BYTES_COPIES: &str = r#"fn main() {
+    let shared = Bytes.zeroed(3145728)
+    var copies: List<Bytes> = []
+    while true {
+        var copy = shared
+        copy.set(0, 1)
+        copies.push(copy)
+    }
+}
+"#;
+
+/// `Bytes` under `--max-memory` (ticket #222): a buffer that grows in
+/// place within the limit runs to the end; one that grows past it by
+/// appends, or by changed copies of a shared buffer, stops with `P0040`
+/// on both backends. On the interpreter the report spans the call that
+/// would have grown or copied it.
+#[test]
+fn bytes_are_counted_against_the_memory_limit() {
+    let fits = program("memory_bytes_fit", BYTES_FIT);
+    let grows = program("memory_bytes_grow", BYTES_GROW);
+    let copies = program("memory_bytes_copies", BYTES_COPIES);
+    for backend in BACKENDS {
+        let run = |dir: &Path| {
+            let mut args = vec!["run", "--no-cache", "--max-memory=8388608", "main.osk"];
+            args.extend_from_slice(backend);
+            let output = oskac_in(dir, &args);
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            (output.status.code(), output.stdout, stderr)
+        };
+        let (code, stdout, stderr) = run(&fits);
+        assert_eq!(code, Some(0), "{backend:?}: {stderr}");
+        assert_eq!(String::from_utf8_lossy(&stdout), "3145728 200000000\n");
+        for (dir, line) in [(&grows, "main.osk:5:9: "), (&copies, "main.osk:6:9: ")] {
+            let (code, stdout, stderr) = run(dir);
+            assert_eq!(code, Some(101), "{backend:?}: {stderr}");
+            assert!(stdout.is_empty(), "{backend:?}: {stderr}");
+            assert!(stderr.contains("error[P0040]"), "{backend:?}: {stderr}");
+            if backend == ["--interpret"] {
+                assert!(stderr.starts_with(line), "{line} {backend:?}: {stderr}");
+            }
+        }
+    }
+}
+
 #[test]
 fn the_memory_limit_report_is_one_json_object_with_format_json() {
     let dir = program("memory_grows_json", GROWS);

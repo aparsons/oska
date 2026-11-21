@@ -1807,6 +1807,21 @@ impl<'l, 'p> Body<'l, 'p> {
         args: Vec<Temp>,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
+        // A call with the wrong number of arguments would leave a
+        // parameter unset, or pass one that is never read: refused, so a
+        // slip in the lowering never compiles.
+        if let Some(function) = self.lowering.rt.functions.get(name) {
+            if function.params.len() != args.len() {
+                return Err(self.refuse(
+                    span,
+                    &format!(
+                        "a call of `std.rt`'s `{name}` with {} arguments, not {}",
+                        args.len(),
+                        function.params.len()
+                    ),
+                ));
+            }
+        }
         self.call_function(Source::Runtime, name, Vec::new(), args, span)
     }
 
@@ -2146,10 +2161,14 @@ impl<'l, 'p> Body<'l, 'p> {
                 });
             }
             Check::BytesSlice | Check::BytesIndex | Check::BytesAppend => {
-                let (code, function) = match check {
-                    Check::BytesSlice => (panics::BYTES_OUT_OF_RANGE, "panic_bytes_slice"),
-                    Check::BytesIndex => (panics::INDEX_OUT_OF_BOUNDS, "panic_bytes_index"),
-                    _ => (panics::BYTES_TOO_LONG, "panic_bytes_append"),
+                // `set`'s arguments are the bytes, the index and the byte:
+                // its report names only the first two.
+                let (code, function, args) = match check {
+                    Check::BytesSlice => (panics::BYTES_OUT_OF_RANGE, "panic_bytes_slice", args),
+                    Check::BytesIndex => {
+                        (panics::INDEX_OUT_OF_BOUNDS, "panic_bytes_index", &args[..2])
+                    }
+                    _ => (panics::BYTES_TOO_LONG, "panic_bytes_append", args),
                 };
                 let label = self.panic_text(code, function, args, span)?;
                 self.push(Inst::JumpIfZero {

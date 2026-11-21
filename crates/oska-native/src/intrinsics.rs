@@ -2057,6 +2057,26 @@ mod tests {
         );
     }
 
+    /// A `Bytes` read fails closed on its own: the generated code panics
+    /// when `bytes_readable` says the bytes do not all lie inside the
+    /// buffer, and `bytes_read` checks again rather than trust that it
+    /// did, so no call of it can read past the buffer.
+    #[test]
+    fn the_std_rt_function_of_every_bytes_read_checks_its_own_bounds() {
+        let calls = rt_calls();
+        for (name, implementation) in PRELUDE {
+            if let Prelude::ByteRead { .. } = implementation {
+                let function = runtime_function(*implementation).expect("a function");
+                assert!(
+                    calls
+                        .get(function)
+                        .is_some_and(|called| called.iter().any(|c| c == "bytes_readable")),
+                    "`{name}` reads through `{function}`, which does not check its bounds"
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_runtime_function_a_prelude_intrinsic_names_is_in_std_rt() {
         let report = oska_check::check_toolchain_rt();
