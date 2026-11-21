@@ -94,6 +94,9 @@ A `std.*` module is also prelude-mode Oska source, `crates/oska-check/src/std/<n
 | `std.sql` | `SqlLiteral`, `Db` (`query`), `connect`, `Row` (`get`), `SqlError` | `sql"..."` has type `SqlLiteral` |
 | `std.proc` | `run`, `Output` (`status`, `stdout`), `ProcError` | None |
 | `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
+| `std.sha2` | `sha256`, `sha512`, `sha256_secret`, `Sha256`, `Sha512`, `Sha256Secret` (each `new`, `update`, `finish`) | None |
+
+`std.sha2` is different from the others: it is Oska source with bodies, not prelude-mode declarations (`StdKind::Source`). A program that imports it, from any module, has it linked in as a module of its own (`link.rs`), as a package's modules are: it is checked under the rules for user code, both backends run it as Oska, and it needs no runtime of the toolchain's (no `E0371`). Its items are private unless `pub` (`E0206`, with no fix), each module sees it only through its own `use`, and the authority report names its functions by module path, as `std.sha2.sha256`. Such a module may import another; a cycle is refused (`E0207`).
 
 A sink literal's tag names the module that provides it. The literal has the type that module declares for it, and the module must be imported (`E0310`). A tag no module provides is `E0311`. The sink modules are signature-only. `std.html` has a runtime: `text` escapes `&`, `<`, `>`, `"`, and `'`, so its output is safe in an element's content and in a quoted attribute value, and `TrustedHtml` markup passes through unescaped. `std.sql` and `std.proc` have none yet.
 
