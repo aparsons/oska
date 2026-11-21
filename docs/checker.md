@@ -2381,14 +2381,14 @@ fn main(env: Env) {
 #### `E0353`
 
 ```oska error=E0353
-fn pick(c: Secret<Bool>, a: U32, b: U32) -> U32 {
-    if c { a } else { b }
+fn both(a: Secret<Bool>, b: Secret<Bool>) -> Secret<Bool> {
+    a && b
 }
 ```
 
 ```oska fixed=E0353
-fn pick(c: Secret<Bool>, a: U32, b: U32) -> Secret<U32> {
-    c.ct_select(Secret.new(a), Secret.new(b))
+fn both(a: Secret<Bool>, b: Secret<Bool>) -> Secret<Bool> {
+    a.and(b)
 }
 ```
 
