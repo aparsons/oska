@@ -237,9 +237,36 @@ pub(super) enum Operands {
     Error,
 }
 
-/// The value types `ct_select` picks between: the ones a backend keeps in
-/// a word, and `Bytes`.
-const SELECTABLE: &[&str] = &["U8", "U32", "U64", "Bool", "Bytes"];
+/// The types code makes secrets of with `Secret.new`, and that
+/// `ct_select` picks between: the ones a backend keeps in a word, and
+/// `Bytes`. (A `Secret<String>` comes only from `Env.secret`.)
+const SECRET_TYPES: &[&str] = &["U8", "U32", "U64", "Bool", "Bytes"];
+
+/// Where an argument goes, for what a secret there would decide.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Position {
+    /// An index, an offset, a length or a count of a prelude method:
+    /// which memory is read, or whether the call panics.
+    Address,
+    /// The amount of a prelude rotation (`rotl`, `rotr`).
+    Rotation,
+    /// Anywhere else, as any parameter of a module's own function.
+    Plain,
+}
+
+impl Position {
+    /// The position of the parameter `param` of the callee, which is the
+    /// prelude or `std` function `intrinsic` when it is one.
+    pub(super) fn of(intrinsic: Option<&str>, param: &Option<String>) -> Position {
+        match (intrinsic, param.as_deref()) {
+            (Some("rotl" | "rotr"), Some("n")) => Position::Rotation,
+            (Some(_), Some("index" | "offset" | "start" | "end" | "len" | "times")) => {
+                Position::Address
+            }
+            _ => Position::Plain,
+        }
+    }
+}
 
 impl Body<'_, '_, '_> {
     /// The `T` of a `Secret<T>`, or `None` for any other type.
@@ -460,26 +487,65 @@ impl Body<'_, '_, '_> {
     }
 
     /// Check the argument `value` of a call against its parameter type
-    /// `param`. A secret where a public `Int` is wanted, an index, an
-    /// offset or a length, is `E0354`, or `E0355` as the amount of a
-    /// `rotation`.
-    pub(super) fn argument(&mut self, value: &Expr, param: &Ty, rotation: bool) -> Ty {
+    /// `param`, at `position`. A secret where a prelude method wants a
+    /// public index, offset or length is `E0354`, and one as the amount
+    /// of a rotation is `E0355`. Anywhere else a secret is just not the
+    /// `Int` wanted.
+    pub(super) fn argument(&mut self, value: &Expr, param: &Ty, position: Position) -> Ty {
         let ty = self.expr(value, Some(param));
-        if self.is_secret(&ty) && self.infer.resolve(param) == Ty::int() {
-            if rotation {
-                self.secret_amount(value.span);
-            } else {
-                self.error(
-                    codes::SECRET_ADDRESS,
-                    "a secret cannot be an index, an offset or a length: it would decide \
-                     which memory is read, or whether the call panics; use a public value, or \
-                     read the secret with `.expose()`",
-                    value.span,
-                );
-            }
-            return Ty::Error;
+        let public = position == Position::Plain
+            || !self.is_secret(&ty)
+            || self.infer.resolve(param) != Ty::int();
+        if public {
+            return self.expect(&ty, param, value.span);
         }
-        self.expect(&ty, param, value.span)
+        if position == Position::Rotation {
+            self.secret_amount(value.span);
+        } else {
+            self.error(
+                codes::SECRET_ADDRESS,
+                "a secret cannot be an index, an offset or a length: it would decide which \
+                 memory is read, or whether the call panics; use a public value, or read the \
+                 secret with `.expose()`",
+                value.span,
+            );
+        }
+        Ty::Error
+    }
+
+    /// Report `Secret.new`, called at `span`, making the secret `ty` when
+    /// that is not a type code may make a secret of: a `Secret<String>`
+    /// comes only from `Env.secret` (`E0271`), and the other secrets are
+    /// those of [`SECRET_TYPES`] (`E0223`).
+    pub(super) fn secret_made(&mut self, ty: &Ty, span: Span) {
+        let Some(inner) = self.secret_inner(ty) else {
+            return;
+        };
+        let inner = self.infer.resolve(&inner);
+        if inner.is_error() || matches!(inner, Ty::Var(_) | Ty::Never) {
+            return;
+        }
+        if inner.head() == Some(ty::STRING) {
+            self.error(
+                codes::FORGED,
+                "a `Secret<String>` cannot be made from text in the program: it comes from \
+                 `Env.secret`, so a secret in the source is never mistaken for one from the \
+                 environment",
+                span,
+            );
+            return;
+        }
+        if inner.head().is_some_and(|h| SECRET_TYPES.contains(&h)) {
+            return;
+        }
+        self.error(
+            codes::BAD_OPERAND,
+            format!(
+                "`Secret.new` cannot make a `Secret<{inner}>`; it makes `Secret<U8>`, \
+                 `Secret<U32>`, `Secret<U64>`, `Secret<Bool>` and `Secret<Bytes>`"
+            ),
+            span,
+        );
     }
 
     /// Report `ct_select` at `span` picking between secrets of type `ty`,
@@ -492,7 +558,7 @@ impl Body<'_, '_, '_> {
         if inner.is_error() || matches!(inner, Ty::Var(_) | Ty::Never) {
             return;
         }
-        if inner.head().is_some_and(|h| SELECTABLE.contains(&h)) {
+        if inner.head().is_some_and(|h| SECRET_TYPES.contains(&h)) {
             return;
         }
         self.error(

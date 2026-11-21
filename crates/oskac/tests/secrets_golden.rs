@@ -65,7 +65,7 @@ fn every_refusal_has_its_code_span_and_fix() {
     for (code, count) in [
         ("E0351", 2),
         ("E0353", 9),
-        ("E0354", 4),
+        ("E0354", 5),
         ("E0355", 4),
         ("E0356", 1),
     ] {

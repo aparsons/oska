@@ -334,12 +334,16 @@ pub enum ExprKind {
         operand: Box<Expr>,
         int: IntType,
     },
-    /// A choice without a branch, as `ct_select` makes on a secret:
-    /// `cond`, `if_true` and `if_false` are all evaluated, in that order,
+    /// A choice without a branch: `cond`, `if_true` and `if_false` are
+    /// all evaluated, in that order,
     /// and the value is `if_true` when `cond` holds, otherwise
     /// `if_false`. The two have one type: `Bool`, `U8`, `U32`, `U64` or
     /// `Bytes`. Two `Bytes` of different lengths panic (`P0042`), which
     /// depends on their public lengths only.
+    ///
+    /// The checker never makes one: a checked program calls
+    /// `Secret.ct_select`, and only [`secrets::expand`] turns that into a
+    /// `Select`, for a backend that runs secret operations as public ones.
     Select {
         cond: Box<Expr>,
         if_true: Box<Expr>,

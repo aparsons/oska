@@ -561,3 +561,135 @@ fn a_secret_through_an_eq_bound_is_e0351() {
         &[("E0351", "same(a, b)")],
     );
 }
+
+// ---- Review fixes: which positions, which methods, which types ---------------
+
+#[test]
+fn a_secret_passed_to_a_users_int_parameter_is_a_type_mismatch() {
+    assert_errors(
+        "fn take(n: Int) -> Int {\n    n\n}\n\
+         fn f(k: Secret<U32>) -> Int {\n    take(k)\n}",
+        &[("E0220", "k")],
+    );
+}
+
+#[test]
+fn attack_a_secret_index_of_a_mutating_method_is_e0354() {
+    assert_refused(
+        "fn f(k: Secret<U32>) -> Bytes {\n    var b = Bytes.zeroed(4)\n    b.set(k, 1)\n    b\n}",
+        "E0354",
+        "k",
+        "index, an offset or a length",
+    );
+}
+
+#[test]
+fn attack_a_secret_text_slice_bound_and_repeat_count_are_e0354() {
+    assert_refused(
+        "fn f(s: String, k: Secret<U8>) -> String {\n    s.slice(k, 3)\n}",
+        "E0354",
+        "k",
+        "index, an offset or a length",
+    );
+    assert_refused(
+        "fn f(s: String, k: Secret<U8>) -> String {\n    s.repeat(k)\n}",
+        "E0354",
+        "k",
+        "index, an offset or a length",
+    );
+}
+
+#[test]
+fn a_users_function_named_rotl_is_no_rotation() {
+    assert_errors(
+        "fn rotl(x: U32, n: Int) -> U32 {\n    x\n}\n\
+         fn f(k: Secret<U8>) -> U32 {\n    rotl(1, k)\n}",
+        &[("E0220", "k")],
+    );
+}
+
+#[test]
+fn a_users_trait_method_named_ct_select_is_not_the_prelude_one() {
+    assert_ok(
+        "trait Pick {\n    fn ct_select(self, a: Int, b: Int) -> Int\n}\n\
+         impl Pick for Secret<String> {\n    fn ct_select(self, a: Int, b: Int) -> Int {\n        a\n    }\n}\n\
+         fn f(s: Secret<String>) -> Int {\n    s.ct_select(1, 2)\n}",
+    );
+}
+
+#[test]
+fn a_qualified_call_picks_the_impl_of_its_receivers_type_argument() {
+    assert_ok("fn f(k: Secret<U64>) -> Secret<U64> {\n    Secret.rotl(k, 3)\n}");
+    assert_ok("fn f(k: Secret<U8>) -> Secret<U32> {\n    Secret.to_u32(k)\n}");
+    assert_ok(
+        "fn f(key: Secret<Bytes>, mac: Bytes) -> Bool {\n    Secret.constant_time_eq(key, mac)\n}",
+    );
+    assert_ok(
+        "fn f(key: Secret<String>, token: String) -> Bool {\n    Secret.constant_time_eq(key, token)\n}",
+    );
+}
+
+#[test]
+fn attack_secret_new_of_text_is_forging_e0271() {
+    assert_refused(
+        "fn f() -> Secret<String> {\n    Secret.new(\"hunter2\")\n}",
+        "E0271",
+        "Secret.new(\"hunter2\")",
+        "`Env.secret`",
+    );
+}
+
+#[test]
+fn attack_secret_new_of_another_type_is_e0223() {
+    for (value, ty) in [("5", "Int"), ("[1, 2]", "List<Int>")] {
+        assert_refused(
+            &format!("fn f() {{\n    let _ = Secret.new({value})\n}}"),
+            "E0223",
+            &format!("Secret.new({value})"),
+            &format!("`Secret<{ty}>`"),
+        );
+    }
+    assert_refused(
+        "fn wrap<T>(x: T) -> Secret<T> {\n    Secret.new(x)\n}",
+        "E0223",
+        "Secret.new(x)",
+        "`Secret<T>`",
+    );
+}
+
+#[test]
+fn a_method_of_another_secret_type_names_the_types_that_have_it() {
+    let src = "fn f(k: Secret<Int>) {\n    let _ = k.rotl(1)\n}";
+    assert_refused(
+        src,
+        "E0228",
+        "rotl",
+        "`rotl` is a method of `Secret<U8>`, `Secret<U32>` and `Secret<U64>`",
+    );
+    let report = check(src);
+    assert!(
+        !report.diagnostics[0].message.contains("did you mean"),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn attack_a_secret_through_a_trait_method_is_still_refused() {
+    assert_refused(
+        "trait Check {\n    fn check(self) -> Secret<Bool>\n}\n\
+         struct Key { k: Secret<U32> }\n\
+         impl Check for Key {\n    fn check(self) -> Secret<Bool> {\n        self.k.ct_eq(Secret.new(1))\n    }\n}\n\
+         fn g<T: Check>(x: T) -> Int {\n    if x.check() { 1 } else { 0 }\n}",
+        "E0353",
+        "x.check()",
+        "`if` condition",
+    );
+    assert_refused(
+        "trait Leak {\n    fn decide(self) -> Bool\n}\n\
+         impl Leak for Secret<Bool> {\n    fn decide(self) -> Bool {\n        if self { true } else { false }\n    }\n}",
+        "E0353",
+        "self",
+        "`if` condition",
+    );
+}

@@ -26,7 +26,12 @@ impl Lowering<'_> {
                             BinaryOp::Sub => "wrapping_sub",
                             _ => "wrapping_mul",
                         };
-                        let name = int_name(&inner).unwrap_or("U64");
+                        let name = int_name(&inner).unwrap_or_else(|| {
+                            unreachable!(
+                                "the checker refuses arithmetic on a secret that is not a \
+                                 secret integer (`E0223`), so `{inner:?}` is one"
+                            )
+                        });
                         Expr {
                             kind: ExprKind::Call {
                                 callee: Callee::Intrinsic(format!("{name}.{method}")),

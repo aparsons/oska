@@ -381,46 +381,36 @@ fn secret_expose(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, P
     Ok(args[0].fields()[0].clone())
 }
 
-/// `Secret.constant_time_eq(self, other)`.
+/// `Secret.constant_time_eq(self, other)`, on secret text or bytes.
 fn secret_constant_time_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    if let Value::Bytes(secret) = &args[0].fields()[0] {
-        return Ok(Value::Bool(bytes_constant_time_eq(
-            secret,
-            args[1].as_bytes(),
-        )));
-    }
-    let secret = args[0].fields()[0].as_str();
-    Ok(Value::Bool(constant_time_eq(secret, text(&args, 1))))
+    let secret = &args[0].fields()[0];
+    Ok(Value::Bool(constant_time_eq(
+        contents(secret),
+        contents(&args[1]),
+    )))
 }
 
-/// `Secret.constant_time_eq_secret(self, other)`.
+/// `Secret.constant_time_eq_secret(self, other)`, on secret text or bytes.
 fn secret_constant_time_eq_secret(
     _: &mut dyn Host,
     args: Vec<Value>,
     _: Span,
 ) -> Result<Value, Panic> {
-    if let (Value::Bytes(a), Value::Bytes(b)) = (&args[0].fields()[0], &args[1].fields()[0]) {
-        return Ok(Value::Bool(bytes_constant_time_eq(a, b)));
-    }
-    let a = args[0].fields()[0].as_str();
-    let b = args[1].fields()[0].as_str();
-    Ok(Value::Bool(constant_time_eq(a, b)))
+    let (a, b) = (&args[0].fields()[0], &args[1].fields()[0]);
+    Ok(Value::Bool(constant_time_eq(contents(a), contents(b))))
 }
 
-/// Whether the buffers `a` and `b` are equal, every byte compared whatever
-/// the first difference.
-fn bytes_constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let diff = a
-        .iter()
-        .zip(b)
-        .fold(u8::from(a.len() != b.len()), |diff, (x, y)| diff | (x ^ y));
-    diff == 0
+/// The bytes of a text or `Bytes` value.
+fn contents(value: &Value) -> &[u8] {
+    match value {
+        Value::Bytes(bytes) => bytes,
+        _ => value.as_str().as_bytes(),
+    }
 }
 
 /// Whether `a` and `b` are equal, in time that depends on their lengths
 /// but not on where they first differ.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let diff = a
         .iter()
         .zip(b)

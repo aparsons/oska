@@ -219,7 +219,9 @@ pub struct Secret<T> { value: T }
 
 impl<T> Secret<T> {
     // `value`, made secret. Adding secrecy never weakens a guarantee, so
-    // this is not an audit site.
+    // this is not an audit site. It makes `Secret<U8>`, `Secret<U32>`,
+    // `Secret<U64>`, `Secret<Bool>` and `Secret<Bytes>` only (`E0223`);
+    // a `Secret<String>` comes from `Env.secret` (`E0271`).
     pub fn new(value: T) -> Secret<T>
     // The secret's value. Every call is an audit site.
     pub fn expose(self) -> T

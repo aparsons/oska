@@ -327,6 +327,14 @@ struct Callable {
     /// its signature's generics, for the checked program. Unlike
     /// `type_args`, it holds nothing else.
     instance: Vec<Ty>,
+    /// For a body-less prelude or `std` function: its name. Its `Int`
+    /// parameters are known by name (see [`Body::argument`]), which a
+    /// module's own function of the same name does not share.
+    intrinsic: Option<String>,
+    /// The type of the first argument, when it was checked already: a
+    /// qualified call of a method with one `impl` per type argument, as
+    /// `Secret.rotl(k, 3)`, checks its receiver to choose the `impl`.
+    checked_first: Option<Ty>,
 }
 
 /// What `base.name` names when `base` is not a value.
@@ -409,6 +417,9 @@ enum Deferred {
     Equality,
     /// An interpolation hole: the `Display` implementation of its type.
     Display,
+    /// `Secret.new`: the secret it makes, which must be one of the types
+    /// code may make a secret of.
+    SecretNew,
 }
 
 /// A `scope` block being checked, and what it may have stored outside
@@ -556,6 +567,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Deferred::Display => self
                     .trait_callee(&ty, ty::DISPLAY, "to_string")
                     .map(Resolution::Display),
+                Deferred::SecretNew => {
+                    self.secret_made(&ty, span);
+                    None
+                }
             };
             if let Some(resolution) = resolution {
                 // A `Display` or `Eq` impl may be generic.
