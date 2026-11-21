@@ -4,6 +4,7 @@
 - **Scope:** Ticket #469 of spec #461 ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). On 2026-11-19 the musl build took 0.32 s to `oskac build` the site generator against 0.20 s for the glibc build, and its interpreter took 5.8 s against 3.8 s. Find where the time goes, on x86_64 and aarch64, and rank the fixes. No allocator and no `unsafe` code in this ticket.
 - **Status:** x86_64 measured here. **aarch64 is pending**: this machine is x86_64 only, and no aarch64 number below is measured. Section 5 gives the exact commands for an aarch64 runner.
 - **Update 2026-11-21:** aarch64 measured on a GitHub `ubuntu-24.04-arm` runner (ticket #506). Section 5 has the figures: causes 1 and 2 hold there, cause 3 (`memcpy`) does not.
+- **Update 2026-11-21 (ticket #507):** re-measured on both processors after fixes 1 to 6. The musl build still misses the 1.10x threshold of spec #521 on most workloads: section 7.
 - **Method:** Built both release binaries of `oskac` at `36167da` with the pinned Rust 1.100.0: `cargo build --release -p oskac` and the same with `--target x86_64-unknown-linux-musl`. Ran `scripts/bench-native.sh` once with each. Timed the site generator with `perf stat`. Profiled with `perf record` (CPU-clock sampling, as this VM has no hardware counters), `strace -c`, and `valgrind --tool=callgrind`, which counts instructions and calls exactly. Disassembled the C library routines in the binaries. Wrote a small Rust program that times `memcpy` and allocation on each C library.
 - **Machine:** Intel Xeon @ 2.10GHz, 4 CPUs, a Linux 6.18 VM shared with one other agent. CPU times (user plus system) are used, as other work stretches the wall clock but not CPU time much. Each figure is the best of 3 to 5 runs. The musl build was slower in every run, but absolute times differ between runs and tools: the musl interpreter's site build took 8,333 ms in the bench script and 8,879 ms under `perf stat`, 6.5% apart.
 - **Sources:** what this note measured, plus the musl release notes. The musl source site and its GitHub mirror were not reachable from this session, so each claim about how musl works is either read from the disassembly of the shipped `libc.a` or marked **Inference**.
@@ -316,11 +317,59 @@ Not recommended:
 
 Follow-up tickets: #500 (string literals), #501 (`String.chars`), #502 (intrinsic lookup), #503 (`Infer::flow`), #504 (`Ty` names), #505 (call `Vec`s), #506 (aarch64 measurement), #507 (allocator decision, last).
 
+## 7. Re-measured after fixes 1 to 6 (2026-11-21, ticket #507)
+
+Spec #521's threshold: on each `scripts/bench-native.sh` workload and on the site build, interpreter and `oskac build`, the musl build's CPU time is at most 1.10x the glibc build's, on x86_64 and on aarch64.
+
+- **Commit:** `fb86bc4b`, which is the integration branch `spec/521-musl-only` at `5592ce14` (fixes 1 to 6, #500 to #505, merged) plus the `bench.yml` change below. Rust 1.100.0.
+- **Workflow:** `.github/workflows/bench.yml`, which now runs on each Linux runner, in one job: the bench script with the glibc build, the bench script with `OSKA_BENCH_TARGET=<arch>-unknown-linux-musl`, then `oskac build site/build.osk` with each build, best CPU time (user plus system) of 5. So each ratio below compares two figures from the same machine.
+- **Runs:** three dispatches, workflow runs 44925905934 (A), 44926133879 (B) and 44926380054 (C). Each figure is the best of 5 runs. The second and third were dispatched because some ratios were within 1.05x to 1.15x.
+- **Runners:** `ubuntu-24.04-arm` was an Arm Neoverse-N2 with 4 CPUs in all three runs. `ubuntu-latest` was a different x86_64 processor each time: AMD EPYC 9V45 (A), Intel Xeon 6975P-C (B) and AMD EPYC 9V74 (C), 4 CPUs each.
+- The "site" row is `oskac run --interpret site/build.osk`, which includes checking the program. "`oskac build`" is the compile of the site.
+
+### aarch64 (Neoverse-N2)
+
+| Workload | glibc (A / B / C) | musl (A / B / C) | musl / glibc (A / B / C) | At most 1.10x? |
+| --- | ---: | ---: | ---: | --- |
+| loop | 669 / 673 / 670 ms | 685 / 686 / 683 ms | 1.02 / 1.02 / 1.02 | Yes |
+| text | 64 / 64 / 64 ms | 88 / 88 / 88 ms | 1.38 / 1.38 / 1.38 | No, by 0.28 |
+| bulk-text | 27 / 26 / 27 ms | 30 / 28 / 30 ms | 1.11 / 1.08 / 1.11 | No in 2 of 3 runs, by 0.01 (3 ms in 27 ms, at the 1 ms resolution of the timer) |
+| lists | 343 / 342 / 343 ms | 356 / 358 / 358 ms | 1.04 / 1.05 / 1.04 | Yes |
+| recursion | 520 / 521 / 520 ms | 640 / 640 / 640 ms | 1.23 / 1.23 / 1.23 | No, by 0.13 |
+| site (interpreter) | 3,158 / 3,159 / 3,160 ms | 3,846 / 3,859 / 3,876 ms | 1.22 / 1.22 / 1.23 | No, by 0.12 |
+| `oskac build` of the site | 34 / 34 / 34 ms | 43 / 43 / 44 ms | 1.26 / 1.26 / 1.29 | No, by 0.16 to 0.19 |
+
+The three runs agree to within 1%. Against ticket #506's figures on the same runner type (section 5), fixes 1 to 6 took the glibc site build from 5,833 ms to 3,158 ms and the musl one from 8,058 ms to 3,846 ms, and the gap from 1.38x to 1.22x. `text` went from 1.48x to 1.38x, `recursion` from 1.75x to 1.23x, and `oskac build` from 1.56x (`perf stat`) to 1.26x.
+
+### x86_64
+
+| Workload | glibc (A / B / C) | musl (A / B / C) | musl / glibc (A / B / C) | At most 1.10x? |
+| --- | ---: | ---: | ---: | --- |
+| loop | 533 / 577 / 985 ms | 523 / 579 / 986 ms | 0.98 / 1.00 / 1.00 | Yes |
+| text | 42 / 45 / 78 ms | 78 / 123 / 113 ms | 1.86 / 2.73 / 1.45 | No, by 0.35 to 1.63 |
+| bulk-text | 26 / 23 / 41 ms | 43 / 45 / 57 ms | 1.65 / 1.96 / 1.39 | No, by 0.29 to 0.86 |
+| lists | 279 / 304 / 523 ms | 372 / 314 / 530 ms | 1.33 / 1.03 / 1.01 | Yes in 2 of 3 runs; 1.33 in run A |
+| recursion | 388 / 420 / 775 ms | 440 / 476 / 828 ms | 1.13 / 1.13 / 1.07 | No in 2 of 3 runs, by 0.03 |
+| site (interpreter) | 2,569 / 2,639 / 4,321 ms | 3,295 / 2,233 / 5,592 ms | 1.28 / 0.85 / 1.29 | No on both AMD runners, by 0.18 to 0.19; 0.85 on the Intel one |
+| `oskac build` of the site | 30 / 34 / 48 ms | 44 / 46 / 67 ms | 1.47 / 1.35 / 1.40 | No, by 0.25 to 0.37 |
+
+The x86_64 runners differ from run to run, so their absolute times do too (run C's are about 1.7x run A's), and the ratios are noisier than on aarch64. Two results do not fit the rest and this note does not explain them: `lists` at 1.33x in run A, and the musl site build faster than the glibc one (0.85x) on the Intel runner of run B. Against section 1 (a different machine, so only roughly), the site gap fell from 1.59x to about 1.28x and `recursion` from 1.58x to about 1.1x, while `text` (2.58x then, 1.45x to 2.73x now) and `bulk-text` (2.00x then, 1.39x to 1.96x now) moved less.
+
+### Verdict
+
+The musl build does not meet the threshold.
+
+- **Meets it on both processors:** `loop`, and `lists` (except x86_64 run A).
+- **Misses it on both processors:** `text` (1.38x on aarch64, 1.45x to 2.73x on x86_64), the site build in the interpreter (1.22x on aarch64, 1.28x on two of three x86_64 runners), and `oskac build` of the site (1.26x to 1.29x on aarch64, 1.35x to 1.47x on x86_64).
+- **Misses it on one processor:** `recursion` (1.23x on aarch64; 1.07x to 1.13x on x86_64, a miss in 2 of 3 runs) and `bulk-text` (1.39x to 1.96x on x86_64; 1.08x to 1.11x on aarch64, a miss by one timer tick in 2 of 3 runs).
+
+The largest misses are the workloads that allocate a text on each step (`text`, `bulk-text` on x86_64) and the compile, which is where causes 1 to 3 of section 3 act. Fixes 1 to 6 narrowed the gap but did not close it, so by spec #521 fix 7 (an allocator for the musl build) applies. Fix 7 removes causes 1 and 2 but not cause 3 (`memcpy` on x86_64), which **(Inference)** `bulk-text` and `text`, the workloads that copy the most text, are most exposed to.
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
 - How much of the 592 ms in Oska's own code (cause 4) comes from cache and TLB misses. A machine with hardware counters (`perf stat -e cache-misses,dTLB-load-misses`) can answer it.
-- After fixes 1 to 6, does the musl build meet a threshold? The 2026-11-19 research note suggested at most 10% slower than glibc. Decide it before fix 7.
+- ~~After fixes 1 to 6, does the musl build meet a threshold? The 2026-11-19 research note suggested at most 10% slower than glibc. Decide it before fix 7.~~ Spec #521 set the threshold at 1.10x. Measured on 2026-11-21: the musl build misses it (section 7).
 
 ## How this was measured
 
