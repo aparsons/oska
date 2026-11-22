@@ -1,12 +1,12 @@
 # Hashing, HMAC and verifying SSH signatures
 
-Oska's `std` has four modules for the cryptography a program needs to check what it downloaded: `std.sha2` hashes, `std.hmac` authenticates a message under a secret key, `std.ed25519` verifies an Ed25519 signature, and `std.sshsig` reads OpenSSH public keys and verifies the signatures `ssh-keygen -Y sign` writes. The toolchain uses the same code to verify its own releases. Every program on this page is checked by `oskac` when the documentation is tested, and the output shown is what `oskac run` prints.
+Oska's `std` has four modules, and three more for certificates and key exchange, for the cryptography a program needs to check what it downloaded: `std.sha2` hashes, `std.hmac` authenticates a message under a secret key, `std.ed25519` verifies an Ed25519 signature, and `std.sshsig` reads OpenSSH public keys and verifies the signatures `ssh-keygen -Y sign` writes. `std.ecdsa`, `std.rsa` and `std.p256` add the signature checks web certificates use and a P-256 key exchange, which [the section below](#certificate-signatures-and-p-256-key-exchange) describes. The toolchain uses the same code to verify its own releases. Every program on this page is checked by `oskac` when the documentation is tested, and the output shown is what `oskac run` prints.
 
 ## What this crypto is, and is not
 
 This code is hand-written, in Oska, and has not been audited by anyone outside the project. [ADR 0012](../adr/0012-tls-git-and-crypto-are-written-in-oska.md) accepts that on purpose: the primitives are Oska source, with no Rust implementation behind them, so one body of code runs on the interpreter and in every native executable. Its assurance is what the project can show:
 
-- Each module is held by published test vectors, run as Oska tests on both backends on every supported platform: FIPS 180-4 and NIST CAVP for `std.sha2`, RFC 4231 and Wycheproof for `std.hmac`, RFC 8032 and Wycheproof for `std.ed25519`, and signatures made by `ssh-keygen` for `std.sshsig`, including the published releases' own `SHA256SUMS.sig`.
+- Each module is held by published test vectors, run as Oska tests on both backends on every supported platform: FIPS 180-4 and NIST CAVP for `std.sha2`, RFC 4231 and Wycheproof for `std.hmac`, RFC 8032 and Wycheproof for `std.ed25519`, signatures made by `ssh-keygen` for `std.sshsig`, including the published releases' own `SHA256SUMS.sig`; and for `std.ecdsa`, `std.rsa` and `std.p256`, RFC 6979, RFC 5903 and Wycheproof's ECDSA, RSA and P-256 ECDH vectors. The full Wycheproof files run natively only, as the interpreter takes minutes over them; the interpreter runs the smaller RFC and edge-case sets.
 - The checker treats the modules as user code. They contain no `expose()` and no `.assume_trusted()`, so `oskac audit` lists no audit site inside them, and every function is a pure function.
 - The secret forms (`sha256_secret` and `hmac.sha256`) are written over secret integers, so the checker refuses a secret-dependent branch or memory address and the native backend checks the code it emits. That is the whole of the timing story: nothing measures time, and secret memory is not zeroed. See [secrets](secrets.md).
 
@@ -219,9 +219,19 @@ fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
 
 The release signature of the Oska toolchain itself is made in the namespace `oska-release` with the key published as `oska-release.pub`, and its fingerprint is in the [install guide](install.md). Do not take the key out of the same download as the file it signs.
 
+## Certificate signatures and P-256 key exchange
+
+`sha2.sha384(data)` gives the 48-byte SHA-384 digest, the hash of P-384 and many RSA signatures. Three modules check the signatures on web certificates, each over public data and pure:
+
+- `std.ecdsa` loads a P-256 or P-384 key with `ecdsa.PublicKey.from_bytes(curve, bytes)` (a SEC1 uncompressed point, checked to be on the curve) and checks a signature with `ecdsa.verify(key, digest, signature)` for the fixed-width `r || s` form or `ecdsa.verify_der` for strict DER.
+- `std.rsa` loads a key with `rsa.PublicKey.from_components(modulus, exponent)` (2048 to 8192 bits) and checks `rsa.verify_pkcs1` or `rsa.verify_pss` with a `rsa.HashAlgorithm` of `Sha256`, `Sha384` or `Sha512`.
+- You hash the message yourself and pass the digest, with the hash the signature names.
+
+`std.p256` is Diffie-Hellman on P-256: `p256.public_key(scalar)` and `p256.shared_secret(scalar, peer)` take a 32-byte `Secret<Bytes>` scalar and return `Secret<Bytes>`, computed over secret integers so no branch or memory address depends on the scalar. Exposing a result, such as a TLS key share, is your audit site; the module has none. A scalar that is zero or not below the group order cannot be refused, since refusing would branch on the secret: it gives zeros or the result for the scalar mod the order, so pick scalars from 1 to n - 1.
+
 ## What to remember
 
 - Hash with `sha2`, authenticate with `hmac`, verify with `ed25519` and `sshsig`. Use the secret forms for secret data and `verify_sha256` for tags.
 - The code is hand-written and unaudited, and held by published test vectors on every platform. Weigh it as [ADR 0012](../adr/0012-tls-git-and-crypto-are-written-in-oska.md) does.
 - The key and the namespace you trust are policy: trusted text, and an audit site where a program vouches for text it read.
-- The API of each module is in the API reference on the site, and `oskac doc std.sha2` (or `std.hmac`, `std.ed25519`, `std.sshsig`) prints it.
+- The API of each module is in the API reference on the site, and `oskac doc std.sha2` (or `std.hmac`, `std.ed25519`, `std.sshsig`, `std.ecdsa`, `std.rsa`, `std.p256`) prints it.

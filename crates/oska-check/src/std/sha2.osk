@@ -1,6 +1,7 @@
-// `std.sha2`: the SHA-256 and SHA-512 hash functions of FIPS 180-4, in
-// one call (`sha2.sha256(data)`) or a piece at a time (`Sha256`,
-// `Sha512`). A module sees them only after `use std.sha2`.
+// `std.sha2`: the SHA-256, SHA-384 and SHA-512 hash functions of FIPS
+// 180-4, in one call (`sha2.sha256(data)`) or, for SHA-256 and SHA-512, a
+// piece at a time (`Sha256`, `Sha512`). A module sees them only after
+// `use std.sha2`.
 //
 // A digest is trusted `Bytes`, whatever the trust of the data hashed: it
 // is a fixed-length value computed from integers read out of the data,
@@ -35,6 +36,14 @@ pub fn sha512(data: Untrusted<Bytes>) -> Bytes {
     var hasher = Sha512.new()
     hasher.update(data)
     hasher.finish()
+}
+
+// The SHA-384 digest of `data`: 48 bytes. SHA-384 is SHA-512 with its own
+// initial hash value, cut to its first 48 bytes.
+pub fn sha384(data: Untrusted<Bytes>) -> Bytes {
+    var hasher = Sha512(state: initial384(), pending: Bytes.new(), length: 0)
+    hasher.update(data)
+    hasher.finish().slice(0, 48)
 }
 
 // The SHA-256 digest of secret `data`, as a secret: 32 bytes, computed in
@@ -388,6 +397,14 @@ fn initial512() -> List<U64> {
     [
         7640891576956012808, 13503953896175478587, 4354685564936845355, 11912009170470909681,
         5840696475078001361, 11170449401992604703, 2270897969802886507, 6620516959819538809
+    ]
+}
+
+// The initial hash value of SHA-384 (section 5.3.4), in decimal.
+fn initial384() -> List<U64> {
+    [
+        14680500436340154072, 7105036623409894663, 10473403895298186519, 1526699215303891257,
+        7436329637833083697, 10282925794625328401, 15784041429090275239, 5167115440072839076
     ]
 }
 
