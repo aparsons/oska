@@ -85,6 +85,12 @@
 //!   takes. `--max-memory` charges a program's values, not this heap,
 //!   so it bounds what the program holds at once but no longer bounds
 //!   the process's memory by itself.
+//! - **Held large blocks add to that.** On top of the classes, the heap
+//!   holds up to [`HOLD_CAP`] (8 MiB) of freed large blocks, and each
+//!   large block, live or held, takes up to a quarter more than its
+//!   request, rounded to its bucket. Both are bounded (8 MiB, and 25% of
+//!   the large blocks the program holds), and neither is charged to
+//!   `--max-memory`.
 //!
 //! # Soundness
 //!
@@ -103,6 +109,16 @@
 //! program no longer uses it. Regions are carved by a bump pointer under
 //! the lock, so no two batches overlap, and no block is ever handed out
 //! twice.
+//!
+//! A held large block is likewise memory no live allocation covers: a
+//! block `System` returned for its bucket's layout, at least 1280 bytes
+//! and 16-aligned, whose first word holds the next block of its bucket's
+//! list, reached only under the pool's lock (the word is written under it
+//! too, by `dealloc_large`). It leaves the list when `alloc_large` takes
+//! it, and returns to `System` only through `dealloc_large` with its
+//! bucket's layout, whether it was held or not, so `System` always sees
+//! the size and alignment it allocated with. The bucket's size is up to a
+//! quarter above the request; the bytes past the request are never read.
 //!
 //! Nothing here panics or unwinds: no `unwrap`, no overflowing
 //! arithmetic (sizes are at most [`REGION`]), and table lookups whose
@@ -257,11 +273,21 @@ const fn bucket_size(bucket: usize) -> usize {
     (5 + bucket % 4) << (bucket / 4 + 8)
 }
 
-/// The layout [`System`] sees for a block of `bucket`: always the same
-/// size and alignment, for `alloc` and `dealloc` alike.
-fn bucket_layout(bucket: usize) -> Option<Layout> {
-    Layout::from_size_align(bucket_size(bucket), ALIGN).ok()
-}
+/// The layout [`System`] sees for each bucket's blocks: always the same
+/// size and alignment, for `alloc` and `dealloc` alike. Built at compile
+/// time, so none can be invalid and no lookup can fail.
+const BUCKET_LAYOUTS: [Layout; LARGE_BUCKETS] = {
+    let mut layouts = [REGION_LAYOUT; LARGE_BUCKETS];
+    let mut bucket = 0;
+    while bucket < LARGE_BUCKETS {
+        layouts[bucket] = match Layout::from_size_align(bucket_size(bucket), ALIGN) {
+            Ok(layout) => layout,
+            Err(_) => panic!("a bucket's layout is valid"),
+        };
+        bucket += 1;
+    }
+    layouts
+};
 
 /// How many blocks of `class` move between a thread's cache and the
 /// shared pool at once: as many blocks as fit in 4 KiB, but at most 64,
@@ -409,8 +435,7 @@ unsafe fn next_of(block: *mut u8) -> *mut u8 {
 /// # Safety
 ///
 /// `block` is a block of a size class or a large bucket that no live
-/// allocation covers
-/// and that only the caller can reach.
+/// allocation covers and that only the caller can reach.
 unsafe fn set_next(block: *mut u8, next: *mut u8) {
     // SAFETY: by this function's contract `block` is at least 16 bytes,
     // 16-aligned, and no one else reads or writes it now.
@@ -831,9 +856,7 @@ fn alloc_large(bucket: usize, zero: usize) -> *mut u8 {
         }
         return held;
     }
-    let Some(layout) = bucket_layout(bucket) else {
-        return ptr::null_mut();
-    };
+    let layout = BUCKET_LAYOUTS[bucket];
     if zero > 0 {
         // SAFETY: `layout` has a non-zero size.
         unsafe { System.alloc_zeroed(layout) }
@@ -866,11 +889,9 @@ unsafe fn dealloc_large(bucket: usize, block: *mut u8) {
         true
     });
     if !kept {
-        if let Some(layout) = bucket_layout(bucket) {
-            // SAFETY: `System` returned `block` for this layout in
-            // `alloc_large`, and the program no longer uses it.
-            unsafe { System.dealloc(block, layout) };
-        }
+        // SAFETY: `System` returned `block` for this layout in
+        // `alloc_large`, and the program no longer uses it.
+        unsafe { System.dealloc(block, BUCKET_LAYOUTS[bucket]) };
     }
 }
 

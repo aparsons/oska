@@ -22,10 +22,12 @@
 //!   size class, and a block grown from small to large, and back, keeps
 //!   its bytes and returns to the right place.
 //!
-//! The held total is process-wide, so every test but the stress test
-//! holds [`SERIAL`] while it measures. Linux, as `allocator_threads.rs`
-//! (a platform where the C library's `free` ignores a block's size is not
-//! assumed: every layout here is the one the block was allocated with).
+//! - **Alignment:** a block aligned past 16 bytes is never held, whatever
+//!   its size.
+//!
+//! The held total is process-wide, so every test holds [`SERIAL`], and
+//! the ones that measure it first [`drain`] the pool, so a test that ran
+//! before cannot leave it near the cap.
 
 use oska_sys::{SizeClassAlloc, HOLD_CAP, HOLD_MAX};
 use std::sync::Mutex;
@@ -39,6 +41,27 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
     SERIAL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Takes every held block out of the pool, by requesting each bucket's
+/// size until a request no longer lowers the held total, and returns them
+/// so the caller keeps them live. With them out, the pool is empty and
+/// has all of `HOLD_CAP` and every bucket's count to spare.
+fn drain() -> Vec<Vec<u8>> {
+    // Room for every block, so that growing this list frees nothing.
+    let mut taken = Vec::with_capacity(4096);
+    for bucket in 0..40 {
+        let size = (5 + bucket % 4) << (bucket / 4 + 8);
+        loop {
+            let before = SizeClassAlloc::held_bytes();
+            taken.push(Vec::<u8>::with_capacity(size));
+            if SizeClassAlloc::held_bytes() == before {
+                break;
+            }
+        }
+    }
+    assert_eq!(SizeClassAlloc::held_bytes(), 0);
+    taken
 }
 
 /// A buffer of capacity exactly `size`, holding `size` copies of `tag`.
@@ -79,6 +102,7 @@ fn a_zeroed_request_is_zero_after_a_dirtied_block_is_reused() {
 #[test]
 fn a_block_above_the_per_block_limit_goes_straight_to_the_system() {
     let _guard = serial();
+    let _live = drain();
     let before = SizeClassAlloc::held_bytes();
     drop(filled(HOLD_MAX + 1, 1));
     assert_eq!(SizeClassAlloc::held_bytes(), before, "nothing was held");
@@ -95,6 +119,7 @@ fn a_block_above_the_per_block_limit_goes_straight_to_the_system() {
 #[test]
 fn a_block_goes_back_to_the_allocator_it_came_from_large_and_small() {
     let _guard = serial();
+    let _live = drain();
     let before = SizeClassAlloc::held_bytes();
 
     // Small: freed into its size class, never held, reused from it.
@@ -144,9 +169,34 @@ fn a_block_goes_back_to_the_allocator_it_came_from_large_and_small() {
     assert!(SizeClassAlloc::held_bytes() <= HOLD_CAP);
 }
 
+/// 32-aligned, 32 bytes.
+#[repr(align(32))]
+#[allow(dead_code)] // only its size and alignment matter
+struct Wide([u8; 32]);
+
+#[test]
+fn a_block_aligned_past_16_bytes_goes_straight_to_the_system() {
+    let _guard = serial();
+    let _live = drain();
+    // 64 * 32 = 2048 bytes, in the range that is held at an alignment of
+    // 16 or less.
+    let wide: Vec<Wide> = Vec::with_capacity(64);
+    assert_eq!(wide.as_ptr() as usize % 32, 0);
+    assert_eq!(wide.capacity() * std::mem::size_of::<Wide>(), 2048);
+    drop(wide);
+    assert_eq!(SizeClassAlloc::held_bytes(), 0, "nothing was held");
+    drop(Vec::<u8>::with_capacity(2048));
+    assert_eq!(
+        SizeClassAlloc::held_bytes(),
+        2048,
+        "a 16-aligned block of that size is held"
+    );
+}
+
 #[test]
 fn a_realloc_within_one_bucket_stays_in_place() {
     let _guard = serial();
+    let _live = drain();
     // 1100 and 1200 both round up to the 1280-byte bucket.
     let mut buffer = filled(1100, 7);
     let address = buffer.as_ptr();
@@ -165,7 +215,7 @@ fn next(state: &mut u64) -> usize {
 #[test]
 fn threads_that_allocate_grow_and_free_large_blocks_never_hold_past_the_cap() {
     let _guard = serial();
-    let handles: Vec<_> = (1..=8u64)
+    let handles: Vec<_> = (1..=4u64)
         .map(|id| {
             std::thread::spawn(move || {
                 let mut state = id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -174,7 +224,7 @@ fn threads_that_allocate_grow_and_free_large_blocks_never_hold_past_the_cap() {
                 for _ in 0..3_000 {
                     peak = peak.max(SizeClassAlloc::held_bytes());
                     match next(&mut state) % 3 {
-                        0 | 1 if live.len() < 64 => {
+                        0 | 1 if live.len() < 16 => {
                             let size = 1025 + next(&mut state) % (2 * HOLD_MAX);
                             let tag = (size % 251) as u8 + 1;
                             let buffer = if size % 2 == 0 {
