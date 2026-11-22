@@ -90,6 +90,24 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.ecdsa",
+        source: include_str!("std/ecdsa.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.p256",
+        source: include_str!("std/p256.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.rsa",
+        source: include_str!("std/rsa.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.sshsig",
         source: include_str!("std/sshsig.osk"),
         sink_literal: None,

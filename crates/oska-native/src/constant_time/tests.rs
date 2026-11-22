@@ -749,4 +749,50 @@ fn main(io: Stdout) {
             }
         }
     }
+
+    /// `std.p256` (#242), Oska source linked into the program with the
+    /// `std.ecdsa` it uses to check a peer's point, builds for every
+    /// target, and on aarch64 and x86_64 the machine code of its curve
+    /// arithmetic over the secret scalar is branch-free and addresses no
+    /// memory by a secret: the field operations, the complete point
+    /// formulas (which the backend inlines into `multiply`), the choice of
+    /// the sum or the point doubled for each bit, and the loop over the
+    /// bits itself.
+    #[test]
+    fn the_machine_code_of_std_p256_is_branch_free() {
+        let src = r#"use std.p256
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let scalar = env.secret("P256_SCALAR").to_bytes()
+    let peer = match args.get(1) {
+        Some(text) => Bytes.from_hex(text).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }
+    let same = match p256.shared_secret(scalar, peer) {
+        Some(shared) => match p256.public_key(scalar) {
+            Some(public) => shared.constant_time_eq_secret(public)
+            None => false
+        }
+        None => false
+    }
+    let _ = io.println(if same { "same" } else { "different" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.p256.mont_mul",
+                "pkg.std.p256.add_mod",
+                "pkg.std.p256.sub_mod",
+                "pkg.std.p256.reduce_once",
+                "pkg.std.p256.select",
+                "pkg.std.p256.multiply",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
 }

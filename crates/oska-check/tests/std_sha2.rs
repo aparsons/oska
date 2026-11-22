@@ -15,9 +15,10 @@ use oska_check::CheckReport;
 
 /// The public functions and methods of `std.sha2`, as the authority report
 /// names them.
-const FUNCTIONS: [&str; 12] = [
+const FUNCTIONS: [&str; 13] = [
     "std.sha2.sha256",
     "std.sha2.sha512",
+    "std.sha2.sha384",
     "std.sha2.sha256_secret",
     "std.sha2.Sha256.new",
     "std.sha2.Sha256.update",
