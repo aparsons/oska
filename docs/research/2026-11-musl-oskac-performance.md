@@ -676,7 +676,7 @@ Ticket #616 of spec #612 asked `String.join` to size its result once and copy ea
 | before | 7,494,215 | 5,260,480 |
 | after | 7,675,294 | 5,453,169 |
 
-The count went up by 2.4%, not down. Two reasons, both in the code: the standard library's `join` already sizes its result once, so there was nothing to save there; and for a short separator it copies the separator with an unrolled, inlined path and no `memcpy` call, while `push_str` of the separator calls `memcpy` each time. Each part is one `memcpy` either way. The one-character parts come from `String.chars` in the Oska program being joined, so the only way to make fewer calls is to avoid copying a short piece, which spec #521 rules out.
+The count went up by 2.4%, not down. The likely reasons: the standard library's `join` already sizes its result once, so there was nothing to save there, and, as I remember its source (the Rust source is not installed in this container, so I did not re-check it), it copies a short separator with an unrolled path that makes no `memcpy` call, while `push_str` of the separator calls `memcpy` each time. I did not isolate which of the two causes the extra calls. Each part is one `memcpy` either way. The one-character parts come from `String.chars` in the Oska program being joined, so the only way to make fewer calls is to avoid copying a short piece, which spec #521 rules out.
 
 The ticket's criterion (the count falls) is not met, so the change is not merged. The branch `ticket/616-join-sizing` stays local in the session. The one-byte copies are left for ticket #581 (the `memcpy` override), which is the change that makes each of them cheap.
 
