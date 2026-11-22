@@ -291,6 +291,42 @@ fn an_unsplit_toolset_gives_every_tool_the_whole_toolsets_capabilities() {
 }
 
 #[test]
+fn a_tool_that_reaches_a_type_parameter_carries_the_unknown_kind() {
+    let src = "use std.json\nuse std.mcp\n\n\
+               trait Source {\n    fn read(self) -> String\n}\n\n\
+               cap struct Wrap<S: Source> { source: S }\n\n\
+               impl<S: Source> mcp.Toolset for Wrap<S> {\n    \
+               fn specs(self) -> List<mcp.ToolSpec> {\n        []\n    }\n\n    \
+               fn call(self, name: String, args: json.Value) -> mcp.ToolResult {\n        \
+               match name {\n            \"read\" => mcp.ToolResult.text(self.source.read())\n            \
+               _ => mcp.ToolResult.error(\"unknown\")\n        }\n    }\n}\n";
+    let program = check(src).program.expect("a clean program is checked");
+    let toolset = &program.toolsets[0];
+    assert_eq!(toolset.capabilities("read"), ["?"]);
+    // A name the report does not list gets the whole toolset's.
+    assert_eq!(toolset.capabilities("other"), ["?"]);
+    assert_eq!(toolset.whole, ["?"]);
+}
+
+#[test]
+fn every_implementation_gets_a_reached_method_the_checker_wrote() {
+    let call = "        match name {\n            \
+                \"read\" => listed(self.notes)\n            \
+                _ => mcp.ToolResult.error(\"unknown\")\n        }";
+    let (_, report) = toolset_of(&toolset(FIELDS, NO_HELPERS, SPECS, call));
+    let program = report.program.expect("a clean program is checked");
+    let reached = program
+        .functions
+        .get("<Tools as pkg.std.mcp.Toolset>.reached")
+        .expect("the toolset has a reached method");
+    // `if name == "read" { ["DirRead"] } else { [whole] }`
+    let oska_check::program::ExprKind::If { else_branch, .. } = &reached.body.kind else {
+        panic!("{:#?}", reached.body);
+    };
+    assert!(else_branch.is_some());
+}
+
+#[test]
 fn a_generic_toolset_names_its_bounded_parameter() {
     let src = "use std.json\nuse std.mcp\n\n\
                trait Source {\n    fn read(self) -> String\n}\n\n\
@@ -366,22 +402,47 @@ fn an_impl_of_another_trait_named_toolset_is_not_a_toolset() {
 const MCP_SOURCE: &str = include_str!("../src/std/mcp.osk");
 
 #[test]
-fn the_module_reaches_no_authority_and_vouches_for_nothing() {
+fn the_module_adds_no_capability_and_vouches_for_nothing() {
     // The authority and audit reports leave a `std` module written in
-    // Oska out, so this checks it as code of its own.
+    // Oska out, so this checks it as code of its own. It holds no
+    // capability: `serve` is given standard input and output, and the
+    // functions that take a toolset have only what its type argument
+    // holds (`generic T (tools)`).
     let report = check(MCP_SOURCE);
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
-    let reaching: Vec<&str> = report
+    let reaching: Vec<(&str, &[String])> = report
         .functions
         .iter()
-        .filter(|f| !f.pure || !f.authority.is_empty())
-        .map(|f| f.name.as_str())
+        .filter(|f| !f.authority.is_empty())
+        .map(|f| (f.name.as_str(), f.authority.as_slice()))
         .collect();
-    assert!(
-        reaching.is_empty(),
-        "functions that reach authority: {reaching:?}"
+    assert_eq!(
+        reaching,
+        [(
+            "serve",
+            ["Stdin".to_string(), "Stdout".to_string()].as_slice()
+        )]
     );
     assert!(report.audit.is_empty(), "{:#?}", report.audit);
+}
+
+#[test]
+fn serve_and_handle_are_generic_over_the_toolset_and_never_pure() {
+    let report = check(MCP_SOURCE);
+    let human: Vec<String> = report
+        .functions
+        .iter()
+        .filter(|f| matches!(f.name.as_str(), "serve" | "handle" | "validate"))
+        .map(|f| f.to_human())
+        .collect();
+    assert_eq!(
+        human,
+        [
+            "pub fn validate: generic T (tools)",
+            "pub fn serve: Stdin (stdin), Stdout (stdout), generic T (tools)",
+            "pub fn handle: generic T (tools)",
+        ]
+    );
 }
 
 #[test]

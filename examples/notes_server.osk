@@ -1,0 +1,135 @@
+// An MCP server in Oska: three tools over standard input and output, for
+// any MCP client (Claude Code, an IDE, `npx @modelcontextprotocol/inspector`).
+//
+// Each tool reaches only what its arm of `call` uses, and `oskac check`
+// says so, per tool: `list_notes` and `read_note` reach `notes`, a
+// read-only directory; `save_note` reaches `drafts`, a different
+// directory it can only write. Nobody writes the tools' hints (read-only,
+// destructive): `mcp.serve` gives `list_notes` and `read_note` the
+// read-only hint, and `save_note` the destructive one, because that is
+// what the checker computed they reach.
+//
+// A path a client sends is untrusted. It reaches `Path.from` only, and
+// the directory capability refuses one that leaves its root, so
+// `../secret.txt` reads nothing: the tool answers with an error the model
+// can read.
+use std.json
+use std.mcp
+
+cap struct Notes {
+    notes: DirRead,
+    drafts: DirWrite,
+}
+
+impl mcp.Toolset for Notes {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        let path = json.Schema.string().describe("A file name under the notes directory.")
+        [
+            mcp.ToolSpec.new("list_notes", "List the names of the notes.", json.Schema.object([])),
+            mcp.ToolSpec.new(
+                "read_note",
+                "Read one note.",
+                json.Schema.object([json.Field.required("path", path)]),
+            ).with_title("Read a note"),
+            mcp.ToolSpec.new(
+                "save_note",
+                "Save a draft, replacing a draft of the same name.",
+                json.Schema.object([
+                    json.Field.required("path", path),
+                    json.Field.required("text", json.Schema.string().describe("What the draft says.")),
+                ]),
+            ),
+        ]
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        match name {
+            "list_notes" => list(self.notes)
+            "read_note" => read(self.notes, args)
+            "save_note" => save(self.drafts, args)
+            _ => mcp.ToolResult.error("no such tool")
+        }
+    }
+}
+
+fn list(notes: DirRead) -> mcp.ToolResult {
+    match notes.list_dir(Path.new(".")) {
+        Ok(names) => {
+            var values: List<json.Value> = []
+            for name in names {
+                values.push(json.Value.Text(name))
+            }
+            mcp.ToolResult.json(json.Value.List(values))
+        }
+        Err(_) => mcp.ToolResult.error("cannot list the notes")
+    }
+}
+
+fn read(notes: DirRead, args: json.Value) -> mcp.ToolResult {
+    let path = args.text("path").unwrap_or("")
+    match notes.read_to_string(Path.from(path)) {
+        Ok(text) => mcp.ToolResult.text(text)
+        Err(_) => mcp.ToolResult.error("cannot read the note {path}: it is not a note")
+    }
+}
+
+fn save(drafts: DirWrite, args: json.Value) -> mcp.ToolResult {
+    let path = args.text("path").unwrap_or("")
+    let text = args.text("text").unwrap_or("")
+    match drafts.write(Path.from(path), text) {
+        Ok(()) => mcp.ToolResult.text("saved the draft {path}")
+        Err(_) => mcp.ToolResult.error("cannot save the draft {path}")
+    }
+}
+
+fn main(fs: Fs, stdin: Stdin, stdout: Stdout) -> Result<(), mcp.McpError> {
+    let tools = Notes(
+        notes: fs.read_only().restrict_to("notes"),
+        drafts: fs.write_only().restrict_to("drafts"),
+    )
+    let info = mcp.ServerInfo.new("notes", "1.0.0").with_instructions("Read the notes, and save drafts.")
+    mcp.serve(stdin, stdout, info, tools)
+}
+
+// The tests drive the server with `mcp.handle` and recorded lines: no
+// process, no standard input. `t.fs` is an in-memory filesystem.
+const META: String = "\"_meta\":\{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":\{\}\}"
+
+fn server(fs: Fs) -> Notes {
+    Notes(notes: fs.read_only().restrict_to("notes"), drafts: fs.write_only().restrict_to("drafts"))
+}
+
+// The reply to the request `method` with `params`, as a client reads it.
+fn reply(tools: Notes, method: String, params: String) -> Untrusted<String> {
+    let line = "\{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"{method}\",\"params\":\{{params}{META}\}\}"
+    let session = mcp.Session.new(mcp.ServerInfo.new("notes", "1.0.0"))
+    mcp.handle(session, tools, line).reply.unwrap_or("(no reply)")
+}
+
+test "the tool list gives each tool the hints its authority computes" {
+    let list = reply(server(t.fs), "tools/list", "")
+    let read_only = "\"annotations\":\{\"readOnlyHint\":true,\"destructiveHint\":false,\"openWorldHint\":false\}"
+    let destructive = "\"annotations\":\{\"readOnlyHint\":false,\"destructiveHint\":true,\"openWorldHint\":false\}"
+    t.assert(list.contains("\"name\":\"read_note\""))
+    t.assert(list.contains(read_only))
+    t.assert(list.contains(destructive))
+}
+
+test "a path out of the notes directory is a tool error, not a read" {
+    let call = "\"name\":\"read_note\",\"arguments\":\{\"path\":\"../secret.txt\"\},"
+    let answer = reply(server(t.fs), "tools/call", call)
+    t.assert(answer.contains("\"isError\":true"))
+    t.assert(answer.contains("it is not a note"))
+}
+
+test "arguments that break the schema are an error the client can correct" {
+    let call = "\"name\":\"read_note\",\"arguments\":\{\},"
+    let answer = reply(server(t.fs), "tools/call", call)
+    t.assert(answer.contains("\"isError\":true"))
+    t.assert(answer.contains("$.path"))
+}
+
+test "an unknown tool is a protocol error" {
+    let answer = reply(server(t.fs), "tools/call", "\"name\":\"nope\",")
+    t.assert(answer.contains("\"code\":-32602"))
+}

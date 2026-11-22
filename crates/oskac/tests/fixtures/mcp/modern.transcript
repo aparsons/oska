@@ -1,0 +1,70 @@
+# A modern client: discovery, the tool list, calls, and every error it can cause.
+> {"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28","2025-11-25"],"capabilities":{"tools":{}},"instructions":"Read the notes, and save drafts.","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","tools":[{"name":"list_notes","description":"List the names of the notes.","inputSchema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}},{"name":"read_note","title":"Read a note","description":"Read one note.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"A file name under the notes directory."}},"required":["path"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}},{"name":"save_note","description":"Save a draft, replacing a draft of the same name.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"A file name under the notes directory."},"text":{"type":"string","description":"What the draft says."}},"required":["path","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}],"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_note","arguments":{"path":"a.txt"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","content":[{"type":"text","text":"hello note\n"}],"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_notes","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":4,"result":{"resultType":"complete","content":[{"type":"text","text":"[\"a.txt\"]"}],"structuredContent":["a.txt"],"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"save_note","arguments":{"path":"d.txt","text":"line one\nline two"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":5,"result":{"resultType":"complete","content":[{"type":"text","text":"saved the draft d.txt"}],"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"read_note","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":6,"result":{"resultType":"complete","content":[{"type":"text","text":"invalid arguments: $.path: expected a required member"}],"isError":true,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_note","arguments":{"path":3},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":7,"result":{"resultType":"complete","content":[{"type":"text","text":"invalid arguments: $.path: expected a string"}],"isError":true,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"read_note","arguments":{"path":"a.txt","extra":true},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":8,"result":{"resultType":"complete","content":[{"type":"text","text":"invalid arguments: $.extra: expected no member by this name"}],"isError":true,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"no_such_tool","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":9,"error":{"code":-32602,"message":"Unknown tool: no_such_tool"}}
+> {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":10,"error":{"code":-32602,"message":"tools/call needs a tool name string"}}
+> {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"read_note","arguments":[],"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"arguments must be an object"}}
+> {"jsonrpc":"2.0","id":"twelve","method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":"twelve","result":{"resultType":"complete","tools":[{"name":"list_notes","description":"List the names of the notes.","inputSchema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}},{"name":"read_note","title":"Read a note","description":"Read one note.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"A file name under the notes directory."}},"required":["path"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}},{"name":"save_note","description":"Save a draft, replacing a draft of the same name.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"A file name under the notes directory."},"text":{"type":"string","description":"What the draft says."}},"required":["path","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}],"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":13,"method":"tools/list","params":{}}
+< {"jsonrpc":"2.0","id":13,"error":{"code":-32602,"message":"params._meta is required"}}
+> {"jsonrpc":"2.0","id":14,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
+< {"jsonrpc":"2.0","id":14,"error":{"code":-32602,"message":"_meta needs io.modelcontextprotocol/clientCapabilities"}}
+> {"jsonrpc":"2.0","id":15,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":15,"error":{"code":-32602,"message":"_meta needs io.modelcontextprotocol/protocolVersion"}}
+> {"jsonrpc":"2.0","id":16,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2024-11-05","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":16,"error":{"code":-32022,"message":"unsupported protocol version","data":{"supported":["2026-07-28","2025-11-25"],"requested":"2024-11-05"}}}
+> {"jsonrpc":"2.0","id":18,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":18,"error":{"code":-32601,"message":"method not found: ping"}}
+> {"jsonrpc":"2.0","id":19,"method":"resources/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":19,"error":{"code":-32601,"message":"method not found: resources/list"}}
+> {"jsonrpc":"2.0","id":20,"method":"tools/list","params":[]}
+< {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"params must be an object"}}
+# Notifications get no reply, and neither does a notification the server does not know.
+> {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}
+> {"jsonrpc":"2.0","method":"notifications/initialized"}
+> {"jsonrpc":"2.0","method":"no/such/notification"}
+> {"jsonrpc":"2.0","method":"tools/list"}
+# Not a request, or not JSON: the id is null when it cannot be read.
+> not json
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error: invalid JSON at byte 0: unexpected character"}}
+> 
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error: invalid JSON at byte 0: unexpected end of input"}}
+> [1,2]
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request is a JSON object"}}
+> 42
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request is a JSON object"}}
+> {"jsonrpc":"2.0","id":21}
+< {"jsonrpc":"2.0","id":21,"error":{"code":-32600,"message":"not a request: no method"}}
+> {"jsonrpc":"1.0","id":22,"method":"tools/list"}
+< {"jsonrpc":"2.0","id":22,"error":{"code":-32600,"message":"not a request: jsonrpc is not \"2.0\""}}
+> {"jsonrpc":"2.0","id":null,"method":"tools/list"}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request id is a string or a number"}}
+> {"jsonrpc":"2.0","id":[1],"method":"tools/list"}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request id is a string or a number"}}
+> {"jsonrpc":"2.0","id":23,"method":5}
+< {"jsonrpc":"2.0","id":23,"error":{"code":-32600,"message":"not a request: no method"}}
+> {"jsonrpc":"2.0","id":24,"result":{}}
+< {"jsonrpc":"2.0","id":24,"error":{"code":-32600,"message":"not a request: no method"}}
+> {"jsonrpc":"2.0","id":25,"method":"tools/list","method":"ping"}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error: invalid JSON at byte 47: duplicate key"}}
+# After all that the server still answers.
+> {"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"read_note","arguments":{"path":"a.txt"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":26,"result":{"resultType":"complete","content":[{"type":"text","text":"hello note\n"}],"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}

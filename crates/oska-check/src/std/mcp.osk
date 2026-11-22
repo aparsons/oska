@@ -10,6 +10,14 @@
 // other way gets one entry for the whole toolset, marked as not split per
 // tool.
 //
+// `serve(stdin, stdout, info, tools)` makes the program an MCP server over
+// standard input and output, for any MCP client, in two protocol eras:
+// 2026-07-28 and 2025-11-25. It lists each tool with annotations
+// (`readOnlyHint`, `destructiveHint`, `openWorldHint`) that it derives
+// from what the checker computed the tool reaches, so no program can
+// claim one. `handle` is the function `serve` loops over, for tests that
+// drive a server with recorded JSON-RPC lines and no process.
+//
 // `std.mcp` adds no capability. A tool reaches only what its toolset
 // holds, and `main` builds the toolset from its own authority.
 
@@ -34,6 +42,16 @@ pub trait Toolset {
     // Run the tool `name`, one of the names in `specs`, with `args`,
     // arguments that match its input schema. Their strings are untrusted.
     fn call(self, name: String, args: json.Value) -> ToolResult
+
+    // The capabilities the tool `name` reaches, as the checker computed
+    // them from its code, such as `["DirRead"]`, or `["?"]` for one held
+    // by a type parameter, which could be any. Do not write this method:
+    // the toolchain gives every implementation its own, and replaces one
+    // a program writes. `serve` reads it to set each tool's annotations,
+    // so that they are derived, never claimed.
+    fn reached(self, name: String) -> List<String> {
+        []
+    }
 }
 
 // What a tool is: its name, an optional title, a description and the
@@ -121,5 +139,514 @@ impl ToolResult {
     // Whether the call failed.
     pub fn is_error(self) -> Bool {
         self.failed
+    }
+}
+
+// ---- Serving ---------------------------------------------------------
+
+// The longest message line `serve` handles, in bytes: 1 MiB. A longer
+// line gets a `-32600` error, and the server goes on with the next.
+pub const MAX_LINE: Int = 1048576
+
+// The protocol version of the modern era, whose requests each carry their
+// own metadata.
+pub const MODERN_VERSION: String = "2026-07-28"
+
+// The protocol version of the legacy era, which starts with `initialize`.
+pub const LEGACY_VERSION: String = "2025-11-25"
+
+// What a client may show of a server: its name and version, and
+// instructions for the model that uses it, if any.
+pub struct ServerInfo {
+    name: String,
+    version: String,
+    instructions: Option<String>,
+}
+
+impl ServerInfo {
+    // A server called `name`, at `version`, with no instructions.
+    pub fn new(name: String, version: String) -> ServerInfo {
+        ServerInfo(name: name, version: version, instructions: None)
+    }
+
+    // The same server with `instructions`, natural-language guidance for a
+    // model on how to use its tools.
+    pub fn with_instructions(self, instructions: String) -> ServerInfo {
+        ServerInfo(name: self.name, version: self.version, instructions: Some(instructions))
+    }
+}
+
+// Why a server cannot start or go on: what is wrong with its tools, or
+// the stream it serves.
+pub struct McpError { pub message: String }
+
+impl Display for McpError {
+    fn to_string(self) -> String {
+        self.message
+    }
+}
+
+// What a server remembers between messages: who it is, and whether a
+// client chose the legacy era with `initialize`. Make one with
+// `Session.new`.
+pub struct Session {
+    info: ServerInfo,
+    legacy: Bool,
+}
+
+impl Session {
+    // A session of the server `info`, before any message.
+    pub fn new(info: ServerInfo) -> Session {
+        Session(info: info, legacy: false)
+    }
+
+    // Whether the client chose the legacy era (protocol 2025-11-25) with
+    // `initialize`.
+    pub fn is_legacy(self) -> Bool {
+        self.legacy
+    }
+}
+
+// What `handle` gives back: the session to use for the next message, and
+// the line to write in reply, if any. A notification has none.
+pub struct Step {
+    pub session: Session,
+    pub reply: Option<Untrusted<String>>,
+}
+
+// Check the tools of `tools` as `serve` does before it reads anything:
+// every name is 1 to 128 ASCII letters, digits, `_` and `-`, no two tools
+// share a name, and every input schema is an object. The first fault is
+// an `McpError`.
+pub fn validate<T: Toolset>(tools: T) -> Result<(), McpError> {
+    let specs = tools.specs()
+    var seen: List<String> = []
+    for spec in specs {
+        let name = spec.name()
+        if !valid_name(name) {
+            return Err(McpError(message: "tool name `{name}` must be 1 to 128 ASCII letters, digits, `_` and `-`"))
+        }
+        for earlier in seen {
+            if earlier == name {
+                return Err(McpError(message: "two tools are named `{name}`"))
+            }
+        }
+        seen.push(name)
+        if !is_object_schema(spec.input()) {
+            return Err(McpError(message: "the input schema of tool `{name}` must be an object schema"))
+        }
+    }
+    Ok(())
+}
+
+// Serve `tools` over MCP, reading one JSON-RPC message per line from
+// `stdin` and writing each reply as one line to `stdout`, until `stdin`
+// closes: then it returns `Ok`. It checks the tools first, with
+// `validate`, and returns that error before it reads anything. It handles
+// the messages one at a time, in order, and writes a reply before it reads
+// the next line, so a call runs to completion and `notifications/cancelled`
+// finds nothing to cancel. Nothing else is written to `stdout`.
+//
+// Each tool's annotations in `tools/list` come from what the checker
+// computed the tool reaches: nothing a program writes can make a tool
+// look safer than its code is.
+pub fn serve<T: Toolset>(stdin: Stdin, stdout: Stdout, info: ServerInfo, tools: T) -> Result<(), McpError> {
+    validate(tools)?
+    var session = Session.new(info)
+    while true {
+        let line = match stdin.read_line() {
+            Ok(Some(line)) => line
+            Ok(None) => {
+                return Ok(())
+            }
+            Err(_) => {
+                return Err(McpError(message: "cannot read standard input"))
+            }
+        }
+        let step = handle(session, tools, line)
+        session = step.session
+        match step.reply {
+            Some(reply) => {
+                match stdout.println(reply) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        return Err(McpError(message: "cannot write standard output"))
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+// Handle one message `line` for a server of `tools`, as `serve` does for
+// each line it reads, and give the next session and the reply line, if
+// any. It is public so that a program's tests can drive a server with
+// recorded lines and no process.
+//
+// A message over `MAX_LINE` bytes gets `-32600`. A line that is not JSON
+// gets `-32700`, one that is not a request `-32600`, an unknown method
+// `-32601`. A notification gets no reply, whatever it is.
+//
+// Two protocol eras are served. A request in the modern era (2026-07-28)
+// carries `io.modelcontextprotocol/protocolVersion` and
+// `io.modelcontextprotocol/clientCapabilities` in `params._meta`, or gets
+// `-32602`, and a version this server does not take gets `-32022`; it
+// has `server/discover`, `tools/list` and `tools/call`, and its results
+// carry `resultType` and the server's info. `initialize` chooses the
+// legacy era (2025-11-25) for the rest of the session, which also has
+// `ping`, and accepts `notifications/initialized`.
+//
+// `tools/call` checks the arguments against the tool's input schema
+// before it calls `Toolset.call`, and gives a failure as a result with
+// `isError` set. It gives `Toolset.call` the tool's name from its own
+// specs, not the client's text, and answers an unknown tool itself.
+pub fn handle<T: Toolset>(session: Session, tools: T, line: Untrusted<String>) -> Step {
+    if line.byte_len() > MAX_LINE {
+        return Step(session: session, reply: Some(error_line(json.Value.Null, -32600, "message longer than the limit", None)))
+    }
+    let value = match json.parse(line) {
+        Ok(value) => value
+        Err(error) => {
+            return Step(session: session, reply: Some(error_line(json.Value.Null, -32700, "parse error: {error}", None)))
+        }
+    }
+    if !value.as_members().is_some() {
+        return Step(session: session, reply: Some(error_line(json.Value.Null, -32600, "a request is a JSON object", None)))
+    }
+    let id = value.get("id")
+    let known_id = match id {
+        Some(json.Value.Text(_)) => true
+        Some(json.Value.Number(_)) => true
+        _ => false
+    }
+    let method = value.text("method")
+    let versioned = value.text("jsonrpc")
+    let wellformed = match versioned {
+        Some(version) => version == "2.0"
+        None => false
+    }
+    if id.is_some() && !known_id {
+        return Step(session: session, reply: Some(error_line(json.Value.Null, -32600, "a request id is a string or a number", None)))
+    }
+    let name = match method {
+        Some(name) => name
+        None => {
+            return Step(session: session, reply: Some(error_line(id.unwrap_or(json.Value.Null), -32600, "not a request: no method", None)))
+        }
+    }
+    if !wellformed {
+        return Step(session: session, reply: Some(error_line(id.unwrap_or(json.Value.Null), -32600, "not a request: jsonrpc is not \"2.0\"", None)))
+    }
+    let request_id = match id {
+        Some(request_id) => request_id
+        None => {
+            return Step(session: session, reply: None)
+        }
+    }
+    let params = match value.get("params") {
+        Some(json.Value.Object(members)) => json.Value.Object(members)
+        Some(_) => {
+            return Step(session: session, reply: Some(error_line(request_id, -32602, "params must be an object", None)))
+        }
+        None => json.Value.Object([])
+    }
+    request(session, tools, request_id, name, params)
+}
+
+// Answer the request `id`, which asks `method` with `params`, an object.
+fn request<T: Toolset>(session: Session, tools: T, id: json.Value, method: Untrusted<String>, params: json.Value) -> Step {
+    if method == "initialize" {
+        return initialize(session, id, params)
+    }
+    // Before `initialize`, and after it for a client that sends metadata,
+    // the modern era's rules hold for the methods it has.
+    let known = match method {
+        "server/discover" => true
+        "tools/list" => true
+        "tools/call" => true
+        "ping" => session.legacy
+        _ => false
+    }
+    if !known {
+        return Step(session: session, reply: Some(error_line(id, -32601, "method not found: {method}", None)))
+    }
+    if !session.legacy || method == "server/discover" {
+        match meta_fault(params) {
+            Some(fault) => {
+                return Step(session: session, reply: Some(fault.line(id)))
+            }
+            None => {}
+        }
+    }
+    let result = match method {
+        "server/discover" => discover(session.info)
+        "tools/list" => json.Value.Object([member("tools", json.Value.List(tool_list(tools)))])
+        "ping" => json.Value.Object([])
+        _ => {
+            match call_tool(tools, params) {
+                Ok(result) => result
+                Err(message) => {
+                    return Step(session: session, reply: Some(error_line(id, -32602, message, None)))
+                }
+            }
+        }
+    }
+    let shaped = if session.legacy && method != "server/discover" { result } else { modern(session.info, result) }
+    Step(session: session, reply: Some(result_line(id, shaped)))
+}
+
+// The reply to `initialize`: the legacy era starts, and the server
+// echoes its version, or offers it when the client asked for another.
+fn initialize(session: Session, id: json.Value, params: json.Value) -> Step {
+    let asked = match params.text("protocolVersion") {
+        Some(asked) => asked
+        None => {
+            return Step(session: session, reply: Some(error_line(id, -32602, "initialize needs a protocolVersion string", None)))
+        }
+    }
+    var members: List<json.Member> = [
+        member("protocolVersion", json.Value.Text(LEGACY_VERSION)),
+        member("capabilities", json.Value.Object([member("tools", json.Value.Object([]))])),
+        member("serverInfo", server_info(session.info)),
+    ]
+    match session.info.instructions {
+        Some(text) => members.push(member("instructions", json.Value.Text(text)))
+        None => {}
+    }
+    let legacy = Session(info: session.info, legacy: true)
+    Step(session: legacy, reply: Some(result_line(id, json.Value.Object(members))))
+}
+
+// The result of `server/discover`.
+fn discover(info: ServerInfo) -> json.Value {
+    var members: List<json.Member> = [
+        member("supportedVersions", json.Value.List([json.Value.Text(MODERN_VERSION), json.Value.Text(LEGACY_VERSION)])),
+        member("capabilities", json.Value.Object([member("tools", json.Value.Object([]))])),
+    ]
+    match info.instructions {
+        Some(text) => members.push(member("instructions", json.Value.Text(text)))
+        None => {}
+    }
+    json.Value.Object(members)
+}
+
+// A modern result: `resultType` first, then what the method gives, then
+// the server's info in `_meta`.
+fn modern(info: ServerInfo, result: json.Value) -> json.Value {
+    var members: List<json.Member> = [member("resultType", json.Value.Text("complete"))]
+    for field in result.as_members().unwrap_or([]) {
+        members.push(field)
+    }
+    members.push(member("_meta", json.Value.Object([member("io.modelcontextprotocol/serverInfo", server_info(info))])))
+    json.Value.Object(members)
+}
+
+fn server_info(info: ServerInfo) -> json.Value {
+    json.Value.Object([member("name", json.Value.Text(info.name)), member("version", json.Value.Text(info.version))])
+}
+
+// What is wrong with a modern request's `_meta`: the error to answer.
+struct Fault { code: Int, message: Untrusted<String>, data: Option<json.Value> }
+
+impl Fault {
+    fn line(self, id: json.Value) -> Untrusted<String> {
+        error_line(id, self.code, self.message, self.data)
+    }
+}
+
+// The fault in `params._meta`, if any: a missing field is `-32602`, a
+// version this server does not take is `-32022`.
+fn meta_fault(params: json.Value) -> Option<Fault> {
+    let meta = match params.object("_meta") {
+        Some(meta) => meta
+        None => {
+            return Some(Fault(code: -32602, message: "params._meta is required", data: None))
+        }
+    }
+    let version = match meta.text("io.modelcontextprotocol/protocolVersion") {
+        Some(version) => version
+        None => {
+            return Some(Fault(code: -32602, message: "_meta needs io.modelcontextprotocol/protocolVersion", data: None))
+        }
+    }
+    if !meta.object("io.modelcontextprotocol/clientCapabilities").is_some() {
+        return Some(Fault(code: -32602, message: "_meta needs io.modelcontextprotocol/clientCapabilities", data: None))
+    }
+    if version != MODERN_VERSION {
+        let data = json.Value.Object([
+            member("supported", json.Value.List([json.Value.Text(MODERN_VERSION), json.Value.Text(LEGACY_VERSION)])),
+            member("requested", json.Value.Text(version)),
+        ])
+        return Some(Fault(code: -32022, message: "unsupported protocol version", data: Some(data)))
+    }
+    None
+}
+
+// The tools as `tools/list` gives them, in the order of `specs`.
+fn tool_list<T: Toolset>(tools: T) -> List<json.Value> {
+    var listed: List<json.Value> = []
+    for spec in tools.specs() {
+        var members: List<json.Member> = [member("name", json.Value.Text(spec.name()))]
+        match spec.title() {
+            Some(title) => members.push(member("title", json.Value.Text(title)))
+            None => {}
+        }
+        members.push(member("description", json.Value.Text(spec.description())))
+        members.push(member("inputSchema", spec.input().to_value()))
+        members.push(member("annotations", annotations(tools.reached(spec.name()))))
+        listed.push(json.Value.Object(members))
+    }
+    listed
+}
+
+// Run the call in `params`: its result, or the message of the protocol
+// error for a malformed call or an unknown tool. Arguments that break
+// the tool's schema are a failed result, which a model can correct.
+fn call_tool<T: Toolset>(tools: T, params: json.Value) -> Result<json.Value, Untrusted<String>> {
+    let asked = match params.text("name") {
+        Some(asked) => asked
+        None => {
+            return Err("tools/call needs a tool name string")
+        }
+    }
+    let args = match params.get("arguments") {
+        Some(json.Value.Object(members)) => json.Value.Object(members)
+        Some(_) => {
+            return Err("arguments must be an object")
+        }
+        None => json.Value.Object([])
+    }
+    for spec in tools.specs() {
+        // The name `call` gets is the spec's own, never the client's text.
+        if spec.name() == asked {
+            return Ok(run(tools, spec, args))
+        }
+    }
+    Err("Unknown tool: {asked}")
+}
+
+fn run<T: Toolset>(tools: T, spec: ToolSpec, args: json.Value) -> json.Value {
+    match spec.input().validate(args) {
+        Ok(()) => result_value(tools.call(spec.name(), args))
+        Err(violation) => result_value(ToolResult.error("invalid arguments: {violation}"))
+    }
+}
+
+fn result_value(result: ToolResult) -> json.Value {
+    var members: List<json.Member> = [
+        member("content", json.Value.List([json.Value.Object([
+            member("type", json.Value.Text("text")),
+            member("text", json.Value.Text(result.content)),
+        ])])),
+    ]
+    match result.structured {
+        Some(structured) => members.push(member("structuredContent", structured))
+        None => {}
+    }
+    members.push(member("isError", json.Value.Bool(result.failed)))
+    json.Value.Object(members)
+}
+
+// ---- Annotations -----------------------------------------------------
+
+// The `annotations` of a tool that reaches `kinds`, the capabilities the
+// checker computed for it. `readOnlyHint` is true only when every kind
+// is one that reads: so not a write, a network, a spawn or a budget
+// capability, nor standard input or output, and not a kind this list
+// does not know. `destructiveHint` is true when it reaches a write
+// capability or a spawn (append and overwrite are not told apart), and
+// `openWorldHint` when it reaches the network. A kind of `?`, which stands
+// for a capability reached through a generic type, sets them all as far as
+// it can. `idempotentHint` is never sent.
+fn annotations(kinds: List<Untrusted<String>>) -> json.Value {
+    var read_only = true
+    var destructive = false
+    var open_world = false
+    for kind in kinds {
+        if !reads_only(kind) {
+            read_only = false
+        }
+        if writes(kind) {
+            destructive = true
+        }
+        if reaches_network(kind) {
+            open_world = true
+        }
+    }
+    json.Value.Object([
+        member("readOnlyHint", json.Value.Bool(read_only)),
+        member("destructiveHint", json.Value.Bool(destructive)),
+        member("openWorldHint", json.Value.Bool(open_world)),
+    ])
+}
+
+fn reads_only(kind: Untrusted<String>) -> Bool {
+    kind == "FsRead" || kind == "DirRead" || kind == "FileRead" || kind == "Env" || kind == "Clock" || kind == "Random" || kind == "Sched"
+}
+
+fn writes(kind: Untrusted<String>) -> Bool {
+    kind == "Fs" || kind == "FsWrite" || kind == "Dir" || kind == "DirWrite" || kind == "FileWrite" || kind == "Spawn" || kind == "?"
+}
+
+fn reaches_network(kind: Untrusted<String>) -> Bool {
+    kind == "Net" || kind == "NetConnect" || kind == "NetListen" || kind == "Connection" || kind == "?"
+}
+
+// ---- Messages --------------------------------------------------------
+
+fn member(key: String, value: json.Value) -> json.Member {
+    json.Member(key: key, value: value)
+}
+
+fn result_line(id: json.Value, result: json.Value) -> Untrusted<String> {
+    json.encode(json.Value.Object([
+        member("jsonrpc", json.Value.Text("2.0")),
+        member("id", id),
+        member("result", result),
+    ]))
+}
+
+fn error_line(id: json.Value, code: Int, message: Untrusted<String>, data: Option<json.Value>) -> Untrusted<String> {
+    var error: List<json.Member> = [
+        member("code", json.Value.Number(json.Number.from_int(code))),
+        member("message", json.Value.Text(message)),
+    ]
+    match data {
+        Some(data) => error.push(member("data", data))
+        None => {}
+    }
+    json.encode(json.Value.Object([
+        member("jsonrpc", json.Value.Text("2.0")),
+        member("id", id),
+        member("error", json.Value.Object(error)),
+    ]))
+}
+
+// ---- Validation ------------------------------------------------------
+
+// Whether `name` is 1 to 128 ASCII letters, digits, `_` and `-`.
+fn valid_name(name: String) -> Bool {
+    let length = name.len()
+    if length < 1 || length > 128 || name.byte_len() != length {
+        return false
+    }
+    for c in name.chars() {
+        let b = c.to_bytes().at(0).to_int()
+        let letter = (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+        let digit = b >= 48 && b <= 57
+        if !letter && !digit && b != 95 && b != 45 {
+            return false
+        }
+    }
+    true
+}
+
+// Whether `schema` accepts objects.
+fn is_object_schema(schema: json.Schema) -> Bool {
+    match schema.to_value().text("type") {
+        Some(kind) => kind == "object"
+        None => false
     }
 }
