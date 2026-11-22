@@ -101,9 +101,12 @@ A `std.*` module is a file `crates/oska-check/src/std/<name>.osk`, registered in
 | `std.sql` | `SqlLiteral`, `Db` (`query`), `connect`, `Row` (`get`), `SqlError` | `sql"..."` has type `SqlLiteral` |
 | `std.proc` | `run`, `Output` (`status`, `stdout`), `ProcError` | None |
 | `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
-| `std.sha2` | `sha256`, `sha512`, `sha256_secret`, `Sha256`, `Sha512`, `Sha256Secret` (each `new`, `update`, `finish`) | None |
+| `std.sha2` | `sha256`, `sha384`, `sha512`, `sha256_secret`, `Sha256`, `Sha512`, `Sha256Secret` (each `new`, `update`, `finish`) | None |
 | `std.hmac` | `sha256`, `verify_sha256` | None |
 | `std.ed25519` | `PublicKey` (`from_bytes`, `to_bytes`), `verify` | None |
+| `std.ecdsa` | `Curve` (`P256`, `P384`), `PublicKey` (`from_bytes`, `to_bytes`), `verify`, `verify_der` | None |
+| `std.rsa` | `HashAlgorithm` (`Sha256`, `Sha384`, `Sha512`), `PublicKey` (`from_components`, `bits`), `verify_pkcs1`, `verify_pss` | None |
+| `std.p256` | `public_key`, `shared_secret` | None |
 | `std.sshsig` | `PublicKey` (`parse`, `comment`, `fingerprint`, `ed25519`), `Signature` (`parse`, `public_key`, `namespace`, `hash_algorithm`), `verify`, `SshsigError` | None |
 | `std.mcp` | `Toolset` (`specs`, `call`, and `reached`, which the toolchain fills in), `ToolSpec` (`new`, `with_title`, `name`, `title`, `description`, `input`), `ToolResult` (`text`, `json`, `error`, `content`, `structured`, `is_error`), `ServerInfo` (`new`, `with_instructions`), `McpError`, `Session` (`new`, `is_legacy`), `Step`, `validate`, `serve`, `handle`, and the constants `MAX_LINE`, `MODERN_VERSION` and `LEGACY_VERSION` | None |
 | `std.json` | `Value`, `Member`, `Number` (`from_int`, `parse`, `to_int`, `text`), `Error`, `Violation`, `DecodeError`, `parse`, `encode`, `decode`, `Schema` (`string`, `integer`, `number`, `boolean`, `one_of`, `list`, `object`, `describe`, `to_value`, `validate`), `Field` (`required`, `optional`), and the constants `MAX_LENGTH` and `MAX_DEPTH` | None |
