@@ -6,10 +6,7 @@
 //! it resolves a field, a method or a constructor. Each is reported as a
 //! private item is (`E0206`), with a fix in the declaring file.
 //!
-//! A single file is one module, so nothing here applies to it, except
-//! across the `std` modules of Oska source it imports, which are linked in
-//! as modules of their own. Their private parts get no fix: a program
-//! cannot edit `std`.
+//! A single file is one module, so nothing here applies to it.
 
 use oska_syntax::ast::Visibility;
 use oska_syntax::{Diagnostic, Edit, Span};
@@ -37,19 +34,16 @@ impl Body<'_, '_, '_> {
         declared.marker_at(self.src)
     }
 
-    /// Report a use at `span` of something private to a `std` module,
-    /// which `message` names. It has no fix: a program cannot edit `std`.
-    fn private_to_std(&mut self, message: String, span: Span) {
-        self.out
-            .diagnostics
-            .push(Diagnostic::new(codes::PRIVATE_ITEM, message, span));
-    }
-
     /// Report the use at `span` of `what`, private to `module`, with a fix
     /// that inserts `marker` at `at`.
     fn private(&mut self, what: &str, module: &str, marker: &str, at: usize, span: Span) {
-        if link::is_std_module(module) {
-            self.private_to_std(format!("{what} is private to `{module}`"), span);
+        if link::is_std_path(module) {
+            // A `std` module's privacy is not the program's to change.
+            self.out.diagnostics.push(Diagnostic::new(
+                codes::PRIVATE_TO_MODULE,
+                format!("{what} is private to `{module}`"),
+                span,
+            ));
             return;
         }
         let shown = marker.trim_end();
@@ -71,15 +65,9 @@ impl Body<'_, '_, '_> {
     /// this module; a trait's method needs the trait to be. Reports one
     /// that may not.
     pub(super) fn method_visible(&mut self, sig: &FnSig, type_name: &str, span: Span) -> bool {
-        let (declared, what) = match &sig.trait_name {
-            None => (
-                sig.declared,
-                format!("the method `{}` of `{}`", sig.name, type_name),
-            ),
-            Some(trait_name) => (
-                self.items.traits.get(trait_name).and_then(|t| t.declared),
-                format!("the trait `{}` of the method `{}`", trait_name, sig.name),
-            ),
+        let declared = match &sig.trait_name {
+            None => sig.declared,
+            Some(trait_name) => self.items.traits.get(trait_name).and_then(|t| t.declared),
         };
         let Some(declared) = declared else {
             return true;
@@ -89,6 +77,11 @@ impl Body<'_, '_, '_> {
         }
         let Some(module) = self.foreign(declared.start) else {
             return true;
+        };
+        // The message is made only for a method it refuses (#572).
+        let what = match &sig.trait_name {
+            None => format!("the method `{}` of `{}`", sig.name, type_name),
+            Some(trait_name) => format!("the trait `{}` of the method `{}`", trait_name, sig.name),
         };
         let at = self.marker_at(&declared);
         self.private(&what, &module, "pub(pkg) ", at, span);
@@ -143,14 +136,16 @@ impl Body<'_, '_, '_> {
         let Some(module) = self.foreign(declared.start) else {
             return true;
         };
-        if link::is_std_module(&module) {
-            self.private_to_std(
+        if link::is_std_path(&module) {
+            // A `std` module's privacy is not the program's to change.
+            self.out.diagnostics.push(Diagnostic::new(
+                codes::PRIVATE_TO_MODULE,
                 format!(
                     "`{type_name}` has fields private to `{module}`, so only that module can \
                      build it or match its fields"
                 ),
                 span,
-            );
+            ));
             return false;
         }
         let diagnostic = Diagnostic::new(

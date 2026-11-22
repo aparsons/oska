@@ -171,7 +171,7 @@ impl Body<'_, '_, '_> {
         if name == ty::BOOL {
             return Some(vec![ctor("true", Vec::new()), ctor("false", Vec::new())]);
         }
-        if let Some(info) = self.items.enums.get(&name) {
+        if let Some(info) = self.items.enums.get(name.as_str()) {
             let subst: Vec<(String, Ty)> = info.generics.iter().cloned().zip(args).collect();
             return Some(
                 info.variants
@@ -186,7 +186,7 @@ impl Body<'_, '_, '_> {
             );
         }
         let user_struct = self.decls().get(&name).is_some_and(|d| !d.in_prelude);
-        match self.items.structs.get(&name) {
+        match self.items.structs.get(name.as_str()) {
             Some(info) if user_struct => {
                 let subst: Vec<(String, Ty)> = info.generics.iter().cloned().zip(args).collect();
                 Some(vec![ctor(&name, info.fields.instantiate(&subst))])

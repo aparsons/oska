@@ -118,11 +118,11 @@ fn a_private_helper_cannot_be_used() {
     assert_errors(
         "use std.ed25519\n\
          fn main() {\n    let _ = ed25519.reduce_mod_order(Bytes.zeroed(64))\n}",
-        &[("E0206", "reduce_mod_order")],
+        &[("E0360", "reduce_mod_order")],
     );
     assert_errors(
         "use std.ed25519.{decode_point}",
-        &[("E0206", "decode_point")],
+        &[("E0360", "decode_point")],
     );
 }
 
@@ -133,7 +133,7 @@ fn a_keys_point_is_private_and_a_key_cannot_be_forged() {
          fn peek(key: ed25519.PublicKey) -> Bytes {\n    key.encoding\n}",
     );
     let codes: Vec<&str> = report.diagnostics.iter().map(|d| d.code).collect();
-    assert_eq!(codes, ["E0206"], "{:#?}", report.diagnostics);
+    assert_eq!(codes, ["E0360"], "{:#?}", report.diagnostics);
     assert!(
         report.diagnostics[0].message.contains("`std.ed25519`"),
         "{}",
@@ -146,22 +146,32 @@ fn a_keys_point_is_private_and_a_key_cannot_be_forged() {
 
 #[test]
 fn every_function_is_pure_and_the_module_has_no_audit_site() {
-    let report = check(EVERY_FUNCTION);
+    // A program that imports the module is checked with it linked in, and
+    // the report lists only the program's own functions: the module's are
+    // the toolchain's code. So its purity is checked on the module itself,
+    // as a file, where every function it declares, `pub` or not, is named.
+    let program = check(EVERY_FUNCTION);
+    assert!(program.diagnostics.is_empty(), "{:#?}", program.diagnostics);
+    assert!(
+        program
+            .functions
+            .iter()
+            .all(|f| !f.name.contains("ed25519")),
+        "the report lists only the program's own functions"
+    );
+    assert!(program.audit.is_empty(), "{:#?}", program.audit);
+    assert!(!function(&program, "main").pure);
+    let report = check(include_str!("../src/std/ed25519.osk"));
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     for name in FUNCTIONS {
+        let name = name.strip_prefix("std.ed25519.").unwrap_or(name);
         let f = function(&report, name);
         assert!(f.pure, "`{name}` should be pure: {:?}", f.authority);
     }
-    // So is everything it reaches, `std.sha2`'s functions included.
-    for f in report
-        .functions
-        .iter()
-        .filter(|f| f.name.starts_with("std."))
-    {
+    for f in &report.functions {
         assert!(f.pure, "`{}` should be pure: {:?}", f.name, f.authority);
     }
     assert!(report.audit.is_empty(), "{:#?}", report.audit);
-    assert!(!function(&report, "main").pure);
 }
 
 #[test]

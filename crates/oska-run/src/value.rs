@@ -17,6 +17,7 @@
 //! `Untrusted<String>` is a plain [`Value::Str`] here.
 
 use crate::host::RootHandle;
+use crate::memory;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -93,6 +94,9 @@ pub enum Capability {
     Env,
     Clock,
     Random,
+    /// A `Budget`: the number of its counters in the interpreter
+    /// (`budget.rs`), so every copy draws from the same counters.
+    Budget(usize),
     /// `Fs`, `FsRead`, or `FsWrite`, with its attenuation state: its
     /// root is always [`Root::Anywhere`], since `restrict_to` gives a
     /// directory capability.
@@ -160,6 +164,7 @@ enum Kind {
     Env,
     Clock,
     Random,
+    Budget,
     Fs(Access),
     Dir(Access),
     File(Access),
@@ -176,6 +181,7 @@ const IMPLEMENTED: &[(&str, Kind)] = &[
     ("Env", Kind::Env),
     ("Clock", Kind::Clock),
     ("Random", Kind::Random),
+    ("Budget", Kind::Budget),
     ("Fs", Kind::Fs(Access::ReadWrite)),
     ("FsRead", Kind::Fs(Access::Read)),
     ("FsWrite", Kind::Fs(Access::Write)),
@@ -206,6 +212,7 @@ impl Capability {
             Kind::Env => Capability::Env,
             Kind::Clock => Capability::Clock,
             Kind::Random => Capability::Random,
+            Kind::Budget => Capability::Budget(crate::budget::ROOT),
             Kind::Fs(access) => Capability::Fs(FsCap {
                 root: Root::Anywhere,
                 access,
@@ -222,6 +229,7 @@ impl Capability {
             Capability::Env => Kind::Env,
             Capability::Clock => Kind::Clock,
             Capability::Random => Kind::Random,
+            Capability::Budget(_) => Kind::Budget,
             Capability::Fs(fs) => Kind::Fs(fs.access),
             Capability::Dir(dir) => Kind::Dir(dir.access),
             Capability::File(file) => Kind::File(file.access),
@@ -277,8 +285,8 @@ impl Value {
 
     pub fn variant(ty: &str, variant: &str, fields: Vec<Value>) -> Value {
         Value::Variant {
-            ty: Rc::from(ty),
-            variant: Rc::from(variant),
+            ty: memory::shared_name(ty),
+            variant: memory::shared_name(variant),
             fields: Rc::new(fields),
         }
     }
@@ -287,7 +295,7 @@ impl Value {
     /// read and write as fields do.
     pub fn range(start: Value, end: Value) -> Value {
         Value::Struct {
-            ty: Rc::from(builtins::RANGE),
+            ty: memory::shared_name(builtins::RANGE),
             fields: Rc::new(vec![start, end]),
         }
     }
@@ -297,7 +305,7 @@ impl Value {
         match &ctor.variant {
             Some(variant) => Value::variant(&ctor.ty, variant, fields),
             None => Value::Struct {
-                ty: Rc::from(ctor.ty.as_str()),
+                ty: memory::shared_name(&ctor.ty),
                 fields: Rc::new(fields),
             },
         }

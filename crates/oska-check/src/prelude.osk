@@ -436,6 +436,74 @@ impl Random {
     pub fn next_int(self) -> Int
 }
 
+// Authority to spend model tokens and calls, which `std.llm` takes. Its
+// counters live in the runtime, so every copy of a budget draws from the
+// same counters. `main`'s is unlimited; `limit` attenuates it. A test's
+// `t.budget` has 100000 tokens and 100 calls. Tokens are counted, not
+// money, because prices differ by model and change.
+#[capability]
+pub struct Budget { handle: Int }
+
+impl Budget {
+    // A child budget of at most `tokens` tokens and `calls` calls, drawn
+    // from this one: each is clamped to what this budget has left, so it
+    // never has more. A negative amount counts as 0.
+    pub fn limit(self, tokens: Int, calls: Int) -> Budget
+    // What it has left to reserve: the least that it or any budget it
+    // was limited from has left, `None` where all are unlimited.
+    pub fn remaining(self) -> Allowance
+    // What it, and every budget limited from it, has spent.
+    pub fn spent(self) -> Spending
+    // Reserve `tokens` tokens and one call before a request, or refuse
+    // with `OverBudget` when it or any budget it was limited from has
+    // less left, or has no tokens left at all. A negative amount counts
+    // as 0. A model client, such as `std.llm`, calls it before each
+    // request; a program that settles for less than it used cheats only
+    // itself, since a budget can only spend what it was given.
+    pub fn reserve(self, tokens: Int) -> Result<Reservation, OverBudget>
+}
+
+// Tokens and calls reserved from a `Budget` and not yet settled. Settle
+// it once, with `debit` or `release`; settling it again changes nothing.
+pub struct Reservation { handle: Int, tokens: Int, open: Bool }
+
+impl Reservation {
+    // Spend the call and every token a reply used: its input, output,
+    // cache-creation and cache-read tokens, as the model reports them
+    // (a negative count counts as 0). The rest of the reservation is
+    // returned. A reply may use more than was reserved, since input
+    // tokens are known only after it; they are spent all the same.
+    pub fn debit(self, input: Int, output: Int, cache_creation: Int, cache_read: Int)
+    // Return the whole reservation, spending nothing: the request was
+    // never sent.
+    pub fn release(self)
+}
+
+// What a `Budget` has left: `None` where it is unlimited.
+pub struct Allowance {
+    pub tokens: Option<Int>,
+    pub calls: Option<Int>,
+}
+
+// What a `Budget` has spent.
+pub struct Spending {
+    pub tokens: Int,
+    pub calls: Int,
+}
+
+// The refusal of a reservation that a `Budget` cannot cover: the tokens
+// asked for, with one call, and what the budget had left.
+pub struct OverBudget {
+    pub asked: Int,
+    pub left: Allowance,
+}
+
+impl Display for OverBudget {
+    // `over budget: asked for 500 tokens and 1 call, with 100 tokens and
+    // 3 calls left`, with `unlimited` for an amount without a limit.
+    fn to_string(self) -> String
+}
+
 // Channels and `select`, for concurrency that is not deterministic. It
 // has no methods and no runtime yet (`E0370`). `scope` and `spawn` need
 // no capability.
@@ -447,18 +515,99 @@ pub struct Sched { handle: Int }
 #[capability]
 pub struct Spawn { handle: Int }
 
+// ---- Approval ------------------------------------------------------------
+
+// Someone who can say yes to a consequential action, such as a tool that
+// deletes a file or sends a message: a person at the terminal
+// (`Approver.terminal`), or a test's `t.approver`. Only an approver makes
+// an `Approval`, so a tool that takes one has proof that a person said
+// yes. Its fields are private, and it has no other constructor.
+pub cap struct Approver { stdin: Stdin, stderr: Stderr }
+
+impl Approver {
+    // An approver that asks the person at the terminal: it writes each
+    // question to `stderr`, never to standard output, which a pipeline or
+    // an MCP server may own, and reads the answer from `stdin`. It is only
+    // as strong as whoever writes to `stdin`: never build one over the
+    // standard input of an MCP server, or of anything a script feeds.
+    pub fn terminal(stdin: Stdin, stderr: Stderr) -> Approver
+    // Ask for a yes to the action `summary` describes, with `details`,
+    // such as the arguments a model chose for a tool. It shows
+    // `approval needed: ` and the summary, then each detail on a line of
+    // its own, indented. Each is in double quotes, as `dbg` shows text:
+    // `"` and `\` escaped, and control, bidirectional and other invisible
+    // characters written as escapes such as `\n` and `\u{202e}`, so
+    // neither can disguise itself. Then `approve? [y/N]`. Only `y` or
+    // `yes`, in any case and with any spaces around it, approves; any
+    // other answer, the end of input or a failed read or write is `None`.
+    pub fn confirm(self, summary: String, details: List<Untrusted<String>>) -> Option<Approval>
+}
+
+// A person's yes to one action: the summary and details they approved.
+// Only an `Approver` makes one. It is single use: the tool it is given to
+// calls `consume`, and every later `consume`, of it or of any copy of it,
+// is refused with `ApprovalError.Used`.
+pub struct Approval {
+    summary: String,
+    details: List<Untrusted<String>>,
+    handle: Int,
+}
+
+impl Approval {
+    // The summary that was approved.
+    pub fn summary(self) -> String
+    // The details that were approved.
+    pub fn details(self) -> List<Untrusted<String>>
+    // Whether it approved exactly this summary and these details and is
+    // still unused: whether `consume` would succeed. It does not use the
+    // approval, so a tool that acts on one calls `consume`, not this.
+    pub fn matches(self, summary: String, details: List<Untrusted<String>>) -> Bool
+    // Use the approval for the action `summary` and `details` describe:
+    // `Ok` once, when it matches and has not been used. A used one is
+    // refused with `ApprovalError.Used`, and one given for a different
+    // action with `ApprovalError.Mismatch`, which leaves it unused.
+    pub fn consume(self, summary: String, details: List<Untrusted<String>>) -> Result<(), ApprovalError>
+}
+
+// A question an approver was asked: what `t.approvals_asked` records.
+pub struct ApprovalRequest {
+    pub summary: String,
+    pub details: List<Untrusted<String>>,
+}
+
+// Why `Approval.consume` refused an approval.
+pub enum ApprovalError {
+    // It was used already: one yes covers one action.
+    Used,
+    // It approved a different summary or different details.
+    Mismatch,
+}
+
+impl Display for ApprovalError {
+    // `approval already used: one approval covers one action`, or
+    // `approval does not match: it was given for a different action`.
+    fn to_string(self) -> String
+}
+
 // ---- Tests ---------------------------------------------------------------
 
 // The type of `t`, the built-in value in every `test` body. Its fields are
 // stand-in capabilities: an in-memory `fs`, a fixed `clock`, a seeded
-// `random`, and a recording `stdout`. An `#[integration]` test gets the
-// same `t`; the runtime decides which capabilities are real. A failed
-// assertion fails the test.
+// `random`, a recording `stdout`, a `budget` of 100000 tokens and 100
+// calls whose spending a test reads with `t.budget.spent()`, and an
+// `approver` that answers from the test's script (`answer_approval`)
+// and records what it was asked (`approvals_asked`). An
+// `#[integration]` test gets the same `t`; the runtime decides which
+// capabilities are real, its budget has the same limits, and its
+// `approver` still answers from the script. A failed assertion fails
+// the test.
 pub cap struct TestContext {
     pub fs: Fs,
     pub clock: Clock,
     pub random: Random,
     pub stdout: Stdout,
+    pub budget: Budget,
+    pub approver: Approver,
 }
 
 impl TestContext {
@@ -479,6 +628,13 @@ impl TestContext {
     // Every line printed to `stdout` so far in this test, one per
     // `println`, without its line break.
     pub fn printed(self) -> List<Untrusted<String>>
+    // Script `t.approver`'s answer to the next question it is asked:
+    // `true` approves, `false` refuses. Answers are given in the order
+    // they were scripted; a question with none left is refused.
+    pub fn answer_approval(self, yes: Bool)
+    // Every question `t.approver` has been asked so far, in order: its
+    // summary and details, as the code that asked gave them.
+    pub fn approvals_asked(self) -> List<ApprovalRequest>
 }
 
 // ---- Core types --------------------------------------------------------

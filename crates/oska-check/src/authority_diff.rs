@@ -954,6 +954,7 @@ mod tests {
             authority: authority.iter().map(|a| a.to_string()).collect(),
             via: Vec::new(),
             pure: authority.is_empty(),
+            toolset: None,
         }
     }
 

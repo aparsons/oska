@@ -1,0 +1,32 @@
+// A toolset whose `call` is not a `match` on the tool's name with
+// literal arms, for the golden tests of per-tool authority (#249): the
+// report gives the whole toolset one entry, not split per tool.
+use std.json
+use std.mcp
+
+cap struct Notes {
+    notes: DirRead,
+    out: Stdout,
+}
+
+impl mcp.Toolset for Notes {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        [mcp.ToolSpec.new("read_note", "Read a note.", json.Schema.object([]))]
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        if name == "read_note" {
+            match self.notes.read_to_string(Path.new("today.txt")) {
+                Ok(text) => mcp.ToolResult.text(text)
+                Err(_) => mcp.ToolResult.error("cannot read the note")
+            }
+        } else {
+            mcp.ToolResult.error("no such tool")
+        }
+    }
+}
+
+fn main(fs: Fs, io: Stdout) {
+    let tools = Notes(notes: fs.read_only().restrict_to("notes"), out: io)
+    let _ = tools.call("read_note", json.Value.Null)
+}

@@ -1,0 +1,66 @@
+// A toolset whose `call` is not a `match` on the tool's name, so the
+// checker cannot tell the tools apart and gives every one the whole
+// toolset's authority, and a toolset generic over a source, whose type
+// argument could hold any capability, for the tests of the annotations
+// `mcp.serve` derives (#250).
+use std.json
+use std.mcp
+
+cap struct Plain {
+    notes: DirRead,
+    drafts: DirWrite,
+}
+
+impl mcp.Toolset for Plain {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        let none = json.Schema.object([])
+        [
+            mcp.ToolSpec.new("read", "Read a note.", none),
+            mcp.ToolSpec.new("write", "Write a draft.", none),
+        ]
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        let _ = self.drafts.write(Path.new("a.txt"), "")
+        mcp.ToolResult.text(self.notes.list_dir(Path.new(".")).unwrap_or([]).len().to_string())
+    }
+}
+
+trait Source {
+    fn fetch(self) -> String
+}
+
+cap struct Fixed { text: String }
+
+impl Source for Fixed {
+    fn fetch(self) -> String {
+        self.text
+    }
+}
+
+cap struct Generic<S: Source> { source: S }
+
+impl<S: Source> mcp.Toolset for Generic<S> {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        [mcp.ToolSpec.new("source", "Read the source.", json.Schema.object([]))]
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        match name {
+            "source" => mcp.ToolResult.text(self.source.fetch())
+            _ => mcp.ToolResult.error("no such tool")
+        }
+    }
+}
+
+fn main(fs: Fs, stdin: Stdin, stdout: Stdout, args: Args) -> Result<(), mcp.McpError> {
+    let info = mcp.ServerInfo.new("unsplit", "1.0.0")
+    if args.get(1).unwrap_or("") == "generic" {
+        return mcp.serve(stdin, stdout, info, Generic(source: Fixed(text: "fixed")))
+    }
+    let tools = Plain(
+        notes: fs.read_only().restrict_to("notes"),
+        drafts: fs.write_only().restrict_to("drafts"),
+    )
+    mcp.serve(stdin, stdout, info, tools)
+}

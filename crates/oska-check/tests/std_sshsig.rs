@@ -12,7 +12,7 @@ use common::{assert_errors, assert_modules_ok, assert_ok, check};
 use oska_check::CheckReport;
 
 /// The public functions and methods of `std.sshsig`, as the authority
-/// report names them.
+/// report names them when the module is checked as a file.
 const FUNCTIONS: [&str; 10] = [
     "std.sshsig.PublicKey.parse",
     "std.sshsig.PublicKey.comment",
@@ -190,9 +190,9 @@ fn a_private_helper_cannot_be_used() {
     assert_errors(
         "use std.sshsig\n\
          fn main() {\n    let _ = sshsig.decode_base64(Bytes.new())\n}",
-        &[("E0206", "decode_base64")],
+        &[("E0360", "decode_base64")],
     );
-    assert_errors("use std.sshsig.{read_string}", &[("E0206", "read_string")]);
+    assert_errors("use std.sshsig.{read_string}", &[("E0360", "read_string")]);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn a_key_and_a_signature_cannot_be_forged_or_opened() {
          fn peek(key: sshsig.PublicKey) -> Bytes {\n    key.wire\n}",
     );
     let codes: Vec<&str> = report.diagnostics.iter().map(|d| d.code).collect();
-    assert_eq!(codes, ["E0206"], "{:#?}", report.diagnostics);
+    assert_eq!(codes, ["E0360"], "{:#?}", report.diagnostics);
     assert!(
         report.diagnostics[0].message.contains("`std.sshsig`"),
         "{}",
@@ -214,29 +214,37 @@ fn a_key_and_a_signature_cannot_be_forged_or_opened() {
          fn peek(signature: sshsig.Signature) -> Bytes {\n    signature.signature\n}",
     );
     let codes: Vec<&str> = report.diagnostics.iter().map(|d| d.code).collect();
-    assert_eq!(codes, ["E0206"], "{:#?}", report.diagnostics);
+    assert_eq!(codes, ["E0360"], "{:#?}", report.diagnostics);
 }
 
 // ---- Purity and audit sites ---------------------------------------------------------
 
 #[test]
 fn every_function_is_pure_and_the_module_has_no_audit_site() {
-    let report = check(EVERY_FUNCTION);
+    // A program that imports the module is checked with it linked in, and
+    // the report lists only the program's own functions: the module's are
+    // the toolchain's code. So its purity is checked on the module itself,
+    // as a file, where every function it declares, `pub` or not, is named.
+    let program = check(EVERY_FUNCTION);
+    assert!(program.diagnostics.is_empty(), "{:#?}", program.diagnostics);
+    assert!(
+        program.functions.iter().all(|f| !f.name.contains("sshsig")),
+        "the report lists only the program's own functions"
+    );
+    assert!(program.audit.is_empty(), "{:#?}", program.audit);
+    assert!(!function(&program, "main").pure);
+    let report = check(include_str!("../src/std/sshsig.osk"));
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     for name in FUNCTIONS {
+        let name = name.replace("std.sshsig.", "");
+        let name = name.as_str();
         let f = function(&report, name);
         assert!(f.pure, "`{name}` should be pure: {:?}", f.authority);
     }
-    // So is everything it reaches, `std.sha2` and `std.ed25519` included.
-    for f in report
-        .functions
-        .iter()
-        .filter(|f| f.name.starts_with("std."))
-    {
+    for f in &report.functions {
         assert!(f.pure, "`{}` should be pure: {:?}", f.name, f.authority);
     }
     assert!(report.audit.is_empty(), "{:#?}", report.audit);
-    assert!(!function(&report, "main").pure);
 }
 
 #[test]

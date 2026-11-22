@@ -16,12 +16,13 @@ use crate::items::{literal_text, FnSig};
 use crate::{Attenuation, AttenuationRoot};
 
 /// The attenuation methods, and whether each takes a root as its first
-/// argument.
+/// argument. `Budget.limit` takes amounts, which the report leaves out.
 pub(crate) const METHODS: &[(&str, bool)] = &[
     ("restrict_to", true),
     ("restrict_to_file", true),
     ("read_only", false),
     ("write_only", false),
+    ("limit", false),
 ];
 
 impl Body<'_, '_, '_> {

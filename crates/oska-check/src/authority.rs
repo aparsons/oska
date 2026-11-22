@@ -14,6 +14,8 @@ use crate::link::Modules;
 use crate::ty::{Cap, Ty, SELF};
 use crate::{FunctionAuthority, Via};
 
+mod tools;
+
 /// What a type can reach.
 #[derive(Debug, Clone, Default)]
 struct Reach {
@@ -72,15 +74,15 @@ fn reach(ty: &Ty, decls: &Decls, bounded: &[String], expanding: &mut Vec<String>
             };
             match decl.kind {
                 DeclKind::Capability => Reach {
-                    capabilities: vec![name.clone()],
+                    capabilities: vec![name.to_string()],
                     generics: Vec::new(),
                     bearing: true,
                 },
                 DeclKind::Primitive | DeclKind::Trait => Reach::default(),
                 DeclKind::Data => {
                     let mut total = Reach::default();
-                    if !expanding.contains(name) {
-                        expanding.push(name.clone());
+                    if !expanding.iter().any(|e| e == name) {
+                        expanding.push(name.to_string());
                         let lower = Lower::in_scope(decls, decl.in_prelude)
                             .with_generic_names(&decl.generics);
                         let subst: Vec<(String, Ty)> = decl
@@ -102,9 +104,9 @@ fn reach(ty: &Ty, decls: &Decls, bounded: &[String], expanding: &mut Vec<String>
                 }
             }
         }
-        Ty::Param(name) if bounded.contains(name) => Reach {
+        Ty::Param(name) if bounded.iter().any(|b| b == name) => Reach {
             capabilities: Vec::new(),
-            generics: vec![name.clone()],
+            generics: vec![name.to_string()],
             bearing: true,
         },
         Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => Reach::default(),
@@ -149,7 +151,15 @@ fn entries(
     with_signatures: bool,
 ) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
-    for item in &module.items {
+    // A `std` module written in Oska is the toolchain's code: the report
+    // is about the program's. Leaving it out hides no authority only
+    // because such a module reaches no capability, which its own test
+    // checks (`tests/std_json.rs`); one that does must not be left out.
+    for item in module
+        .items
+        .iter()
+        .filter(|i| !modules.in_std(i.span.start))
+    {
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = modules.function_name(item.span.start, None, &f.name.name);
@@ -159,10 +169,23 @@ fn entries(
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
+                let toolset = items
+                    .impls
+                    .iter()
+                    .find(|info| info.span == Some(item.span))
+                    .is_some_and(|info| tools::is_toolset(&info.trait_name));
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
                         let name = impl_method_name(modules, items, item, imp, method, f);
-                        functions.push(function(name, method, f, lower.clone()));
+                        let mut entry = function(name, method, f, lower.clone());
+                        if toolset && f.name.name == "call" {
+                            if let Some(target) = &lower.self_ty {
+                                entry.toolset = Some(tools::toolset(
+                                    module, decls, items, imp, f, target, &lower,
+                                ));
+                            }
+                        }
+                        functions.push(entry);
                     }
                 }
             }
@@ -173,14 +196,14 @@ fn entries(
                 // checker, so a receiver reaches whatever an impl's does.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param(SELF.to_string()))
+                    .with_self(Ty::Param(SELF.into()))
                     .with_bound(Bound {
                         param: SELF.to_string(),
                         trait_name: t.name.name.clone(),
                         args: t
                             .generics
                             .iter()
-                            .map(|g| Ty::Param(g.name.name.clone()))
+                            .map(|g| Ty::Param(g.name.name.as_str().into()))
                             .collect(),
                     });
                 for method in &t.methods {
@@ -267,6 +290,7 @@ fn function(name: String, item: &Item, f: &FnDecl, lower: Lower) -> FunctionAuth
         authority: total.capabilities,
         via,
         pure: !total.bearing,
+        toolset: None,
     }
 }
 

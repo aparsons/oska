@@ -68,8 +68,8 @@ USAGE:
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac doc [module | item] [--format=json]
                                            Print the API reference of the
-                                           prelude, std.html, std.sql and
-                                           std.proc, offline, or of one module
+                                           prelude and the std modules,
+                                           offline, or of one module
                                            (std.sql) or item (List.push)
     oskac new <name> [--lib] [--no-agent-files] [--format=json]
                                            Lay out a new package in the
@@ -546,7 +546,7 @@ Unlike the other commands, `explain` takes a code and not a file. A code that do
 
 ## `oskac doc`
 
-`oskac doc [module | item] [--format=json]` prints the API reference: every public item of the prelude, `std.html`, `std.sql` and `std.proc`, in that order. It is the same reference as the `/api/` pages of the documentation site, but offline. It reads only the toolchain's own sources, built into `oskac`, and writes only to standard output. `std.rt`, the runtime's system-call layer, is not user API and is left out.
+`oskac doc [module | item] [--format=json]` prints the API reference: every public item of the prelude, `std.html`, `std.json`, `std.mcp`, `std.sql` and `std.proc`, in that order. It is the same reference as the `/api/` pages of the documentation site, but offline. It reads only the toolchain's own sources, built into `oskac`, and writes only to standard output. `std.rt`, the runtime's system-call layer, is not user API and is left out.
 
 ```sh
 oskac doc                      # everything

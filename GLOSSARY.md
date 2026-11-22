@@ -26,6 +26,17 @@ _Avoid_: restricted Fs, sandboxed filesystem
 **File capability**:
 A capability confined to a single file, such as `FileRead`. Using it takes no path.
 
+**Budget**:
+The capability to spend model tokens and calls, which a model client such as `std.llm` takes. Its counters live in the runtime, so every copy of a budget draws from the same ones. `main`'s is unlimited, and `limit` attenuates it to a child budget that draws from its parent and never has more than the parent has left. It counts tokens, not money.
+_Avoid_: quota, allowance (for the capability), wallet
+
+**Reservation**:
+The tokens and one call that a budget holds for a request before it is sent. It is settled once: a debit spends what the reply used and returns the rest, and a release returns everything. A reservation the budget, or any budget it was limited from, cannot cover is refused with `OverBudget`, before anything is spent.
+
+**Spend**:
+To use up tokens and calls of a budget: what a reservation's debit does. What a budget has spent includes what every budget limited from it has spent.
+_Avoid_: charge, consume (for budgets)
+
 **Capability-bearing type**:
 A type that is a capability or that contains one, directly or transitively. This includes containment through type arguments, as in `List<Stdout>`, and closures that capture a capability.
 
@@ -54,6 +65,34 @@ _Avoid_: grant file, sandbox policy, allowlist (for this concept)
 
 **Pure function**:
 A function with no capability-bearing parameters and no parameter whose type is or holds a bounded type parameter, whose type argument could be capability-bearing. It cannot perform effects, and it is deterministic.
+
+**Tool**:
+One operation that an agent, such as an MCP client or a model, may call by name, with JSON arguments that match its input schema. A tool reaches only what its toolset holds.
+_Avoid_: function, command, action (for this concept)
+
+**Toolset**:
+A value that describes a set of tools and runs them: a `cap struct` holding only the narrowed capabilities its tools need, implementing `std.mcp`'s `Toolset` trait.
+_Avoid_: server, tool registry (for the value itself)
+
+**MCP server**:
+An Oska program that calls `std.mcp`'s `serve` with a toolset: it speaks MCP over standard input and output, one JSON-RPC message per line, and returns when standard input closes. It serves two protocol eras, the modern one (2026-07-28, each request carrying its own `_meta`) and the legacy one (2025-11-25, which starts with `initialize`).
+_Avoid_: agent (the client is the agent), plugin
+
+**Derived annotation**:
+A tool's `readOnlyHint`, `destructiveHint` or `openWorldHint`, which `serve` computes from the capabilities the checker found the tool reaches. A program has no way to set one by hand, so a hint is never more permissive than the tool's authority.
+_Avoid_: hint (alone), claimed annotation (a derived one is never claimed)
+
+**Protocol era**:
+One of the two versions of the MCP wire protocol that `serve` speaks. The modern era (2026-07-28) is stateless: every request carries its protocol version and client capabilities in `_meta`. The legacy era (2025-11-25) starts with `initialize` and has `ping`. `initialize` chooses the legacy era for the rest of the session.
+_Avoid_: mode, version (alone)
+
+**Session**:
+What `std.mcp`'s `handle` remembers between messages: the server's info, the tools as listed when the session began, and whether the client chose the legacy era. It is a value that `handle` takes and returns, not a connection.
+_Avoid_: connection, client state
+
+**Per-tool authority**:
+The authority report's entry for one tool of a toolset: the capabilities the code that runs that tool can reach, computed from its arm of the `match` on the tool's name, not the union of the whole toolset.
+_Avoid_: tool permissions, tool annotations (for this concept)
 
 **Pre-state value**:
 A value in a postcondition captured with `old(...)` when the function is entered, before a mutating method changes its receiver.
@@ -113,6 +152,16 @@ _Avoid_: constant-time int, CtU32
 The property of code that no conditional branch or memory address depends on a secret value, and no secret is a divisor or a shift amount, so the path the code takes and the memory it touches do not reveal the secret. It holds for native code, not for the interpreter, and not for what the hardware does with the instructions.
 _Avoid_: timing-safe, side-channel free
 
+**Approval**:
+A person's yes to one consequential action, such as a tool deleting a file, recorded with the action's summary and details. Only an approver makes one, and it is single use: the tool it is given to consumes it, and the runtime refuses a second use. It is not the approval of a widening, which is a change to an authority baseline that a reviewer makes before a build.
+_Avoid_: consent, confirmation token
+
+**Approver**:
+Who an approval comes from: the person at a terminal, asked over standard error with the answer read from standard input, or a test's scripted stand-in. An approver over standard input is only as strong as whoever controls that stream.
+
+**Approval summary**:
+The trusted text that says what an approval is for, shown above its untrusted details. Both are shown with control and bidirectional characters made visible, so neither can disguise the action.
+
 **Sink**:
 An API where data leaves the program or affects how it behaves, such as SQL queries, process execution, HTML output, filesystem paths, network hosts, or logs.
 
@@ -164,7 +213,7 @@ The Linux `oskac` that links glibc dynamically, so it runs only where glibc 2.35
 _Avoid_: dynamic build, the Linux binary
 
 **musl build**:
-The Linux `oskac` that is a static executable with musl inside it, with no dynamic loader and no shared library, so it runs on any Linux, an empty container included. It is a variant of the Linux supported platform, not a platform of its own: it takes the same target platforms and builds the same bytes as the glibc build, only more slowly (ADR 0022).
+The Linux `oskac` that is a static executable with musl inside it, with no dynamic loader and no shared library, so it runs on any Linux, an empty container included. It is a variant of the Linux supported platform, not a platform of its own: it takes the same target platforms and builds the same bytes as the glibc build. It runs at about the same speed on aarch64, and up to about 1.2x slower on x86_64 for the site build and more for text-heavy work (ADR 0022; `docs/research/2026-11-musl-oskac-performance.md`).
 _Avoid_: static build, Alpine build, musl platform, musl target (for `oskac`'s own build)
 
 **Parity gate**:

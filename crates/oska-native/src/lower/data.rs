@@ -360,7 +360,10 @@ impl Body<'_, '_> {
         let (callee, type_args) = self.resolve(callee, type_args, receiver_ty.as_ref(), span)?;
         let name = match &callee {
             Callee::Function(name) if self.program().functions.contains_key(name) => name,
-            Callee::Function(name) | Callee::Intrinsic(name) => {
+            Callee::Function(name) => {
+                return Err(self.refuse(span, &format!("the mutating method `{name}`")))
+            }
+            Callee::Intrinsic(name) => {
                 return Err(self.refuse(span, &format!("the mutating method `{name}`")))
             }
             Callee::Trait { trait_name, method } => {

@@ -32,7 +32,7 @@ use oska_syntax::{json_escape, Diagnostic, SnapshotRecord, Span};
 use crate::host::{FakeHost, Host, Output, RootHandle};
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
-use crate::intrinsics::{debug, Table};
+use crate::intrinsics::{debug, Args, Table};
 use crate::panics::{codes, Panic};
 use crate::snapshots::{Written, ASSERT_SNAPSHOT};
 use crate::value::{Capability, Value};
@@ -463,6 +463,16 @@ fn test_context() -> Value {
     let fields = builtins::test_context_fields()
         .iter()
         .map(|ty| {
+            if *ty == builtins::APPROVER {
+                // `t.approver`, which answers from the test's script.
+                return Value::Struct {
+                    ty: builtins::APPROVER.into(),
+                    fields: std::rc::Rc::new(vec![
+                        Value::Capability(Capability::Stdin),
+                        Value::Capability(Capability::Stderr),
+                    ]),
+                };
+            }
             let capability =
                 Capability::granted(ty).expect("a `TestContext` capability has a runtime");
             Value::Capability(capability)
@@ -611,7 +621,7 @@ pub const INTRINSICS: Table = &[
 ];
 
 /// `t.assert(cond)`: fails the test when `cond` is false.
-fn assert(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn assert(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     if args[1].as_bool() {
         return Ok(Value::Unit);
     }
@@ -623,13 +633,13 @@ fn assert(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic
 }
 
 /// `t.fail(message)`: fails the test with `message`.
-fn fail(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn fail(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     Err(Panic::new(codes::TEST_FAILED, args[1].as_str(), span))
 }
 
 /// `t.printed()`: every line printed to `t.stdout` so far, one per
 /// `println`.
-fn printed(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn printed(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
     let lines = host.printed().iter().map(|l| Value::str(l)).collect();
     Ok(Value::List(std::rc::Rc::new(lines)))
 }
@@ -639,7 +649,7 @@ fn printed(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> 
 /// call stack a failure of it reports.
 fn assert_snapshot(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     let record = SnapshotRecord {
@@ -654,7 +664,7 @@ fn assert_snapshot(
 /// `t.assert_eq(actual, expected)`: fails the test when they differ.
 fn assert_eq(
     interp: &mut Interpreter<'_, '_>,
-    mut args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     let expected = args.pop().expect("`expected`");
@@ -676,7 +686,7 @@ fn assert_eq(
 /// `t.assert_ne(actual, other)`: fails the test when they are equal.
 fn assert_ne(
     interp: &mut Interpreter<'_, '_>,
-    mut args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     let other = args.pop().expect("`other`");

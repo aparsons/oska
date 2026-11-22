@@ -17,8 +17,9 @@
 //! test executable it reads the word, which `test_begin` sets before any
 //! of the test's code runs.
 //!
-//! `t`, the `TestContext`, is a static object: its fields are stateless
-//! capabilities, words 0, which reach whatever host the process runs on.
+//! `t`, the `TestContext`, is an object made before the test runs: its
+//! fields are stateless capabilities, words 0, which reach whatever host
+//! the process runs on, and `t.approver`, a static `Approver`.
 //! A failed assertion, `t.fail` and any other panic write the panic's
 //! report to stdout, unlocated (`std.rt`'s `report_fd`), for `oskac` to
 //! read back (`crate::test_failure`).
@@ -60,7 +61,6 @@ impl Body<'_, '_> {
         let user = self.lowering.user;
         let count = self.constant(user.tests.len() as i64);
         let selected = self.call_runtime("test_selected", vec![count], NOWHERE)?;
-        let fields = vec![0; builtins::test_context_fields().len()];
         for (index, test) in user.tests.iter().enumerate() {
             let next = self.label();
             let this = self.constant(index as i64);
@@ -73,14 +73,31 @@ impl Body<'_, '_> {
             let host = self.constant(if test.integration { 2 } else { 1 });
             let prefix = self.text(&format!("[{}] ", escape_control(&test.name)));
             self.call_runtime("test_begin", vec![host, prefix], NOWHERE)?;
-            let at = self.lowering.rodata.object(&fields);
-            let t = self.rodata(at);
+            let t = self.test_context()?;
             // As the interpreter runs a test body, not counted as a call.
             let id = self.lowering.request(Instance::Test(index), test.span);
             self.call_id(id, vec![t], test.span)?;
             self.push(Inst::Label(next));
         }
         Ok(())
+    }
+
+    /// `t`, a new object: each field a stateless capability, the word 0,
+    /// but `t.approver`, a static `Approver` of two (`std.rt`'s
+    /// "Approvals"). It is borrowed by the test and never released.
+    fn test_context(&mut self) -> Result<Temp, Diagnostic> {
+        let fields = builtins::test_context_fields();
+        let t = self.alloc(crate::layout::struct_size(fields.len()))?;
+        for (index, ty) in fields.iter().enumerate() {
+            let value = if *ty == builtins::APPROVER {
+                let at = self.lowering.rodata.object(&[0, 0]);
+                self.rodata(at)
+            } else {
+                self.constant(0)
+            };
+            self.store(t, crate::layout::struct_field(index), value);
+        }
+        Ok(t)
     }
 
     /// The body of [`Instance::Test`]: the test's block, with `t`

@@ -1,0 +1,66 @@
+// A toolset whose `call` is a `match` on the tool's name with literal
+// arms, for the golden tests of per-tool authority (#249). Each tool
+// reaches only the fields its arm uses; `forget` has a spec but no arm,
+// so it runs the default arm, and `shout` an arm but no spec. `shout`
+// and the default arm write to standard output.
+use std.json
+use std.mcp
+
+cap struct Notes {
+    notes: DirRead,
+    drafts: DirWrite,
+    out: Stdout,
+}
+
+impl mcp.Toolset for Notes {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        let input = json.Schema.object([json.Field.required("path", json.Schema.string())])
+        [
+            mcp.ToolSpec.new("read_note", "Read a note.", input),
+            mcp.ToolSpec.new("save_note", "Save a draft.", input).with_title("Save"),
+            mcp.ToolSpec.new("forget", "Forget a note.", input),
+        ]
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        match name {
+            "read_note" => self.read(args)
+            "save_note" => save(self.drafts, args)
+            "shout" => {
+                let _ = self.out.println("called")
+                mcp.ToolResult.text("ok")
+            }
+            _ => {
+                let _ = self.out.println("no such tool")
+                mcp.ToolResult.error("no such tool")
+            }
+        }
+    }
+}
+
+impl Notes {
+    fn read(self, args: json.Value) -> mcp.ToolResult {
+        let path = args.text("path").unwrap_or("")
+        match self.notes.read_to_string(Path.from(path)) {
+            Ok(text) => mcp.ToolResult.text(text)
+            Err(_) => mcp.ToolResult.error("cannot read {path}")
+        }
+    }
+}
+
+fn save(drafts: DirWrite, args: json.Value) -> mcp.ToolResult {
+    let path = args.text("path").unwrap_or("")
+    match drafts.write(Path.from(path), "") {
+        Ok(()) => mcp.ToolResult.text("saved")
+        Err(_) => mcp.ToolResult.error("cannot save {path}")
+    }
+}
+
+fn main(fs: Fs, io: Stdout) {
+    let tools = Notes(
+        notes: fs.read_only().restrict_to("notes"),
+        drafts: fs.write_only().restrict_to("drafts"),
+        out: io,
+    )
+    let _ = tools.call("read_note", json.Value.Null)
+}
