@@ -41,6 +41,7 @@ use std::rc::Rc;
 use oska_check::program::Program;
 use oska_syntax::Diagnostic;
 
+mod approval;
 mod budget;
 mod bytes;
 mod confine;

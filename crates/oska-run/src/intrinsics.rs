@@ -14,6 +14,7 @@ use oska_check::builtins;
 use oska_check::limits;
 use oska_syntax::Span;
 
+use crate::approval;
 use crate::budget;
 use crate::bytes;
 use crate::confine::{self, Intent};
@@ -124,6 +125,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
     [
         INTRINSICS,
         budget::INTRINSICS,
+        approval::INTRINSICS,
         int_methods::INTRINSICS,
         data::INTRINSICS,
         bytes::INTRINSICS,
@@ -285,6 +287,8 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Struct { ty, .. } if &**ty == builtins::SECRET => out.push_str("<redacted>"),
         // Its one field is the runtime's own number for it.
         Value::Struct { ty, .. } if &**ty == builtins::RESERVATION => out.push_str("<reservation>"),
+        // Its last field is the runtime's own number for it.
+        Value::Struct { ty, .. } if &**ty == builtins::APPROVAL => out.push_str("<approval>"),
         Value::Struct { ty, fields } => {
             out.push_str(ty);
             tuple(out, fields);
