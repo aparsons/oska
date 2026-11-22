@@ -11,9 +11,9 @@ A program that is an MCP server for any MCP client, in `examples/notes_server.os
 // Each tool reaches only what its arm of `call` uses, and `oskac check`
 // says so, per tool: `list_notes` and `read_note` reach `notes`, a
 // read-only directory; `save_note` reaches `drafts`, a different
-// directory it can only write. Nobody writes the tools' hints (read-only,
+// directory it can only write. Nobody writes the tools' derived annotations (read-only,
 // destructive): `mcp.serve` gives `list_notes` and `read_note` the
-// read-only hint, and `save_note` the destructive one, because that is
+// read-only annotation, and `save_note` the destructive one, because that is
 // what the checker computed they reach.
 //
 // A path a client sends is untrusted. It reaches `Path.from` only, and
@@ -109,11 +109,11 @@ fn server(fs: Fs) -> Notes {
 // The reply to the request `method` with `params`, as a client reads it.
 fn reply(tools: Notes, method: String, params: String) -> Untrusted<String> {
     let line = "\{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"{method}\",\"params\":\{{params}{META}\}\}"
-    let session = mcp.Session.new(mcp.ServerInfo.new("notes", "1.0.0"))
+    let session = mcp.Session.new(mcp.ServerInfo.new("notes", "1.0.0"), tools)
     mcp.handle(session, tools, line).reply.unwrap_or("(no reply)")
 }
 
-test "the tool list gives each tool the hints its authority computes" {
+test "the tool list gives each tool the derived annotations its authority computes" {
     let list = reply(server(t.fs), "tools/list", "")
     let read_only = "\"annotations\":\{\"readOnlyHint\":true,\"destructiveHint\":false,\"openWorldHint\":false\}"
     let destructive = "\"annotations\":\{\"readOnlyHint\":false,\"destructiveHint\":true,\"openWorldHint\":false\}"
@@ -155,15 +155,15 @@ fn list: DirRead (notes)
 fn read: DirRead (notes)
 fn save: DirWrite (drafts)
 fn main: Fs (fs), Stdin (stdin), Stdout (stdout)
-  notes_server.osk:87:16: Fs -> FsRead: read_only (bytes 3262..3276)
-  notes_server.osk:87:16: FsRead -> DirRead: restrict_to "notes" (bytes 3262..3297)
-  notes_server.osk:88:17: Fs -> FsWrite: write_only (bytes 3315..3330)
-  notes_server.osk:88:17: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3315..3352)
+  notes_server.osk:87:16: Fs -> FsRead: read_only (bytes 3282..3296)
+  notes_server.osk:87:16: FsRead -> DirRead: restrict_to "notes" (bytes 3282..3317)
+  notes_server.osk:88:17: Fs -> FsWrite: write_only (bytes 3335..3350)
+  notes_server.osk:88:17: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3335..3372)
 fn server: Fs (fs)
-  notes_server.osk:99:18: Fs -> FsRead: read_only (bytes 3843..3857)
-  notes_server.osk:99:18: FsRead -> DirRead: restrict_to "notes" (bytes 3843..3878)
-  notes_server.osk:99:63: Fs -> FsWrite: write_only (bytes 3888..3903)
-  notes_server.osk:99:63: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3888..3925)
+  notes_server.osk:99:18: Fs -> FsRead: read_only (bytes 3863..3877)
+  notes_server.osk:99:18: FsRead -> DirRead: restrict_to "notes" (bytes 3863..3898)
+  notes_server.osk:99:63: Fs -> FsWrite: write_only (bytes 3908..3923)
+  notes_server.osk:99:63: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3908..3945)
 fn reply: DirRead, DirWrite (tools)
 ```
 
@@ -173,9 +173,9 @@ Read the report as a reviewer would:
 - `main` holds the whole `Fs` and narrows it in two attenuations before the toolset exists. The server loop, `mcp.serve`, gets only standard input and output.
 - No tool prints to standard output. A tool that did would be flagged in the report as writing to the protocol stream, because one stray line would corrupt the framing.
 
-## Hints no one writes
+## Derived annotations no one writes
 
-`tools/list` gives every tool `annotations`: `readOnlyHint`, `destructiveHint` and `openWorldHint`. `mcp.serve` computes them from what the checker found each tool reaches, so a program cannot claim a hint its code does not earn. For this server, `list_notes` and `read_note` are read-only, and `save_note` is destructive, because it reaches a write capability. A tool is read-only only when it reaches nothing that writes, uses the network, starts a process or spends a budget; it is destructive when it reaches a write capability or starts a process (append and overwrite are not told apart); it is open-world when it reaches the network. A tool that reaches a capability through a type parameter could reach any, and gets all three. A toolset whose `call` is not a `match` on the tool's name gives every tool the whole toolset's authority. `idempotentHint` is never sent. Clients must treat annotations as untrusted anyway; deriving them makes them honest, not authoritative.
+`tools/list` gives every tool `annotations`: `readOnlyHint`, `destructiveHint` and `openWorldHint`. `mcp.serve` computes them from what the checker found each tool reaches, so a program cannot claim a hint its code does not earn. For this server, `list_notes` and `read_note` are read-only, and `save_note` is destructive, because it reaches a write capability. A tool is read-only only when it reaches nothing that writes, uses the network, starts a process or spends a budget; it is destructive when it reaches a write capability or starts a process (append and overwrite are not told apart); it is open-world when it reaches the network or starts a process. A tool that reaches a capability through a type parameter could reach any, and gets all three. A tool that reaches standard input or output, or a capability this list does not know, is not read-only. A toolset whose `specs` has changed since the server started is still served as it was listed at the start: `serve` lists the tools once and checks that list. A toolset whose `call` is not a `match` on the tool's name gives every tool the whole toolset's authority. `idempotentHint` is never sent. Clients must treat annotations as untrusted anyway; deriving them makes them honest, not authoritative.
 
 ## What a client sees
 
@@ -188,16 +188,16 @@ A modern client may start with `server/discover`, and then sends `tools/list` an
 
 A path that leaves the notes directory reads nothing: the model-chosen path reaches only `Path.from`, and the directory capability refuses it. The tool answers with an error the model can read, as a tool execution error (`isError`). Arguments that break a tool's input schema are the same kind of error, naming the failing field and what was expected. A call to a tool the server does not have is a JSON-RPC error (`-32602`), which the server answers itself: `Toolset.call` only ever gets a name from its own specs.
 
-The error codes are `-32700` for text that is not JSON (with `id` null), `-32600` for a message that is not a request or is longer than `mcp.MAX_LINE`, `-32601` for an unknown method, `-32602` for malformed parameters, an unknown tool or a request without its `_meta`, and `-32022` for a protocol version the server does not take, with `data.supported` and `data.requested`. A notification never gets a reply. A call runs to completion before the next line is read, so `notifications/cancelled` is accepted and ignored: the reply has been sent already.
+The error codes are `-32700` for text that is not JSON (with `id` null), `-32600` for a message that is not a request or is longer than `mcp.MAX_LINE`, `-32601` for an unknown method, `-32602` for malformed parameters, an unknown tool or a request without its `_meta`, and `-32022` for a protocol version the server does not take, with `data.supported` (what the server supports) and `data.requested`. A request whose `_meta` names 2025-11-25 gets `-32022` too, though that version is in `data.supported`: the legacy era has no `_meta` and starts with `initialize`, so a modern-style request cannot be served with its rules. A message with no `id` is a notification: it never gets a reply, whatever else is wrong with it. `mcp.MAX_LINE` (1 MiB) limits the line the server handles, but standard input is read a whole line at a time before its length is known, so the `-32600` reply keeps the framing and does not bound memory: a hostile client can still make the server buffer a huge line. A tool that reaches `Stdout` can write a bare line into the protocol stream and corrupt the framing; the authority report flags it, and `serve` does not refuse it. A call runs to completion before the next line is read, so `notifications/cancelled` is accepted and ignored: the reply has been sent already.
 
 To connect a client, give it the command that starts the program, such as `oskac run examples/notes_server.osk` in a directory that has `notes` and `drafts`, or the executable `oskac build` makes.
 
 ## Test it without a process
 
-`mcp.handle(session, tools, line)` is what `serve` runs for each line, so the example's `test` blocks drive the server with recorded lines and no process:
+`mcp.handle(session, tools, line)`, with a session from `mcp.Session.new(info, tools)`, is what `serve` runs for each line, so the example's `test` blocks drive the server with recorded lines and no process:
 
 ```console cmd=test
-test the tool list gives each tool the hints its authority computes ... ok
+test the tool list gives each tool the derived annotations its authority computes ... ok
 test a path out of the notes directory is a tool error, not a read ... ok
 test arguments that break the schema are an error the client can correct ... ok
 test an unknown tool is a protocol error ... ok

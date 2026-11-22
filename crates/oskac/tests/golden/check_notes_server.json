@@ -12,14 +12,14 @@
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"read_only","path":"examples/notes_server.osk","span":{"start":3262,"end":3276},"source":"Fs","result":"FsRead","root":null},
-    {"function":"main","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3262,"end":3297},"source":"FsRead","result":"DirRead","root":"notes"},
-    {"function":"main","method":"write_only","path":"examples/notes_server.osk","span":{"start":3315,"end":3330},"source":"Fs","result":"FsWrite","root":null},
-    {"function":"main","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3315,"end":3352},"source":"FsWrite","result":"DirWrite","root":"drafts"},
-    {"function":"server","method":"read_only","path":"examples/notes_server.osk","span":{"start":3843,"end":3857},"source":"Fs","result":"FsRead","root":null},
-    {"function":"server","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3843,"end":3878},"source":"FsRead","result":"DirRead","root":"notes"},
-    {"function":"server","method":"write_only","path":"examples/notes_server.osk","span":{"start":3888,"end":3903},"source":"Fs","result":"FsWrite","root":null},
-    {"function":"server","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3888,"end":3925},"source":"FsWrite","result":"DirWrite","root":"drafts"}
+    {"function":"main","method":"read_only","path":"examples/notes_server.osk","span":{"start":3282,"end":3296},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3282,"end":3317},"source":"FsRead","result":"DirRead","root":"notes"},
+    {"function":"main","method":"write_only","path":"examples/notes_server.osk","span":{"start":3335,"end":3350},"source":"Fs","result":"FsWrite","root":null},
+    {"function":"main","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3335,"end":3372},"source":"FsWrite","result":"DirWrite","root":"drafts"},
+    {"function":"server","method":"read_only","path":"examples/notes_server.osk","span":{"start":3863,"end":3877},"source":"Fs","result":"FsRead","root":null},
+    {"function":"server","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3863,"end":3898},"source":"FsRead","result":"DirRead","root":"notes"},
+    {"function":"server","method":"write_only","path":"examples/notes_server.osk","span":{"start":3908,"end":3923},"source":"Fs","result":"FsWrite","root":null},
+    {"function":"server","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3908,"end":3945},"source":"FsWrite","result":"DirWrite","root":"drafts"}
   ],
   "verdict": "ok"
 }

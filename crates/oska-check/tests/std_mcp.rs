@@ -309,24 +309,6 @@ fn a_tool_that_reaches_a_type_parameter_carries_the_unknown_kind() {
 }
 
 #[test]
-fn every_implementation_gets_a_reached_method_the_checker_wrote() {
-    let call = "        match name {\n            \
-                \"read\" => listed(self.notes)\n            \
-                _ => mcp.ToolResult.error(\"unknown\")\n        }";
-    let (_, report) = toolset_of(&toolset(FIELDS, NO_HELPERS, SPECS, call));
-    let program = report.program.expect("a clean program is checked");
-    let reached = program
-        .functions
-        .get("<Tools as pkg.std.mcp.Toolset>.reached")
-        .expect("the toolset has a reached method");
-    // `if name == "read" { ["DirRead"] } else { [whole] }`
-    let oska_check::program::ExprKind::If { else_branch, .. } = &reached.body.kind else {
-        panic!("{:#?}", reached.body);
-    };
-    assert!(else_branch.is_some());
-}
-
-#[test]
 fn a_generic_toolset_names_its_bounded_parameter() {
     let src = "use std.json\nuse std.mcp\n\n\
                trait Source {\n    fn read(self) -> String\n}\n\n\

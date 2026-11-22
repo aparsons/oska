@@ -31,6 +31,8 @@
 < {"jsonrpc":"2.0","id":15,"error":{"code":-32602,"message":"_meta needs io.modelcontextprotocol/protocolVersion"}}
 > {"jsonrpc":"2.0","id":16,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2024-11-05","io.modelcontextprotocol/clientCapabilities":{}}}}
 < {"jsonrpc":"2.0","id":16,"error":{"code":-32022,"message":"unsupported protocol version","data":{"supported":["2026-07-28","2025-11-25"],"requested":"2024-11-05"}}}
+> {"jsonrpc":"2.0","id":17,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":17,"error":{"code":-32022,"message":"unsupported protocol version","data":{"supported":["2026-07-28","2025-11-25"],"requested":"2025-11-25"}}}
 > {"jsonrpc":"2.0","id":18,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 < {"jsonrpc":"2.0","id":18,"error":{"code":-32601,"message":"method not found: ping"}}
 > {"jsonrpc":"2.0","id":19,"method":"resources/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
@@ -65,6 +67,11 @@
 < {"jsonrpc":"2.0","id":24,"error":{"code":-32600,"message":"not a request: no method"}}
 > {"jsonrpc":"2.0","id":25,"method":"tools/list","method":"ping"}
 < {"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error: invalid JSON at byte 47: duplicate key"}}
+# A message with no id is a notification, and never gets a reply, whatever else is wrong with it.
+> {"jsonrpc":"1.0","method":"tools/list"}
+> {"jsonrpc":"2.0"}
+> {"method":5}
+> {"jsonrpc":"2.0","method":"tools/call","params":[]}
 # After all that the server still answers.
 > {"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"read_note","arguments":{"path":"a.txt"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 < {"jsonrpc":"2.0","id":26,"result":{"resultType":"complete","content":[{"type":"text","text":"hello note\n"}],"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"notes","version":"1.0.0"}}}}

@@ -12,7 +12,7 @@
 //
 // `serve(stdin, stdout, info, tools)` makes the program an MCP server over
 // standard input and output, for any MCP client, in two protocol eras:
-// 2026-07-28 and 2025-11-25. It lists each tool with annotations
+// 2026-07-28 and 2025-11-25. It lists each tool with derived annotations
 // (`readOnlyHint`, `destructiveHint`, `openWorldHint`) that it derives
 // from what the checker computed the tool reaches, so no program can
 // claim one. `handle` is the function `serve` loops over, for tests that
@@ -50,7 +50,7 @@ pub trait Toolset {
     // a program writes. `serve` reads it to set each tool's annotations,
     // so that they are derived, never claimed.
     fn reached(self, name: String) -> List<String> {
-        []
+        ["?"]
     }
 }
 
@@ -186,18 +186,23 @@ impl Display for McpError {
     }
 }
 
-// What a server remembers between messages: who it is, and whether a
-// client chose the legacy era with `initialize`. Make one with
-// `Session.new`.
+// What a server remembers between messages: who it is, the tools it
+// listed when the session began, and whether a client chose the legacy
+// era with `initialize`. The tools are listed once: a toolset whose
+// `specs` answers differently later is still served as it was when
+// `serve` checked it. Make one with `Session.new`.
 pub struct Session {
     info: ServerInfo,
+    specs: List<ToolSpec>,
     legacy: Bool,
 }
 
 impl Session {
-    // A session of the server `info`, before any message.
-    pub fn new(info: ServerInfo) -> Session {
-        Session(info: info, legacy: false)
+    // A session of the server `info` with the tools `tools` lists now,
+    // before any message. It does not check them: `serve` does, with
+    // `validate`.
+    pub fn new<T: Toolset>(info: ServerInfo, tools: T) -> Session {
+        Session(info: info, specs: tools.specs(), legacy: false)
     }
 
     // Whether the client chose the legacy era (protocol 2025-11-25) with
@@ -219,7 +224,11 @@ pub struct Step {
 // share a name, and every input schema is an object. The first fault is
 // an `McpError`.
 pub fn validate<T: Toolset>(tools: T) -> Result<(), McpError> {
-    let specs = tools.specs()
+    check_specs(tools.specs())
+}
+
+// `validate` for the tools already listed.
+fn check_specs(specs: List<ToolSpec>) -> Result<(), McpError> {
     var seen: List<String> = []
     for spec in specs {
         let name = spec.name()
@@ -247,12 +256,18 @@ pub fn validate<T: Toolset>(tools: T) -> Result<(), McpError> {
 // the next line, so a call runs to completion and `notifications/cancelled`
 // finds nothing to cancel. Nothing else is written to `stdout`.
 //
+// It lists the tools once, when it starts, and serves that list for the
+// whole run. `MAX_LINE` limits the line `handle` accepts, not what
+// `Stdin.read_line` buffers: a line is read whole before its length is
+// known, so the `-32600` reply keeps the framing and does not bound
+// memory.
+//
 // Each tool's annotations in `tools/list` come from what the checker
 // computed the tool reaches: nothing a program writes can make a tool
 // look safer than its code is.
 pub fn serve<T: Toolset>(stdin: Stdin, stdout: Stdout, info: ServerInfo, tools: T) -> Result<(), McpError> {
-    validate(tools)?
-    var session = Session.new(info)
+    var session = Session.new(info, tools)
+    check_specs(session.specs)?
     while true {
         let line = match stdin.read_line() {
             Ok(Some(line)) => line
@@ -287,7 +302,8 @@ pub fn serve<T: Toolset>(stdin: Stdin, stdout: Stdout, info: ServerInfo, tools: 
 //
 // A message over `MAX_LINE` bytes gets `-32600`. A line that is not JSON
 // gets `-32700`, one that is not a request `-32600`, an unknown method
-// `-32601`. A notification gets no reply, whatever it is.
+// `-32601`. A message with no `id` is a notification and gets no reply of
+// any kind, whatever else is wrong with it.
 //
 // Two protocol eras are served. A request in the modern era (2026-07-28)
 // carries `io.modelcontextprotocol/protocolVersion` and
@@ -315,35 +331,34 @@ pub fn handle<T: Toolset>(session: Session, tools: T, line: Untrusted<String>) -
     if !value.as_members().is_some() {
         return Step(session: session, reply: Some(error_line(json.Value.Null, -32600, "a request is a JSON object", None)))
     }
-    let id = value.get("id")
-    let known_id = match id {
-        Some(json.Value.Text(_)) => true
-        Some(json.Value.Number(_)) => true
-        _ => false
-    }
-    let method = value.text("method")
-    let versioned = value.text("jsonrpc")
-    let wellformed = match versioned {
-        Some(version) => version == "2.0"
-        None => false
-    }
-    if id.is_some() && !known_id {
-        return Step(session: session, reply: Some(error_line(json.Value.Null, -32600, "a request id is a string or a number", None)))
-    }
-    let name = match method {
-        Some(name) => name
-        None => {
-            return Step(session: session, reply: Some(error_line(id.unwrap_or(json.Value.Null), -32600, "not a request: no method", None)))
-        }
-    }
-    if !wellformed {
-        return Step(session: session, reply: Some(error_line(id.unwrap_or(json.Value.Null), -32600, "not a request: jsonrpc is not \"2.0\"", None)))
-    }
-    let request_id = match id {
-        Some(request_id) => request_id
+    // A message with no id is a notification, whatever else is wrong with
+    // it: it never gets a reply.
+    let request_id = match value.get("id") {
+        Some(id) => id
         None => {
             return Step(session: session, reply: None)
         }
+    }
+    let known_id = match request_id {
+        json.Value.Text(_) => true
+        json.Value.Number(_) => true
+        _ => false
+    }
+    if !known_id {
+        return Step(session: session, reply: Some(error_line(json.Value.Null, -32600, "a request id is a string or a number", None)))
+    }
+    let name = match value.text("method") {
+        Some(name) => name
+        None => {
+            return Step(session: session, reply: Some(error_line(request_id, -32600, "not a request: no method", None)))
+        }
+    }
+    let wellformed = match value.text("jsonrpc") {
+        Some(version) => version == "2.0"
+        None => false
+    }
+    if !wellformed {
+        return Step(session: session, reply: Some(error_line(request_id, -32600, "not a request: jsonrpc is not \"2.0\"", None)))
     }
     let params = match value.get("params") {
         Some(json.Value.Object(members)) => json.Value.Object(members)
@@ -382,10 +397,10 @@ fn request<T: Toolset>(session: Session, tools: T, id: json.Value, method: Untru
     }
     let result = match method {
         "server/discover" => discover(session.info)
-        "tools/list" => json.Value.Object([member("tools", json.Value.List(tool_list(tools)))])
+        "tools/list" => json.Value.Object([member("tools", json.Value.List(tool_list(session.specs, tools)))])
         "ping" => json.Value.Object([])
         _ => {
-            match call_tool(tools, params) {
+            match call_tool(session.specs, tools, params) {
                 Ok(result) => result
                 Err(message) => {
                     return Step(session: session, reply: Some(error_line(id, -32602, message, None)))
@@ -415,7 +430,7 @@ fn initialize(session: Session, id: json.Value, params: json.Value) -> Step {
         Some(text) => members.push(member("instructions", json.Value.Text(text)))
         None => {}
     }
-    let legacy = Session(info: session.info, legacy: true)
+    let legacy = Session(info: session.info, specs: session.specs, legacy: true)
     Step(session: legacy, reply: Some(result_line(id, json.Value.Object(members))))
 }
 
@@ -485,9 +500,9 @@ fn meta_fault(params: json.Value) -> Option<Fault> {
 }
 
 // The tools as `tools/list` gives them, in the order of `specs`.
-fn tool_list<T: Toolset>(tools: T) -> List<json.Value> {
+fn tool_list<T: Toolset>(specs: List<ToolSpec>, tools: T) -> List<json.Value> {
     var listed: List<json.Value> = []
-    for spec in tools.specs() {
+    for spec in specs {
         var members: List<json.Member> = [member("name", json.Value.Text(spec.name()))]
         match spec.title() {
             Some(title) => members.push(member("title", json.Value.Text(title)))
@@ -504,7 +519,7 @@ fn tool_list<T: Toolset>(tools: T) -> List<json.Value> {
 // Run the call in `params`: its result, or the message of the protocol
 // error for a malformed call or an unknown tool. Arguments that break
 // the tool's schema are a failed result, which a model can correct.
-fn call_tool<T: Toolset>(tools: T, params: json.Value) -> Result<json.Value, Untrusted<String>> {
+fn call_tool<T: Toolset>(specs: List<ToolSpec>, tools: T, params: json.Value) -> Result<json.Value, Untrusted<String>> {
     let asked = match params.text("name") {
         Some(asked) => asked
         None => {
@@ -518,7 +533,7 @@ fn call_tool<T: Toolset>(tools: T, params: json.Value) -> Result<json.Value, Unt
         }
         None => json.Value.Object([])
     }
-    for spec in tools.specs() {
+    for spec in specs {
         // The name `call` gets is the spec's own, never the client's text.
         if spec.name() == asked {
             return Ok(run(tools, spec, args))
@@ -557,7 +572,7 @@ fn result_value(result: ToolResult) -> json.Value {
 // capability, nor standard input or output, and not a kind this list
 // does not know. `destructiveHint` is true when it reaches a write
 // capability or a spawn (append and overwrite are not told apart), and
-// `openWorldHint` when it reaches the network. A kind of `?`, which stands
+// `openWorldHint` when it reaches the network or starts a process. A kind of `?`, which stands
 // for a capability reached through a generic type, sets them all as far as
 // it can. `idempotentHint` is never sent.
 fn annotations(kinds: List<Untrusted<String>>) -> json.Value {
@@ -591,7 +606,7 @@ fn writes(kind: Untrusted<String>) -> Bool {
 }
 
 fn reaches_network(kind: Untrusted<String>) -> Bool {
-    kind == "Net" || kind == "NetConnect" || kind == "NetListen" || kind == "Connection" || kind == "?"
+    kind == "Net" || kind == "NetConnect" || kind == "NetListen" || kind == "Connection" || kind == "Spawn" || kind == "?"
 }
 
 // ---- Messages --------------------------------------------------------

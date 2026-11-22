@@ -4,9 +4,9 @@
 // Each tool reaches only what its arm of `call` uses, and `oskac check`
 // says so, per tool: `list_notes` and `read_note` reach `notes`, a
 // read-only directory; `save_note` reaches `drafts`, a different
-// directory it can only write. Nobody writes the tools' hints (read-only,
+// directory it can only write. Nobody writes the tools' derived annotations (read-only,
 // destructive): `mcp.serve` gives `list_notes` and `read_note` the
-// read-only hint, and `save_note` the destructive one, because that is
+// read-only annotation, and `save_note` the destructive one, because that is
 // what the checker computed they reach.
 //
 // A path a client sends is untrusted. It reaches `Path.from` only, and
@@ -102,11 +102,11 @@ fn server(fs: Fs) -> Notes {
 // The reply to the request `method` with `params`, as a client reads it.
 fn reply(tools: Notes, method: String, params: String) -> Untrusted<String> {
     let line = "\{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"{method}\",\"params\":\{{params}{META}\}\}"
-    let session = mcp.Session.new(mcp.ServerInfo.new("notes", "1.0.0"))
+    let session = mcp.Session.new(mcp.ServerInfo.new("notes", "1.0.0"), tools)
     mcp.handle(session, tools, line).reply.unwrap_or("(no reply)")
 }
 
-test "the tool list gives each tool the hints its authority computes" {
+test "the tool list gives each tool the derived annotations its authority computes" {
     let list = reply(server(t.fs), "tools/list", "")
     let read_only = "\"annotations\":\{\"readOnlyHint\":true,\"destructiveHint\":false,\"openWorldHint\":false\}"
     let destructive = "\"annotations\":\{\"readOnlyHint\":false,\"destructiveHint\":true,\"openWorldHint\":false\}"

@@ -14,9 +14,10 @@ pub fn ToolResult.is_error: pure
 pub fn ServerInfo.new: pure
 pub fn ServerInfo.with_instructions: pure
 fn <McpError as Display>.to_string: pure
-pub fn Session.new: pure
+pub fn Session.new: generic T (tools)
 pub fn Session.is_legacy: pure
 pub fn validate: generic T (tools)
+fn check_specs: pure
 pub fn serve: Stdin (stdin), Stdout (stdout), generic T (tools)
 pub fn handle: generic T (tools)
 fn request: generic T (tools)

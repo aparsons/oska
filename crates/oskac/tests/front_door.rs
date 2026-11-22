@@ -232,7 +232,7 @@ const PROBES: &[(&str, Probe)] = &[
              fn main(io: Stdout, stdin: Stdin) -> Result<(), IoError> {\n    \
              let info = mcp.ServerInfo.new(\"probe\", \"1.0.0\")\n    \
              let line = \"not json\"\n    \
-             let step = mcp.handle(mcp.Session.new(info), Tools(out: io), line)\n    \
+             let step = mcp.handle(mcp.Session.new(info, Tools(out: io)), Tools(out: io), line)\n    \
              io.println(step.reply.unwrap_or(\"no reply\"))?\n    \
              match mcp.serve(stdin, io, info, Tools(out: io)) {\n        \
              Ok(()) => io.println(\"served\")\n        \

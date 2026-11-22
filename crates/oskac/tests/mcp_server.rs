@@ -28,6 +28,7 @@ use differential::{assert_same, Case, Outcome};
 const NOTES: &str = include_str!("../../../examples/notes_server.osk");
 const HINTS: &str = include_str!("fixtures/mcp_hints.osk");
 const UNSPLIT: &str = include_str!("fixtures/mcp_unsplit.osk");
+const SHIFTING: &str = include_str!("fixtures/mcp_shifting.osk");
 const INVALID: &str = include_str!("fixtures/mcp_invalid.osk");
 
 /// The metadata every modern request carries.
@@ -143,6 +144,18 @@ fn a_toolset_not_split_per_tool_gives_every_tool_the_whole_toolsets_hints() {
 fn a_tool_that_reaches_a_capability_through_a_type_parameter_is_not_read_only() {
     let case = Case::file_at("mcp-generic", "mcp_unsplit.osk", UNSPLIT).with_args(&["generic"]);
     play(case, include_str!("fixtures/mcp/generic.transcript"));
+}
+
+#[test]
+fn the_tools_are_listed_once_and_that_list_is_served_for_the_whole_run() {
+    let case =
+        Case::file_at("mcp-shifting", "mcp_shifting.osk", SHIFTING).with_file("state/.keep", "");
+    let outcome = play(case, include_str!("fixtures/mcp/shifting.transcript"));
+    // `specs` did answer differently by the end.
+    assert_eq!(
+        outcome.tree.get("state/state.txt"),
+        Some(&Some("grown".to_string()))
+    );
 }
 
 #[test]
