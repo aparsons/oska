@@ -43,8 +43,7 @@ mod fence;
 use fence::{FenceLine, Fences};
 
 /// Codes no program can reach, so they have no example: `E0170` is for the
-/// prelude only (user code gets `E0132` instead), `E0360` needs a `std`
-/// module with a private name (none has one yet), `P0005` is a second
+/// prelude only (user code gets `E0132` instead), `P0005` is a second
 /// line of defence behind the checker (`E0292`), `E0411` is a symlink,
 /// which a documentation example cannot write, `E0391` is an output
 /// path, `E0393` and `E0394` a `--target`, and `E0395`, `E0396` and
@@ -52,9 +51,9 @@ use fence::{FenceLine, Fences};
 /// a program, and
 /// `E0392` a fault in the native backend and `E0398` a bug in it, which no
 /// program is meant to reach.
-const UNREACHABLE: [&str; 12] = [
-    "E0170", "E0360", "E0391", "E0392", "E0393", "E0394", "E0395", "E0396", "E0397", "E0398",
-    "E0411", "P0005",
+const UNREACHABLE: [&str; 11] = [
+    "E0170", "E0391", "E0392", "E0393", "E0394", "E0395", "E0396", "E0397", "E0398", "E0411",
+    "P0005",
 ];
 
 /// How the meaning of a code with no example ends, after the reason why.

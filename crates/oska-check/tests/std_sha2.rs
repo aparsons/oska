@@ -104,7 +104,7 @@ fn without_its_use_the_module_is_unknown() {
 
 #[test]
 fn a_brace_group_name_the_module_does_not_declare_is_an_error() {
-    assert_errors("use std.sha2.{sha265}", &[("E0205", "sha265")]);
+    assert_errors("use std.sha2.{sha265}", &[("E0312", "sha265")]);
 }
 
 // ---- Privacy ------------------------------------------------------------------------
@@ -114,9 +114,9 @@ fn a_private_helper_cannot_be_used() {
     assert_errors(
         "use std.sha2\n\
          fn main() {\n    let _ = sha2.padding(0, 64)\n}",
-        &[("E0206", "padding")],
+        &[("E0360", "padding")],
     );
-    assert_errors("use std.sha2.{padding}", &[("E0206", "padding")]);
+    assert_errors("use std.sha2.{padding}", &[("E0360", "padding")]);
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn a_hashers_state_is_private_and_it_cannot_be_forged() {
          fn peek(h: sha2.Sha256) -> Int {\n    h.length\n}",
     );
     let codes: Vec<&str> = report.diagnostics.iter().map(|d| d.code).collect();
-    assert_eq!(codes, ["E0206"], "{:#?}", report.diagnostics);
+    assert_eq!(codes, ["E0360"], "{:#?}", report.diagnostics);
     let message = &report.diagnostics[0].message;
     assert!(message.contains("`std.sha2`"), "{message}");
     assert!(
@@ -212,15 +212,29 @@ fn exposing_a_secret_digest_is_the_callers_audit_site() {
 
 #[test]
 fn every_function_is_pure_and_the_module_has_no_audit_site() {
-    let report = check(EVERY_FUNCTION);
+    // A program that imports the module is checked with it linked in, and
+    // the report lists only the program's own functions: the module's are
+    // the toolchain's code. So its purity is checked on the module itself,
+    // as a file, where every function it declares, `pub` or not, is named.
+    let program = check(EVERY_FUNCTION);
+    assert!(program.diagnostics.is_empty(), "{:#?}", program.diagnostics);
+    assert!(
+        program.functions.iter().all(|f| !f.name.contains("sha2")),
+        "the report lists only the program's own functions"
+    );
+    assert!(program.audit.is_empty(), "{:#?}", program.audit);
+    assert!(!function(&program, "main").pure);
+    let report = check(include_str!("../src/std/sha2.osk"));
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     for name in FUNCTIONS {
+        let name = name.strip_prefix("std.sha2.").unwrap_or(name);
         let f = function(&report, name);
         assert!(f.pure, "`{name}` should be pure: {:?}", f.authority);
     }
+    for f in &report.functions {
+        assert!(f.pure, "`{}` should be pure: {:?}", f.name, f.authority);
+    }
     assert!(report.audit.is_empty(), "{:#?}", report.audit);
-    // The program's own functions keep the names a single file gives them.
-    assert!(!function(&report, "main").pure);
 }
 
 #[test]
@@ -293,5 +307,10 @@ fn a_package_names_its_functions_by_key_and_std_ones_by_their_module() {
     ]);
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     assert!(function(&report, "pkg.main.hex").pure);
-    assert!(function(&report, "std.sha2.sha256").pure);
+    // The module's own functions are the toolchain's, not the program's.
+    assert!(
+        report.functions.iter().all(|f| !f.name.starts_with("std.")),
+        "{:?}",
+        report.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+    );
 }

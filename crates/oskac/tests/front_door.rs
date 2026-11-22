@@ -140,6 +140,37 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`Budget`",
+        Probe::Program(
+            "fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {\n    \
+             let small = budget.limit(100, 1)\n    \
+             let shown = match small.reserve(500) {\n        \
+             Ok(r) => {\n            \
+             r.release()\n            \
+             \"reserved\"\n        \
+             }\n        \
+             Err(e) => e.to_string()\n    \
+             }\n    \
+             io.println(shown)\n}\n",
+        ),
+    ),
+    (
+        "`Approval` and `Approver`",
+        Probe::Tests(
+            "fn send(approval: Approval) -> Bool {\n    \
+             approval.consume(\"send\", [\"to: a\"]).is_ok()\n}\n\n\
+             test \"one yes, one use\" {\n    \
+             t.answer_approval(true)\n    \
+             match t.approver.confirm(\"send\", [\"to: a\"]) {\n        \
+             Some(a) => {\n            \
+             t.assert(send(a))\n            \
+             t.assert(!send(a))\n        \
+             }\n        \
+             None => t.fail(\"refused\")\n    \
+             }\n}\n",
+        ),
+    ),
+    (
         "Files: `Fs`, `FsRead`, `FsWrite`, and the directory and file capabilities",
         Probe::Program(
             "fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {\n    \
@@ -175,6 +206,53 @@ const PROBES: &[(&str, Probe)] = &[
              fn main(io: Stdout, env: Env) -> Result<(), IoError> {\n    \
              let name = env.get(\"OSKA_PROBE_UNSET\").unwrap_or(\"<world>\")\n    \
              io.println(html.text(name).render().assume_trusted())\n}\n",
+        ),
+    ),
+    (
+        "`std.json`",
+        Probe::Program(
+            "use std.json\n\n\
+             fn main(io: Stdout, env: Env) -> Result<(), IoError> {\n    \
+             let name = env.get(\"OSKA_PROBE_UNSET\").unwrap_or(\"ada\")\n    \
+             let value = json.Value.Object([json.Member(key: \"name\", value: json.Value.Text(name))])\n    \
+             io.println(json.encode(value))\n}\n",
+        ),
+    ),
+    (
+        "`std.mcp`: `Toolset`, `ToolSpec` and `ToolResult`",
+        Probe::Program(
+            "use std.json\nuse std.mcp\n\n\
+             cap struct Tools { out: Stdout }\n\n\
+             impl mcp.Toolset for Tools {\n    \
+             fn specs(self) -> List<mcp.ToolSpec> {\n        \
+             [mcp.ToolSpec.new(\"say\", \"Say hello.\", json.Schema.object([]))]\n    }\n\n    \
+             fn call(self, name: String, args: json.Value) -> mcp.ToolResult {\n        \
+             match name {\n            \
+             \"say\" => mcp.ToolResult.json(json.Value.Text(\"hello\"))\n            \
+             _ => mcp.ToolResult.error(\"unknown tool\")\n        }\n    }\n}\n\n\
+             fn main(io: Stdout) -> Result<(), IoError> {\n    \
+             let tools = Tools(out: io)\n    \
+             io.println(tools.call(\"say\", json.Value.Null).content())\n}\n",
+        ),
+    ),
+    (
+        "`std.mcp`: `serve` and `handle`, an MCP server over standard input and output",
+        Probe::Program(
+            "use std.json\nuse std.mcp\n\n\
+             cap struct Tools { out: Stdout }\n\n\
+             impl mcp.Toolset for Tools {\n    \
+             fn specs(self) -> List<mcp.ToolSpec> {\n        \
+             [mcp.ToolSpec.new(\"say\", \"Say hello.\", json.Schema.object([]))]\n    }\n\n    \
+             fn call(self, name: String, args: json.Value) -> mcp.ToolResult {\n        \
+             mcp.ToolResult.text(\"hello\")\n    }\n}\n\n\
+             fn main(io: Stdout, stdin: Stdin) -> Result<(), IoError> {\n    \
+             let info = mcp.ServerInfo.new(\"probe\", \"1.0.0\")\n    \
+             let line = \"not json\"\n    \
+             let step = mcp.handle(mcp.Session.new(info, Tools(out: io)), Tools(out: io), line)\n    \
+             io.println(step.reply.unwrap_or(\"no reply\"))?\n    \
+             match mcp.serve(stdin, io, info, Tools(out: io)) {\n        \
+             Ok(()) => io.println(\"served\")\n        \
+             Err(_) => io.println(\"refused\")\n    }\n}\n",
         ),
     ),
     (

@@ -77,7 +77,7 @@ fn without_its_use_the_module_is_unknown() {
 
 #[test]
 fn its_helpers_are_private() {
-    assert_errors("use std.hmac.{key_block}", &[("E0206", "key_block")]);
+    assert_errors("use std.hmac.{key_block}", &[("E0360", "key_block")]);
 }
 
 #[test]
@@ -187,14 +187,28 @@ fn exposing_a_tag_is_the_callers_audit_site() {
 
 #[test]
 fn every_function_is_pure_and_the_module_has_no_audit_site() {
-    let report = check(EVERY_FUNCTION);
+    // A program that imports the module is checked with it linked in, and
+    // the report lists only the program's own functions: the module's are
+    // the toolchain's code. So its purity is checked on the module itself,
+    // as a file, where every function it declares, `pub` or not, is named.
+    let program = check(EVERY_FUNCTION);
+    assert!(program.diagnostics.is_empty(), "{:#?}", program.diagnostics);
+    assert!(
+        program.functions.iter().all(|f| !f.name.contains("hmac")),
+        "the report lists only the program's own functions"
+    );
+    assert!(program.audit.is_empty(), "{:#?}", program.audit);
+    assert!(!function(&program, "main").pure);
+    let report = check(include_str!("../src/std/hmac.osk"));
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     for name in FUNCTIONS {
+        let name = name.strip_prefix("std.hmac.").unwrap_or(name);
         let f = function(&report, name);
         assert!(f.pure, "`{name}` should be pure: {:?}", f.authority);
     }
-    // `std.sha2`, which it uses, is linked in too.
-    assert!(function(&report, "std.sha2.Sha256Secret.finish").pure);
+    for f in &report.functions {
+        assert!(f.pure, "`{}` should be pure: {:?}", f.name, f.authority);
+    }
     assert!(report.audit.is_empty(), "{:#?}", report.audit);
 }
 

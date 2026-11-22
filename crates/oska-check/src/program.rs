@@ -52,8 +52,9 @@
 //!    refuse it unless it joins Oska Core, in a new core IR version.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::ops::ControlFlow;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -99,6 +100,40 @@ pub struct Program {
     /// declares, such as the core IR's refusal of anything outside Oska
     /// Core (`core_ir.rs`), reads it here.
     pub declarations: Vec<Declaration>,
+    /// Every implementation of `std.mcp`'s `Toolset`, with the built-in
+    /// capabilities each of its tools reaches, as the authority report
+    /// computes them. An MCP server derives each tool's annotations from
+    /// them: the checker writes each implementation's `reached` method
+    /// from this list, and `std.mcp`'s `serve` calls it.
+    pub toolsets: Vec<Toolset>,
+}
+
+/// An implementation of `std.mcp`'s `Toolset` and the built-in
+/// capabilities its tools reach.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Toolset {
+    /// The implementing type, as [`Program::types`] names it.
+    pub implementation: String,
+    /// Each tool, by name, and the capabilities it reaches; empty when
+    /// `call` is not split per tool.
+    pub tools: Vec<(String, Vec<String>)>,
+    /// The capabilities the whole toolset reaches.
+    pub whole: Vec<String>,
+}
+
+/// What [`Toolset::capabilities`] lists for a tool that reaches a
+/// capability held by a type parameter, which could be any.
+pub const UNKNOWN_KIND: &str = "?";
+
+impl Toolset {
+    /// The capabilities the tool `name` reaches: its own when the report
+    /// splits it out, and otherwise the whole toolset's, never fewer.
+    pub fn capabilities(&self, name: &str) -> &[String] {
+        self.tools
+            .iter()
+            .find(|(tool, _)| tool == name)
+            .map_or(&self.whole, |(_, capabilities)| capabilities)
+    }
 }
 
 /// A declaration other than a function, a `use` or a `test`.
@@ -906,7 +941,7 @@ pub enum Callee {
     /// qualified name: `Type.method` for a method, such as
     /// `Stdout.println`. A prelude type's implementation of a prelude
     /// trait is named the same way, such as `Int.to_string`.
-    Intrinsic(String),
+    Intrinsic(IntrinsicName),
     /// A trait's method called on a value whose type only the runtime
     /// knows: in generic code, a value of a type parameter. The receiver
     /// is the first argument. A backend finds the implementation from the
@@ -915,6 +950,89 @@ pub enum Callee {
     /// intrinsic `Tag.method` of a prelude implementation. Only a trait
     /// without generics is called this way.
     Trait { trait_name: String, method: String },
+}
+
+impl Callee {
+    /// A call of the intrinsic `name`.
+    pub fn intrinsic(name: impl Into<String>) -> Callee {
+        Callee::Intrinsic(IntrinsicName::new(name))
+    }
+}
+
+/// The qualified name of the intrinsic a [`Callee::Intrinsic`] reaches,
+/// with a place for the backend that runs the call to keep what it found
+/// for the name. The interpreter looks the name up on a call site's first
+/// call and keeps its own number for the intrinsic here, so it does not
+/// look the name up again on every call (#502). It is the backend's, not
+/// the program's: two names are equal when their text is, kept or not.
+#[derive(Debug, Clone)]
+pub struct IntrinsicName {
+    name: String,
+    resolved: OnceLock<u32>,
+}
+
+impl IntrinsicName {
+    pub fn new(name: impl Into<String>) -> IntrinsicName {
+        IntrinsicName {
+            name: name.into(),
+            resolved: OnceLock::new(),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.name
+    }
+
+    /// The number `resolve` gives for the name: `resolve` runs on the
+    /// first call only, and every later call returns what it gave then.
+    pub fn resolve_with(&self, resolve: impl FnOnce(&str) -> u32) -> u32 {
+        *self.resolved.get_or_init(|| resolve(&self.name))
+    }
+
+    /// The number [`IntrinsicName::resolve_with`] kept, once it has run.
+    pub fn resolved(&self) -> Option<u32> {
+        self.resolved.get().copied()
+    }
+}
+
+impl std::ops::Deref for IntrinsicName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl fmt::Display for IntrinsicName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+impl PartialEq for IntrinsicName {
+    fn eq(&self, other: &IntrinsicName) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for IntrinsicName {}
+
+impl PartialEq<str> for IntrinsicName {
+    fn eq(&self, other: &str) -> bool {
+        self.name == other
+    }
+}
+
+impl PartialEq<&str> for IntrinsicName {
+    fn eq(&self, other: &&str) -> bool {
+        self.name == *other
+    }
+}
+
+impl PartialEq<String> for IntrinsicName {
+    fn eq(&self, other: &String) -> bool {
+        self.name == *other
+    }
 }
 
 /// What a [`walk`] meets.

@@ -184,7 +184,7 @@ fn same_signature(actual: &FnSig, expected: &FnSig) -> bool {
         .generics
         .iter()
         .zip(&actual.generics)
-        .map(|(e, a)| (e.clone(), Ty::Param(a.clone())))
+        .map(|(e, a)| (e.clone(), Ty::Param(a.as_str().into())))
         .collect();
     actual
         .params

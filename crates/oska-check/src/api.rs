@@ -26,7 +26,9 @@ pub const PRELUDE: &str = "prelude";
 /// The modules the reference documents, in the order it lists them.
 /// `std.rt` is left out: it is the runtime's system-call layer, not user
 /// API.
-pub const MODULES: &[&str] = &[PRELUDE, "std.html", "std.sql", "std.proc"];
+pub const MODULES: &[&str] = &[
+    PRELUDE, "std.html", "std.json", "std.mcp", "std.sql", "std.proc",
+];
 
 /// What kind of item an entry is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,9 +343,9 @@ impl Reach {
 fn type_reach(decls: &Decls, name: &str, params: &[GenericParam]) -> Reach {
     let args = params
         .iter()
-        .map(|g| Ty::Param(g.name.name.clone()))
+        .map(|g| Ty::Param(g.name.name.as_str().into()))
         .collect();
-    let ty = Ty::Named(name.to_string(), args, Trust::Trusted);
+    let ty = Ty::Named(name.into(), args, Trust::Trusted);
     let capabilities = match decls.get(name).map(|d| &d.kind) {
         Some(DeclKind::Capability) => vec![name.to_string()],
         _ => authority::capabilities_of(&ty, decls),

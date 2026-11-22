@@ -13,7 +13,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics::Intrinsic::{Mutating, Plain};
-use crate::intrinsics::Table;
+use crate::intrinsics::{Args, Table};
 use crate::memory;
 use crate::panics::{codes, Panic};
 use crate::value::Value;
@@ -82,13 +82,13 @@ fn receiver(bytes: &mut Value) -> &mut std::rc::Rc<Vec<u8>> {
 }
 
 /// `Bytes.new()`: an empty buffer.
-fn bytes_new(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_new(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
     memory::bytes_of_len(0, span, Vec::new)
 }
 
 /// `Bytes.zeroed(len)`: `len` zero bytes. A negative length panics with
 /// `P0042`, one past [`MAX_BYTES`] with `P0043`.
-fn bytes_zeroed(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_zeroed(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let len = args[0].as_int();
     if len < 0 {
         return Err(Panic::new(
@@ -116,7 +116,7 @@ fn hex_value(digit: u8) -> Option<u8> {
 
 /// `Bytes.from_hex(text)`: the bytes two hexadecimal digits each spell,
 /// or `None` for an odd number of digits or anything that is not one.
-fn bytes_from_hex(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_from_hex(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = args[0].as_str().as_bytes();
     if text.len() % 2 != 0 {
         return Ok(Value::none());
@@ -134,7 +134,7 @@ fn bytes_from_hex(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Valu
 }
 
 /// `Bytes.len(self)`: the number of bytes.
-fn bytes_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn bytes_len(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(args[0].as_bytes().len() as i128))
 }
 
@@ -144,7 +144,7 @@ fn byte(b: u8) -> Value {
 }
 
 /// `Bytes.get(self, index)`: the byte at `index`, or `None`.
-fn bytes_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn bytes_get(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let found = usize::try_from(args[1].as_int())
         .ok()
         .and_then(|i| args[0].as_bytes().get(i).copied());
@@ -162,7 +162,7 @@ fn index_out_of_bounds(index: i128, len: usize, span: Span) -> Panic {
 
 /// `Bytes.at(self, index)`: the byte at `index`. Out of bounds, it panics
 /// with `P0002`.
-fn bytes_at(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_at(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let data = args[0].as_bytes();
     let index = args[1].as_int();
     usize::try_from(index)
@@ -174,7 +174,7 @@ fn bytes_at(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Pan
 
 /// `Bytes.slice(self, start, end)`: the bytes from `start` up to `end`.
 /// Bounds out of range, or reversed, panic with `P0042`.
-fn bytes_slice(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_slice(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let data = args[0].as_bytes();
     let (start, end) = (args[1].as_int(), args[2].as_int());
     let bounds = usize::try_from(start)
@@ -227,32 +227,32 @@ fn unsigned(bytes: &[u8], big: bool, int: IntType) -> Value {
     Value::Int(n as i128, int)
 }
 
-fn read_u16_be(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    Ok(unsigned(read(&args, 2, span)?, true, IntType::U16))
+fn read_u16_be(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    Ok(unsigned(read(args, 2, span)?, true, IntType::U16))
 }
 
-fn read_u16_le(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    Ok(unsigned(read(&args, 2, span)?, false, IntType::U16))
+fn read_u16_le(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    Ok(unsigned(read(args, 2, span)?, false, IntType::U16))
 }
 
-fn read_u32_be(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    Ok(unsigned(read(&args, 4, span)?, true, IntType::U32))
+fn read_u32_be(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    Ok(unsigned(read(args, 4, span)?, true, IntType::U32))
 }
 
-fn read_u32_le(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    Ok(unsigned(read(&args, 4, span)?, false, IntType::U32))
+fn read_u32_le(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    Ok(unsigned(read(args, 4, span)?, false, IntType::U32))
 }
 
-fn read_u64_be(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    Ok(unsigned(read(&args, 8, span)?, true, IntType::U64))
+fn read_u64_be(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    Ok(unsigned(read(args, 8, span)?, true, IntType::U64))
 }
 
-fn read_u64_le(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    Ok(unsigned(read(&args, 8, span)?, false, IntType::U64))
+fn read_u64_le(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    Ok(unsigned(read(args, 8, span)?, false, IntType::U64))
 }
 
 /// `Bytes.to_hex(self)`: two lower-case hexadecimal digits a byte.
-fn bytes_to_hex(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_to_hex(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let data = args[0].as_bytes();
     memory::text_of_len(2 * data.len(), span, || hex(data))
 }
@@ -267,7 +267,7 @@ pub(crate) fn hex(data: &[u8]) -> String {
 }
 
 /// `Bytes.to_text(self)`: the text the bytes encode in UTF-8, or `None`.
-fn bytes_to_text(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_to_text(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     match std::str::from_utf8(args[0].as_bytes()) {
         Ok(text) => Ok(Value::some(memory::text(text, span)?)),
         Err(_) => Ok(Value::none()),
@@ -277,18 +277,18 @@ fn bytes_to_text(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value
 /// `Untrusted<Bytes>.assume_trusted(self)`: the bytes themselves. Trust
 /// is a property the checker tracks; at run time untrusted bytes are
 /// plain bytes.
-fn bytes_assume_trusted(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn bytes_assume_trusted(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args.swap_remove(0))
 }
 
 /// `String.to_bytes(self)`: its UTF-8 encoding.
-fn string_to_bytes(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_to_bytes(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = args[0].as_str();
     memory::bytes_of_len(text.len(), span, || text.as_bytes().to_vec())
 }
 
 /// `Bytes.eq(self, other)`: the same bytes.
-fn bytes_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn bytes_eq(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].as_bytes() == args[1].as_bytes()))
 }
 
@@ -312,7 +312,7 @@ pub fn select(cond: bool, if_true: Value, if_false: Value, span: Span) -> Result
 }
 
 /// `Bytes.hash(self)`: the 64-bit FNV-1a hash of the bytes, as an `Int`.
-fn bytes_hash(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn bytes_hash(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let hash = args[0]
         .as_bytes()
         .iter()
@@ -339,19 +339,19 @@ fn byte_arg(value: &Value) -> u8 {
 }
 
 /// `Bytes.push(var self, byte)`: `byte` added at the end.
-fn bytes_push(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_push(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     add(bytes, &[byte_arg(&args[0])], span)
 }
 
 /// `Bytes.append(var self, other)`: `other`'s bytes added at the end.
-fn bytes_append(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_append(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let other = std::rc::Rc::clone(args[0].as_bytes());
     add(bytes, &other, span)
 }
 
 /// `Bytes.set(var self, index, byte)`: the byte at `index` replaced.
 /// Out of bounds, it panics with `P0002` and changes nothing.
-fn bytes_set(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn bytes_set(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let data = receiver(bytes);
     let index = args[0].as_int();
     let Some(at) = usize::try_from(index).ok().filter(|&i| i < data.len()) else {
@@ -367,26 +367,26 @@ fn word(value: &Value) -> u64 {
     value.as_int() as u64
 }
 
-fn push_u16_be(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn push_u16_be(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     add(bytes, &(word(&args[0]) as u16).to_be_bytes(), span)
 }
 
-fn push_u16_le(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn push_u16_le(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     add(bytes, &(word(&args[0]) as u16).to_le_bytes(), span)
 }
 
-fn push_u32_be(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn push_u32_be(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     add(bytes, &(word(&args[0]) as u32).to_be_bytes(), span)
 }
 
-fn push_u32_le(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn push_u32_le(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     add(bytes, &(word(&args[0]) as u32).to_le_bytes(), span)
 }
 
-fn push_u64_be(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn push_u64_be(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     add(bytes, &word(&args[0]).to_be_bytes(), span)
 }
 
-fn push_u64_le(bytes: &mut Value, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn push_u64_le(bytes: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     add(bytes, &word(&args[0]).to_le_bytes(), span)
 }

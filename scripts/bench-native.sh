@@ -16,8 +16,10 @@
 #
 # Builds a release oskac, then for each workload runs `oskac run
 # --interpret` and the executable `oskac build` wrote, `runs` times each
-# (default 5), and prints the best CPU time of each and the speedup. The interpreter's time includes checking the program, as
-# `oskac run` does; the native time is the executable alone. The
+# (default 5), and prints the best CPU time of each, the speedup, and the best
+# wall-clock time of each. A run that fails, or prints other than the first
+# run did, stops the script. The interpreter's time includes checking the
+# program, as `oskac run` does; the native time is the executable alone. The
 # workloads:
 #
 #   loop        a 5M-iteration integer loop
@@ -142,35 +144,59 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }
 EOF
 
-# The best CPU time (user plus system), in milliseconds, of `runs` runs of
-# the command, in the current directory, with its output discarded. CPU
-# time, not wall-clock time: a Pi doing other work, or writing to its SD
-# card, stretches the wall clock of a short run several times over. On
-# Windows it is the best wall-clock time (see `clock` above).
+# The best CPU time (user plus system) and the best wall-clock time, both in
+# milliseconds, of `runs` runs of the command, in the current directory,
+# printed as "cpu wall". CPU time is the headline figure: a Pi doing other
+# work, or writing to its SD card, stretches the wall clock of a short run
+# several times over. On Windows the CPU figure is wall-clock time too (see
+# `clock` above). Every timed run must exit 0 and print what the first,
+# untimed run printed (`expected`, a file); anything else stops the script,
+# so a run that failed fast can never be recorded as a win.
 best() {
-  local best_ms="" ms TIMEFORMAT="$clock"
+  local expected="$1" label="$2" best_cpu="" best_wall="" cpu wall status
+  shift 2
+  local TIMEFORMAT="$clock %3R"
   for _ in $(seq "$runs"); do
-    ms=$({ time "$@" >/dev/null 2>&1; } 2>&1 | awk '{ printf "%d", ($1 + $2) * 1000 }')
-    if [ -z "$best_ms" ] || [ "$ms" -lt "$best_ms" ]; then
-      best_ms=$ms
+    status=0
+    { time "$@" >"$work/run.out" 2>&1; } 2>"$work/run.time" || status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "bench-native.sh: $label: a timed run exited with status $status" >&2
+      exit 1
+    fi
+    if ! cmp -s "$expected" "$work/run.out"; then
+      echo "bench-native.sh: $label: a timed run printed different output" >&2
+      exit 1
+    fi
+    read -r cpu wall < <(awk '{ printf "%d %d\n", ($1 + $2) * 1000, $3 * 1000 }' "$work/run.time")
+    if [ -z "${cpu:-}" ] || [ -z "${wall:-}" ]; then
+      echo "bench-native.sh: $label: could not read the time of a run" >&2
+      exit 1
+    fi
+    if [ -z "$best_cpu" ] || [ "$cpu" -lt "$best_cpu" ]; then
+      best_cpu=$cpu
+    fi
+    if [ -z "$best_wall" ] || [ "$wall" -lt "$best_wall" ]; then
+      best_wall=$wall
     fi
   done
-  echo "$best_ms"
+  echo "$best_cpu $best_wall"
 }
 
 # Benchmark the program `file`, from the current directory.
 bench() {
   local name="$1" file="$2" exe="$work/$1.exe" interpreted native
   "$oskac" build "$file" -o "$exe"
-  # Both backends must agree before their times mean anything.
-  if ! diff <("$oskac" run --interpret "$file" 2>&1) <("$exe" 2>&1) >/dev/null; then
-    echo "bench-native.sh: $name: the backends' output differs" >&2
+  # Both backends must agree before their times mean anything, and the
+  # first output is the one every timed run must match.
+  "$oskac" run --interpret "$file" >"$work/$name.expected" 2>&1
+  if ! "$exe" >"$work/$name.native" 2>&1 || ! cmp -s "$work/$name.expected" "$work/$name.native"; then
+    echo "bench-native.sh: $name: the backends' output differs or a backend failed" >&2
     exit 1
   fi
-  interpreted=$(best "$oskac" run --interpret "$file")
-  native=$(best "$exe")
-  awk -v n="$name" -v i="$interpreted" -v e="$native" \
-    'BEGIN { printf "| %-10s | %7d ms | %6d ms | %6.1fx |\n", n, i, e, i / (e > 0 ? e : 1) }'
+  interpreted=$(best "$work/$name.expected" "$name (interpreter)" "$oskac" run --interpret "$file")
+  native=$(best "$work/$name.expected" "$name (native)" "$exe")
+  awk -v n="$name" -v i="${interpreted% *}" -v iw="${interpreted#* }" -v e="${native% *}" -v ew="${native#* }" \
+    'BEGIN { printf "| %-10s | %7d ms | %6d ms | %6.1fx | %7d ms | %6d ms |\n", n, i, e, i / (e > 0 ? e : 1), iw, ew }'
 }
 
 # Stop if the oskac under test cannot even print its version.
@@ -180,8 +206,8 @@ measure="CPU time"
 [ "$exe" = ".exe" ] && measure="wall-clock time"
 echo "oskac $version${OSKA_BENCH_TARGET:+ ($OSKA_BENCH_TARGET)}, best $measure of $runs runs, $(uname -m)"
 echo
-echo "| Workload   | Interpreter | Native |  Speedup |"
-echo "| ---------- | ----------: | -----: | -------: |"
+echo "| Workload   | Interpreter | Native |  Speedup | Interp. wall | Native wall |"
+echo "| ---------- | ----------: | -----: | -------: | -----------: | ----------: |"
 (cd "$work" && for name in loop text bulk-text lists recursion; do bench "$name" "$name.osk"; done)
 "$oskac" check site/build.osk >site/authority.txt || true
 "$oskac" doc --format=json >site/api.json

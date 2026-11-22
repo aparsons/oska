@@ -232,6 +232,8 @@ fn every_public_item_of_the_prelude_and_std_is_listed() {
     let sources = [
         ("prelude", "crates/oska-check/src/prelude.osk"),
         ("std.html", "crates/oska-check/src/std/html.osk"),
+        ("std.json", "crates/oska-check/src/std/json.osk"),
+        ("std.mcp", "crates/oska-check/src/std/mcp.osk"),
         ("std.sql", "crates/oska-check/src/std/sql.osk"),
         ("std.proc", "crates/oska-check/src/std/proc.osk"),
     ];
@@ -255,7 +257,10 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
     let items = json_items(&[]);
     let mut modules: Vec<&str> = items.iter().map(|i| field(i, "module")).collect();
     modules.dedup();
-    assert_eq!(modules, ["prelude", "std.html", "std.sql", "std.proc"]);
+    assert_eq!(
+        modules,
+        ["prelude", "std.html", "std.json", "std.mcp", "std.sql", "std.proc"]
+    );
     assert!(items.iter().all(|i| !field(i, "name").starts_with("rt_")));
     let output = oskac(&["doc", "std.rt"]);
     assert_eq!(output.status.code(), Some(2));

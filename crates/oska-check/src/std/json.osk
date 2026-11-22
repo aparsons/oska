@@ -1,0 +1,1097 @@
+// `std.json`: read and write JSON (RFC 8259). `use std.json`, then write
+// `json.parse(...)`, `json.encode(...)` and `json.Schema.object(...)`.
+//
+// JSON from outside the program is untrusted. `parse` keeps every string
+// it reads, keys included, as untrusted text, so a field of a message
+// cannot reach a structural position without a validator. Numbers and
+// booleans are trusted values, as `len` of untrusted text is. A number is
+// kept as its decimal text, so a fraction or an exponent survives a round
+// trip; `Number.to_int` gives `None`, never a panic, for one that is not
+// an integer that fits an `Int`.
+//
+// `parse` refuses input longer than 8 MiB (8388608 bytes) and lists and
+// objects nested deeper than 128, with an `Error`, never a panic. A key
+// that occurs twice in one object is an error, not "last wins", so two
+// readers cannot disagree about one message.
+//
+// `encode` writes canonical JSON: no whitespace, object members in their
+// order, every number as its text (an exponent written with `e`), and
+// every string escaped: `"`, `\`, every character below U+0020 (line
+// breaks included), U+2028 and U+2029. Its output never holds a line
+// break, so it is safe as one line of a line-delimited stream.
+//
+// `Schema` describes the JSON a program accepts, in the subset of JSON
+// Schema that both MCP and Claude's structured outputs take: closed
+// objects with required and optional fields, strings, integers, numbers,
+// booleans, string enumerations and lists. `Schema.validate` checks a
+// `Value` against it.
+
+// For maintainers: unlike the other `std` modules, this file is Oska
+// source with bodies, checked and run with each program that imports it
+// as one more module of the program. The comment block directly above a
+// `pub` item is its description in the API reference.
+
+// The longest input `parse` reads, in bytes: 8 MiB.
+pub const MAX_LENGTH: Int = 8388608
+
+// The deepest nesting of lists and objects `parse` reads.
+pub const MAX_DEPTH: Int = 128
+
+// A JSON value. A string `parse` reads is untrusted text; one a program
+// builds may be trusted or untrusted.
+pub enum Value {
+    Null,
+    Bool(Bool),
+    Number(Number),
+    Text(Untrusted<String>),
+    List(List<Value>),
+    Object(List<Member>),
+}
+
+// One member of an object: a key and its value.
+pub struct Member { pub key: Untrusted<String>, pub value: Value }
+
+// A JSON number, kept as its decimal text. Its field is private: code
+// makes one with `from_int` or `parse`, so its text is always valid JSON.
+pub struct Number { text: String }
+
+// Why `parse` refused its input: the byte offset where it stopped, from
+// 0, and a short reason, one of a fixed set of texts such as `unexpected
+// character` or `duplicate key`.
+pub struct Error { pub offset: Int, pub reason: String }
+
+impl Display for Error {
+    fn to_string(self) -> String {
+        "invalid JSON at byte {self.offset}: {self.reason}"
+    }
+}
+
+// The first place a value breaks a schema: its JSON path, such as
+// `$.items[2].name`, and what the schema expected there, such as `an
+// integer`.
+pub struct Violation { pub path: String, pub expected: String }
+
+impl Display for Violation {
+    fn to_string(self) -> String {
+        "{self.path}: expected {self.expected}"
+    }
+}
+
+// Why `decode` refused its input: it is not JSON, or it breaks the schema.
+pub enum DecodeError {
+    Syntax(Error),
+    Invalid(Violation),
+}
+
+impl Display for DecodeError {
+    fn to_string(self) -> String {
+        match self {
+            DecodeError.Syntax(error) => error.to_string()
+            DecodeError.Invalid(violation) => violation.to_string()
+        }
+    }
+}
+
+// Parse `text` as one JSON value, with only whitespace around it.
+pub fn parse(text: Untrusted<String>) -> Result<Value, Error> {
+    if text.byte_len() > MAX_LENGTH {
+        return Err(Error(offset: MAX_LENGTH, reason: "input longer than the limit"))
+    }
+    var parser = Parser(bytes: text.to_bytes(), at: 0)
+    parser.skip_space()
+    let value = parser.value(0)?
+    parser.skip_space()
+    if parser.at < parser.bytes.len() {
+        return parser.fail("trailing characters after the value")
+    }
+    Ok(value)
+}
+
+// `value` as canonical JSON text, on one line. It is untrusted, as the
+// strings in `value` may be.
+pub fn encode(value: Value) -> Untrusted<String> {
+    var out = Encoder(parts: [])
+    out.value(value)
+    "".join(out.parts)
+}
+
+// Parse `text`, check it against `schema`, and give the checked value to
+// `read`, which turns it into a typed value.
+pub fn decode<T>(text: Untrusted<String>, schema: Schema, read: fn(Value) -> T) -> Result<T, DecodeError> {
+    let value = match parse(text) {
+        Ok(value) => value
+        Err(error) => {
+            return Err(DecodeError.Syntax(error))
+        }
+    }
+    match schema.validate(value) {
+        Ok(()) => Ok(read(value))
+        Err(violation) => Err(DecodeError.Invalid(violation))
+    }
+}
+
+impl Number {
+    // The number `value`.
+    pub fn from_int(value: Int) -> Number {
+        Number(text: "{value}")
+    }
+
+    // The number `text` spells in JSON's grammar, such as `-1.5e3`, or
+    // `None` when it spells none.
+    pub fn parse(text: Untrusted<String>) -> Option<Number> {
+        var parser = Parser(bytes: text.to_bytes(), at: 0)
+        match parser.number() {
+            Ok(Value.Number(number)) => {
+                if parser.at == parser.bytes.len() {
+                    Some(number)
+                } else {
+                    None
+                }
+            }
+            _ => None
+        }
+    }
+
+    // The number as an `Int`, or `None` when it has a fraction or an
+    // exponent, or does not fit.
+    pub fn to_int(self) -> Option<Int> {
+        if self.text.contains(".") || self.text.contains("e") {
+            return None
+        }
+        self.text.parse_int()
+    }
+
+    // The number's decimal text, as JSON writes it.
+    pub fn text(self) -> String {
+        self.text
+    }
+
+    // Whether the number has no fractional part, however it is written:
+    // `3`, `3.0`, `30e-1` and `1e400` do, `3.5` and `1e-400` do not.
+    fn is_integral(self) -> Bool {
+        let parts = self.text.split("e")
+        let mantissa = parts.at(0).replace("-", "").split(".")
+        let whole = mantissa.at(0)
+        let fraction = mantissa.get(1).unwrap_or("")
+        let digits = "{whole}{fraction}".chars()
+        var significant = false
+        var zeros = 0
+        for digit in digits {
+            if digit == "0" {
+                zeros = zeros + 1
+            } else {
+                significant = true
+                zeros = 0
+            }
+        }
+        if !significant {
+            return true
+        }
+        let exponent = parts.get(1).unwrap_or("0").replace("+", "")
+        match exponent.parse_int() {
+            Some(e) => e - fraction.len() + zeros >= 0
+            None => !exponent.starts_with("-")
+        }
+    }
+}
+
+impl Value {
+    // The string, if the value is one.
+    pub fn as_text(self) -> Option<Untrusted<String>> {
+        match self {
+            Value.Text(text) => Some(text)
+            _ => None
+        }
+    }
+
+    // The number as an `Int`, if the value is a number that is an integer
+    // and fits.
+    pub fn as_int(self) -> Option<Int> {
+        match self {
+            Value.Number(number) => number.to_int()
+            _ => None
+        }
+    }
+
+    // The boolean, if the value is one.
+    pub fn as_bool(self) -> Option<Bool> {
+        match self {
+            Value.Bool(flag) => Some(flag)
+            _ => None
+        }
+    }
+
+    // The items, if the value is a list.
+    pub fn as_list(self) -> Option<List<Value>> {
+        match self {
+            Value.List(items) => Some(items)
+            _ => None
+        }
+    }
+
+    // The members, in order, if the value is an object.
+    pub fn as_members(self) -> Option<List<Member>> {
+        match self {
+            Value.Object(members) => Some(members)
+            _ => None
+        }
+    }
+
+    // Whether the value is `null`.
+    pub fn is_null(self) -> Bool {
+        match self {
+            Value.Null => true
+            _ => false
+        }
+    }
+
+    // The value of the member `key`, if the value is an object that has
+    // one.
+    pub fn get(self, key: Untrusted<String>) -> Option<Value> {
+        match self {
+            Value.Object(members) => {
+                for member in members {
+                    if member.key == key {
+                        return Some(member.value)
+                    }
+                }
+                None
+            }
+            _ => None
+        }
+    }
+
+    // The string member `key`, if there is one.
+    pub fn text(self, key: Untrusted<String>) -> Option<Untrusted<String>> {
+        self.get(key).unwrap_or(Value.Null).as_text()
+    }
+
+    // The integer member `key`, if there is one and it fits an `Int`.
+    pub fn int(self, key: Untrusted<String>) -> Option<Int> {
+        self.get(key).unwrap_or(Value.Null).as_int()
+    }
+
+    // The boolean member `key`, if there is one.
+    pub fn bool(self, key: Untrusted<String>) -> Option<Bool> {
+        self.get(key).unwrap_or(Value.Null).as_bool()
+    }
+
+    // The items of the list member `key`, if there is one.
+    pub fn list(self, key: Untrusted<String>) -> Option<List<Value>> {
+        self.get(key).unwrap_or(Value.Null).as_list()
+    }
+
+    // The object member `key`, if there is one.
+    pub fn object(self, key: Untrusted<String>) -> Option<Value> {
+        match self.get(key) {
+            Some(Value.Object(members)) => Some(Value.Object(members))
+            _ => None
+        }
+    }
+}
+
+// ---- Schemas ---------------------------------------------------------
+
+// A description of the JSON a program accepts. Build one with `string`,
+// `integer`, `number`, `boolean`, `one_of`, `list` and `object`; its
+// fields are private.
+pub struct Schema { kind: Kind, description: String }
+
+// What a schema accepts. A string's choices are empty when any string
+// will do.
+enum Kind {
+    Text(List<String>),
+    Integer,
+    Number,
+    Boolean,
+    List(Schema),
+    Object(List<Field>),
+}
+
+// A field of an object schema: its name, its schema, and whether it is
+// required.
+pub struct Field { name: String, schema: Schema, required: Bool }
+
+impl Field {
+    // The field `name`, which every value must have.
+    pub fn required(name: String, schema: Schema) -> Field {
+        Field(name: name, schema: schema, required: true)
+    }
+
+    // The field `name`, which a value may leave out.
+    pub fn optional(name: String, schema: Schema) -> Field {
+        Field(name: name, schema: schema, required: false)
+    }
+}
+
+impl Schema {
+    // Any string.
+    pub fn string() -> Schema {
+        Schema(kind: Kind.Text([]), description: "")
+    }
+
+    // A number with no fractional part, such as `3`, `3.0` or `3e2`, of
+    // any size, as JSON Schema's `integer`. `Value.as_int` gives an `Int`
+    // only for one written without a fraction or an exponent that fits.
+    pub fn integer() -> Schema {
+        Schema(kind: Kind.Integer, description: "")
+    }
+
+    // Any number.
+    pub fn number() -> Schema {
+        Schema(kind: Kind.Number, description: "")
+    }
+
+    // `true` or `false`.
+    pub fn boolean() -> Schema {
+        Schema(kind: Kind.Boolean, description: "")
+    }
+
+    // A string that is one of `choices`.
+    pub fn one_of(choices: List<String>) -> Schema {
+        Schema(kind: Kind.Text(choices), description: "")
+    }
+
+    // A list whose every item matches `items`.
+    pub fn list(items: Schema) -> Schema {
+        Schema(kind: Kind.List(items), description: "")
+    }
+
+    // An object with `fields`, in order, and no other member.
+    pub fn object(fields: List<Field>) -> Schema {
+        Schema(kind: Kind.Object(fields), description: "")
+    }
+
+    // The same schema with a description, which tells a model or a client
+    // what the value means.
+    pub fn describe(self, text: String) -> Schema {
+        Schema(kind: self.kind, description: text)
+    }
+
+    // The schema as JSON Schema: `type`, then `description` when there is
+    // one, then `enum`, `items`, or an object's `properties`, `required`
+    // and `additionalProperties: false`.
+    pub fn to_value(self) -> Value {
+        let kind = match self.kind {
+            Kind.Text(_) => "string"
+            Kind.Integer => "integer"
+            Kind.Number => "number"
+            Kind.Boolean => "boolean"
+            Kind.List(_) => "array"
+            Kind.Object(_) => "object"
+        }
+        var members: List<Member> = [Member(key: "type", value: Value.Text(kind))]
+        if self.description != "" {
+            members.push(Member(key: "description", value: Value.Text(self.description)))
+        }
+        match self.kind {
+            Kind.Text(choices) => {
+                if choices.len() > 0 {
+                    var values: List<Value> = []
+                    for choice in choices {
+                        values.push(Value.Text(choice))
+                    }
+                    members.push(Member(key: "enum", value: Value.List(values)))
+                }
+            }
+            Kind.List(items) => members.push(Member(key: "items", value: items.to_value()))
+            Kind.Object(fields) => {
+                var properties: List<Member> = []
+                var required: List<Value> = []
+                for field in fields {
+                    properties.push(Member(key: field.name, value: field.schema.to_value()))
+                    if field.required {
+                        required.push(Value.Text(field.name))
+                    }
+                }
+                members.push(Member(key: "properties", value: Value.Object(properties)))
+                members.push(Member(key: "required", value: Value.List(required)))
+                members.push(Member(key: "additionalProperties", value: Value.Bool(false)))
+            }
+            _ => {}
+        }
+        Value.Object(members)
+    }
+
+    // `Ok` when `value` matches the schema, or the first violation, in
+    // document order. A member the schema does not name is a violation
+    // at its own path: `$.name` when its key is a plain name, or
+    // `$.(member 3)`, its place in the object counted from 1, when not.
+    pub fn validate(self, value: Value) -> Result<(), Violation> {
+        self.check(value, "$")
+    }
+
+    fn check(self, value: Value, path: String) -> Result<(), Violation> {
+        match self.kind {
+            Kind.Text(choices) => {
+                let text = match value.as_text() {
+                    Some(text) => text
+                    None => {
+                        return Schema.expected(path, "a string")
+                    }
+                }
+                if choices.len() == 0 {
+                    return Ok(())
+                }
+                for choice in choices {
+                    if text == choice {
+                        return Ok(())
+                    }
+                }
+                Schema.expected(path, "one of the schema's choices")
+            }
+            Kind.Integer => {
+                match value {
+                    Value.Number(number) => {
+                        if number.is_integral() {
+                            return Ok(())
+                        }
+                    }
+                    _ => {}
+                }
+                Schema.expected(path, "an integer")
+            }
+            Kind.Number => {
+                match value {
+                    Value.Number(_) => Ok(())
+                    _ => Schema.expected(path, "a number")
+                }
+            }
+            Kind.Boolean => {
+                match value.as_bool() {
+                    Some(_) => Ok(())
+                    None => Schema.expected(path, "a boolean")
+                }
+            }
+            Kind.List(schema) => {
+                let items = match value.as_list() {
+                    Some(items) => items
+                    None => {
+                        return Schema.expected(path, "a list")
+                    }
+                }
+                var index = 0
+                for item in items {
+                    let at = "{path}[{index}]"
+                    schema.check(item, at)?
+                    index = index + 1
+                }
+                Ok(())
+            }
+            Kind.Object(fields) => Schema.check_object(fields, value, path)
+        }
+    }
+
+    fn check_object(fields: List<Field>, value: Value, path: String) -> Result<(), Violation> {
+        let members = match value.as_members() {
+            Some(members) => members
+            None => {
+                return Schema.expected(path, "an object")
+            }
+        }
+        var place = 0
+        for member in members {
+            place = place + 1
+            var found = false
+            for field in fields {
+                if !found && member.key == field.name {
+                    found = true
+                    let at = "{path}.{field.name}"
+                    field.schema.check(member.value, at)?
+                }
+            }
+            if !found {
+                let name = match plain_name(member.key) {
+                    Some(name) => name
+                    None => "(member {place})"
+                }
+                return Schema.expected("{path}.{name}", "no member by this name")
+            }
+        }
+        for field in fields {
+            if field.required && !value.get(field.name).is_some() {
+                let at = "{path}.{field.name}"
+                return Schema.expected(at, "a required member")
+            }
+        }
+        Ok(())
+    }
+
+    fn expected(path: String, expected: String) -> Result<(), Violation> {
+        Err(Violation(path: path, expected: expected))
+    }
+}
+
+// `key`, when it is a plain name of 1 to 64 ASCII letters, digits, `_`
+// and `-`, which can stand in a violation's path as it is.
+fn plain_name(key: Untrusted<String>) -> Option<String> {
+    let bytes = key.to_bytes()
+    if bytes.len() == 0 || bytes.len() > 64 {
+        return None
+    }
+    for at in 0..bytes.len() {
+        let byte = bytes.at(at).to_int()
+        let letter = (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+        let digit = byte >= 48 && byte <= 57
+        if !letter && !digit && byte != 95 && byte != 45 {
+            return None
+        }
+    }
+    Some(vouch(key))
+}
+
+// The one trust assertion of `std.json`, for text its callers have
+// checked character by character: a number's text, which the parser
+// validated against JSON's grammar, and a key that `plain_name` found to
+// be a plain name. Neither can hold anything but the characters checked.
+fn vouch(checked: Untrusted<String>) -> String {
+    checked.assume_trusted()
+}
+
+// ---- Reading ---------------------------------------------------------
+
+// The state of `parse`: the input and the offset of the next byte.
+struct Parser { bytes: Untrusted<Bytes>, at: Int }
+
+impl Parser {
+    // The next byte, or -1 at the end.
+    fn peek(self) -> Int {
+        match self.bytes.get(self.at) {
+            Some(byte) => byte.to_int()
+            None => -1
+        }
+    }
+
+    fn fail<T>(self, reason: String) -> Result<T, Error> {
+        Err(Error(offset: self.at, reason: reason))
+    }
+
+    // The failure at the current byte: the input ends, or holds a byte
+    // that cannot come next.
+    fn unexpected<T>(self) -> Result<T, Error> {
+        if self.at >= self.bytes.len() {
+            self.fail("unexpected end of input")
+        } else {
+            self.fail("unexpected character")
+        }
+    }
+
+    fn skip_space(var self) {
+        while true {
+            let byte = self.peek()
+            if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
+                self.at = self.at + 1
+            } else {
+                return
+            }
+        }
+    }
+
+    // The value at the current byte, nested `depth` lists and objects
+    // deep.
+    fn value(var self, depth: Int) -> Result<Value, Error> {
+        let byte = self.peek()
+        if byte == 123 {
+            return self.object(depth + 1)
+        }
+        if byte == 91 {
+            return self.list(depth + 1)
+        }
+        if byte == 34 {
+            return Ok(Value.Text(self.string()?))
+        }
+        if byte == 45 || (byte >= 48 && byte <= 57) {
+            return self.number()
+        }
+        if self.word("true") {
+            return Ok(Value.Bool(true))
+        }
+        if self.word("false") {
+            return Ok(Value.Bool(false))
+        }
+        if self.word("null") {
+            return Ok(Value.Null)
+        }
+        self.unexpected()
+    }
+
+    // Whether `word` comes next; it is read if it does.
+    fn word(var self, word: String) -> Bool {
+        let expected = word.to_bytes()
+        let end = self.at + expected.len()
+        if end > self.bytes.len() {
+            return false
+        }
+        if self.bytes.slice(self.at, end) != expected {
+            return false
+        }
+        self.at = end
+        true
+    }
+
+    fn list(var self, depth: Int) -> Result<Value, Error> {
+        if depth > MAX_DEPTH {
+            return self.fail("nesting deeper than the limit")
+        }
+        self.at = self.at + 1
+        var items: List<Value> = []
+        self.skip_space()
+        if self.peek() == 93 {
+            self.at = self.at + 1
+            return Ok(Value.List(items))
+        }
+        while true {
+            self.skip_space()
+            items.push(self.value(depth)?)
+            self.skip_space()
+            let byte = self.peek()
+            if byte == 93 {
+                self.at = self.at + 1
+                return Ok(Value.List(items))
+            }
+            if byte != 44 {
+                return self.unexpected()
+            }
+            self.at = self.at + 1
+        }
+        self.unexpected()
+    }
+
+    fn object(var self, depth: Int) -> Result<Value, Error> {
+        if depth > MAX_DEPTH {
+            return self.fail("nesting deeper than the limit")
+        }
+        self.at = self.at + 1
+        var members: List<Member> = []
+        var keys: List<Untrusted<Bytes>> = []
+        var offsets: List<Int> = []
+        self.skip_space()
+        if self.peek() == 125 {
+            self.at = self.at + 1
+            return Ok(Value.Object(members))
+        }
+        while true {
+            self.skip_space()
+            if self.peek() != 34 {
+                return self.unexpected()
+            }
+            let offset = self.at
+            let key = self.string()?
+            self.skip_space()
+            if self.peek() != 58 {
+                return self.unexpected()
+            }
+            self.at = self.at + 1
+            self.skip_space()
+            let value = self.value(depth)?
+            members.push(Member(key: key, value: value))
+            keys.push(key.to_bytes())
+            offsets.push(offset)
+            self.skip_space()
+            let byte = self.peek()
+            if byte == 125 {
+                self.at = self.at + 1
+                return match first_duplicate(keys, offsets) {
+                    Some(at) => Err(Error(offset: at, reason: "duplicate key"))
+                    None => Ok(Value.Object(members))
+                }
+            }
+            if byte != 44 {
+                return self.unexpected()
+            }
+            self.at = self.at + 1
+        }
+        self.unexpected()
+    }
+
+    // The string that starts at the current byte, a `"`.
+    fn string(var self) -> Result<Untrusted<String>, Error> {
+        self.at = self.at + 1
+        var out = Bytes.new()
+        var run = self.at
+        while true {
+            let byte = self.peek()
+            if byte == -1 {
+                return self.fail("unexpected end of input")
+            }
+            if byte < 32 {
+                return self.fail("control character in a string")
+            }
+            if byte == 34 {
+                out.append(self.bytes.slice(run, self.at))
+                self.at = self.at + 1
+                return match out.to_text() {
+                    Some(text) => Ok(text)
+                    // Unreachable: the input is text, cut only at ASCII
+                    // bytes, and every escape adds a scalar value's UTF-8.
+                    None => self.fail("invalid text")
+                }
+            }
+            if byte == 92 {
+                out.append(self.bytes.slice(run, self.at))
+                out.append(self.escape()?)
+                run = self.at
+            } else {
+                self.at = self.at + 1
+            }
+        }
+        self.unexpected()
+    }
+
+    // The bytes the escape at the current byte, a `\`, stands for.
+    fn escape(var self) -> Result<Bytes, Error> {
+        let start = self.at
+        self.at = self.at + 1
+        let byte = self.peek()
+        self.at = self.at + 1
+        var out = Bytes.new()
+        if byte == 34 || byte == 92 || byte == 47 {
+            out.push(byte.to_u8())
+        } else if byte == 98 {
+            out.push(8)
+        } else if byte == 102 {
+            out.push(12)
+        } else if byte == 110 {
+            out.push(10)
+        } else if byte == 114 {
+            out.push(13)
+        } else if byte == 116 {
+            out.push(9)
+        } else if byte == 117 {
+            var point = self.hex4(start)?
+            if point >= 56320 && point <= 57343 {
+                return Err(Error(offset: start, reason: "invalid surrogate"))
+            }
+            if point >= 55296 && point <= 56319 {
+                if !self.word("\\u") {
+                    return Err(Error(offset: start, reason: "invalid surrogate"))
+                }
+                let low = self.hex4(start)?
+                if low < 56320 || low > 57343 {
+                    return Err(Error(offset: start, reason: "invalid surrogate"))
+                }
+                point = 65536 + (point - 55296) * 1024 + (low - 56320)
+            }
+            out.append(utf8(point))
+        } else {
+            return Err(Error(offset: start, reason: "invalid escape"))
+        }
+        Ok(out)
+    }
+
+    // The four hexadecimal digits at the current byte, as a number; an
+    // escape that starts at `start` when they are not.
+    fn hex4(var self, start: Int) -> Result<Int, Error> {
+        var value = 0
+        for _ in 0..4 {
+            let byte = self.peek()
+            var digit = -1
+            if byte >= 48 && byte <= 57 {
+                digit = byte - 48
+            } else if byte >= 65 && byte <= 70 {
+                digit = byte - 55
+            } else if byte >= 97 && byte <= 102 {
+                digit = byte - 87
+            }
+            if digit < 0 {
+                return Err(Error(offset: start, reason: "invalid escape"))
+            }
+            value = value * 16 + digit
+            self.at = self.at + 1
+        }
+        Ok(value)
+    }
+
+    // The number at the current byte, in JSON's grammar. Its text is
+    // vouched for once the grammar has checked every character, with any
+    // exponent written `e`.
+    fn number(var self) -> Result<Value, Error> {
+        let start = self.at
+        if self.peek() == 45 {
+            self.at = self.at + 1
+        }
+        let first = self.peek()
+        if first == 48 {
+            self.at = self.at + 1
+        } else if first >= 49 && first <= 57 {
+            let _ = self.digits()
+        } else {
+            return Err(Error(offset: start, reason: "invalid number"))
+        }
+        if self.peek() == 46 {
+            self.at = self.at + 1
+            if self.digits() == 0 {
+                return Err(Error(offset: start, reason: "invalid number"))
+            }
+        }
+        let e = self.peek()
+        if e == 101 || e == 69 {
+            self.at = self.at + 1
+            let sign = self.peek()
+            if sign == 43 || sign == 45 {
+                self.at = self.at + 1
+            }
+            if self.digits() == 0 {
+                return Err(Error(offset: start, reason: "invalid number"))
+            }
+        }
+        match self.bytes.slice(start, self.at).to_text() {
+            Some(text) => Ok(Value.Number(Number(text: vouch(text.replace("E", "e")))))
+            // Unreachable: every byte read is an ASCII digit, sign, `.`,
+            // `e` or `E`.
+            None => Err(Error(offset: start, reason: "invalid number"))
+        }
+    }
+
+    // Read the decimal digits at the current byte; how many there were.
+    fn digits(var self) -> Int {
+        var count = 0
+        while true {
+            let byte = self.peek()
+            if byte < 48 || byte > 57 {
+                return count
+            }
+            count = count + 1
+            self.at = self.at + 1
+        }
+        count
+    }
+}
+
+// `point`, a Unicode scalar value, encoded in UTF-8.
+fn utf8(point: Int) -> Bytes {
+    var out = Bytes.new()
+    if point < 128 {
+        out.push(point.to_u8())
+    } else if point < 2048 {
+        out.push((192 + point / 64).to_u8())
+        out.push((128 + point % 64).to_u8())
+    } else if point < 65536 {
+        out.push((224 + point / 4096).to_u8())
+        out.push((128 + point / 64 % 64).to_u8())
+        out.push((128 + point % 64).to_u8())
+    } else {
+        out.push((240 + point / 262144).to_u8())
+        out.push((128 + point / 4096 % 64).to_u8())
+        out.push((128 + point / 64 % 64).to_u8())
+        out.push((128 + point % 64).to_u8())
+    }
+    out
+}
+
+// The offset of the key that repeats an earlier one in its object, the
+// earliest such in the input, if any. The keys are sorted, so that a
+// hostile object with many keys costs time in proportion to n log n, not
+// n squared.
+fn first_duplicate(keys: List<Untrusted<Bytes>>, offsets: List<Int>) -> Option<Int> {
+    if keys.len() < 2 {
+        return None
+    }
+    let sorted = sort(keys)
+    var found = -1
+    var previous = sorted.at(0)
+    for index in sorted {
+        if index != previous && compare(keys.at(previous), keys.at(index)) == 0 {
+            let later = offsets.at(index)
+            if found < 0 || later < found {
+                found = later
+            }
+        }
+        previous = index
+    }
+    if found < 0 {
+        None
+    } else {
+        Some(found)
+    }
+}
+
+// The indices of `keys`, in the order of the keys' bytes. The sort is a
+// merge sort, stable, so equal keys keep the order they came in.
+fn sort(keys: List<Untrusted<Bytes>>) -> List<Int> {
+    var runs: List<List<Int>> = []
+    for index in 0..keys.len() {
+        runs.push([index])
+    }
+    while runs.len() > 1 {
+        var merged: List<List<Int>> = []
+        var at = 0
+        while at < runs.len() {
+            if at + 1 < runs.len() {
+                merged.push(merge(keys, runs.at(at), runs.at(at + 1)))
+            } else {
+                merged.push(runs.at(at))
+            }
+            at = at + 2
+        }
+        runs = merged
+    }
+    runs.at(0)
+}
+
+fn merge(keys: List<Untrusted<Bytes>>, left: List<Int>, right: List<Int>) -> List<Int> {
+    var out: List<Int> = []
+    var i = 0
+    var j = 0
+    while i < left.len() && j < right.len() {
+        if compare(keys.at(right.at(j)), keys.at(left.at(i))) < 0 {
+            out.push(right.at(j))
+            j = j + 1
+        } else {
+            out.push(left.at(i))
+            i = i + 1
+        }
+    }
+    while i < left.len() {
+        out.push(left.at(i))
+        i = i + 1
+    }
+    while j < right.len() {
+        out.push(right.at(j))
+        j = j + 1
+    }
+    out
+}
+
+// -1, 0 or 1 as `a` sorts before, with, or after `b`, byte by byte.
+fn compare(a: Untrusted<Bytes>, b: Untrusted<Bytes>) -> Int {
+    var at = 0
+    while at < a.len() && at < b.len() {
+        let x = a.at(at).to_int()
+        let y = b.at(at).to_int()
+        if x < y {
+            return -1
+        }
+        if x > y {
+            return 1
+        }
+        at = at + 1
+    }
+    if a.len() < b.len() {
+        -1
+    } else if a.len() > b.len() {
+        1
+    } else {
+        0
+    }
+}
+
+// ---- Writing ---------------------------------------------------------
+
+// The state of `encode`: the pieces of text written so far.
+struct Encoder { parts: List<Untrusted<String>> }
+
+impl Encoder {
+    fn value(var self, value: Value) {
+        match value {
+            Value.Null => self.parts.push("null")
+            Value.Bool(flag) => {
+                if flag {
+                    self.parts.push("true")
+                } else {
+                    self.parts.push("false")
+                }
+            }
+            Value.Number(number) => self.parts.push(number.text)
+            Value.Text(text) => self.string(text)
+            Value.List(items) => {
+                self.parts.push("[")
+                var first = true
+                for item in items {
+                    if !first {
+                        self.parts.push(",")
+                    }
+                    first = false
+                    self.value(item)
+                }
+                self.parts.push("]")
+            }
+            Value.Object(members) => {
+                self.parts.push("\{")
+                var first = true
+                for member in members {
+                    if !first {
+                        self.parts.push(",")
+                    }
+                    first = false
+                    self.string(member.key)
+                    self.parts.push(":")
+                    self.value(member.value)
+                }
+                self.parts.push("\}")
+            }
+        }
+    }
+
+    // `text` as a JSON string: quoted, with `"`, `\`, every character
+    // below U+0020, U+2028 and U+2029 escaped. Runs between escapes are
+    // copied whole.
+    fn string(var self, text: Untrusted<String>) {
+        self.parts.push("\"")
+        var run = 0
+        var at = 0
+        for c in text.chars() {
+            let escape = escape_of(c)
+            if escape != "" {
+                self.parts.push(text.slice(run, at))
+                self.parts.push(escape)
+                run = at + 1
+            }
+            at = at + 1
+        }
+        self.parts.push(text.slice(run, at))
+        self.parts.push("\"")
+    }
+}
+
+// The escape JSON writes for the character `c`, or `""` when it is
+// written as it is.
+fn escape_of(c: Untrusted<String>) -> String {
+    let bytes = c.to_bytes()
+    let first = bytes.at(0).to_int()
+    if first == 34 {
+        return "\\\""
+    }
+    if first == 92 {
+        return "\\\\"
+    }
+    if first < 32 {
+        return control_escape(first)
+    }
+    if bytes.len() == 3 && first == 226 && bytes.at(1).to_int() == 128 {
+        let last = bytes.at(2).to_int()
+        if last == 168 {
+            return "\\u2028"
+        }
+        if last == 169 {
+            return "\\u2029"
+        }
+    }
+    ""
+}
+
+// The escape JSON writes for the control character `byte`, below 0x20:
+// a short one where JSON has one, `\u00XX` otherwise.
+fn control_escape(byte: Int) -> String {
+    if byte == 8 {
+        return "\\b"
+    }
+    if byte == 9 {
+        return "\\t"
+    }
+    if byte == 10 {
+        return "\\n"
+    }
+    if byte == 12 {
+        return "\\f"
+    }
+    if byte == 13 {
+        return "\\r"
+    }
+    let high = HEX.at(byte / 16)
+    let low = HEX.at(byte % 16)
+    "\\u00{high}{low}"
+}
+
+// The hexadecimal digits, by value, in lower case.
+const HEX: List<String> = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]

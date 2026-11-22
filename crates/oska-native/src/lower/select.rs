@@ -34,7 +34,7 @@ impl Body<'_, '_> {
         if !matches!(expr.ty, Type::Bool | Type::Int(_)) {
             let call = Expr {
                 kind: ExprKind::Call {
-                    callee: Callee::Intrinsic("Bytes.ct_select".to_string()),
+                    callee: Callee::intrinsic("Bytes.ct_select"),
                     type_args: Vec::new(),
                     args: vec![cond.clone(), if_true.clone(), if_false.clone()],
                 },

@@ -1,0 +1,9 @@
+# The tools are listed once: a second list is the first, though specs now answers differently.
+> {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","tools":[{"name":"grow","description":"Change the tools.","inputSchema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}],"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"shifting","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"grow","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"grown"}],"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"shifting","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","tools":[{"name":"grow","description":"Change the tools.","inputSchema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}],"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"shifting","version":"1.0.0"}}}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"not allowed","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+< {"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Unknown tool: not allowed"}}

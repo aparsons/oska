@@ -61,7 +61,7 @@ pub fn conceal(value: Expr) -> ExprKind {
 fn intrinsic(name: String, args: Vec<Expr>, ty: Type, span: Span) -> Expr {
     Expr {
         kind: ExprKind::Call {
-            callee: Callee::Intrinsic(name),
+            callee: Callee::intrinsic(name),
             type_args: Vec::new(),
             args,
         },
@@ -93,7 +93,7 @@ pub fn expand(callee: &str, args: &[Expr], ty: &Type, span: Span) -> Option<Expr
 pub fn expand_mutating(callee: &str, receiver: &Place, args: &[Expr]) -> Option<ExprKind> {
     let method = callee.strip_prefix("Secret.")?;
     Some(ExprKind::MutatingCall {
-        callee: Callee::Intrinsic(format!("Bytes.{method}")),
+        callee: Callee::intrinsic(format!("Bytes.{method}")),
         type_args: Vec::new(),
         receiver: Place::Field {
             base: Box::new(receiver.clone()),
@@ -133,13 +133,13 @@ fn secret_call(
         // `Secret<String>`'s comparisons and `expose` stay intrinsics.
         (_, Some(Type::String)) | ("expose", _) => Err(args),
         ("constant_time_eq" | "constant_time_eq_secret", Some(_)) => Ok(ExprKind::Call {
-            callee: Callee::Intrinsic("Bytes.constant_time_eq".to_string()),
+            callee: Callee::intrinsic("Bytes.constant_time_eq".to_string()),
             type_args: Vec::new(),
             args: args.into_iter().map(reveal).collect(),
         }),
         // `Secret<Bytes>.len` is public.
         ("len", Some(inner)) => Ok(ExprKind::Call {
-            callee: Callee::Intrinsic(format!("{}.len", type_name(&inner))),
+            callee: Callee::intrinsic(format!("{}.len", type_name(&inner))),
             type_args: Vec::new(),
             args: args.into_iter().map(reveal).collect(),
         }),
@@ -147,7 +147,7 @@ fn secret_call(
             let Some(result) = result_inner else {
                 // A method that mutates a temporary `Secret<Bytes>`.
                 return Ok(ExprKind::Call {
-                    callee: Callee::Intrinsic(format!("{}.{method}", type_name(&inner))),
+                    callee: Callee::intrinsic(format!("{}.{method}", type_name(&inner))),
                     type_args: Vec::new(),
                     args: args.into_iter().map(reveal).collect(),
                 });

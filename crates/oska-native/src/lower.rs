@@ -91,8 +91,8 @@ use std::collections::{BTreeMap, HashMap};
 use oska_check::builtins;
 use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
-    secrets, trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program,
-    Stmt, Type,
+    secrets, trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, IntrinsicName,
+    Part, Program, Stmt, Type,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Frame, Span, MAX_FRAMES};
@@ -122,7 +122,7 @@ const COUNTED_MEMORY: [(&str, &str); 3] = [
 ];
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
-pub const GLOBALS: u32 = 51;
+pub const GLOBALS: u32 = 54;
 
 /// The runtime's writable word that holds the address of the call stack
 /// (`std.rt`'s "The call stack"), where each counted call stores the
@@ -141,7 +141,7 @@ const STEPS_WORD: u32 = GLOBALS;
 /// Under `--max-memory`, the word after the step counter's holds the
 /// report of the panic (`P0040`) that `std.rt`'s memory limit stops the
 /// program with; without the flag the word is not there. It is a fixed
-/// word, 52, so that `std.rt` can name it whether or not the step counter
+/// word, 55, so that `std.rt` can name it whether or not the step counter
 /// is there too.
 const MEMORY_REPORT_WORD: u32 = GLOBALS + 1;
 
@@ -1928,6 +1928,19 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.spend_output(line, 1, span)?;
                     self.call_runtime(function, args.clone(), span)?
                 }
+                Some(Prelude::Confirm) => {
+                    let &[_, summary, details] = args.as_slice() else {
+                        return Err(self.refuse(span, &format!("`{name}`")));
+                    };
+                    let question =
+                        self.call_runtime("approval_prompt", vec![summary, details], span)?;
+                    self.spend_output(question, 0, span)?;
+                    let mut with_question = args.clone();
+                    with_question.push(question);
+                    let result = self.call_runtime("approver_confirm", with_question, span)?;
+                    self.release(question, &Type::String)?;
+                    result
+                }
                 // The argument is the result: its reference passes on.
                 Some(Prelude::Identity) => match args.first() {
                     Some(&value) => return Ok(value),
@@ -2526,7 +2539,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     .collect();
                 (Callee::Function(user), type_args)
             }
-            None => (Callee::Intrinsic(format!("{tag}.to_string")), Vec::new()),
+            None => (Callee::intrinsic(format!("{tag}.to_string")), Vec::new()),
         };
         self.call(&callee, &type_args, vec![value], &Type::String, span)
     }
@@ -3390,12 +3403,12 @@ fn borrows_arguments(name: &str) -> bool {
 
 /// Whether `main` can be given a value of `ty` by `_start`: the word 0.
 /// Each of these keeps its state, if it has any (the arguments, the
-/// environment, the input buffer, the generator), in the runtime's
-/// globals.
+/// environment, the input buffer, the generator, the root budget), in the
+/// runtime's globals.
 fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),
-        "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Args"
+        "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Budget" | "Args"
             | "Fs" | "FsRead" | "FsWrite"
     ))
 }
@@ -3464,7 +3477,7 @@ fn secret_bytes_read(kind: ExprKind) -> ExprKind {
     {
         if let Some(method) = name.strip_prefix("Bytes.") {
             if matches!(intrinsics::prelude(name), Some(Prelude::ByteRead { .. })) {
-                *name = format!("{}{method}", intrinsics::SECRET_BYTES);
+                *name = IntrinsicName::new(format!("{}{method}", intrinsics::SECRET_BYTES));
             }
         }
     }
@@ -3587,11 +3600,11 @@ fn main(io: Stdout) {
     };
 
     /// Under `--max-memory` the writable data holds the memory limit's
-    /// report in word 52, past the step counter's word, whether or not the
+    /// report in word 55, past the step counter's word, whether or not the
     /// step counter is there; the call area is unchanged.
     #[test]
     fn max_memory_adds_its_report_word_after_the_step_counter() {
-        assert_eq!(super::MEMORY_REPORT_WORD, 52, "std.rt names word 52");
+        assert_eq!(super::MEMORY_REPORT_WORD, 55, "std.rt names word 55");
         for target in Target::ALL {
             let plain = lower(target, Limits::NONE);
             for max_steps in [None, Some(1000)] {

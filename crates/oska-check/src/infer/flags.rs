@@ -8,6 +8,11 @@
 //! that would be both is a failed flow. Edges are kept, so a value that
 //! turns out high later in the body still reaches every slot it flowed
 //! into.
+//!
+//! Every change to a store only adds: a variable, an edge, or a variable
+//! becoming high or pinned. The store logs each change, so the changes
+//! since the log was last cleared ([`Flags::forget`]) can be undone in
+//! reverse ([`Flags::undo`]), with no copy of the store.
 
 /// A flag: low (trusted, plain `fn`), high (untrusted, `cap fn`), or a
 /// variable of a [`Flags`] store.
@@ -31,16 +36,64 @@ struct FlagVar {
     from: Vec<u32>,
 }
 
+/// One change to a [`Flags`] store, logged so that it can be undone.
+#[derive(Debug, Clone, Copy)]
+enum Change {
+    /// A variable was added at the end.
+    Fresh,
+    /// The edge `x ≤ y` was added at the end of `x`'s `into` and `y`'s
+    /// `from`.
+    Edge(u32, u32),
+    /// The variable became high.
+    Raised(u32),
+    /// The variable became pinned.
+    Pinned(u32),
+}
+
 /// The flag variables of one body, for one kind of flag.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub(super) struct Flags {
     vars: Vec<FlagVar>,
+    /// The changes since the log was last cleared.
+    log: Vec<Change>,
+}
+
+/// The variables only: the log is bookkeeping, not what is known.
+impl std::fmt::Debug for Flags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Flags").field("vars", &self.vars).finish()
+    }
 }
 
 impl Flags {
+    /// Undo every change logged since the log was last cleared, latest
+    /// first, and clear it.
+    pub(super) fn undo(&mut self) {
+        let Flags { vars, log } = self;
+        for change in log.drain(..).rev() {
+            match change {
+                Change::Fresh => {
+                    vars.pop();
+                }
+                Change::Edge(x, y) => {
+                    vars[x as usize].into.pop();
+                    vars[y as usize].from.pop();
+                }
+                Change::Raised(v) => vars[v as usize].high = false,
+                Change::Pinned(v) => vars[v as usize].pinned = false,
+            }
+        }
+    }
+
+    /// Keep every change logged so far: clear the log.
+    pub(super) fn forget(&mut self) {
+        self.log.clear();
+    }
+
     /// A new variable, with nothing flowing into or out of it.
     pub(super) fn fresh(&mut self) -> u32 {
         self.vars.push(FlagVar::default());
+        self.log.push(Change::Fresh);
         self.vars.len() as u32 - 1
     }
 
@@ -84,6 +137,7 @@ impl Flags {
                 }
                 self.vars[x as usize].into.push(y);
                 self.vars[y as usize].from.push(x);
+                self.log.push(Change::Edge(x, y));
                 (!self.vars[x as usize].high || self.raise(y))
                     && (!self.vars[y as usize].pinned || self.pin(x))
             }
@@ -100,8 +154,8 @@ impl Flags {
             return false;
         }
         var.high = true;
-        let into = var.into.clone();
-        into.into_iter().all(|w| self.raise(w))
+        self.log.push(Change::Raised(v));
+        self.all_linked(v, |var| &var.into, Flags::raise)
     }
 
     /// `v`, and everything that flows into it, flows into a low slot.
@@ -114,7 +168,26 @@ impl Flags {
             return false;
         }
         var.pinned = true;
-        let from = var.from.clone();
-        from.into_iter().all(|w| self.pin(w))
+        self.log.push(Change::Pinned(v));
+        self.all_linked(v, |var| &var.from, Flags::pin)
+    }
+
+    /// Apply `step` to each variable in `v`'s `linked` list, in order,
+    /// until one fails. `step` may change the store, but not that list,
+    /// so the list is walked by index rather than copied.
+    fn all_linked(
+        &mut self,
+        v: u32,
+        linked: fn(&FlagVar) -> &Vec<u32>,
+        step: fn(&mut Flags, u32) -> bool,
+    ) -> bool {
+        let mut i = 0;
+        while let Some(&w) = linked(&self.vars[v as usize]).get(i) {
+            if !step(self, w) {
+                return false;
+            }
+            i += 1;
+        }
+        true
     }
 }

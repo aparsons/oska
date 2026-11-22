@@ -5,7 +5,9 @@
 //! - an integer of any type is its two's-complement bit pattern, sign- or
 //!   zero-extended to 64 bits as its type says; `Bool` is 0 or 1; `()` is
 //!   0; a capability carries no state, so it is 0 too, except a
-//!   confined one ([`is_confined`]);
+//!   confined one ([`is_confined`]) and a `Budget` that `limit` made,
+//!   which is the address of its counters in `std.rt` (never counted:
+//!   `std.rt`'s "Budgets");
 //! - an enum whose every variant has no fields is its variant's index;
 //! - anything else (text, a struct, an enum with fields) is the address
 //!   of a heap **object**, whose first word is its reference count

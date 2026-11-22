@@ -15,6 +15,14 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "warn"
 
+# Release builds of `oskac` use fat link-time optimisation and one codegen
+# unit: a faster interpreter and compiler and a smaller binary, for a longer
+# release build. Measured in docs/research/2026-11-memcpy-replacement.md and
+# docs/research/2026-11-musl-oskac-performance.md (spec #577).
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 # Test steps are dominated by running the interpreter and compiler these
 # crates hold, so build them optimised in dev and test builds (`test`
 # inherits `dev`). Debug assertions and overflow checks stay on; release

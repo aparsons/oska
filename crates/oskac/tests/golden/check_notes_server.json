@@ -1,0 +1,25 @@
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"<Notes as std.mcp.Toolset>.specs","authority":["DirRead","DirWrite"],"via":[{"param":"self","capabilities":["DirRead","DirWrite"]}],"pure":false},
+    {"name":"<Notes as std.mcp.Toolset>.call","authority":["DirRead","DirWrite"],"via":[{"param":"self","capabilities":["DirRead","DirWrite"]}],"pure":false,"toolset":{"split":true,"tools":[{"name":"list_notes","arm":true,"authority":["DirRead"],"via":[{"param":"self.notes","capabilities":["DirRead"]}],"pure":false,"protocol_stream":false},{"name":"read_note","arm":true,"authority":["DirRead"],"via":[{"param":"self.notes","capabilities":["DirRead"]}],"pure":false,"protocol_stream":false},{"name":"save_note","arm":true,"authority":["DirWrite"],"via":[{"param":"self.drafts","capabilities":["DirWrite"]}],"pure":false,"protocol_stream":false}],"default":{"name":null,"arm":false,"authority":[],"via":[],"pure":true,"protocol_stream":false},"arms_without_spec":[],"specs_checked":true}},
+    {"name":"list","authority":["DirRead"],"via":[{"param":"notes","capabilities":["DirRead"]}],"pure":false},
+    {"name":"read","authority":["DirRead"],"via":[{"param":"notes","capabilities":["DirRead"]}],"pure":false},
+    {"name":"save","authority":["DirWrite"],"via":[{"param":"drafts","capabilities":["DirWrite"]}],"pure":false},
+    {"name":"main","authority":["Fs","Stdin","Stdout"],"via":[{"param":"fs","capabilities":["Fs"]},{"param":"stdin","capabilities":["Stdin"]},{"param":"stdout","capabilities":["Stdout"]}],"pure":false},
+    {"name":"server","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false},
+    {"name":"reply","authority":["DirRead","DirWrite"],"via":[{"param":"tools","capabilities":["DirRead","DirWrite"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [
+    {"function":"main","method":"read_only","path":"examples/notes_server.osk","span":{"start":3282,"end":3296},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3282,"end":3317},"source":"FsRead","result":"DirRead","root":"notes"},
+    {"function":"main","method":"write_only","path":"examples/notes_server.osk","span":{"start":3335,"end":3350},"source":"Fs","result":"FsWrite","root":null},
+    {"function":"main","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3335,"end":3372},"source":"FsWrite","result":"DirWrite","root":"drafts"},
+    {"function":"server","method":"read_only","path":"examples/notes_server.osk","span":{"start":3863,"end":3877},"source":"Fs","result":"FsRead","root":null},
+    {"function":"server","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3863,"end":3898},"source":"FsRead","result":"DirRead","root":"notes"},
+    {"function":"server","method":"write_only","path":"examples/notes_server.osk","span":{"start":3908,"end":3923},"source":"Fs","result":"FsWrite","root":null},
+    {"function":"server","method":"restrict_to","path":"examples/notes_server.osk","span":{"start":3908,"end":3945},"source":"FsWrite","result":"DirWrite","root":"drafts"}
+  ],
+  "verdict": "ok"
+}

@@ -18,7 +18,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics::Intrinsic::{self, Mutating, Plain};
-use crate::intrinsics::{lookup, Table};
+use crate::intrinsics::{lookup, Args, Table};
 use crate::memory;
 use crate::panics::Panic;
 use crate::value::Value;
@@ -27,7 +27,7 @@ use crate::value::Value;
 pub const INTRINSICS: Table = &[
     (
         "Secret.new",
-        Plain(|_, mut args, span| seal(args.remove(0), span)),
+        Plain(|_, args, span| seal(args.swap_remove(0), span)),
     ),
     ("Secret.rotl", Plain(|h, a, s| lifted("rotl", h, a, s))),
     ("Secret.rotr", Plain(|h, a, s| lifted("rotr", h, a, s))),
@@ -161,8 +161,10 @@ fn public(method: &str, value: &Value) -> Intrinsic {
 
 /// The secret method `method` on `args`: the public type's method on the
 /// values inside, made secret.
-fn lifted(method: &str, host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let args: Vec<Value> = args.iter().map(open).collect();
+fn lifted(method: &str, host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    for arg in args.iter_mut() {
+        *arg = open(arg);
+    }
     let Plain(implementation) = public(method, &args[0]) else {
         unreachable!("`{method}` needs only the host")
     };
@@ -174,7 +176,7 @@ fn lifted(method: &str, host: &mut dyn Host, args: Vec<Value>, span: Span) -> Re
 fn mutated(
     method: &str,
     receiver: &mut Value,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     let Value::Struct { fields, .. } = receiver else {
@@ -184,5 +186,8 @@ fn mutated(
     let Mutating(implementation) = public(method, inside) else {
         unreachable!("`{method}` is a mutating method")
     };
-    implementation(inside, args.iter().map(open).collect(), span)
+    for arg in args.iter_mut() {
+        *arg = open(arg);
+    }
+    implementation(inside, args, span)
 }

@@ -15,30 +15,23 @@ pub const PRIMITIVES: &[&str] = &[
 
 /// A `std.*` module, which a module sees only once it imports it with
 /// `use`. Add a module with an entry here and a `std/*.osk` file.
+///
+/// Most are prelude declarations, written in prelude mode like
+/// `prelude.osk`, whose functions the runtime implements. A module
+/// [`written in Oska`](StdModule::written_in_oska), such as `std.json`, is
+/// ordinary Oska source instead: a program that imports it is checked and
+/// run with the module's text as one more module of the program
+/// (`link.rs`), so the checker, both backends and the differential suite
+/// cover it as they cover user code.
 pub struct StdModule {
     /// The path written after `use`, such as `std.sql`.
     pub path: &'static str,
     pub source: &'static str,
-    /// Whether its file is declarations or Oska source.
-    pub kind: StdKind,
     /// The sink literal this module provides, if it is a sink module.
     pub sink_literal: Option<SinkLiteral>,
-}
-
-/// What a `std` module's file holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StdKind {
-    /// Prelude declarations, written in prelude mode like `prelude.osk`,
-    /// whose runtime, if any, is the toolchain's own (`std.html`'s
-    /// intrinsics). Add items by appending declarations to its file.
-    Declarations,
-    /// Oska source, with bodies, checked under the rules for user code.
-    /// A program that imports one, directly or through another, has it
-    /// linked in as a module of its own (`link.rs`), so both backends run
-    /// it as Oska, with no intrinsics and no `E0371`. Its items are
-    /// private unless `pub`, and its own `use std.…` imports resolve the
-    /// same way.
-    Source,
+    /// The module is Oska source with bodies, parsed as user code, not
+    /// prelude declarations.
+    pub written_in_oska: bool,
 }
 
 /// A sink literal's tag and the type of a literal with that tag: with
@@ -54,49 +47,80 @@ pub static STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "std.sql",
         source: include_str!("std/sql.osk"),
-        kind: StdKind::Declarations,
         sink_literal: Some(SinkLiteral {
             tag: "sql",
             ty: "SqlLiteral",
         }),
+        written_in_oska: false,
     },
     StdModule {
         path: "std.proc",
         source: include_str!("std/proc.osk"),
-        kind: StdKind::Declarations,
         sink_literal: None,
+        written_in_oska: false,
     },
     StdModule {
         path: "std.html",
         source: include_str!("std/html.osk"),
-        kind: StdKind::Declarations,
         sink_literal: None,
+        written_in_oska: false,
     },
     StdModule {
         path: "std.sha2",
         source: include_str!("std/sha2.osk"),
-        kind: StdKind::Source,
         sink_literal: None,
+        written_in_oska: true,
     },
     StdModule {
         path: "std.hmac",
         source: include_str!("std/hmac.osk"),
-        kind: StdKind::Source,
         sink_literal: None,
+        written_in_oska: true,
     },
     StdModule {
         path: "std.ed25519",
         source: include_str!("std/ed25519.osk"),
-        kind: StdKind::Source,
         sink_literal: None,
+        written_in_oska: true,
     },
     StdModule {
         path: "std.sshsig",
         source: include_str!("std/sshsig.osk"),
-        kind: StdKind::Source,
         sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.json",
+        source: include_str!("std/json.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.mcp",
+        source: include_str!("std/mcp.osk"),
+        sink_literal: None,
+        written_in_oska: true,
     },
 ];
+
+/// The `std` modules written in Oska that `module` imports, in the order
+/// of their first `use`.
+pub fn oska_std_imports(module: &Module) -> Vec<&'static StdModule> {
+    let mut found: Vec<&'static StdModule> = Vec::new();
+    for item in &module.items {
+        let ItemKind::Use(u) = &item.kind else {
+            continue;
+        };
+        let path: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
+        let Some(std) = std_module(&path.join(".")) else {
+            continue;
+        };
+        if std.written_in_oska && !found.iter().any(|m| m.path == std.path) {
+            found.push(std);
+        }
+    }
+    found
+}
 
 /// The `std.*` module at `path`.
 pub fn std_module(path: &str) -> Option<&'static StdModule> {
@@ -161,12 +185,6 @@ impl StdModule {
         self.module().items.iter().filter_map(item_name).collect()
     }
 
-    /// The file a report names for the module's code: `std/sha2.osk` for
-    /// `std.sha2`, under the toolchain's `std` directory.
-    pub fn file(&self) -> String {
-        format!("std/{}.osk", self.name())
-    }
-
     /// The name a plain `use` binds: the path's last segment, as `sql`
     /// for `std.sql`.
     pub fn name(&self) -> &'static str {
@@ -218,17 +236,23 @@ mod tests {
     #[test]
     fn every_name_in_each_std_module_resolves_once_imported() {
         for std in super::STD_MODULES {
-            // The importer binds the module's own name and, as the module
-            // does, every module it imports, so a type such as
-            // `ed25519.PublicKey` resolves in a module that uses one.
-            let imports: String = std
-                .source
-                .lines()
-                .filter(|line| line.starts_with("use "))
-                .map(|line| format!("{line}\n"))
-                .collect();
-            let importer = oska_syntax::parse_module(&format!("use {}\n{imports}", std.path))
-                .expect("a use parses");
+            // A module written in Oska sees the `std` modules it imports,
+            // as a program that imports it does; it is also checked whole,
+            // linked with them, as that program is.
+            let mut uses = vec![std.path];
+            if std.written_in_oska {
+                let report = crate::check_module(std.source);
+                assert!(
+                    report.diagnostics.is_empty(),
+                    "{}: {:#?}",
+                    std.path,
+                    report.diagnostics
+                );
+                let ast = oska_syntax::parse_module(std.source).expect("the module parses");
+                uses.extend(super::oska_std_imports(&ast).iter().map(|m| m.path));
+            }
+            let importer: String = uses.iter().map(|path| format!("use {path}\n")).collect();
+            let importer = oska_syntax::parse_module(&importer).expect("a use parses");
             let mut diagnostics = Vec::new();
             let decls = Decls::collect(&importer, &mut diagnostics);
             resolve::prelude_module(std.module(), &decls, &mut diagnostics);

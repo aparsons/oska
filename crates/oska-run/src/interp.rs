@@ -20,19 +20,23 @@
 //! checker's locals: push exactly where the checker binds.
 
 use std::cell::Cell;
+use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use oska_check::builtins::{self, TraitMethod};
 use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
-    self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
+    self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt, Visit,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Frame as StackFrame, Frames, Span, MAX_FRAMES};
 
+use crate::approval::Approvals;
+use crate::budget::Budgets;
 use crate::host::Host;
-use crate::intrinsics::{self, Intrinsic};
+use crate::intrinsics::{self, Args, Intrinsic};
 use crate::memory;
 use crate::ops;
 use crate::panics::{codes, Panic};
@@ -116,6 +120,10 @@ pub struct Interpreter<'p, 'h> {
     host: &'h mut dyn Host,
     /// The scopes and tasks of the run (`tasks.rs`).
     pub(crate) tasks: Tasks,
+    /// The budgets and reservations of the run (`budget.rs`).
+    pub(crate) budgets: Budgets,
+    /// The approvals of the run (`approval.rs`).
+    pub(crate) approvals: Approvals,
     /// The calls of functions and closures running, outermost first:
     /// their depth, and a panic's call stack ([`Interpreter::stamped`]).
     calls: Vec<Call<'p>>,
@@ -137,6 +145,47 @@ pub struct Interpreter<'p, 'h> {
     /// Under `--timeout`, its deadline. Boxed, so that a run without it
     /// keeps the interpreter as small as it was.
     deadline: Option<Box<Deadline>>,
+    /// What calls have looked up so far, and the buffers intrinsic calls
+    /// pass their arguments in. Boxed, so that the interpreter stays as
+    /// small as it was: unboxed, it made the musl build's `lists`
+    /// benchmark about 12% slower, with the same instructions (#505).
+    calls_seen: Box<CallCache<'p>>,
+    /// The texts `String.chars` gives ASCII characters, shared (#501).
+    pub(crate) ascii_texts: crate::data::AsciiTexts,
+    /// The texts of the string literals evaluated so far, each made once.
+    literals: memory::Literals,
+    /// Keeps the type and variant names values share for the run
+    /// ([`memory::shared_name`]).
+    _names: memory::Names,
+}
+
+/// What calls have looked up so far, so that each is looked up once, and
+/// the buffers intrinsic calls pass their arguments in (#505).
+#[derive(Default)]
+struct CallCache<'p> {
+    /// Each function of the program called so far, by name, with the
+    /// room a call gives its arguments' `Vec` ([`room`]).
+    functions: HashMap<&'p str, (&'p Function, usize)>,
+    /// What each trait method called so far reaches, by trait, method,
+    /// and the receiver's runtime type tag ([`Interpreter::dispatch`]).
+    traits: HashMap<String, HashMap<String, HashMap<String, Target<'p>>>>,
+    /// Argument buffers no call is using: an intrinsic call takes one,
+    /// and gives it back empty, so a call allocates none once the pool
+    /// holds one for each intrinsic call running at once.
+    buffers: Vec<Args>,
+    /// A text an interpolation builds in, kept between interpolations so
+    /// that each does not grow a `String` of its own; an interpolation
+    /// inside another's hole finds it taken and builds in a new one.
+    text: String,
+}
+
+/// What a call reaches once its callee is resolved.
+#[derive(Clone, Copy)]
+enum Target<'p> {
+    /// A function of the program, with the room a call gives its
+    /// arguments' `Vec` ([`room`]).
+    Function(&'p Function, usize),
+    Intrinsic(Intrinsic),
 }
 
 /// The name of a frame of a panic's call stack: a function's, borrowed
@@ -194,6 +243,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             program,
             host,
             tasks: Tasks::default(),
+            budgets: Budgets::default(),
+            approvals: Approvals::default(),
             calls: Vec::new(),
             root: FrameName::Program("main"),
             caller_override: None,
@@ -201,6 +252,10 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             output_written: 0,
             fuel: u64::MAX,
             deadline: None,
+            calls_seen: Box::default(),
+            ascii_texts: crate::data::AsciiTexts::default(),
+            literals: memory::Literals::default(),
+            _names: memory::Names::start(),
         }
     }
 
@@ -464,18 +519,25 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     pub fn call(
         &mut self,
         function: &Function,
-        args: Vec<Value>,
+        mut args: Vec<Value>,
         span: Span,
     ) -> Result<Value, Panic> {
-        let mut args = args.into_iter();
-        let receiver = if function.receiver { args.next() } else { None };
-        let (value, _) = self.call_with(function, receiver, args.collect(), span)?;
+        // Taken out of the arguments' own `Vec`, which then becomes the
+        // frame (`call_with`): one `Vec` per call.
+        let receiver = if function.receiver && !args.is_empty() {
+            Some(args.remove(0))
+        } else {
+            None
+        };
+        let (value, _) = self.call_with(function, receiver, args, span)?;
         Ok(value)
     }
 
     /// Run a test's `body` with `t`, its `TestContext`, in slot 0. Only a
     /// panic, an assertion failure included, unwinds out of it.
     pub fn run_test(&mut self, body: &Expr, t: Value) -> Result<(), Panic> {
+        self.budgets.for_test();
+        self.approvals.for_test();
         let mut frame = Frame {
             slots: vec![t],
             receiver: None,
@@ -650,7 +712,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     #[inline(never)]
     fn eval_other(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, Unwind> {
         match &expr.kind {
-            ExprKind::Str(text) => Ok(memory::text(text, expr.span)?),
+            ExprKind::Str(text) => Ok(self.literals.text(text, expr.span)?),
             ExprKind::Interpolated(parts) => self.interpolated(parts, expr.span, frame),
             ExprKind::SelfValue => Ok(frame
                 .receiver
@@ -800,8 +862,25 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         span: Span,
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
-        let values = self.eval_all(args, frame)?;
-        Ok(self.call_callee(callee, values, span)?)
+        match callee {
+            Callee::Function(name) => {
+                let (function, values) = self.function_args(name, 0, args, frame)?;
+                Ok(self.call_function(function, values, span)?)
+            }
+            Callee::Intrinsic(name) => {
+                let intrinsic = intrinsics::resolved(name);
+                let mut buffer = self.buffer();
+                let result = match self.eval_onto(&mut buffer, args, frame) {
+                    Ok(()) => self
+                        .run_intrinsic(intrinsic, &mut buffer, span)
+                        .map_err(Unwind::from),
+                    Err(unwind) => Err(unwind),
+                };
+                self.give_back(buffer);
+                result
+            }
+            Callee::Trait { .. } => self.trait_call_expr(callee, args, span, frame),
+        }
     }
 
     /// A call of the mutating method `callee` on `receiver`, made at
@@ -817,7 +896,34 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         span: Span,
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
-        let args = self.eval_all(args, frame)?;
+        if let Callee::Intrinsic(name) = callee {
+            let Intrinsic::Mutating(run) = intrinsics::resolved(name) else {
+                unreachable!(
+                    "the checker calls only a `var self` method on a place, and every \
+                     prelude `var self` method is a mutating intrinsic"
+                )
+            };
+            let mut buffer = self.buffer();
+            let result = match self.eval_onto(&mut buffer, args, frame) {
+                Ok(()) => {
+                    let before = metered_place(receiver).then(|| field_path(receiver, frame));
+                    let place = place_mut(receiver, frame);
+                    let value = run(place, &mut buffer, span);
+                    if let Some(before) = before {
+                        relocate_path(receiver, frame, &before);
+                    }
+                    value.map_err(Unwind::from)
+                }
+                Err(unwind) => Err(unwind),
+            };
+            self.give_back(buffer);
+            return result;
+        }
+        let args = match callee {
+            // The receiver is not among `args`, and takes no slot.
+            Callee::Function(name) => self.function_args(name, 1, args, frame)?.1,
+            _ => self.eval_all(args, frame)?,
+        };
         let before = metered_place(receiver).then(|| field_path(receiver, frame));
         let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
         let value = self.call_mutating(callee, &mut taken, args, span);
@@ -851,7 +957,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             _ => {
                 let error = fields[0].clone();
                 let error = match convert {
-                    Some(convert) => self.call_callee(convert, vec![error], span)?,
+                    Some(convert) => self.call_with_one(convert, error, span)?,
                     None => error,
                 };
                 debug_assert_eq!(&*ty, builtins::RESULT);
@@ -946,13 +1052,149 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         })
     }
 
-    /// Each of `exprs`, in order.
+    /// Each of `exprs`, in order, in a `Vec` of exactly their number: a
+    /// list or struct literal's, which `--max-memory` charges by its
+    /// capacity.
     fn eval_all(&mut self, exprs: &[Expr], frame: &mut Frame) -> Result<Vec<Value>, Unwind> {
         let mut values = Vec::with_capacity(exprs.len());
         for expr in exprs {
             values.push(self.eval(expr, frame)?);
         }
         Ok(values)
+    }
+
+    /// Each of `exprs`, in order, pushed onto `values`.
+    fn eval_onto(
+        &mut self,
+        values: &mut Vec<Value>,
+        exprs: &[Expr],
+        frame: &mut Frame,
+    ) -> Result<(), Unwind> {
+        for expr in exprs {
+            values.push(self.eval(expr, frame)?);
+        }
+        Ok(())
+    }
+
+    /// A call of the trait method `callee`, made at `span`: its receiver,
+    /// the first of `exprs`, is evaluated first, to find what the call
+    /// reaches, and the rest go straight into the `Vec` that wants them.
+    #[inline(never)]
+    fn trait_call_expr(
+        &mut self,
+        callee: &Callee,
+        exprs: &[Expr],
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        let (first, rest) = exprs.split_first().expect("a trait method has a receiver");
+        let receiver = self.eval(first, frame)?;
+        match self.dispatch(callee, &receiver) {
+            Target::Function(function, room) => {
+                let mut values = Vec::with_capacity(room.max(exprs.len()));
+                values.push(receiver);
+                self.eval_onto(&mut values, rest, frame)?;
+                Ok(self.call_function(function, values, span)?)
+            }
+            Target::Intrinsic(intrinsic) => {
+                let mut buffer = self.buffer();
+                buffer.push(receiver);
+                let result = match self.eval_onto(&mut buffer, rest, frame) {
+                    Ok(()) => self
+                        .run_intrinsic(intrinsic, &mut buffer, span)
+                        .map_err(Unwind::from),
+                    Err(unwind) => Err(unwind),
+                };
+                self.give_back(buffer);
+                result
+            }
+        }
+    }
+
+    /// An argument buffer for an intrinsic call: one from the pool, or a
+    /// new one. Give it back with [`Interpreter::give_back`].
+    fn buffer(&mut self) -> Args {
+        self.calls_seen
+            .buffers
+            .pop()
+            .unwrap_or_else(|| Args(Vec::new()))
+    }
+
+    /// Return `buffer` to the pool, emptied: what the intrinsic left in
+    /// it is dropped now, as it was when an intrinsic owned its `Vec`.
+    fn give_back(&mut self, mut buffer: Args) {
+        buffer.clear();
+        self.calls_seen.buffers.push(buffer);
+    }
+
+    /// Run `intrinsic` with `args`, the receiver first for a method,
+    /// made at `span`. A mutating method runs on its receiver taken out
+    /// of `args`, a temporary such as a call's result: the change is
+    /// dropped with it.
+    fn run_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        args: &mut Args,
+        span: Span,
+    ) -> Result<Value, Panic> {
+        match intrinsic {
+            Intrinsic::Plain(run) => run(self.host, args, span),
+            Intrinsic::HigherOrder(run) => run(self, args, span),
+            Intrinsic::Mutating(run) => {
+                let mut receiver = args.remove(0);
+                run(&mut receiver, args, span)
+            }
+        }
+    }
+
+    /// Call `callee` with the one argument `arg`, made at `span`: a
+    /// `Display` implementation in an interpolation, or a `From`
+    /// conversion behind `?`. The argument goes straight into the `Vec`
+    /// the callee wants.
+    fn call_with_one(&mut self, callee: &Callee, arg: Value, span: Span) -> Result<Value, Panic> {
+        let target = match callee {
+            Callee::Function(name) => {
+                let (function, room) = self.function(name);
+                Target::Function(function, room)
+            }
+            Callee::Intrinsic(name) => Target::Intrinsic(intrinsics::resolved(name)),
+            Callee::Trait { .. } => self.dispatch(callee, &arg),
+        };
+        match target {
+            Target::Function(function, room) => {
+                let mut values = Vec::with_capacity(room.max(1));
+                values.push(arg);
+                self.call_function(function, values, span)
+            }
+            Target::Intrinsic(intrinsic) => {
+                let mut buffer = self.buffer();
+                buffer.push(arg);
+                let result = self.run_intrinsic(intrinsic, &mut buffer, span);
+                self.give_back(buffer);
+                result
+            }
+        }
+    }
+
+    /// The program function `name`, and the values of the arguments
+    /// `exprs` of a call of it, in a `Vec` with room for its frame
+    /// ([`room`]), less `taken`: the slots of the room that are not
+    /// among `exprs`, `1` for a mutating method's receiver. Out of line,
+    /// so a call of an intrinsic does not carry it.
+    #[inline(never)]
+    fn function_args(
+        &mut self,
+        name: &str,
+        taken: usize,
+        exprs: &[Expr],
+        frame: &mut Frame,
+    ) -> Result<(&'p Function, Vec<Value>), Unwind> {
+        let (function, room) = self.function(name);
+        let mut values = Vec::with_capacity(room.saturating_sub(taken).max(exprs.len()));
+        for expr in exprs {
+            values.push(self.eval(expr, frame)?);
+        }
+        Ok((function, values))
     }
 
     /// A block: its statements, then its value. Its slots are popped
@@ -1107,12 +1349,20 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         }
     }
 
-    /// The function the program defines as `name`.
-    fn function(&self, name: &str) -> &'p Function {
-        self.program
+    /// The function the program defines as `name`, with the room a call
+    /// gives its arguments ([`room`]).
+    fn function(&mut self, name: &str) -> (&'p Function, usize) {
+        if let Some(&found) = self.calls_seen.functions.get(name) {
+            return found;
+        }
+        let (name, function) = self
+            .program
             .functions
-            .get(name)
-            .expect("`crate::run` refuses a call to a function the program lacks")
+            .get_key_value(name)
+            .expect("`crate::run` refuses a call to a function the program lacks");
+        let found = (function, room(function));
+        self.calls_seen.functions.insert(name, found);
+        found
     }
 
     /// Call `callee` with `args`, the receiver first for a method. Only a
@@ -1125,29 +1375,40 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     ) -> Result<Value, Panic> {
         match callee {
             Callee::Function(name) => {
-                let function = self.function(name);
-                self.enter(FrameName::Program(&function.name), span)?;
-                let result = self.call(function, args, span);
-                let result = result.map_err(|panic| self.stamped(panic));
-                self.leave();
-                result
+                let (function, room) = self.function(name);
+                let mut args = args;
+                args.reserve_exact(room.saturating_sub(args.len()));
+                self.call_function(function, args, span)
             }
-            Callee::Intrinsic(name) => match intrinsic(name) {
-                Intrinsic::Plain(run) => run(self.host, args, span),
-                Intrinsic::HigherOrder(run) => run(self, args, span),
-                Intrinsic::Mutating(run) => {
-                    // A mutating method called on a temporary, such as a
-                    // call's result: the change is dropped with it.
-                    let mut args = args.into_iter();
-                    let mut receiver = args.next().expect("a method's receiver");
-                    run(&mut receiver, args.collect(), span)
+            Callee::Intrinsic(name) => {
+                self.run_intrinsic(intrinsics::resolved(name), &mut Args(args), span)
+            }
+            Callee::Trait { .. } => match self.dispatch(callee, &args[0]) {
+                Target::Function(function, room) => {
+                    let mut args = args;
+                    args.reserve_exact(room.saturating_sub(args.len()));
+                    self.call_function(function, args, span)
+                }
+                Target::Intrinsic(intrinsic) => {
+                    self.run_intrinsic(intrinsic, &mut Args(args), span)
                 }
             },
-            Callee::Trait { .. } => {
-                let callee = self.dispatch(callee, &args[0]);
-                self.call_callee(&callee, args, span)
-            }
         }
+    }
+
+    /// Call the program's `function` with `args`, the receiver first for
+    /// a method, made at `span`.
+    fn call_function(
+        &mut self,
+        function: &'p Function,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Panic> {
+        self.enter(FrameName::Program(&function.name), span)?;
+        let result = self.call(function, args, span);
+        let result = result.map_err(|panic| self.stamped(panic));
+        self.leave();
+        result
     }
 
     /// The implementation `callee` reaches for `receiver`: a trait's
@@ -1155,17 +1416,40 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// function `<Tag as Trait>.method` when the program has one and the
     /// prelude's intrinsic `Tag.method` otherwise. Any other callee is
     /// already resolved.
-    fn dispatch(&self, callee: &Callee, receiver: &Value) -> Callee {
+    ///
+    /// What it finds is kept by trait, method and tag, so a call looks it
+    /// up, and makes its names, only the first time.
+    fn dispatch(&mut self, callee: &Callee, receiver: &Value) -> Target<'p> {
         let Callee::Trait { trait_name, method } = callee else {
-            return callee.clone();
+            unreachable!("only a trait method is dispatched")
         };
         let tag = receiver.type_tag();
-        let name = program::trait_method(tag, trait_name, method);
-        if self.program.functions.contains_key(&name) {
-            Callee::Function(name)
-        } else {
-            Callee::Intrinsic(format!("{tag}.{method}"))
+        let seen = self
+            .calls_seen
+            .traits
+            .get(trait_name.as_str())
+            .and_then(|methods| methods.get(method.as_str()))
+            .and_then(|tags| tags.get(tag));
+        if let Some(&target) = seen {
+            return target;
         }
+        let name = program::trait_method(tag, trait_name, method);
+        let target = if self.program.functions.contains_key(&name) {
+            let (function, room) = self.function(&name);
+            Target::Function(function, room)
+        } else {
+            let intrinsic = intrinsics::lookup(&format!("{tag}.{method}"))
+                .expect("`crate::run` refuses a call to a missing intrinsic");
+            Target::Intrinsic(intrinsic)
+        };
+        self.calls_seen
+            .traits
+            .entry(trait_name.clone())
+            .or_default()
+            .entry(method.clone())
+            .or_default()
+            .insert(tag.to_string(), target);
+        target
     }
 
     /// Call the trait method `method` on `receiver`, through the
@@ -1181,8 +1465,22 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             trait_name: method.trait_name.to_string(),
             method: method.method.to_string(),
         };
-        let args = std::iter::once(receiver).chain(args).collect();
-        self.call_callee(&callee, args, span)
+        match self.dispatch(&callee, &receiver) {
+            Target::Function(function, room) => {
+                let mut values = Vec::with_capacity(room.max(1 + args.len()));
+                values.push(receiver);
+                values.extend(args);
+                self.call_function(function, values, span)
+            }
+            Target::Intrinsic(intrinsic) => {
+                let mut buffer = self.buffer();
+                buffer.push(receiver);
+                buffer.extend(args);
+                let result = self.run_intrinsic(intrinsic, &mut buffer, span);
+                self.give_back(buffer);
+                result
+            }
+        }
     }
 
     /// Call the function value `callee`, a closure or a named function,
@@ -1201,11 +1499,15 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         // The slots the body never reads stay `()`: the numbering is the
         // checker's, so the captured ones and the arguments land where
         // the body looks for them.
-        let mut slots = vec![Value::Unit; closure.code.height];
+        let mut slots = Vec::with_capacity(closure.code.height + args.len());
+        slots.resize(closure.code.height, Value::Unit);
         for (&slot, value) in closure.code.captures.iter().zip(&closure.captured) {
             slots[slot] = value.clone();
         }
-        slots.extend(binding(closure.code.params.iter().map(|p| p.binds), args));
+        slots.append(&mut binding(
+            closure.code.params.iter().map(|p| p.binds),
+            args,
+        ));
         let mut frame = Frame {
             slots,
             receiver: closure.receiver.clone(),
@@ -1236,28 +1538,49 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     ) -> Result<Value, Panic> {
         match callee {
             Callee::Function(name) => {
-                let function = self.function(name);
-                let taken = std::mem::replace(receiver, Value::Unit);
-                self.enter(FrameName::Program(&function.name), span)?;
-                let result = self.call_with(function, Some(taken), args, span);
-                let result = result.map_err(|panic| self.stamped(panic));
-                self.leave();
-                let (value, after) = result?;
-                *receiver = after.expect("a method keeps its receiver");
-                Ok(value)
+                let (function, room) = self.function(name);
+                self.call_mutating_function(function, room, receiver, args, span)
             }
-            Callee::Intrinsic(name) => match intrinsic(name) {
-                Intrinsic::Mutating(run) => run(receiver, args, span),
+            Callee::Intrinsic(name) => match intrinsics::resolved(name) {
+                Intrinsic::Mutating(run) => run(receiver, &mut Args(args), span),
                 Intrinsic::Plain(_) | Intrinsic::HigherOrder(_) => unreachable!(
                     "the checker calls only a `var self` method on a place, and every \
                      prelude `var self` method is a mutating intrinsic"
                 ),
             },
-            Callee::Trait { .. } => {
-                let callee = self.dispatch(callee, receiver);
-                self.call_mutating(&callee, receiver, args, span)
-            }
+            Callee::Trait { .. } => match self.dispatch(callee, receiver) {
+                Target::Function(function, room) => {
+                    self.call_mutating_function(function, room, receiver, args, span)
+                }
+                Target::Intrinsic(Intrinsic::Mutating(run)) => run(receiver, &mut Args(args), span),
+                Target::Intrinsic(_) => unreachable!(
+                    "the checker calls only a `var self` method on a place, and every \
+                     prelude `var self` method is a mutating intrinsic"
+                ),
+            },
         }
+    }
+
+    /// Call the program's mutating method `function` on `receiver`, which
+    /// it changes, with `args`. `room` is its frame's ([`room`]), the
+    /// receiver's slot included.
+    fn call_mutating_function(
+        &mut self,
+        function: &'p Function,
+        room: usize,
+        receiver: &mut Value,
+        mut args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Panic> {
+        args.reserve_exact(room.saturating_sub(1 + args.len()));
+        let taken = std::mem::replace(receiver, Value::Unit);
+        self.enter(FrameName::Program(&function.name), span)?;
+        let result = self.call_with(function, Some(taken), args, span);
+        let result = result.map_err(|panic| self.stamped(panic));
+        self.leave();
+        let (value, after) = result?;
+        *receiver = after.expect("a method keeps its receiver");
+        Ok(value)
     }
 
     /// An interpolated string: each hole displayed through the
@@ -1271,19 +1594,39 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         if memory::metered() {
             return self.interpolated_metered(parts, span, frame);
         }
-        let mut text = String::new();
+        let mut text = std::mem::take(&mut self.calls_seen.text);
+        let built = self.interpolate_into(&mut text, parts, frame);
+        let value = built.map(|()| Value::str(&text));
+        // A text kept for the next is cleared; a long one is let go of,
+        // so a page built once is not held for the rest of the run.
+        if text.capacity() <= 1 << 16 {
+            text.clear();
+            self.calls_seen.text = text;
+        }
+        value
+    }
+
+    /// Push each of `parts` onto `text`, each hole displayed.
+    fn interpolate_into(
+        &mut self,
+        text: &mut String,
+        parts: &[Part],
+        frame: &mut Frame,
+    ) -> Result<(), Unwind> {
         for part in parts {
             match part {
                 Part::Text(t) => text.push_str(t),
                 Part::Hole { value, display, .. } => {
                     let span = value.span;
                     let value = self.eval(value, frame)?;
-                    let shown = self.call_callee(display, vec![value], span)?;
-                    text.push_str(shown.as_str());
+                    if !shown_in_place(text, display, &value) {
+                        let shown = self.call_with_one(display, value, span)?;
+                        text.push_str(shown.as_str());
+                    }
                 }
             }
         }
-        Ok(Value::str(&text))
+        Ok(())
     }
 
     /// [`Interpreter::interpolated`] under `--max-memory`: each hole is
@@ -1301,7 +1644,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             if let Part::Hole { value, display, .. } = part {
                 let at = value.span;
                 let value = self.eval(value, frame)?;
-                shown.push(self.call_callee(display, vec![value], at)?);
+                shown.push(self.call_with_one(display, value, at)?);
             }
         }
         let len = parts
@@ -1326,6 +1669,32 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             text
         })?;
         Ok(text)
+    }
+}
+
+/// Push `value` as `display` shows it onto `text`, when `display` is the
+/// prelude's `Display` for `Int` or `String`, and say whether it was.
+/// The same text as calling `display`, without making a text value for
+/// the hole and copying it again (#572). Not used under `--max-memory`,
+/// whose interpolation charges each hole's text
+/// ([`Interpreter::interpolated_metered`]).
+#[inline]
+fn shown_in_place(text: &mut String, display: &Callee, value: &Value) -> bool {
+    use std::fmt::Write as _;
+    let Callee::Intrinsic(name) = display else {
+        return false;
+    };
+    match (intrinsics::display_in_place(name), value) {
+        (Some(intrinsics::InPlace::Int), Value::Int(n, _)) => {
+            // Writing to a `String` cannot fail.
+            let _ = write!(text, "{n}");
+            true
+        }
+        (Some(intrinsics::InPlace::Str), Value::Str(s)) => {
+            text.push_str(s);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -1415,15 +1784,51 @@ fn place_ref<'f>(place: &Place, frame: &'f Frame) -> &'f Value {
 }
 
 /// The arguments that take slots: each of `args` whose parameter
-/// `binds`. Kept out of line, so the frame of a call does not hold the
-/// iterator.
+/// `binds`, kept in `args`' own `Vec` (no second one per call). Kept out
+/// of line, so the frame of a call does not hold the iterator.
 #[inline(never)]
-fn binding(binds: impl Iterator<Item = bool>, args: Vec<Value>) -> Vec<Value> {
-    binds
-        .zip(args)
-        .filter(|(binds, _)| *binds)
-        .map(|(_, arg)| arg)
-        .collect()
+fn binding(mut binds: impl Iterator<Item = bool>, mut args: Vec<Value>) -> Vec<Value> {
+    // `retain` visits the arguments in order, one parameter each; an
+    // argument past the last parameter takes no slot.
+    args.retain(|_| binds.next().unwrap_or(false));
+    args
+}
+
+/// The room a call of `function` gives its arguments' `Vec`, which
+/// becomes its frame ([`Interpreter::call`]): the receiver, for a method,
+/// then the slots its body reads. A frame grows one `let` at a time, so
+/// without the room it would grow by `realloc`.
+///
+/// The slots are the highest one the body reads, outside its closures
+/// (which number their own). A slot bound and never read is not counted:
+/// a frame that reaches it grows once, as it would have.
+///
+/// It tells a closure's body from the rest by span, which assumes that a
+/// closure's span holds everything inside it and that `walk` visits each
+/// expression before what is inside it, so whatever it visits after a
+/// closure's body starts at or past the closure's end. Lowering keeps
+/// spans so; if it did not, `room` would only be wrong as a capacity: a
+/// frame given too little grows as it did before #505, one given too
+/// much keeps a few spare slots. What a call computes never depends on
+/// it.
+fn room(function: &Function) -> usize {
+    let mut slots = function.params.iter().filter(|p| p.binds).count();
+    // The spans of the closures around the expression visited now.
+    let mut closures: Vec<Span> = Vec::new();
+    let _ = program::walk(&function.body, &mut |visit| {
+        if let Visit::Expr(expr) = visit {
+            while closures.last().is_some_and(|c| c.end <= expr.span.start) {
+                closures.pop();
+            }
+            match expr.kind {
+                ExprKind::Closure(_) => closures.push(expr.span),
+                ExprKind::Local(slot) if closures.is_empty() => slots = slots.max(slot + 1),
+                _ => {}
+            }
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    usize::from(function.receiver) + slots
 }
 
 /// Where a function's body returns when it falls off its end: its tail
@@ -1440,11 +1845,6 @@ fn body_end(body: &Expr) -> Span {
     }
 }
 
-/// The intrinsic named `name`.
-fn intrinsic(name: &str) -> Intrinsic {
-    intrinsics::lookup(name).expect("`crate::run` refuses a call to a missing intrinsic")
-}
-
 /// The items of a list, one at a time.
 struct ListIter {
     items: Rc<Vec<Value>>,
@@ -1458,5 +1858,59 @@ impl Iterator for ListIter {
         let item = self.items.get(self.next)?.clone();
         self.next += 1;
         Some(item)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::room;
+
+    /// The room of the function `name` in `src`.
+    fn room_of(src: &str, name: &str) -> usize {
+        let program = oska_check::check_module(src)
+            .program
+            .expect("the test program checks");
+        room(&program.functions[name])
+    }
+
+    #[test]
+    fn the_room_counts_the_frames_own_slots_and_not_a_closures() {
+        // `a`, `g` and `b` are the frame's slots 0 to 2. The closure's
+        // body numbers its own from 2 (`x`, `y`, `z` are 2 to 4), and
+        // they are not the frame's.
+        let src = "fn f(a: Int) -> Int {
+    let g = |x: Int| {
+        let y = x + 1
+        let z = y * 2
+        z
+    }
+    let b = a + 1
+    g(b)
+}
+
+fn main() {
+    let _ = f(1)
+}
+";
+        assert_eq!(room_of(src, "f"), 3);
+    }
+
+    #[test]
+    fn a_method_has_room_for_its_receiver_and_a_skipped_parameter_takes_none() {
+        let src = "struct P { x: Int }
+
+impl P {
+    fn add(self, _: Int, n: Int) -> Int {
+        let sum = self.x + n
+        sum
+    }
+}
+
+fn main() {
+    let _ = P(x: 1).add(0, 2)
+}
+";
+        // The receiver, then `n` (slot 0) and `sum` (slot 1).
+        assert_eq!(room_of(src, "P.add"), 3);
     }
 }

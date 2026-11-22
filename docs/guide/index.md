@@ -35,6 +35,7 @@ Each example page shows the program's source and its `oskac check` authority rep
 
 - [hello](examples/hello.md)
 - [capabilities](examples/capabilities.md)
+- [an MCP server](examples/notes_server.md)
 
 ## Reference
 

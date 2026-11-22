@@ -8,14 +8,12 @@
 //! them into one module, resolving `use pkg.…` imports, and the checker
 //! checks that module, so every rule holds across the whole package.
 
-use std::sync::OnceLock;
-
-use oska_syntax::ast::{ItemKind, Module};
+use oska_syntax::ast::ItemKind;
 use oska_syntax::{Diagnostic, Frame, LineIndex, Location, Span};
 
 use crate::manifest::is_snake_case;
 use crate::{
-    check_parsed, codes, hoist, link, parse_manifest, prelude, Attenuation, AuditSite,
+    check_module_with, check_parsed, codes, hoist, link, parse_manifest, Attenuation, AuditSite,
     CheckOptions, CheckReport,
 };
 
@@ -99,8 +97,8 @@ pub fn check_file(path: &str, source: &str, options: CheckOptions) -> CheckRepor
 /// diagnostics, spans every module (`link.rs`).
 ///
 /// A package of one module with no manifest is a single file: checked
-/// exactly as [`crate::check_module_with`] checks it, where `use pkg.…`
-/// is an error.
+/// exactly as [`check_module_with`] checks it, where `use pkg.…` is an
+/// error.
 pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
     let mut report = check_package_unfixed(package, options);
     hoist::add_fixes(package, &mut report.diagnostics);
@@ -124,108 +122,24 @@ pub(crate) fn check_package_unfixed(package: &Package, options: CheckOptions) ->
             };
         }
     }
-    let linked = linked_modules(&package.modules);
-    let single_file = package.manifest.is_none() && package.modules.len() == 1;
-    let mut report = match linked.as_slice() {
+    let mut report = match package.modules.as_slice() {
         [] => CheckReport::default(),
         [module] if package.manifest.is_none() => {
-            let mut report = check_one(&module.source, options);
+            let mut report = check_module_with(&module.source, options);
             report.diagnostics.extend(layout_diagnostics(module));
             report.diagnostics.sort_by_key(|d| d.span.start);
             if !report.diagnostics.is_empty() {
                 report.program = None;
             }
-            locate(report, &Joined::new(&linked))
+            locate(report, &Joined::new(vec![module]))
         }
-        modules => check_joined(modules, options, single_file),
+        modules => check_joined(modules.iter().collect(), options),
     };
     if let Some(diagnostics) = manifest_errors {
         report.diagnostics.splice(0..0, diagnostics);
         report.program = None;
     }
     report
-}
-
-/// What a check of `modules` links: `modules` themselves, then each `std`
-/// module of Oska source they import, directly or through another such
-/// module, in the order first imported. A module that does not parse
-/// imports nothing here; its parse error is reported.
-pub(crate) fn linked_modules(modules: &[ModuleSource]) -> Vec<&ModuleSource> {
-    let mut linked: Vec<&ModuleSource> = modules.iter().collect();
-    let mut next = 0;
-    while next < linked.len() {
-        for path in std_source_imports(&linked[next].source) {
-            if let Some(std) = std_source_file(&path) {
-                if !linked.iter().any(|m| m.module == std.module) {
-                    linked.push(std);
-                }
-            }
-        }
-        next += 1;
-    }
-    linked
-}
-
-/// Whether `module` imports a `std` module of Oska source.
-pub(crate) fn imports_std_source(module: &Module) -> bool {
-    module_std_imports(module)
-        .iter()
-        .any(|path| std_source_file(path).is_some())
-}
-
-/// The path of every `std.…` module `source`'s `use`s name.
-fn std_source_imports(source: &str) -> Vec<String> {
-    oska_syntax::parse_module(source)
-        .map(|module| module_std_imports(&module))
-        .unwrap_or_default()
-}
-
-/// The path of every `std.…` module `module`'s `use`s name.
-fn module_std_imports(module: &Module) -> Vec<String> {
-    module
-        .items
-        .iter()
-        .filter_map(|item| match &item.kind {
-            ItemKind::Use(u) if u.path.first().is_some_and(|s| s.name == link::STD) => Some(
-                u.path
-                    .iter()
-                    .map(|s| s.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("."),
-            ),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The `std` module of Oska source at `path` as a module to link: its
-/// path, such as `std.sha2`, is one no package module can have, as a
-/// package's module path cannot start with `std`.
-fn std_source_file(path: &str) -> Option<&'static ModuleSource> {
-    static FILES: OnceLock<Vec<ModuleSource>> = OnceLock::new();
-    let files = FILES.get_or_init(|| {
-        prelude::STD_MODULES
-            .iter()
-            .filter(|m| m.kind == prelude::StdKind::Source)
-            .map(|m| ModuleSource {
-                module: m.path.to_string(),
-                path: m.file(),
-                source: m.source.to_string(),
-            })
-            .collect()
-    });
-    files.iter().find(|f| f.module == path)
-}
-
-/// Check `src`, one file that imports no `std` module of Oska source.
-pub(crate) fn check_one(src: &str, options: CheckOptions) -> CheckReport {
-    match oska_syntax::parse_module(src) {
-        Ok(module) => check_parsed(src, &module, options, link::Modules::default()),
-        Err(err) => CheckReport {
-            diagnostics: vec![err],
-            ..CheckReport::default()
-        },
-    }
 }
 
 /// The modules' texts end to end, each after a line break, and where
@@ -242,8 +156,11 @@ struct Joined<'p> {
 }
 
 impl<'p> Joined<'p> {
-    /// The join of `modules`, which is not empty.
-    fn new(modules: &[&'p ModuleSource]) -> Joined<'p> {
+    /// The join of `modules`, which is not empty, and of the `std`
+    /// modules written in Oska that they import, which come last.
+    fn new(modules: Vec<&'p ModuleSource>) -> Joined<'p> {
+        let mut modules = modules;
+        modules.extend(std_sources(&modules));
         let entry_first = modules
             .iter()
             .copied()
@@ -381,14 +298,81 @@ static NO_MODULE: ModuleSource = ModuleSource {
     source: String::new(),
 };
 
+/// The `std` modules written in Oska that `modules` import, and that
+/// those import in turn, as modules of the program: each once, and none
+/// that is among `modules` already. A module that does not parse imports
+/// nothing here; checking it reports why.
+fn std_sources(modules: &[&ModuleSource]) -> Vec<&'static ModuleSource> {
+    let mut found: Vec<&'static ModuleSource> = Vec::new();
+    let mut pending: Vec<&str> = modules.iter().map(|m| m.source.as_str()).collect();
+    while let Some(source) = pending.pop() {
+        let Ok(ast) = oska_syntax::parse_module(source) else {
+            continue;
+        };
+        for std in crate::prelude::oska_std_imports(&ast) {
+            let present = modules.iter().any(|m| m.module == std.path)
+                || found.iter().any(|m| m.module == std.path);
+            if !present {
+                let module = std_source(std);
+                found.push(module);
+                pending.push(&module.source);
+            }
+        }
+    }
+    found
+}
+
+/// `std`, a `std` module written in Oska, as a module of a program: its
+/// module path is its `std` path, which no package module can have, and
+/// its file is named `std/<name>.osk`.
+fn std_source(std: &'static crate::prelude::StdModule) -> &'static ModuleSource {
+    static SOURCES: std::sync::OnceLock<Vec<ModuleSource>> = std::sync::OnceLock::new();
+    let sources = SOURCES.get_or_init(|| {
+        crate::prelude::STD_MODULES
+            .iter()
+            .filter(|m| m.written_in_oska)
+            .map(|m| ModuleSource {
+                module: m.path.to_string(),
+                path: format!("std/{}.osk", m.name()),
+                source: m.source.to_string(),
+            })
+            .collect()
+    });
+    sources
+        .iter()
+        .find(|m| m.module == std.path)
+        .expect("every std module written in Oska has a source")
+}
+
+/// Check `source`, a single file that imports a `std` module written in
+/// Oska, joined with the modules it imports, as `check_module_with`
+/// checks a single file: its own items keep their names, and the report's
+/// spans are offsets into `source`, not located in a file.
+pub(crate) fn check_single_with_std(source: &str, options: CheckOptions) -> CheckReport {
+    let file = ModuleSource {
+        module: ENTRY_MODULE.to_string(),
+        path: String::new(),
+        source: source.to_string(),
+    };
+    let (report, _) = check_linked(vec![&file], options, true);
+    report
+}
+
 /// Parse every module at its offset in the joined text, link them, and
-/// check the joined module. `single_file` says the modules are one file
-/// and the `std` modules of Oska source it imports.
-fn check_joined(
-    modules: &[&ModuleSource],
+/// check the joined module.
+fn check_joined(modules: Vec<&ModuleSource>, options: CheckOptions) -> CheckReport {
+    let (report, joined) = check_linked(modules, options, false);
+    locate(report, &joined)
+}
+
+/// [`check_joined`], with the report's spans still offsets into the
+/// joined text. With `plain_entry`, `modules` is a single file
+/// ([`link::link`]).
+fn check_linked(
+    modules: Vec<&ModuleSource>,
     options: CheckOptions,
-    single_file: bool,
-) -> CheckReport {
+    plain_entry: bool,
+) -> (CheckReport, Joined<'_>) {
     let joined = Joined::new(modules);
     let mut parsed = Vec::new();
     let mut parse_errors = Vec::new();
@@ -403,7 +387,11 @@ fn check_joined(
         }
     }
     let mut layout = Vec::new();
-    for (module, start) in &joined.modules {
+    for (module, start) in joined
+        .modules
+        .iter()
+        .filter(|(m, _)| !link::is_std_path(&m.module))
+    {
         layout.extend(layout_diagnostics(module).into_iter().map(|mut d| {
             d.span = Span {
                 start: d.span.start + start,
@@ -420,23 +408,25 @@ fn check_joined(
             diagnostics,
             ..CheckReport::default()
         };
-        return locate(report, &joined);
+        return (report, joined);
     }
-    let linked = link::link(&joined.text, parsed, single_file);
-    let modules = link::Modules::new(
-        joined
-            .modules
-            .iter()
-            .map(|(module, start)| {
-                let span = Span {
-                    start: *start,
-                    end: start + module.source.len(),
-                };
-                (module.module.clone(), span)
-            })
-            .collect(),
-        single_file,
-    );
+    let linked = link::link(&joined.text, parsed, plain_entry);
+    let ranges = joined
+        .modules
+        .iter()
+        .map(|(module, start)| {
+            let span = Span {
+                start: *start,
+                end: start + module.source.len(),
+            };
+            (module.module.clone(), span)
+        })
+        .collect();
+    let modules = if plain_entry {
+        link::Modules::single_file_with_std(ranges)
+    } else {
+        link::Modules::new(ranges)
+    };
     let mut report = check_parsed(&joined.text, &linked.module, options, modules);
     report.diagnostics = report
         .diagnostics
@@ -455,7 +445,7 @@ fn check_joined(
     if !report.diagnostics.is_empty() {
         report.program = None;
     }
-    locate(report, &joined)
+    (report, joined)
 }
 
 /// What the offsets of a checked package's program mean. Built once for
@@ -472,10 +462,14 @@ pub struct Locator<'p> {
 
 impl<'p> Locator<'p> {
     pub fn new(package: &'p Package) -> Locator<'p> {
-        let linked = linked_modules(&package.modules);
-        let parsed: Vec<(&str, oska_syntax::ast::Module)> = linked
+        let joined =
+            (!package.modules.is_empty()).then(|| Joined::new(package.modules.iter().collect()));
+        // The keys of every module, the `std` ones written in Oska that
+        // the program imports included.
+        let parsed: Vec<(&str, oska_syntax::ast::Module)> = joined
             .iter()
-            .filter_map(|m| {
+            .flat_map(|joined| &joined.modules)
+            .filter_map(|(m, _)| {
                 Some((
                     m.module.as_str(),
                     oska_syntax::parse_module(&m.source).ok()?,
@@ -487,7 +481,7 @@ impl<'p> Locator<'p> {
                 link::declared_names(ast).map(move |name| (*module, name))
             }));
         Locator {
-            joined: (!linked.is_empty()).then(|| Joined::new(&linked)),
+            joined,
             keys,
             single_file: package.manifest.is_none() && package.modules.len() == 1,
         }

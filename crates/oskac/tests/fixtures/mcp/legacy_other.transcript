@@ -1,0 +1,5 @@
+# A client that asks for a version this server does not have is offered 2025-11-25.
+> {"jsonrpc":"2.0","id":"a","method":"initialize","params":{"protocolVersion":"2024-11-05"}}
+< {"jsonrpc":"2.0","id":"a","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"notes","version":"1.0.0"},"instructions":"Read the notes, and save drafts."}}
+> {"jsonrpc":"2.0","id":"b","method":"ping"}
+< {"jsonrpc":"2.0","id":"b","result":{}}
