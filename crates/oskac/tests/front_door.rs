@@ -220,6 +220,26 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`std.mcp`: `serve` and `handle`, an MCP server over standard input and output",
+        Probe::Program(
+            "use std.json\nuse std.mcp\n\n\
+             cap struct Tools { out: Stdout }\n\n\
+             impl mcp.Toolset for Tools {\n    \
+             fn specs(self) -> List<mcp.ToolSpec> {\n        \
+             [mcp.ToolSpec.new(\"say\", \"Say hello.\", json.Schema.object([]))]\n    }\n\n    \
+             fn call(self, name: String, args: json.Value) -> mcp.ToolResult {\n        \
+             mcp.ToolResult.text(\"hello\")\n    }\n}\n\n\
+             fn main(io: Stdout, stdin: Stdin) -> Result<(), IoError> {\n    \
+             let info = mcp.ServerInfo.new(\"probe\", \"1.0.0\")\n    \
+             let line = \"not json\"\n    \
+             let step = mcp.handle(mcp.Session.new(info), Tools(out: io), line)\n    \
+             io.println(step.reply.unwrap_or(\"no reply\"))?\n    \
+             match mcp.serve(stdin, io, info, Tools(out: io)) {\n        \
+             Ok(()) => io.println(\"served\")\n        \
+             Err(_) => io.println(\"refused\")\n    }\n}\n",
+        ),
+    ),
+    (
         "`std.sql`",
         Probe::Program(
             "use std.sql\n\n\
