@@ -378,7 +378,7 @@ main.osk:1:46: error[E0370]: `oskac run` cannot grant `Spawn` yet: the capabilit
 
 `Net` has a runtime, on the interpreter only. A program that connects goes through a host capability, and it runs with `oskac run --interpret`; `oskac run` refuses it with `E0390` until the native backend has networking:
 
-```oska
+```oska fragment
 fn main(io: Stdout, net: Net) -> Result<(), IoError> {
     let connection = net.restrict_to("example.com", 443).connect()?
     connection.send("hello")?

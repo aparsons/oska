@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{assert_refused, fs_program, run_differential, test_fake};
+use common::{fs_program, run_differential, test_fake};
 use oska_run::{FakeHost, TestStatus};
 
 /// What the program running `body` with [`common::fs_program`]'s

@@ -277,7 +277,7 @@ mod tests {
             "ex@mple.com",
             "http://x",
         ] {
-            let err = parse_host(bad).unwrap_err();
+            let err = parse_host(bad).expect_err("an error");
             assert!(err.to_string().contains("invalid host"), "{bad}: {err}");
         }
     }
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(check_port(1).ok(), Some(1));
         assert_eq!(check_port(65535).ok(), Some(65535));
         for bad in [0, -1, 65536] {
-            let err = check_port(bad).unwrap_err();
+            let err = check_port(bad).expect_err("an error");
             assert_eq!(
                 err.to_string(),
                 format!("port {bad} is out of range: use 1 to 65535")
@@ -308,7 +308,7 @@ mod tests {
         assert!(client.send_all(b"x").is_err());
         drop(server);
         drop(listener);
-        let err = NetStream::connect("127.0.0.1", port).unwrap_err();
+        let err = NetStream::connect("127.0.0.1", port).expect_err("an error");
         assert_eq!(
             err.to_string(),
             format!("cannot connect to 127.0.0.1:{port}: connection refused")

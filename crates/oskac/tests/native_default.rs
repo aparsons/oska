@@ -301,7 +301,10 @@ fn a_module_with_no_runtime_is_refused_as_the_interpreter_refuses_it() {
     // The network runs on the interpreter only (ADR 0023): the native
     // backend refuses it, an error on every platform, and `--interpret`
     // runs it.
-    let net = [("net.osk", "fn main(net: Net) {}\n")];
+    let net = [(
+        "net.osk",
+        "fn main(net: Net) {\n    let _ = net.restrict_to(\"example.com\", 443)\n}\n",
+    )];
     assert_golden("run_net_refused_natively", &net, &["run", "net.osk"]);
     assert_golden(
         "run_net_interpret",
