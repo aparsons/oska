@@ -565,6 +565,10 @@ impl Host for TestHost<'_> {
         self.world().next_random()
     }
 
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        self.world().secure_bytes(len)
+    }
+
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
         self.world().open_root(path)
     }

@@ -76,6 +76,11 @@ mod c {
         /// `uid_t geteuid(void)`: the effective user ID, which never fails.
         /// `uid_t` is 32 bits unsigned on every target this crate covers.
         pub fn geteuid() -> u32;
+
+        /// `int getentropy(void *buffer, size_t length)`: fill `buffer`
+        /// from the operating system's secure random source, at most 256
+        /// bytes at a time. 0 on success, -1 on an error.
+        pub fn getentropy(buffer: *mut c_void, length: usize) -> c_int;
     }
 
     pub const O_RDONLY: c_int = 0;
@@ -173,6 +178,20 @@ pub fn effective_uid() -> u32 {
     // SAFETY: `geteuid` takes nothing, touches no memory of ours and
     // cannot fail.
     unsafe { c::geteuid() }
+}
+
+/// Fill `buf` from the operating system's secure random source
+/// (`getentropy`, 256 bytes at a time).
+pub fn fill_random(buf: &mut [u8]) -> io::Result<()> {
+    for chunk in buf.chunks_mut(256) {
+        // SAFETY: `chunk` is a live, writable buffer of exactly the
+        // length passed, which is at most 256, `getentropy`'s limit.
+        let status = unsafe { c::getentropy(chunk.as_mut_ptr().cast(), chunk.len()) };
+        if status != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 /// An open directory: the root of a confined capability, or a directory

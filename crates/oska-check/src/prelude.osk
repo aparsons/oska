@@ -434,6 +434,11 @@ pub struct Random { handle: Int }
 impl Random {
     // A pseudo-random integer from 0 up to, but excluding, 2^63.
     pub fn next_int(self) -> Int
+
+    // `n` bytes for keys and nonces, from the operating system's secure
+    // random source. A test's `t.random` gives the same bytes on every run.
+    // A negative `n` panics (`P0042`), as `Bytes.zeroed` does.
+    pub fn secure_bytes(self, n: Int) -> Secret<Bytes>
 }
 
 // Authority to spend model tokens and calls, which `std.llm` takes. Its

@@ -56,9 +56,9 @@ pub use wording::{
 
 pub use heap::SizeClassAlloc;
 #[cfg(unix)]
-pub use unix::{effective_uid, Dir};
+pub use unix::{effective_uid, fill_random, Dir};
 #[cfg(windows)]
-pub use windows::Dir;
+pub use windows::{fill_random, Dir};
 
 #[cfg(not(any(unix, windows)))]
 compile_error!("oska-sys confines file access only on Unix and Windows");

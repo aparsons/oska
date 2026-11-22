@@ -180,6 +180,8 @@ pub fn rt_mem_as_text(object: Int) -> String
 // its one field).
 pub fn rt_mem_secret(secret: Secret<String>) -> Int
 pub fn rt_mem_as_secret(object: Int) -> Secret<String>
+// The `Secret<Bytes>` whose object is at `object`.
+pub fn rt_mem_as_secret_bytes(object: Int) -> Secret<Bytes>
 pub fn rt_mem_as_io_error(object: Int) -> IoError
 pub fn rt_mem_path(path: Path) -> Int
 pub fn rt_mem_as_path(object: Int) -> Path
@@ -3880,11 +3882,10 @@ pub fn clock_now_millis(clock: Clock) -> Int {
     seconds * 1000 + nanos / 1000000
 }
 
-// `Random.next_int`: SplitMix64, as the interpreter's, seeded on first use
-// from the operating system's random source (from the clock if that
-// fails). From 0 up to, but
-// excluding, 2^63.
-pub fn random_next_int(random: Random) -> Int {
+// The next 64 bits of the generator: SplitMix64, as the interpreter's,
+// seeded on first use from the operating system's random source (from the
+// clock if that fails).
+fn random_next_word() -> Int {
     if rt_mem_load64(global(21)) == 0 {
         let object = alloc(24)
         var got = 0
@@ -3908,7 +3909,66 @@ pub fn random_next_int(random: Random) -> Int {
     var z = state
     z = rt_mem_mul(rt_mem_xor(z, rt_mem_shr(z, 30)), -4658895280553007687)
     z = rt_mem_mul(rt_mem_xor(z, rt_mem_shr(z, 27)), -7723592293110705685)
-    rt_mem_shr(rt_mem_xor(z, rt_mem_shr(z, 31)), 1)
+    rt_mem_xor(z, rt_mem_shr(z, 31))
+}
+
+// `Random.next_int`: from 0 up to, but excluding, 2^63.
+pub fn random_next_int(random: Random) -> Int {
+    rt_mem_shr(random_next_word(), 1)
+}
+
+// `Random.secure_bytes`: `length` bytes of the operating system's secure
+// random source, in a `Secret<Bytes>`; on the test host the generator's
+// words, little-endian, as the interpreter's. The word 0 says a negative
+// length and -1 one past `max_bytes`. No secure source ends the program:
+// there is no guessable fallback.
+pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
+    if length < 0 {
+        return rt_mem_as_secret_bytes(0)
+    }
+    if length > max_bytes() {
+        return rt_mem_as_secret_bytes(-1)
+    }
+    let bytes = bytes_zeroed(length)
+    let data = bytes_data(rt_mem_bytes(bytes))
+    if faking() {
+        var word = 0
+        var i = 0
+        while i < length {
+            let shift = rt_mem_shl(rt_mem_and(i, 7), 3)
+            if shift == 0 {
+                word = random_next_word()
+            }
+            rt_mem_store8(rt_mem_add(data, i), rt_mem_and(rt_mem_shr(word, shift), 255))
+            i = i + 1
+        }
+    } else {
+        var done = 0
+        while done < length {
+            var chunk = length - done
+            if chunk > 256 {
+                chunk = 256
+            }
+            var got = 0
+            if on_windows() {
+                got = rt_sys_process_prng(rt_mem_add(data, done), chunk)
+            } else {
+                got = rt_sys_random(rt_mem_add(data, done), chunk)
+            }
+            // `ProcessPrng` always returns TRUE and fills every byte (the
+            // backend's `Fails::Never`), so Windows has no result to check.
+            if got < 0 && !on_windows() {
+                let _ = write_text(report_fd(), "the operating system has no secure random source\n")
+                exit(101)
+            }
+            done = done + chunk
+        }
+    }
+    let object = alloc(16)
+    let held = rt_mem_bytes(bytes)
+    retain(held)
+    rt_mem_store64(rt_mem_add(object, 8), held)
+    rt_mem_as_secret_bytes(object)
 }
 
 // ---- Budgets ---------------------------------------------------------------

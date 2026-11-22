@@ -2158,7 +2158,13 @@ impl<'l, 'p> Body<'l, 'p> {
                     target: long,
                 });
             }
-            Check::Zeroed => {
+            Check::Zeroed | Check::SecureBytes => {
+                // `Random.secure_bytes` passes the capability first.
+                let args = if matches!(check, Check::SecureBytes) {
+                    &args[1..]
+                } else {
+                    args
+                };
                 let negative = self.panic_text(
                     panics::BYTES_OUT_OF_RANGE,
                     "panic_bytes_negative",
