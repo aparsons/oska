@@ -676,11 +676,13 @@ fn main() {
   - `t.fs` is an empty in-memory filesystem, with its working directory at `/`.
   - `t.clock` is fixed at the Unix epoch: `now_millis()` is `0`.
   - `t.random` starts from the same fixed seed in every test.
+  - `t.budget` is a `Budget` of 100000 tokens and 100 calls, the same in every test.
+  - `t.approver` is an `Approver` that answers from the test's script: `t.answer_approval(true)` or `t.answer_approval(false)` queues its next answer, and a question with no answer left is refused.
   - `t.stdout` records what it prints. `t.printed()` returns every line printed so far in the test, one per `println`, without its line break.
 - **Assertions.** `t.assert`, `t.assert_eq`, `t.assert_ne`, and `t.fail` fail the test by panicking, with `P0010` to `P0013` and the span of the call. A failed assertion is a panic like any other: it stops the test, and its diagnostic is the test's failure. A panic from a bug, such as `P0004`, fails the test the same way.
 - **Snapshots.** `t.assert_snapshot(value)` compares `value`, rendered as `dbg` renders it, with its snapshot: see [Snapshots](#snapshots).
 - **Isolation.** A panic stops only the test it happened in, runaway recursion (`P0021`) included. Each test runs in a new interpreter, on a new host, on a thread of its own.
-- **Integration tests.** A test marked `#[integration]` is skipped unless `--integration` is given. Then it runs on the real OS: `t.fs` is an `Fs` over the real filesystem (attenuate it like any `Fs`), `t.clock` the real time, and `t.random` seeded from the clock. Its `t.stdout` is still recorded, not written to the terminal, so `t.printed()` works and the report is the only thing on stdout.
+- **Integration tests.** A test marked `#[integration]` is skipped unless `--integration` is given. Then it runs on the real OS: `t.fs` is an `Fs` over the real filesystem (attenuate it like any `Fs`), `t.clock` the real time, and `t.random` seeded from the clock. `t.budget` and `t.approver` are the same as in any test: `t.approver` still answers from its script and never asks a person. Its `t.stdout` is still recorded, not written to the terminal, so `t.printed()` works and the report is the only thing on stdout.
 
 ### Snapshots
 
