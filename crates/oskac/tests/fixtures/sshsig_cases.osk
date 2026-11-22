@@ -1,0 +1,80 @@
+// Reads cases from stdin, six lines each, and prints one line a case:
+// the key line, the namespace, the armored signature (with `|` for LF and
+// `^` for CR), the message in hexadecimal, and the line `---`. The key
+// line and the namespace are asserted trusted here, in the test program;
+// `std.sshsig` itself has no such assertion. A case prints the verdict
+// (`ok` or the error's name), the key's fingerprint and comment, and the
+// namespace and hash the signature claims.
+use std.sshsig
+
+fn read(input: Stdin) -> Result<Option<Untrusted<String>>, IoError> {
+    input.read_line()
+}
+
+fn name(error: sshsig.SshsigError) -> String {
+    match error {
+        sshsig.SshsigError.Armor => "Armor"
+        sshsig.SshsigError.Malformed => "Malformed"
+        sshsig.SshsigError.UnsupportedVersion => "UnsupportedVersion"
+        sshsig.SshsigError.UnsupportedAlgorithm => "UnsupportedAlgorithm"
+        sshsig.SshsigError.WrongKey => "WrongKey"
+        sshsig.SshsigError.WrongNamespace => "WrongNamespace"
+        sshsig.SshsigError.BadSignature => "BadSignature"
+    }
+}
+
+fn claims(armored: Untrusted<String>) -> Untrusted<String> {
+    match sshsig.Signature.parse(armored) {
+        Ok(parsed) => {
+            let namespace = parsed.namespace()
+            let hash = parsed.hash_algorithm()
+            let fingerprint = parsed.public_key().fingerprint()
+            "{namespace} {hash} {fingerprint}"
+        }
+        Err(error) => {
+            let why = name(error)
+            "- - {why}"
+        }
+    }
+}
+
+// One case; `false` at the end of the input.
+fn run_case(io: Stdout, input: Stdin) -> Result<Bool, IoError> {
+    let key_line = read(input)?
+    let namespace = read(input)?
+    let armored = read(input)?
+    let hex = read(input)?
+    let _ = read(input)?
+    match hex {
+        None => Ok(false)
+        Some(hex_text) => {
+            let message = Bytes.from_hex(hex_text.trim().assume_trusted()).unwrap_or(Bytes.new())
+            let key_text = key_line.unwrap_or("")
+            let namespace_text = namespace.unwrap_or("")
+            let signature = armored.unwrap_or("").replace("|", "\n").replace("^", "\r")
+            match sshsig.PublicKey.parse(key_text.assume_trusted()) {
+                Err(error) => {
+                    let why = name(error)
+                    io.println("key {why}")?
+                }
+                Ok(key) => {
+                    let verdict = match sshsig.verify(signature, message, namespace_text.assume_trusted(), key) {
+                        Ok(_) => "ok"
+                        Err(error) => name(error)
+                    }
+                    let fingerprint = key.fingerprint()
+                    let comment = key.comment()
+                    let claimed = claims(signature)
+                    io.println("{verdict} {fingerprint} {comment} {claimed}")?
+                }
+            }
+            Ok(true)
+        }
+    }
+}
+
+fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
+    while run_case(io, input)? {
+    }
+    Ok(())
+}

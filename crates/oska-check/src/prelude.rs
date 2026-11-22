@@ -90,6 +90,12 @@ pub static STD_MODULES: &[StdModule] = &[
         kind: StdKind::Source,
         sink_literal: None,
     },
+    StdModule {
+        path: "std.sshsig",
+        source: include_str!("std/sshsig.osk"),
+        kind: StdKind::Source,
+        sink_literal: None,
+    },
 ];
 
 /// The `std.*` module at `path`.
