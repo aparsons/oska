@@ -32,6 +32,8 @@ DER = serialization.Encoding.DER
 mode = sys.argv[1] if len(sys.argv) > 1 else "full"
 assert mode in ("full", "quick"), "give `full` or `quick`"
 
+SERVER = [ExtendedKeyUsageOID.SERVER_AUTH]
+
 certs = {}  # name -> DER bytes, in the order made
 
 
@@ -56,7 +58,9 @@ def make(
     ca=None,
     path_len=None,
     key_usage=None,
-    eku=None,
+    eku="auto",
+    ski=None,
+    aki=None,
     san=None,
     not_before=START,
     not_after=END,
@@ -87,8 +91,19 @@ def make(
         )
         flags.update({k: True for k in key_usage})
         builder = builder.add_extension(x509.KeyUsage(**flags), True)
-    if eku is not None:
+    # A server certificate names server authentication: `auto` gives every certificate that is not a CA that,
+    # and `False` leaves the extension out.
+    if eku == "auto":
+        eku = None if ca else SERVER
+    if eku:
         builder = builder.add_extension(x509.ExtendedKeyUsage(eku), False)
+    if ski is not None:
+        builder = builder.add_extension(x509.SubjectKeyIdentifier(ski), False)
+    if aki is not None:
+        builder = builder.add_extension(
+            x509.AuthorityKeyIdentifier(key_identifier=aki, authority_cert_issuer=None, authority_cert_serial_number=None),
+            False,
+        )
     if san is not None:
         builder = builder.add_extension(x509.SubjectAlternativeName(san), False)
     if name_constraints is not None:
@@ -113,7 +128,6 @@ def dns(*names):
 
 CA_KU = ["key_cert_sign", "crl_sign"]
 LEAF_KU = ["digital_signature"]
-SERVER = [ExtendedKeyUsageOID.SERVER_AUTH]
 
 # ---- The EC hierarchy -----------------------------------------------------------------
 
@@ -137,6 +151,10 @@ make(
 make(
     "leaf_a_sha512", "leaf.example.test", ec_key(), issuer="Test EC Intermediate", issuer_key=int_a_key,
     key_usage=LEAF_KU, eku=[ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE], san=dns("sha512.test"), hash_alg=hashes.SHA512,
+)
+make(
+    "leaf_no_eku", "noeku.test", ec_key(), issuer="Test EC Intermediate", issuer_key=int_a_key, key_usage=LEAF_KU,
+    san=dns("example.test"), eku=False,
 )
 make("leaf_a_nosan", "nosan.test", ec_key(), issuer="Test EC Intermediate", issuer_key=int_a_key, key_usage=LEAF_KU)
 
@@ -299,6 +317,55 @@ make("leaf_x", "x", ec_key(), issuer="Unknown Root", issuer_key=root_x_key, san=
 self_key = ec_key()
 make("self_signed", "self.test", self_key, san=dns("self.test"), key_usage=LEAF_KU)
 
+# Name constraints apply to every certificate below the constraining one: a CA under `Constrained` that names
+# a host outside it (leaf_under_sub_bad), and one that does not (leaf_under_sub_ok).
+for label, san in [("bad", "evil.other.test"), ("ok", "ok.permitted.test")]:
+    k = ec_key()
+    make(
+        f"sub_{label}", f"Sub {label}", k, issuer="Constrained", issuer_key=nc_key, ca=True, key_usage=CA_KU,
+        san=dns(san),
+    )
+    make(
+        f"leaf_under_sub_{label}", "x", ec_key(), issuer=f"Sub {label}", issuer_key=k, san=dns("a.permitted.test"),
+        key_usage=LEAF_KU,
+    )
+
+# Depth: a chain of eight intermediates under the root, and the seven that fit.
+parent, parent_key = "Test EC Root", root_a_key
+for n in range(1, 9):
+    k = ec_key()
+    make(f"deep_{n}", f"Deep {n}", k, issuer=parent, issuer_key=parent_key, ca=True, key_usage=CA_KU)
+    if n == 7:
+        make("leaf_deep7", "x", ec_key(), issuer=f"Deep {n}", issuer_key=k, san=dns("example.test"), key_usage=LEAF_KU)
+    parent, parent_key = f"Deep {n}", k
+make("leaf_deep8", "x", ec_key(), issuer=parent, issuer_key=parent_key, san=dns("example.test"), key_usage=LEAF_KU)
+
+# Key identifiers: two intermediates with one name, and a leaf that names the first one's key.
+good_key = ec_key(ec.SECP384R1)
+make(
+    "int_k_good", "Keyed Intermediate", good_key, issuer="Test EC Root", issuer_key=root_a_key, ca=True,
+    key_usage=CA_KU, ski=b"good-key-id-0001",
+)
+make(
+    "int_k_decoy", "Keyed Intermediate", ec_key(ec.SECP384R1), issuer="Test EC Root", issuer_key=root_a_key, ca=True,
+    key_usage=CA_KU, ski=b"decoy-key-id-002",
+)
+make(
+    "leaf_k", "x", ec_key(), issuer="Keyed Intermediate", issuer_key=good_key, san=dns("example.test"),
+    key_usage=LEAF_KU, aki=b"good-key-id-0001",
+)
+# A root with a key identifier, and leaves that name it rightly and wrongly.
+root_k_key = ec_key()
+make("root_k", "Keyed Root", root_k_key, ca=True, key_usage=CA_KU, ski=b"root-key-id-0001")
+make(
+    "leaf_root_k", "x", ec_key(), issuer="Keyed Root", issuer_key=root_k_key, san=dns("example.test"),
+    key_usage=LEAF_KU, aki=b"root-key-id-0001",
+)
+make(
+    "leaf_root_k_wrong", "x", ec_key(), issuer="Keyed Root", issuer_key=root_k_key, san=dns("example.test"),
+    key_usage=LEAF_KU, aki=b"some-other-key-0",
+)
+
 # ---- Malformed encodings, made by hand from leaf_a --------------------------------------
 
 good = certs["leaf_a"]
@@ -380,6 +447,8 @@ QUICK = {
     "a version that is not v1 or v3 is UnsupportedVersion",
     "a certificate of more than 65536 bytes is Malformed",
     "every error has a message",
+    "a trust configuration is the Mozilla roots, more roots, or only the given roots",
+    "parse_der and parse_pem read certificates from untrusted input",
 }
 BODY = r'''// The name of an error kind, which is what the tests pin.
 fn kind(error: x509.X509Error) -> String {
@@ -399,6 +468,7 @@ fn kind(error: x509.X509Error) -> String {
         x509.X509Error.NameConstraint => "NameConstraint"
         x509.X509Error.DistrustedRoot => "DistrustedRoot"
         x509.X509Error.HostMismatch => "HostMismatch"
+        x509.X509Error.LimitExceeded => "LimitExceeded"
     }
 }
 
@@ -418,10 +488,10 @@ fn parsed(der: String) -> List<x509.Certificate> {
 }
 
 // A store of the given roots, or the first error making it.
-fn store_of(roots: List<String>) -> Result<x509.RootStore, x509.X509Error> {
-    var store = x509.RootStore.empty()
+fn store_of(roots: List<String>) -> Result<x509.TrustConfig, x509.X509Error> {
+    var store = x509.TrustConfig.only_roots([])
     for root in roots {
-        store = store.add_der(hex(root))?
+        store = store.with_root_der(hex(root))?
     }
     Ok(store)
 }
@@ -499,7 +569,7 @@ test "a chain to a root the store does not hold is UnknownIssuer" {
 }
 
 test "the Mozilla store holds roots and trusts none of the test roots" {
-    let store = x509.RootStore.mozilla()
+    let store = x509.TrustConfig.default()
     t.assert_eq(store.len() > 100, true)
     match x509.Certificate.parse(hex(root_a())) {
         Ok(root) => t.assert_eq(store.contains(root), false)
@@ -514,7 +584,7 @@ test "the Mozilla store holds roots and trusts none of the test roots" {
 test "a root may be added from PEM, or all roots replaced" {
     let body = pem_body(root_a())
     let pem = "-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n"
-    match x509.RootStore.empty().add_pem(pem) {
+    match x509.TrustConfig.only_roots([]).with_root_pem(pem) {
         Ok(store) => {
             t.assert_eq(store.len(), 1)
             match x509.verify_server(store, parsed(leaf_a()).at(0), parsed(int_a()), "example.test", now()) {
@@ -524,7 +594,7 @@ test "a root may be added from PEM, or all roots replaced" {
         }
         Err(_) => t.assert_eq(true, false)
     }
-    match x509.RootStore.mozilla().add_der(hex(root_a())) {
+    match x509.TrustConfig.default().with_root_der(hex(root_a())) {
         Ok(store) => t.assert_eq(store.len() > 101, true)
         Err(_) => t.assert_eq(true, false)
     }
@@ -539,7 +609,7 @@ test "PEM text that is not certificates is refused" {
 }
 
 fn pem_kind(pem: String) -> String {
-    match x509.RootStore.empty().add_pem(pem) {
+    match x509.TrustConfig.only_roots([]).with_root_pem(pem) {
         Ok(_) => "ok"
         Err(e) => kind(e)
     }
@@ -576,7 +646,11 @@ test "a certificate's fields read as the certificate says" {
             t.assert_eq(c.is_ca(), false)
             t.assert_eq(c.not_before(), 1704067200)
             t.assert_eq(c.not_after(), 2019686400)
-            t.assert_eq(c.dns_names(), ["example.test", "www.example.test", "*.wild.test", "*.test", "w*.example.test", "*.sub.example.test"])
+            let names = c.dns_names()
+            t.assert_eq(names.len(), 6)
+            t.assert_eq(names.at(0).assume_trusted(), "example.test")
+            t.assert_eq(names.at(1).assume_trusted(), "www.example.test")
+            t.assert_eq(names.at(5).assume_trusted(), "*.sub.example.test")
             t.assert_eq(c.public_key().is_some(), true)
             t.assert_eq(c.to_der(), hex(leaf_a()))
         }
@@ -706,7 +780,7 @@ test "a critical extension that is not understood is refused when parsing" {
 test "a root distrusts certificates that became valid after its date" {
     let leaf = parsed(leaf_distrust()).at(0)
     let after = 1735689600  // 2025-01-01
-    match x509.RootStore.empty().add_der_distrust_after(hex(root_a()), after) {
+    match x509.TrustConfig.only_roots([]).with_root_distrusting_after(hex(root_a()), after) {
         Ok(store) => {
             match x509.verify_server(store, leaf, parsed(int_a()), "example.test", now()) {
                 Ok(_) => t.assert_eq(true, false)
@@ -754,6 +828,84 @@ test "a certificate of more than 65536 bytes is Malformed" {
         big.push(0)
     }
     t.assert_eq(parse_bytes_kind(big), "Malformed")
+}
+
+test "an issuer is chosen by key identifier too, which also saves signature checks" {
+    // 100 intermediates with the right name and the wrong key identifier are skipped unchecked.
+    var pool: List<String> = []
+    for _ in 0..100 {
+        pool.push(int_k_decoy())
+    }
+    pool.push(int_k_good())
+    t.assert_eq(verify([root_a()], leaf_k(), pool, "example.test"), "ok 2")
+    t.assert_eq(verify([root_k()], leaf_root_k(), [], "example.test"), "ok 1")
+    t.assert_eq(verify([root_k()], leaf_root_k_wrong(), [], "example.test"), "UnknownIssuer")
+}
+
+test "the work done on one validation is bounded at 64 signature checks" {
+    // Each decoy has the issuer's name and no key identifier, so each costs a check. The path needs two
+    // checks of its own: 62 decoys leave room for them, and 63 do not.
+    var pool: List<String> = []
+    for _ in 0..62 {
+        pool.push(int_a_other_key())
+    }
+    pool.push(int_a())
+    t.assert_eq(verify([root_a()], leaf_a(), pool, "example.test"), "ok 2")
+    var more: List<String> = [int_a_other_key()]
+    for d in pool {
+        more.push(d)
+    }
+    t.assert_eq(verify([root_a()], leaf_a(), more, "example.test"), "LimitExceeded")
+}
+
+test "a path is at most eight certificates before the root" {
+    var seven: List<String> = []
+    for d in [deep_1(), deep_2(), deep_3(), deep_4(), deep_5(), deep_6(), deep_7()] {
+        seven.push(d)
+    }
+    t.assert_eq(verify([root_a()], leaf_deep7(), seven, "example.test"), "ok 8")
+    let all = [deep_1(), deep_2(), deep_3(), deep_4(), deep_5(), deep_6(), deep_7(), deep_8()]
+    t.assert_eq(verify([root_a()], leaf_deep8(), all, "example.test"), "UnknownIssuer")
+}
+
+test "the server's certificate must name server authentication" {
+    t.assert_eq(under_a(leaf_no_eku()), "ExtendedKeyUsage")
+}
+
+test "a CA's name constraints apply to the certificates below it, not only the leaf" {
+    t.assert_eq(verify([root_a()], leaf_under_sub_ok(), [sub_ok(), int_nc()], "a.permitted.test"), "ok 3")
+    t.assert_eq(verify([root_a()], leaf_under_sub_bad(), [sub_bad(), int_nc()], "a.permitted.test"), "NameConstraint")
+}
+
+test "a trust configuration is the Mozilla roots, more roots, or only the given roots" {
+    let default = x509.TrustConfig.default()
+    t.assert_eq(default.len() > 100, true)
+    let roots = parsed(root_a())
+    t.assert_eq(x509.TrustConfig.only_roots(roots).len(), 1)
+    t.assert_eq(default.with_roots(roots).len(), default.len() + 1)
+    t.assert_eq(x509.TrustConfig.only_roots(roots).contains(roots.at(0)), true)
+    t.assert_eq(default.contains(roots.at(0)), false)
+}
+
+test "parse_der and parse_pem read certificates from untrusted input" {
+    match x509.parse_der(hex(leaf_a())) {
+        Ok(c) => t.assert_eq(c.to_der(), hex(leaf_a()))
+        Err(_) => t.assert_eq(true, false)
+    }
+    let one = pem_body(root_a())
+    let two = pem_body(int_a())
+    let pem = "-----BEGIN CERTIFICATE-----\n{one}\n-----END CERTIFICATE-----\n\n-----BEGIN CERTIFICATE-----\n{two}\n-----END CERTIFICATE-----\n"
+    match x509.parse_pem(pem) {
+        Ok(list) => {
+            t.assert_eq(list.len(), 2)
+            t.assert_eq(list.at(1).is_ca(), true)
+        }
+        Err(_) => t.assert_eq(true, false)
+    }
+    match x509.parse_pem("") {
+        Ok(_) => t.assert_eq(true, false)
+        Err(e) => t.assert_eq(kind(e), "Malformed")
+    }
 }
 
 test "every error has a message" {

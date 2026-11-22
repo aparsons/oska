@@ -16,7 +16,7 @@ use oska_check::CheckReport;
 
 /// The public functions and methods of `std.x509`, as the authority report
 /// names them.
-const FUNCTIONS: [&str; 20] = [
+const FUNCTIONS: [&str; 24] = [
     "std.x509.Certificate.parse",
     "std.x509.Certificate.to_der",
     "std.x509.Certificate.subject",
@@ -29,12 +29,16 @@ const FUNCTIONS: [&str; 20] = [
     "std.x509.Certificate.dns_names",
     "std.x509.Certificate.public_key",
     "std.x509.Certificate.matches_host",
-    "std.x509.RootStore.mozilla",
-    "std.x509.RootStore.empty",
-    "std.x509.RootStore.add_der",
-    "std.x509.RootStore.add_pem",
-    "std.x509.RootStore.add_der_distrust_after",
-    "std.x509.RootStore.contains",
+    "std.x509.TrustConfig.default",
+    "std.x509.TrustConfig.with_roots",
+    "std.x509.TrustConfig.only_roots",
+    "std.x509.TrustConfig.with_root_der",
+    "std.x509.TrustConfig.with_root_pem",
+    "std.x509.TrustConfig.with_root_distrusting_after",
+    "std.x509.TrustConfig.contains",
+    "std.x509.TrustConfig.len",
+    "std.x509.parse_der",
+    "std.x509.parse_pem",
     "std.x509.verify_chain",
     "std.x509.verify_server",
 ];
@@ -49,7 +53,7 @@ fn main(io: Stdout, args: Args) {
     }
     match x509.Certificate.parse(raw) {
         Ok(cert) => {
-            let store = x509.RootStore.mozilla()
+            let store = x509.TrustConfig.default()
             let _ = io.println(store.len().to_string())
             let _ = io.println(if cert.is_ca() { "ca" } else { "leaf" })
             let _ = io.println(cert.not_before().to_string())
@@ -79,7 +83,7 @@ fn main(io: Stdout, args: Args) {
                     let _ = io.println(e.to_string())
                 }
             }
-            match store.add_der(Bytes.new()) {
+            match store.with_root_der(Bytes.new()) {
                 Ok(s) => {
                     let _ = io.println(s.len().to_string())
                 }
@@ -87,7 +91,7 @@ fn main(io: Stdout, args: Args) {
                     let _ = io.println(e.to_string())
                 }
             }
-            match store.add_der_distrust_after(Bytes.new(), 0) {
+            match store.with_root_distrusting_after(Bytes.new(), 0) {
                 Ok(s) => {
                     let _ = io.println(s.len().to_string())
                 }
@@ -95,7 +99,23 @@ fn main(io: Stdout, args: Args) {
                     let _ = io.println(e.to_string())
                 }
             }
-            match x509.RootStore.empty().add_pem("") {
+            match x509.parse_der(raw) {
+                Ok(c) => {
+                    let _ = io.println(store.with_roots([c]).len().to_string())
+                }
+                Err(e) => {
+                    let _ = io.println(e.to_string())
+                }
+            }
+            match x509.parse_pem("") {
+                Ok(list) => {
+                    let _ = io.println(list.len().to_string())
+                }
+                Err(e) => {
+                    let _ = io.println(e.to_string())
+                }
+            }
+            match x509.TrustConfig.only_roots([cert]).with_root_pem("") {
                 Ok(s) => {
                     let _ = io.println(s.len().to_string())
                 }
@@ -134,10 +154,10 @@ fn a_program_calling_every_function_checks_and_lowers() {
 #[test]
 fn a_brace_group_imports_its_items_by_name() {
     assert_ok(
-        "use std.x509.{Certificate, RootStore, X509Error, verify_server}\n\
+        "use std.x509.{Certificate, TrustConfig, X509Error, verify_server}\n\
          fn check(der: Untrusted<Bytes>, now: Int) -> Result<Int, X509Error> {\n    \
              let leaf = Certificate.parse(der)?\n    \
-             let chain = verify_server(RootStore.mozilla(), leaf, [], \"example.test\", now)?\n    \
+             let chain = verify_server(TrustConfig.default(), leaf, [], \"example.test\", now)?\n    \
              Ok(chain.len())\n}",
     );
 }
@@ -167,18 +187,30 @@ fn the_host_name_is_trusted_text() {
 }
 
 #[test]
+fn names_read_from_a_certificate_are_untrusted_text() {
+    // A name a certificate claims is not a name the program chose.
+    assert_errors(
+        "use std.x509\n\
+         fn first(cert: x509.Certificate) -> Bool {\n    \
+             let names = cert.dns_names()\n    \
+             cert.matches_host(names.at(0))\n}",
+        &[("E0300", "names.at(0)")],
+    );
+}
+
+#[test]
 fn extra_roots_are_trusted_bytes_and_text() {
     // Which roots to trust is a structural position, as which key to trust is for `std.sshsig`.
     assert_errors(
         "use std.x509\n\
-         fn add(store: x509.RootStore, der: Untrusted<Bytes>) -> Bool {\n    \
-             store.add_der(der).is_ok()\n}",
+         fn add(store: x509.TrustConfig, der: Untrusted<Bytes>) -> Bool {\n    \
+             store.with_root_der(der).is_ok()\n}",
         &[("E0300", "der")],
     );
     assert_errors(
         "use std.x509\n\
-         fn add(store: x509.RootStore, pem: Untrusted<String>) -> Bool {\n    \
-             store.add_pem(pem).is_ok()\n}",
+         fn add(store: x509.TrustConfig, pem: Untrusted<String>) -> Bool {\n    \
+             store.with_root_pem(pem).is_ok()\n}",
         &[("E0300", "pem")],
     );
 }
@@ -230,10 +262,10 @@ fn a_certificates_fields_are_private_and_a_certificate_cannot_be_forged() {
 
 #[test]
 fn a_root_store_cannot_be_forged() {
-    // A store with a root of the caller's making would bypass `add_der`.
+    // A store with a root of the caller's making would bypass `with_root_der`.
     let report = check(
         "use std.x509\n\
-         fn forge() -> x509.RootStore {\n    x509.RootStore(anchors: [])\n}",
+         fn forge() -> x509.TrustConfig {\n    x509.TrustConfig(anchors: [])\n}",
     );
     assert!(!report.diagnostics.is_empty(), "a store has private fields");
 }
@@ -298,7 +330,10 @@ fn the_roots_module_is_generated_from_a_named_certdata() {
         "the module says how it was made"
     );
     let header = source.lines().nth(1).expect("a source line");
-    assert!(header.contains("SHA-256"), "{header}");
+    assert!(
+        header.contains("NSS release NSS_") && header.contains("SHA-256"),
+        "{header}"
+    );
     let roots = source
         .lines()
         .filter(|l| l.starts_with("        Root(name: "))
@@ -306,6 +341,10 @@ fn the_roots_module_is_generated_from_a_named_certdata() {
     assert!(
         roots > 100,
         "Mozilla trusts well over 100 roots, found {roots}"
+    );
+    assert!(
+        source.contains("pub fn nss_release() -> String {\n    \"NSS_"),
+        "the module names the NSS release it came from"
     );
     let count_line = source.lines().nth(2).expect("a count line");
     assert!(

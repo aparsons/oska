@@ -13,14 +13,15 @@
 //
 // `verify_server` builds the path from the server's own list of
 // certificates (in any order, with extras) and the roots of a
-// `RootStore`, and checks for each path found: every certificate's
+// `TrustConfig`, and checks for each path found: every certificate's
 // validity at the time passed in (no clock is read, so the function is
 // pure and a test pins the time), each signature (ECDSA P-256 and P-384,
 // RSA PKCS#1 v1.5 and PSS, Ed25519, with SHA-256, SHA-384 or SHA-512; MD5
 // and SHA-1 signatures are `UnsupportedAlgorithm`), basic constraints
 // (`cA` and `pathLenConstraint`), key usage (`keyCertSign` for a CA,
 // `digitalSignature` for the server's certificate), extended key usage (`serverAuth`
-// or `anyExtendedKeyUsage` wherever the extension is present), name
+// or `anyExtendedKeyUsage`: required on the server's certificate, and on a
+// CA that has the extension), name
 // constraints on the DNS names and IP addresses in the server's
 // certificate, Mozilla's "distrust after" date for the root, and the host
 // name (RFC 9525: only the certificate's `dNSName` and `iPAddress`
@@ -28,9 +29,13 @@
 // marked critical that is not understood makes the certificate
 // `UnsupportedCriticalExtension`.
 //
-// Names are compared as DER bytes, and the path is at most six
-// certificates before the root. The validity of the root itself is not
-// checked (the root store drops a root when Mozilla does). A name
+// Names are compared as DER bytes. A path is at most eight
+// certificates before the root and a validation makes at most 64 signature
+// checks (`LimitExceeded`); an issuer is chosen by name and, when the
+// certificate's authority key identifier and the issuer's subject key
+// identifier are both present, by that too. A CA's name constraints apply
+// to every certificate below it. The validity of the root itself is not
+// checked (the trust configuration drops a root when Mozilla does). A name
 // constraint of a kind other than DNS and IP address (directory names,
 // e-mail addresses, URIs) is ignored, as no such name is checked. A
 // presented DNS name is matched as ASCII, case-insensitively, with a
@@ -38,10 +43,10 @@
 // labels; an IPv6 literal is read in its colon-separated form without an
 // embedded IPv4 part.
 //
-// The root store is a pinned copy of Mozilla's roots trusted for TLS
+// The default trust configuration is a pinned copy of Mozilla's roots trusted for TLS
 // server authentication, compiled into `std.x509_roots` by
 // `scripts/x509-roots/generate.py`; a program may add roots of its own
-// from trusted bytes or replace the store. Every function is pure, and
+// from trusted bytes or replace the roots (`TrustConfig`). Every function is pure, and
 // the module has no audit site: no `expose()` and no `.assume_trusted()`.
 //
 // This code is hand-written and has not been audited (ADR 0012).
@@ -90,8 +95,8 @@ pub enum X509Error {
     PathLengthExceeded,
     // The server's key usage lacks `digitalSignature`.
     KeyUsage,
-    // A certificate on the path has extended key usage without
-    // `serverAuth` (or `anyExtendedKeyUsage`).
+    // The server's certificate has no extended key usage, or a certificate
+    // on the path has one without `serverAuth` (or `anyExtendedKeyUsage`).
     ExtendedKeyUsage,
     // A name in the server's certificate is outside a CA's permitted
     // subtrees or inside an excluded one.
@@ -101,6 +106,9 @@ pub enum X509Error {
     DistrustedRoot,
     // The host name is not in the certificate's subject alternative names.
     HostMismatch,
+    // Building a path took more than 64 signature checks, which bounds the
+    // work a hostile set of certificates can cause.
+    LimitExceeded,
 }
 
 impl Display for X509Error {
@@ -121,6 +129,7 @@ impl Display for X509Error {
             X509Error.NameConstraint => "a name violates a name constraint"
             X509Error.DistrustedRoot => "the root does not trust certificates issued after its distrust date"
             X509Error.HostMismatch => "the certificate is not for this host name"
+            X509Error.LimitExceeded => "building the certificate path took too many signature checks"
         }
     }
 }
@@ -159,6 +168,8 @@ struct Extensions {
     key_usage_bits: Int,
     has_eku: Bool,
     eku: List<String>,
+    ski: Bytes,
+    aki: Bytes,
     dns: List<String>,
     ips: List<Bytes>,
     permitted_dns: List<String>,
@@ -168,8 +179,8 @@ struct Extensions {
 }
 
 // A parsed X.509 certificate. Its fields are private: a certificate comes
-// only from `Certificate.parse` (or a root store's `add_der` and
-// `add_pem`), so everything in it has been read and checked.
+// only from `Certificate.parse` (or `parse_der` and `parse_pem`, or a trust
+// configuration's `with_root_der` and `with_root_pem`), so everything in it has been read and checked.
 pub struct Certificate {
     der: Bytes,
     tbs: Bytes,
@@ -255,9 +266,15 @@ impl Certificate {
     }
 
     // The `dNSName` entries of the subject alternative names, in lower
-    // case. An entry with a byte outside ASCII or a NUL is left out.
-    pub fn dns_names(self) -> List<String> {
-        self.ext.dns
+    // case, as untrusted text: a name from a certificate is the server's
+    // claim, not something the program chose. An entry with a byte outside
+    // ASCII or a NUL is left out.
+    pub fn dns_names(self) -> List<Untrusted<String>> {
+        var out: List<Untrusted<String>> = []
+        for name in self.ext.dns {
+            out.push(name)
+        }
+        out
     }
 
     // The key, or `None` when its algorithm or curve is not supported or
@@ -279,71 +296,91 @@ impl Certificate {
     }
 }
 
-// ---- Root store ---------------------------------------------------------------------
+// ---- Trust configuration ------------------------------------------------------------
 
-// A trust anchor: a root's subject and key, and Mozilla's "distrust
-// after" time (0 for none).
-struct Anchor { subject: Bytes, spki: Bytes, distrust_after: Int }
+// A trust anchor: a root's subject, key and subject key identifier (empty
+// if it has none), and Mozilla's "distrust after" time (0 for none).
+struct Anchor { subject: Bytes, spki: Bytes, ski: Bytes, distrust_after: Int }
 
 // The roots a chain may end at.
-pub struct RootStore { anchors: List<Anchor> }
+pub struct TrustConfig { anchors: List<Anchor> }
 
-impl RootStore {
+fn anchor_of(cert: Certificate, distrust_after: Int) -> Anchor {
+    Anchor(subject: cert.subject, spki: cert.spki, ski: cert.ext.ski, distrust_after: distrust_after)
+}
+
+impl TrustConfig {
     // Mozilla's roots trusted for TLS server authentication, as pinned in
-    // `std.x509_roots`.
-    pub fn mozilla() -> RootStore {
+    // `std.x509_roots` (and decoded from hexadecimal each time this is called).
+    pub fn default() -> TrustConfig {
         var anchors: List<Anchor> = []
         for r in x509_roots.roots() {
             anchors.push(Anchor(
                 subject: Bytes.from_hex(r.subject).unwrap_or(Bytes.new()),
                 spki: Bytes.from_hex(r.key).unwrap_or(Bytes.new()),
+                ski: Bytes.from_hex(r.ski).unwrap_or(Bytes.new()),
                 distrust_after: r.distrust_after
             ))
         }
-        RootStore(anchors: anchors)
+        TrustConfig(anchors: anchors)
     }
 
-    // A store with no roots: for a program that adds the roots it trusts.
-    pub fn empty() -> RootStore {
-        RootStore(anchors: [])
+    // The configuration with `roots` added, each trusted as a root without
+    // a distrust date. A certificate is as trusted as the program that
+    // parsed it: the checker does not track trust on a `Certificate`, so
+    // roots read from a file are an audit site only through `with_root_der`
+    // and `with_root_pem`, which take trusted bytes and text. Use this to
+    // add certificates that the program itself vouches for.
+    pub fn with_roots(self, roots: List<Certificate>) -> TrustConfig {
+        var anchors = self.anchors
+        for cert in roots {
+            anchors.push(anchor_of(cert, 0))
+        }
+        TrustConfig(anchors: anchors)
     }
 
-    // The store and the root `der` encodes. The bytes are trusted: which
-    // roots to trust is a structural position, so a root read from a file
-    // needs the caller's own `.assume_trusted()`, which `oskac audit`
+    // A configuration of only `roots`, none of Mozilla's: for a program
+    // that pins the CAs it trusts, and for tests that trust a test CA.
+    pub fn only_roots(roots: List<Certificate>) -> TrustConfig {
+        TrustConfig(anchors: []).with_roots(roots)
+    }
+
+    // The configuration and the root `der` encodes. The bytes are trusted:
+    // which roots to trust is a structural position, so a root read from a
+    // file needs the caller's own `.assume_trusted()`, which `oskac audit`
     // lists. The certificate's subject and key are kept; the certificate
     // is not otherwise checked.
-    pub fn add_der(self, der: Bytes) -> Result<RootStore, X509Error> {
+    pub fn with_root_der(self, der: Bytes) -> Result<TrustConfig, X509Error> {
         let cert = parse_certificate(der)?
         var anchors = self.anchors
-        anchors.push(Anchor(subject: cert.subject, spki: cert.spki, distrust_after: 0))
-        Ok(RootStore(anchors: anchors))
+        anchors.push(anchor_of(cert, 0))
+        Ok(TrustConfig(anchors: anchors))
     }
 
-    // The store and every certificate in `pem`, one or more
+    // The configuration and every certificate in `pem`, one or more
     // `-----BEGIN CERTIFICATE-----` blocks. The text is trusted, as for
-    // `add_der`. Text outside the blocks, or a block that is not base64
-    // of a certificate, is `Malformed`.
-    pub fn add_pem(self, pem: String) -> Result<RootStore, X509Error> {
-        var store = self
+    // `with_root_der`. Text outside the blocks, or a block that is not
+    // base64 of a certificate, is `Malformed`.
+    pub fn with_root_pem(self, pem: String) -> Result<TrustConfig, X509Error> {
+        var config = self
         for der in pem_blocks(pem)? {
-            store = store.add_der(der)?
+            config = config.with_root_der(der)?
         }
-        Ok(store)
+        Ok(config)
     }
 
-    // The store and the root `der` encodes, with Mozilla's kind of
+    // The configuration and the root `der` encodes, with Mozilla's kind of
     // restriction: a server certificate that became valid after `after`
     // (seconds since 1970) is `DistrustedRoot` under this root. The bytes
-    // are trusted, as for `add_der`.
-    pub fn add_der_distrust_after(self, der: Bytes, after: Int) -> Result<RootStore, X509Error> {
+    // are trusted, as for `with_root_der`.
+    pub fn with_root_distrusting_after(self, der: Bytes, after: Int) -> Result<TrustConfig, X509Error> {
         let cert = parse_certificate(der)?
         var anchors = self.anchors
-        anchors.push(Anchor(subject: cert.subject, spki: cert.spki, distrust_after: after))
-        Ok(RootStore(anchors: anchors))
+        anchors.push(anchor_of(cert, after))
+        Ok(TrustConfig(anchors: anchors))
     }
 
-    // Whether the store has a root with `cert`'s subject and key.
+    // Whether the configuration has a root with `cert`'s subject and key.
     pub fn contains(self, cert: Certificate) -> Bool {
         for anchor in self.anchors {
             if anchor.subject == cert.subject && anchor.spki == cert.spki {
@@ -353,10 +390,28 @@ impl RootStore {
         false
     }
 
-    // How many roots the store holds.
+    // How many roots the configuration holds.
     pub fn len(self) -> Int {
         self.anchors.len()
     }
+}
+
+// The certificate `der` encodes: `Certificate.parse`, as a function.
+pub fn parse_der(der: Untrusted<Bytes>) -> Result<Certificate, X509Error> {
+    Certificate.parse(der)
+}
+
+// Every certificate in `pem`, one or more `-----BEGIN CERTIFICATE-----`
+// blocks with blank lines between them and nothing else outside. The text
+// may be untrusted: each block is decoded and parsed as `parse_der` does.
+// An empty text, a block that is not base64 or text outside the blocks is
+// `Malformed`.
+pub fn parse_pem(pem: Untrusted<String>) -> Result<List<Certificate>, X509Error> {
+    var out: List<Certificate> = []
+    for der in pem_blocks(pem)? {
+        out.push(parse_certificate(der)?)
+    }
+    Ok(out)
 }
 
 // ---- Verifying ----------------------------------------------------------------------
@@ -367,33 +422,51 @@ impl RootStore {
 // the rest of what the server sent, in any order and with extras. When no
 // path is valid, the error is the first reason a path was refused, or
 // `UnknownIssuer` when none led to a root.
-pub fn verify_chain(store: RootStore, leaf: Certificate, others: List<Certificate>, now: Int) -> Result<List<Certificate>, X509Error> {
+pub fn verify_chain(store: TrustConfig, leaf: Certificate, others: List<Certificate>, now: Int) -> Result<List<Certificate>, X509Error> {
     let ctx = Context(store: store, pool: others, now: now)
-    search(ctx, [leaf])
+    let result = search(ctx, [leaf], 0)
+    if result.ok {
+        Ok(result.path)
+    } else {
+        Err(result.error)
+    }
 }
 
 // `verify_chain` and the host name check together: the chain of `leaf`
 // for the server `host`, as `Certificate.matches_host` reads it. The name
 // is checked first, so a certificate for another host is `HostMismatch`
 // whatever its chain. `host` is trusted text.
-pub fn verify_server(store: RootStore, leaf: Certificate, others: List<Certificate>, host: String, now: Int) -> Result<List<Certificate>, X509Error> {
+pub fn verify_server(store: TrustConfig, leaf: Certificate, others: List<Certificate>, host: String, now: Int) -> Result<List<Certificate>, X509Error> {
     if !host_matches(leaf, host) {
         return Err(X509Error.HostMismatch)
     }
     verify_chain(store, leaf, others, now)
 }
 
-// The most certificates a path may hold before its root.
+// The most certificates a path may hold before its root, and the most
+// signature checks one validation may make: the bounds on what a hostile
+// set of certificates can cost.
 fn max_path() -> Int {
-    6
+    8
 }
 
-struct Context { store: RootStore, pool: List<Certificate>, now: Int }
+fn max_checks() -> Int {
+    64
+}
+
+struct Context { store: TrustConfig, pool: List<Certificate>, now: Int }
 
 // Whether `error` says only that no path was found.
 fn is_unknown(error: X509Error) -> Bool {
     match error {
         X509Error.UnknownIssuer => true
+        _ => false
+    }
+}
+
+fn is_limit(error: X509Error) -> Bool {
+    match error {
+        X509Error.LimitExceeded => true
         _ => false
     }
 }
@@ -407,25 +480,51 @@ fn prefer(best: X509Error, error: X509Error) -> X509Error {
     }
 }
 
+// What a search found: the path or the error, and how many signature
+// checks the whole validation has made so far.
+struct Found { path: List<Certificate>, error: X509Error, ok: Bool, checks: Int }
+
+fn found(path: List<Certificate>, checks: Int) -> Found {
+    Found(path: path, error: X509Error.UnknownIssuer, ok: true, checks: checks)
+}
+
+fn failed(error: X509Error, checks: Int) -> Found {
+    Found(path: [], error: error, ok: false, checks: checks)
+}
+
+// Whether the issuer's subject key identifier rules it out: both it and
+// the certificate's authority key identifier are present and differ.
+fn other_key(cert: Certificate, issuer_ski: Bytes) -> Bool {
+    cert.ext.aki.len() > 0 && issuer_ski.len() > 0 && cert.ext.aki != issuer_ski
+}
+
 // Extends `path` (the leaf first) to a root, depth first: a root whose
-// name is the last certificate's issuer and whose key verifies its
-// signature ends the path, which is then validated whole; otherwise each
-// certificate of the pool with that name and such a key is tried.
-fn search(ctx: Context, path: List<Certificate>) -> Result<List<Certificate>, X509Error> {
+// name is the last certificate's issuer (and whose key identifier, when
+// both have one, is the one the certificate names) and whose key verifies
+// its signature ends the path, which is then validated whole; otherwise
+// each certificate of the pool that fits the same way is tried, and the
+// search backtracks. `checks` signature checks have been made; the 65th
+// stops everything with `LimitExceeded`.
+fn search(ctx: Context, path: List<Certificate>, used: Int) -> Found {
     let last = path.at(path.len() - 1)
     var best = X509Error.UnknownIssuer
+    var checks = used
     for anchor in ctx.store.anchors {
-        if anchor.subject == last.issuer {
+        if anchor.subject == last.issuer && !other_key(last, anchor.ski) {
             match spki_key(anchor.spki) {
                 None => {
                     best = prefer(best, X509Error.UnsupportedAlgorithm)
                 }
                 Some(key) => {
+                    if checks >= max_checks() {
+                        return failed(X509Error.LimitExceeded, checks)
+                    }
+                    checks = checks + 1
                     match verify_signature(last, key) {
                         Ok(()) => {
                             match validate(ctx, path, anchor) {
                                 Ok(()) => {
-                                    return Ok(path)
+                                    return found(path, checks)
                                 }
                                 Err(error) => {
                                     best = prefer(best, error)
@@ -441,27 +540,32 @@ fn search(ctx: Context, path: List<Certificate>) -> Result<List<Certificate>, X5
         }
     }
     if path.len() >= max_path() {
-        return Err(best)
+        return failed(best, checks)
     }
     for candidate in ctx.pool {
-        if candidate.subject == last.issuer && !contains_certificate(path, candidate) {
+        if candidate.subject == last.issuer && !other_key(last, candidate.ext.ski) && !contains_certificate(path, candidate) {
             match candidate.key {
                 None => {
                     best = prefer(best, X509Error.UnsupportedAlgorithm)
                 }
                 Some(key) => {
+                    if checks >= max_checks() {
+                        return failed(X509Error.LimitExceeded, checks)
+                    }
+                    checks = checks + 1
                     match verify_signature(last, key) {
                         Ok(()) => {
                             var next = path
                             next.push(candidate)
-                            match search(ctx, next) {
-                                Ok(found) => {
-                                    return Ok(found)
-                                }
-                                Err(error) => {
-                                    best = prefer(best, error)
-                                }
+                            let below = search(ctx, next, checks)
+                            checks = below.checks
+                            if below.ok {
+                                return found(below.path, checks)
                             }
+                            if is_limit(below.error) {
+                                return failed(below.error, checks)
+                            }
+                            best = prefer(best, below.error)
                         }
                         Err(error) => {
                             best = prefer(best, error)
@@ -471,7 +575,7 @@ fn search(ctx: Context, path: List<Certificate>) -> Result<List<Certificate>, X5
             }
         }
     }
-    Err(best)
+    failed(best, checks)
 }
 
 fn contains_certificate(path: List<Certificate>, candidate: Certificate) -> Bool {
@@ -513,14 +617,23 @@ fn validate(ctx: Context, path: List<Certificate>, anchor: Anchor) -> Result<(),
             return Err(X509Error.PathLengthExceeded)
         }
     }
-    for c in path {
-        if c.ext.has_eku && !allows_server_auth(c.ext.eku) {
+    // The server's certificate must name server authentication; a CA's
+    // extended key usage, when it has one, must allow it.
+    if !leaf.ext.has_eku || !allows_server_auth(leaf.ext.eku) {
+        return Err(X509Error.ExtendedKeyUsage)
+    }
+    for i in 1..path.len() {
+        let ca = path.at(i)
+        if ca.ext.has_eku && !allows_server_auth(ca.ext.eku) {
             return Err(X509Error.ExtendedKeyUsage)
         }
     }
+    // A CA's name constraints apply to every certificate below it.
     for i in 1..path.len() {
-        if !names_allowed(leaf, path.at(i).ext) {
-            return Err(X509Error.NameConstraint)
+        for j in 0..i {
+            if !names_allowed(path.at(j), path.at(i).ext) {
+                return Err(X509Error.NameConstraint)
+            }
         }
     }
     if anchor.distrust_after != 0 && leaf.not_before > anchor.distrust_after {
@@ -805,6 +918,8 @@ fn no_extensions() -> Extensions {
         key_usage_bits: 0,
         has_eku: false,
         eku: [],
+        ski: Bytes.new(),
+        aki: Bytes.new(),
         dns: [],
         ips: [],
         permitted_dns: [],
@@ -1198,11 +1313,43 @@ fn parse_extensions(d: Bytes, wrapper: Tlv) -> Result<Extensions, X509Error> {
             x = subject_alt_names(d, v, x)?
         } else if oid == "551d1e" {
             x = name_constraints(d, v, x)?
+        } else if oid == "551d0e" {
+            x = subject_key_id(d, v, x)?
+        } else if oid == "551d23" {
+            x = authority_key_id(d, v, x)?
         } else if critical && !ignorable_extension(oid) {
             return Err(X509Error.UnsupportedCriticalExtension)
         }
     }
     Ok(x)
+}
+
+// The subject key identifier: an OCTET STRING.
+fn subject_key_id(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let id = only_child(d, v)?
+    if id.tag != 4 {
+        return Err(X509Error.Malformed)
+    }
+    out.ski = content(d, id)
+    Ok(out)
+}
+
+// The authority key identifier: a SEQUENCE whose `keyIdentifier [0]`, if
+// present, is the issuer's key identifier. The issuer's name and serial
+// number, if present, are not used.
+fn authority_key_id(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let seq = only_child(d, v)?
+    if seq.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    for field in children(d, seq)? {
+        if field.tag == 128 {
+            out.aki = content(d, field)
+        }
+    }
+    Ok(out)
 }
 
 fn basic_constraints(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
@@ -1646,7 +1793,7 @@ fn base64_value(c: Int) -> Int {
 }
 
 // The bytes `text` encodes in strictly padded standard base64.
-fn decode_base64(text: Bytes) -> Option<Bytes> {
+fn decode_base64(text: Untrusted<Bytes>) -> Option<Bytes> {
     let n = text.len()
     if n == 0 || n % 4 != 0 {
         return None
@@ -1696,7 +1843,7 @@ fn decode_base64(text: Bytes) -> Option<Bytes> {
 
 // The DER of every certificate block of `pem`. Blank lines may stand
 // between blocks, and nothing else may stand outside them.
-fn pem_blocks(pem: String) -> Result<List<Bytes>, X509Error> {
+fn pem_blocks(pem: Untrusted<String>) -> Result<List<Bytes>, X509Error> {
     var blocks: List<Bytes> = []
     var inside = false
     var body = ""

@@ -75,9 +75,9 @@ fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
     let other_hex = line(input)?
     let host = line(input)?.assume_trusted()
     let root = bytes_of(root_hex).assume_trusted()
-    let store = match x509.RootStore.empty().add_der(root) {
+    let store = match x509.TrustConfig.only_roots([]).with_root_der(root) {
         Ok(s) => s
-        Err(_) => x509.RootStore.empty()
+        Err(_) => x509.TrustConfig.only_roots([])
     }
     io.println(store.len().to_string())?
     let leaf = match x509.Certificate.parse(bytes_of(leaf_hex)) {
@@ -93,7 +93,11 @@ fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
     io.println(if leaf.is_ca() { "ca" } else { "leaf" })?
     io.println(leaf.not_before().to_string())?
     io.println(leaf.not_after().to_string())?
-    io.println(",".join(leaf.dns_names()))?
+    var names: List<String> = []
+    for name in leaf.dns_names() {
+        names.push(name.assume_trusted())
+    }
+    io.println(",".join(names))?
     io.println(if leaf.matches_host(host) { "host matches" } else { "host differs" })?
     io.println(if leaf.public_key().is_some() { "key" } else { "no key" })?
     io.println(leaf.subject().to_hex())?
@@ -237,15 +241,15 @@ fn a_package_module_verifies_on_both_backends() {
             ("src/main.osk", &main),
             (
                 "src/trust.osk",
-                "use std.x509.{Certificate, RootStore, verify_server}\n\n\
+                "use std.x509.{Certificate, TrustConfig, verify_server}\n\n\
                  fn hex(text: String) -> Bytes {\n    \
                  Bytes.from_hex(text).unwrap_or(Bytes.new())\n}\n\n\
-                 fn check(store: RootStore, l: Certificate, o: Certificate) -> String {\n    \
+                 fn check(store: TrustConfig, l: Certificate, o: Certificate) -> String {\n    \
                  match verify_server(store, l, [o], \"example.test\", 1750000000) {\n        \
                  Ok(_) => \"valid\"\n        Err(_) => \"invalid\"\n    }\n}\n\n\
                  pub(pkg) fn verdict(root: String, leaf: String, other: String) -> String {\n    \
-                 let store = match RootStore.empty().add_der(hex(root)) {\n        \
-                 Ok(s) => s\n        Err(_) => RootStore.empty()\n    }\n    \
+                 let store = match TrustConfig.only_roots([]).with_root_der(hex(root)) {\n        \
+                 Ok(s) => s\n        Err(_) => TrustConfig.only_roots([])\n    }\n    \
                  match Certificate.parse(hex(leaf)) {\n        \
                  Ok(l) => match Certificate.parse(hex(other)) {\n            \
                  Ok(o) => check(store, l, o)\n            Err(_) => \"malformed\"\n        }\n        \
@@ -271,7 +275,7 @@ fn every_crafted_chain_natively() {
         .expect("oskac runs");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{output:?}");
-    assert!(stdout.contains("31 tests: 31 passed, 0 failed"), "{stdout}");
+    assert!(stdout.contains("38 tests: 38 passed, 0 failed"), "{stdout}");
 }
 
 /// Every real root of Mozilla's store in `vectors/x509_mozilla_roots.osk`,
