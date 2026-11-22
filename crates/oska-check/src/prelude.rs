@@ -90,6 +90,12 @@ pub static STD_MODULES: &[StdModule] = &[
         kind: StdKind::Source,
         sink_literal: None,
     },
+    StdModule {
+        path: "std.sshsig",
+        source: include_str!("std/sshsig.osk"),
+        kind: StdKind::Source,
+        sink_literal: None,
+    },
 ];
 
 /// The `std.*` module at `path`.
@@ -212,8 +218,17 @@ mod tests {
     #[test]
     fn every_name_in_each_std_module_resolves_once_imported() {
         for std in super::STD_MODULES {
-            let importer =
-                oska_syntax::parse_module(&format!("use {}", std.path)).expect("a use parses");
+            // The importer binds the module's own name and, as the module
+            // does, every module it imports, so a type such as
+            // `ed25519.PublicKey` resolves in a module that uses one.
+            let imports: String = std
+                .source
+                .lines()
+                .filter(|line| line.starts_with("use "))
+                .map(|line| format!("{line}\n"))
+                .collect();
+            let importer = oska_syntax::parse_module(&format!("use {}\n{imports}", std.path))
+                .expect("a use parses");
             let mut diagnostics = Vec::new();
             let decls = Decls::collect(&importer, &mut diagnostics);
             resolve::prelude_module(std.module(), &decls, &mut diagnostics);
