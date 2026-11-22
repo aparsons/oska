@@ -13,11 +13,30 @@
 //! - **Size classes.** A request of at most [`MAX_SMALL`] bytes with an
 //!   alignment of at most [`ALIGN`] is served from one of [`CLASSES`]
 //!   size classes ([`SIZES`]), rounded up to the class's block size.
-//!   Every other request goes straight to [`System`], and so does its
-//!   `dealloc` and `realloc`. The route is decided from the layout alone
-//!   ([`class_of`]), and `GlobalAlloc` passes `dealloc` and `realloc`
+//!   Every other request goes to [`System`], and so does its `dealloc`
+//!   and `realloc`. The route is decided from the layout alone
+//!   ([`route`]), and `GlobalAlloc` passes `dealloc` and `realloc`
 //!   the layout the block was allocated with, so a block always goes
 //!   back to the allocator it came from.
+//! - **Held large blocks.** musl's mallocng maps and unmaps a group of
+//!   pages for each request over 1 KiB, so a program that makes and drops
+//!   large buffers pays a system call and page faults each time (section
+//!   13 of the research note: 21,811 `mmap` calls on the interpreted site
+//!   build, against 20 under glibc). A request of more than [`MAX_SMALL`]
+//!   and at most [`HOLD_MAX`] bytes, aligned to at most [`ALIGN`], is
+//!   rounded up to one of [`LARGE_BUCKETS`] sizes (four per doubling, so
+//!   at most a quarter over) and allocated from [`System`] at that
+//!   rounded size. When the program frees it, the block is kept on its
+//!   bucket's list in the shared pool, up to [`HOLD_COUNT`] blocks a
+//!   bucket and [`HOLD_CAP`] bytes in all, and the next request of that
+//!   bucket takes it; past either limit it goes back to [`System`]. A
+//!   held block is still a [`System`] block, allocated and freed at its
+//!   bucket's size and alignment [`ALIGN`], and only ever freed through
+//!   `System` with that layout, whichever thread frees it. The shared
+//!   pool's lock guards the lists (one short critical section per large
+//!   request); the small-block fast path does not touch it. A request
+//!   above [`HOLD_MAX`] goes straight to [`System`], never held: it
+//!   would be a large part of the cap by itself.
 //! - **Regions.** Blocks are carved from regions of [`REGION`] bytes
 //!   that [`System`] allocates. A region is never given back: its blocks
 //!   are reused for the life of the process. Beyond [`System`], the
@@ -126,6 +145,24 @@ const SIZES: [usize; CLASSES] = [
     16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024,
 ];
 
+/// The largest request, in bytes, that is held for reuse after it is
+/// freed: 1 MiB. Above it a block is a large part of [`HOLD_CAP`] and the
+/// kernel's cost per byte is already small.
+pub const HOLD_MAX: usize = 1024 * 1024;
+
+/// The most bytes, in all buckets, the allocator holds freed: 8 MiB. The
+/// interpreter's buffers that matter are a few KiB to a few hundred KiB
+/// (the site build); 8 MiB holds a working set of those and is small next
+/// to what a program that needs `oskac` holds anyway.
+pub const HOLD_CAP: usize = 8 * 1024 * 1024;
+
+/// The most blocks held in one bucket.
+const HOLD_COUNT: usize = 16;
+
+/// The number of large buckets: four sizes for each doubling from 1 KiB
+/// to [`HOLD_MAX`] (10 doublings).
+pub const LARGE_BUCKETS: usize = 40;
+
 /// The bytes of each region taken from [`System`].
 const REGION: usize = 256 * 1024;
 
@@ -167,6 +204,9 @@ const _: () = {
     }
     assert!(SIZES[CLASSES - 1] == MAX_SMALL);
     assert!(REGION % ALIGN == 0 && REGION >= MAX_SMALL * 64);
+    assert!(MAX_SMALL == 1024 && HOLD_MAX == 1 << 20 && LARGE_BUCKETS == 40);
+    assert!(bucket_size(0) == 1280 && bucket_size(LARGE_BUCKETS - 1) == HOLD_MAX);
+    assert!(HOLD_CAP >= HOLD_MAX);
 };
 
 /// The size class that serves `layout`, or `None` for one that goes to
@@ -177,6 +217,50 @@ fn class_of(layout: Layout) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// Where a request goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// A size class.
+    Small(usize),
+    /// A large bucket: [`System`], at the bucket's size, held when freed.
+    Large(usize),
+    /// [`System`], at the requested size.
+    System,
+}
+
+/// The route of `layout`, decided from it alone, so `dealloc` and
+/// `realloc`, given the layout a block was allocated with, send it back
+/// where `alloc` took it from.
+fn route(layout: Layout) -> Route {
+    if let Some(class) = class_of(layout) {
+        Route::Small(class)
+    } else if layout.size() <= HOLD_MAX && layout.align() <= ALIGN {
+        Route::Large(large_bucket(layout.size()))
+    } else {
+        Route::System
+    }
+}
+
+/// The bucket of a request of `size` bytes, `MAX_SMALL < size <=
+/// HOLD_MAX`: the smallest of four sizes per doubling that fits it.
+const fn large_bucket(size: usize) -> usize {
+    // `size - 1` is at least 1024, so `high` is in 10..=19.
+    let high = (usize::BITS - 1 - (size - 1).leading_zeros()) as usize;
+    let units = size.div_ceil(1 << (high - 2));
+    (high - 10) * 4 + (units - 5)
+}
+
+/// The size of a bucket's blocks, in bytes.
+const fn bucket_size(bucket: usize) -> usize {
+    (5 + bucket % 4) << (bucket / 4 + 8)
+}
+
+/// The layout [`System`] sees for a block of `bucket`: always the same
+/// size and alignment, for `alloc` and `dealloc` alike.
+fn bucket_layout(bucket: usize) -> Option<Layout> {
+    Layout::from_size_align(bucket_size(bucket), ALIGN).ok()
 }
 
 /// How many blocks of `class` move between a thread's cache and the
@@ -190,6 +274,10 @@ fn batch(class: usize) -> usize {
 /// The number of regions taken from [`System`] so far, by every
 /// [`SizeClassAlloc`] in the process.
 static REGIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// A copy of [`Pool::held_bytes`], written under the pool's lock, for
+/// [`SizeClassAlloc::held_bytes`].
+static HELD: AtomicUsize = AtomicUsize::new(0);
 
 /// The pool every thread shares, behind [`SHARED`]'s lock.
 struct Pool {
@@ -207,6 +295,13 @@ struct Pool {
     next: *mut u8,
     /// The bytes left in the current region from [`Pool::next`].
     left: usize,
+    /// For each large bucket, the first held block, or null; blocks are
+    /// linked through their first word.
+    held: [*mut u8; LARGE_BUCKETS],
+    /// For each large bucket, the number of blocks held.
+    held_count: [usize; LARGE_BUCKETS],
+    /// The bytes held in all buckets: at most [`HOLD_CAP`].
+    held_bytes: usize,
 }
 
 /// The [`Pool`] behind a lock of its own: a flag that a thread sets to
@@ -234,6 +329,9 @@ static SHARED: Shared = Shared {
         loose: [ptr::null_mut(); CLASSES],
         next: ptr::null_mut(),
         left: 0,
+        held: [ptr::null_mut(); LARGE_BUCKETS],
+        held_count: [0; LARGE_BUCKETS],
+        held_bytes: 0,
     }),
 };
 
@@ -310,7 +408,8 @@ unsafe fn next_of(block: *mut u8) -> *mut u8 {
 ///
 /// # Safety
 ///
-/// `block` is a block of a size class that no live allocation covers
+/// `block` is a block of a size class or a large bucket that no live
+/// allocation covers
 /// and that only the caller can reach.
 unsafe fn set_next(block: *mut u8, next: *mut u8) {
     // SAFETY: by this function's contract `block` is at least 16 bytes,
@@ -672,6 +771,13 @@ impl SizeClassAlloc {
     pub fn regions() -> usize {
         REGIONS.load(Ordering::Relaxed)
     }
+
+    /// How many bytes of freed large blocks the allocator holds for
+    /// reuse right now, in the whole process: never more than
+    /// [`HOLD_CAP`].
+    pub fn held_bytes() -> usize {
+        HELD.load(Ordering::Relaxed)
+    }
 }
 
 /// A free block of `class`, or null.
@@ -700,24 +806,94 @@ unsafe fn dealloc_small(class: usize, block: *mut u8) {
     });
 }
 
+/// A block of `bucket`, held or fresh from [`System`], zeroed in its
+/// first `zero` bytes, or null.
+fn alloc_large(bucket: usize, zero: usize) -> *mut u8 {
+    let size = bucket_size(bucket);
+    let held = with_pool(|pool| {
+        let block = pool.held[bucket];
+        if !block.is_null() {
+            // SAFETY: `block` heads this bucket's list, a held block whose
+            // first word `dealloc_large` set, and this thread holds the
+            // lock.
+            pool.held[bucket] = unsafe { next_of(block) };
+            pool.held_count[bucket] -= 1;
+            pool.held_bytes -= size;
+            HELD.store(pool.held_bytes, Ordering::Relaxed);
+        }
+        block
+    });
+    if !held.is_null() {
+        if zero > 0 {
+            // SAFETY: `held` is a block of `size` >= `zero` bytes that
+            // only this thread reaches now.
+            unsafe { held.write_bytes(0, zero) };
+        }
+        return held;
+    }
+    let Some(layout) = bucket_layout(bucket) else {
+        return ptr::null_mut();
+    };
+    if zero > 0 {
+        // SAFETY: `layout` has a non-zero size.
+        unsafe { System.alloc_zeroed(layout) }
+    } else {
+        // SAFETY: `layout` has a non-zero size.
+        unsafe { System.alloc(layout) }
+    }
+}
+
+/// Holds `block` of `bucket` for reuse, or gives it back to [`System`]
+/// when the bucket or the whole is full.
+///
+/// # Safety
+///
+/// `block` was returned by [`alloc_large`] for `bucket`, and the program
+/// no longer uses it.
+unsafe fn dealloc_large(bucket: usize, block: *mut u8) {
+    let size = bucket_size(bucket);
+    let kept = with_pool(|pool| {
+        if pool.held_count[bucket] >= HOLD_COUNT || pool.held_bytes + size > HOLD_CAP {
+            return false;
+        }
+        // SAFETY: by this function's contract the program no longer uses
+        // `block`, which is at least 1280 bytes and 16-aligned.
+        unsafe { set_next(block, pool.held[bucket]) };
+        pool.held[bucket] = block;
+        pool.held_count[bucket] += 1;
+        pool.held_bytes += size;
+        HELD.store(pool.held_bytes, Ordering::Relaxed);
+        true
+    });
+    if !kept {
+        if let Some(layout) = bucket_layout(bucket) {
+            // SAFETY: `System` returned `block` for this layout in
+            // `alloc_large`, and the program no longer uses it.
+            unsafe { System.dealloc(block, layout) };
+        }
+    }
+}
+
 // SAFETY: `alloc` returns null or a block of at least `layout.size()`
 // bytes aligned to `layout.align()` that no live allocation overlaps
-// (size classes: the module's "Soundness"; otherwise `System`'s promise).
-// `dealloc` and `realloc` route a block by its layout, as `alloc` did,
-// so each block goes back to where it came from. No method panics or
-// unwinds (the module's "Soundness").
+// (size classes: the module's "Soundness"; large buckets and the rest:
+// `System`'s promise, a held block being one `System` returned that no
+// one else holds). `dealloc` and `realloc` route a block by its layout,
+// as `alloc` did, so each block goes back to where it came from. No
+// method panics or unwinds (the module's "Soundness").
 unsafe impl GlobalAlloc for SizeClassAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        match class_of(layout) {
-            Some(class) => alloc_small(class),
+        match route(layout) {
+            Route::Small(class) => alloc_small(class),
+            Route::Large(bucket) => alloc_large(bucket, 0),
             // SAFETY: the caller passes a layout of non-zero size.
-            None => unsafe { System.alloc(layout) },
+            Route::System => unsafe { System.alloc(layout) },
         }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        match class_of(layout) {
-            Some(class) => {
+        match route(layout) {
+            Route::Small(class) => {
                 let block = alloc_small(class);
                 if !block.is_null() {
                     // SAFETY: `block` is a fresh block of at least
@@ -726,20 +902,23 @@ unsafe impl GlobalAlloc for SizeClassAlloc {
                 }
                 block
             }
+            Route::Large(bucket) => alloc_large(bucket, layout.size()),
             // SAFETY: the caller passes a layout of non-zero size.
-            None => unsafe { System.alloc_zeroed(layout) },
+            Route::System => unsafe { System.alloc_zeroed(layout) },
         }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        match class_of(layout) {
+        match route(layout) {
             // SAFETY: the caller passes a block this allocator returned
             // for `layout`, so `alloc_small` returned it for this class,
             // and the program no longer uses it.
-            Some(class) => unsafe { dealloc_small(class, ptr) },
-            // SAFETY: `layout` has no class, so `System` returned `ptr`
-            // for `layout`, which the caller gives back.
-            None => unsafe { System.dealloc(ptr, layout) },
+            Route::Small(class) => unsafe { dealloc_small(class, ptr) },
+            // SAFETY: as above, with `alloc_large` and this bucket.
+            Route::Large(bucket) => unsafe { dealloc_large(bucket, ptr) },
+            // SAFETY: `layout` has no class or bucket, so `System`
+            // returned `ptr` for `layout`, which the caller gives back.
+            Route::System => unsafe { System.dealloc(ptr, layout) },
         }
     }
 
@@ -747,13 +926,16 @@ unsafe impl GlobalAlloc for SizeClassAlloc {
         let Ok(new_layout) = Layout::from_size_align(new_size, layout.align()) else {
             return ptr::null_mut();
         };
-        match (class_of(layout), class_of(new_layout)) {
+        match (route(layout), route(new_layout)) {
             // The block already has room for `new_size` bytes, and a
-            // later `dealloc` with `new_layout` finds the same class.
-            (Some(old), Some(new)) if old == new => ptr,
-            // SAFETY: neither layout has a class, so `System` returned
-            // `ptr` for `layout`; the caller passes a valid `new_size`.
-            (None, None) => unsafe { System.realloc(ptr, layout, new_size) },
+            // later `dealloc` with `new_layout` finds the same class or
+            // bucket.
+            (Route::Small(old), Route::Small(new)) if old == new => ptr,
+            (Route::Large(old), Route::Large(new)) if old == new => ptr,
+            // SAFETY: neither layout has a class or bucket, so `System`
+            // returned `ptr` for `layout`; the caller passes a valid
+            // `new_size`.
+            (Route::System, Route::System) => unsafe { System.realloc(ptr, layout, new_size) },
             _ => {
                 // SAFETY: `new_layout` has a non-zero size, as the caller
                 // passes a non-zero `new_size`.
