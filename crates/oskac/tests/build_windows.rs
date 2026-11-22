@@ -1,6 +1,6 @@
 //! `oskac build --target windows-x86_64` (spec #155, ticket #176): a
 //! PE32+ console executable that the Windows loader loads, importing only
-//! from `kernel32.dll` and `bcryptprimitives.dll` (ADR 0020).
+//! from `kernel32.dll`, `ntdll.dll`, `bcryptprimitives.dll` and `ws2_32.dll` (ADR 0020).
 //!
 //! Every host checks the file against Microsoft's format (`pe-format.md`),
 //! byte by byte, so the writer is developed without Windows. On Windows the
@@ -22,7 +22,7 @@ const PLATFORM: &str = "windows-x86_64";
 
 /// The functions every Windows executable imports, by DLL, in the order
 /// of the import table (ADR 0020: the list is reviewed surface).
-const IMPORTS: [(&str, &[&str]); 3] = [
+const IMPORTS: [(&str, &[&str]); 4] = [
     (
         "KERNEL32.dll",
         &[
@@ -57,6 +57,25 @@ const IMPORTS: [(&str, &[&str]); 3] = [
         ],
     ),
     ("bcryptprimitives.dll", &["ProcessPrng"]),
+    (
+        "WS2_32.dll",
+        &[
+            "WSAStartup",
+            "socket",
+            "connect",
+            "bind",
+            "listen",
+            "accept",
+            "getsockname",
+            "getsockopt",
+            "setsockopt",
+            "send",
+            "recv",
+            "WSAPoll",
+            "closesocket",
+            "ioctlsocket",
+        ],
+    ),
 ];
 
 /// A new, empty directory for `case`, holding `files`.
