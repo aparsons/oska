@@ -1,0 +1,1150 @@
+// `std.dns`: a stub DNS resolver, written in Oska so that every platform
+// resolves names the same way (spec #228, ADR 0012). A module sees it only
+// after `use std.dns`.
+//
+// It has three layers, each usable on its own:
+//
+// - Configuration: `parse_hosts` reads a hosts file, `parse_resolv_conf`
+//   reads a `resolv.conf` (name servers, search list, `ndots`, `timeout`
+//   and `attempts`), and `Config.new` joins them. `load_config` reads the
+//   files of this machine and, on Windows, asks the operating system for
+//   its name servers (`NetConnect.system_name_servers`).
+// - Messages: `build_query` writes a query (RFC 1035) and
+//   `parse_response` reads an answer. An answer comes from outside the
+//   program, so it is untrusted and checked before anything is taken from
+//   it: the transaction id and the question must be the ones sent, name
+//   compression pointers must point strictly backwards, every length is
+//   checked against the bytes that remain, a name is made of letters,
+//   digits, hyphens and underscores only, and only the addresses of the
+//   name asked for, or of the names its `CNAME` chain leads to, are kept.
+//   Nothing in a hostile answer can make the parser panic or loop.
+// - Resolution: `resolve` finds the addresses of a host name. A name that
+//   is an address literal is its own answer. Otherwise the hosts file is
+//   looked up, and then each name server in turn is asked over UDP, and
+//   again over TCP when the answer comes back truncated. Which transport
+//   carries the bytes is a trait, `Exchange`, so the same code runs over
+//   `NetExchange` (real sockets) and over recorded messages in a test.
+//
+// An address is returned as text in its canonical form: dotted decimal
+// for IPv4, and RFC 5952 for IPv6 (lower case, no leading zeros, the
+// longest run of zero groups written as `::`). Addresses are built from
+// integers read out of the input, so they are trusted text, as `std.sha2`'s
+// digests are trusted bytes. IPv4 addresses come before IPv6 ones.
+//
+// Every failure has Oska's own wording (`DnsError`'s `to_string`), never
+// the operating system's. The module has one audit site, an `expose()` in
+// `NetExchange.query_id`: the transaction id comes from the secure random
+// source so that nobody can guess it, and then goes out in the clear in
+// every query. It has no `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by recorded DNS messages, hostile answers, and a loopback name
+// server, on the interpreter and natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+
+// The record type of an IPv4 address.
+pub const TYPE_A: Int = 1
+
+// The record type of an IPv6 address.
+pub const TYPE_AAAA: Int = 28
+
+// The record type of an alias.
+const TYPE_CNAME: Int = 5
+
+// The most `CNAME`s followed from one answer.
+const MAX_CHAIN: Int = 8
+
+// The most records read from one answer.
+const MAX_RECORDS: Int = 128
+
+// The longest hosts file or `resolv.conf` read, in bytes: the rest is
+// ignored.
+pub const MAX_CONFIG_BYTES: Int = 1048576
+
+// Why a lookup or a message was refused. `to_string` has Oska's wording.
+pub enum DnsError {
+    // The host name is empty, too long, has an empty or over-long label,
+    // or a character a host name may not have.
+    InvalidName,
+    // No such host: the name server said so, or no address came back.
+    NotFound,
+    // The name server could not answer.
+    ServerFailure,
+    // The name server refused to answer.
+    Refused,
+    // The answer did not fit its datagram.
+    Truncated,
+    // The answer is not a well-formed DNS message.
+    Malformed,
+    // The answer is for another query: another id, question, or not an
+    // answer at all.
+    Mismatch,
+    // No name server answered in time.
+    Timeout,
+    // The transport failed in some other way: a connection refused or
+    // reset, an unreachable network.
+    Unreachable,
+}
+
+impl Display for DnsError {
+    fn to_string(self) -> String {
+        match self {
+            DnsError.InvalidName => "invalid host name"
+            DnsError.NotFound => "host not found"
+            DnsError.ServerFailure => "name server failed"
+            DnsError.Refused => "name server refused"
+            DnsError.Truncated => "answer truncated"
+            DnsError.Malformed => "malformed answer"
+            DnsError.Mismatch => "answer does not match the query"
+            DnsError.Timeout => "timed out"
+            DnsError.Unreachable => "name server unreachable"
+        }
+    }
+}
+
+// What an answer says about a name: its addresses of the kind asked for
+// (empty when the name exists but has none) and the shortest time to live
+// among the records used, in seconds.
+pub struct Answer { pub addresses: List<String>, pub ttl: Int }
+
+// An IP address as text, in canonical form, and which family it is.
+pub struct Ip { pub text: String, pub is_v6: Bool }
+
+// One line of a hosts file: an address and the names it has, in lower
+// case and with no trailing dot.
+pub struct HostsEntry { pub address: Ip, pub names: List<String> }
+
+// What a `resolv.conf` says: the name servers (at most three, as address
+// literals), the search list (at most six), and the options.
+pub struct ResolvConf {
+    pub servers: List<String>,
+    pub search: List<String>,
+    pub ndots: Int,
+    pub timeout_ms: Int,
+    pub attempts: Int
+}
+
+// Everything the resolver needs to know about the machine it runs on.
+pub struct Config {
+    pub hosts: List<HostsEntry>,
+    pub servers: List<String>,
+    pub search: List<String>,
+    pub ndots: Int,
+    pub timeout_ms: Int,
+    pub attempts: Int
+}
+
+impl Config {
+    // A configuration from a hosts file, a `resolv.conf`, and the name
+    // servers the operating system lists (`system_servers`, used only
+    // when `resolv_conf` names none). With no name server at all, the
+    // resolver asks `127.0.0.1`, as the C library does.
+    pub fn new(hosts: Untrusted<String>, resolv_conf: Untrusted<String>, system_servers: List<String>) -> Config {
+        let parsed = parse_resolv_conf(resolv_conf)
+        var servers = parsed.servers
+        if servers.len() == 0 {
+            for server in system_servers {
+                if servers.len() < 3 {
+                    match parse_ip(server) {
+                        Some(ip) => servers.push(ip.text)
+                        None => {}
+                    }
+                }
+            }
+        }
+        if servers.len() == 0 {
+            servers.push("127.0.0.1")
+        }
+        Config(
+            hosts: parse_hosts(hosts),
+            servers: servers,
+            search: parsed.search,
+            ndots: parsed.ndots,
+            timeout_ms: parsed.timeout_ms,
+            attempts: parsed.attempts
+        )
+    }
+}
+
+// The transport of the resolver: how one DNS message gets to a name
+// server and its answer back. Both methods give the raw message, without
+// the two-byte length TCP puts in front of it, and an `Err` carries the
+// transport's own error, such as `timed out`. A transport that talks to
+// real name servers reads only from the server it sent to.
+pub trait Exchange {
+    // A new transaction id, 0 to 65535. For a transport on a real network
+    // it is unpredictable, so an attacker cannot guess it.
+    fn query_id(self) -> Int
+
+    // Send `message` to `server`, an address literal, as one datagram on
+    // port 53, and wait for one datagram back.
+    fn datagram(self, server: String, message: Bytes) -> Result<Untrusted<Bytes>, IoError>
+
+    // Send `message` to `server`, an address literal, over TCP on port 53,
+    // and read one message back.
+    fn stream(self, server: String, message: Bytes) -> Result<Untrusted<Bytes>, IoError>
+}
+
+// ---- Resolving ---------------------------------------------------------------
+
+// The addresses of `name`, a DNS name or an address literal, in order:
+// IPv4 first, then IPv6. An address literal is its own answer, and the
+// hosts file comes before the network. Otherwise each name the search list
+// makes of `name` is asked in turn (a name with a trailing dot is asked
+// as it is), for IPv4 and then IPv6 addresses. A name server that does not
+// answer, or answers something other than what was asked, is skipped
+// (`attempts` rounds over every server); one that says the name does not
+// exist ends the search of that name.
+pub fn resolve<T: Exchange>(config: Config, transport: T, name: String) -> Result<List<String>, DnsError> {
+    match parse_ip(name) {
+        Some(ip) => { return Ok([ip.text]) }
+        None => {}
+    }
+    let absolute = ends_with_dot(name)
+    let plain = (if absolute { name.slice(0, name.len() - 1) } else { name }).to_lowercase()
+    if !valid_name(plain) {
+        return Err(DnsError.InvalidName)
+    }
+    let listed = lookup_hosts(config.hosts, plain)
+    if listed.len() > 0 {
+        return Ok(listed)
+    }
+    var failure = DnsError.NotFound
+    for candidate in candidates(config, plain, absolute) {
+        var found: List<String> = []
+        for kind in [TYPE_A, TYPE_AAAA] {
+            match ask(config, transport, candidate, kind) {
+                Ok(answer) => {
+                    for address in answer.addresses {
+                        found.push(address)
+                    }
+                }
+                Err(DnsError.NotFound) => {}
+                Err(error) => {
+                    failure = error
+                }
+            }
+        }
+        if found.len() > 0 {
+            return Ok(found)
+        }
+    }
+    Err(failure)
+}
+
+// The addresses the hosts file gives `name`, which is lower-cased first:
+// IPv4 first, then IPv6, each in file order.
+pub fn lookup_hosts(hosts: List<HostsEntry>, name: String) -> List<String> {
+    let wanted = name.to_lowercase()
+    var v4: List<String> = []
+    var v6: List<String> = []
+    for entry in hosts {
+        var matched = false
+        for known in entry.names {
+            if known == wanted {
+                matched = true
+            }
+        }
+        if matched {
+            if entry.address.is_v6 {
+                v6.push(entry.address.text)
+            } else {
+                v4.push(entry.address.text)
+            }
+        }
+    }
+    for address in v6 {
+        v4.push(address)
+    }
+    v4
+}
+
+// The names to ask for `name` (no trailing dot): as it is first when it
+// has `ndots` dots or more, then with each search domain added, and as it
+// is last when it has fewer. An absolute name is asked as it is.
+pub fn candidates(config: Config, name: String, absolute: Bool) -> List<String> {
+    if absolute {
+        return [name]
+    }
+    var dots = 0
+    for char in name.chars() {
+        if char == "." {
+            dots = dots + 1
+        }
+    }
+    var out: List<String> = []
+    if dots >= config.ndots {
+        out.push(name)
+    }
+    for domain in config.search {
+        out.push("{name}.{domain}")
+    }
+    if dots < config.ndots {
+        out.push(name)
+    }
+    out
+}
+
+// Ask the servers for the `kind` records of `name`: `NotFound` when a
+// server says there is no such name, the last failure when none answers.
+fn ask<T: Exchange>(config: Config, transport: T, name: String, kind: Int) -> Result<Answer, DnsError> {
+    var failure = DnsError.ServerFailure
+    var attempt = 0
+    while attempt < config.attempts {
+        for server in config.servers {
+            let id = transport.query_id()
+            let query = build_query(id, name, kind)?
+            match transport.datagram(server, query) {
+                Err(error) => {
+                    failure = transport_failure(error)
+                }
+                Ok(reply) => {
+                    match parse_response(reply, id, name, kind) {
+                        Ok(answer) => { return Ok(answer) }
+                        Err(DnsError.NotFound) => { return Err(DnsError.NotFound) }
+                        Err(DnsError.Truncated) => {
+                            match ask_over_stream(transport, server, query, id, name, kind) {
+                                Ok(answer) => { return Ok(answer) }
+                                Err(DnsError.NotFound) => { return Err(DnsError.NotFound) }
+                                Err(error) => {
+                                    failure = error
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            failure = error
+                        }
+                    }
+                }
+            }
+        }
+        attempt = attempt + 1
+    }
+    Err(failure)
+}
+
+// What a transport's `error` is to the resolver: a timeout, which the
+// transports word as `... timed out`, or any other failure to reach the
+// server.
+fn transport_failure(error: IoError) -> DnsError {
+    if error.message.ends_with("timed out") {
+        DnsError.Timeout
+    } else {
+        DnsError.Unreachable
+    }
+}
+
+// The same question as `ask`, to one server, over TCP.
+fn ask_over_stream<T: Exchange>(transport: T, server: String, query: Bytes, id: Int, name: String, kind: Int) -> Result<Answer, DnsError> {
+    match transport.stream(server, query) {
+        Err(error) => Err(transport_failure(error))
+        Ok(reply) => parse_response(reply, id, name, kind)
+    }
+}
+
+// ---- Messages ----------------------------------------------------------------
+
+// A query for the `kind` records (`TYPE_A` or `TYPE_AAAA`) of `name`, with
+// transaction id `id` (0 to 65535), recursion desired, and no extensions,
+// so that its answer fits a 512-byte datagram or is marked truncated.
+pub fn build_query(id: Int, name: String, kind: Int) -> Result<Bytes, DnsError> {
+    if id < 0 || id > 65535 {
+        return Err(DnsError.Malformed)
+    }
+    if kind != TYPE_A && kind != TYPE_AAAA {
+        return Err(DnsError.Malformed)
+    }
+    var out = Bytes.new()
+    out.push_u16_be(id.to_u16())
+    out.push_u16_be(256)
+    out.push_u16_be(1)
+    out.push_u16_be(0)
+    out.push_u16_be(0)
+    out.push_u16_be(0)
+    if !valid_name(name) {
+        return Err(DnsError.InvalidName)
+    }
+    for label in name.split(".") {
+        let bytes = label.to_bytes()
+        out.push(bytes.len().to_u8())
+        out.append(bytes)
+    }
+    out.push(0)
+    out.push_u16_be(kind.to_u16())
+    out.push_u16_be(1)
+    Ok(out)
+}
+
+// The addresses `message` gives for the `kind` records of `name`, as the
+// answer to the query with id `id`. See the module description for what is
+// checked. An answer with the name server's error code gives that error;
+// one that exists but has no address of the kind gives an empty `Answer`.
+pub fn parse_response(message: Untrusted<Bytes>, id: Int, name: String, kind: Int) -> Result<Answer, DnsError> {
+    let size = message.len()
+    if size < 12 || size > 65535 {
+        return Err(DnsError.Malformed)
+    }
+    if message.read_u16_be(0).to_int() != id {
+        return Err(DnsError.Mismatch)
+    }
+    let flags = message.read_u16_be(2).to_int()
+    // QR (an answer) set, and the opcode 0 (a standard query).
+    if flags / 32768 != 1 || (flags / 2048) % 16 != 0 {
+        return Err(DnsError.Mismatch)
+    }
+    if message.read_u16_be(4).to_int() != 1 {
+        return Err(DnsError.Mismatch)
+    }
+    let answers = message.read_u16_be(6).to_int()
+    // The question: the name, the type and the class must be the ones sent.
+    let question = read_name(message, 12)?
+    if question.next + 4 > size {
+        return Err(DnsError.Malformed)
+    }
+    var asked = Bytes.new()
+    asked.append(name.to_lowercase().to_bytes())
+    if question.text != asked || message.read_u16_be(question.next).to_int() != kind || message.read_u16_be(question.next + 2).to_int() != 1 {
+        return Err(DnsError.Mismatch)
+    }
+    if (flags / 512) % 2 == 1 {
+        return Err(DnsError.Truncated)
+    }
+    let code = flags % 16
+    if code == 3 {
+        return Err(DnsError.NotFound)
+    }
+    if code == 2 {
+        return Err(DnsError.ServerFailure)
+    }
+    if code == 5 {
+        return Err(DnsError.Refused)
+    }
+    if code != 0 {
+        return Err(DnsError.ServerFailure)
+    }
+    if answers > MAX_RECORDS {
+        return Err(DnsError.Malformed)
+    }
+    var at = question.next + 4
+    var owner = asked
+    var chain = 0
+    var addresses: List<String> = []
+    var ttl = 4294967295
+    var index = 0
+    while index < answers {
+        let record_name = read_name(message, at)?
+        if record_name.next + 10 > size {
+            return Err(DnsError.Malformed)
+        }
+        let record_type = message.read_u16_be(record_name.next).to_int()
+        let record_class = message.read_u16_be(record_name.next + 2).to_int()
+        let record_ttl = message.read_u32_be(record_name.next + 4).to_int()
+        let length = message.read_u16_be(record_name.next + 8).to_int()
+        let data = record_name.next + 10
+        if length > size - data {
+            return Err(DnsError.Malformed)
+        }
+        if record_class == 1 && record_name.text == owner {
+            if record_type == TYPE_CNAME {
+                // An alias: the owner of the records that follow is its
+                // target. The target's name must end exactly in the
+                // record's data.
+                let target = read_name(message, data)?
+                if target.next != data + length {
+                    return Err(DnsError.Malformed)
+                }
+                chain = chain + 1
+                if chain > MAX_CHAIN {
+                    return Err(DnsError.Malformed)
+                }
+                owner = target.text
+                if record_ttl < ttl {
+                    ttl = record_ttl
+                }
+            } else if record_type == kind {
+                if kind == TYPE_A && length == 4 {
+                    addresses.push(v4_text(message, data))
+                } else if kind == TYPE_AAAA && length == 16 {
+                    addresses.push(v6_text(message, data))
+                } else {
+                    return Err(DnsError.Malformed)
+                }
+                if record_ttl < ttl {
+                    ttl = record_ttl
+                }
+            }
+        }
+        at = data + length
+        index = index + 1
+    }
+    if addresses.len() == 0 {
+        ttl = 0
+    }
+    Ok(Answer(addresses: addresses, ttl: ttl))
+}
+
+// A name read from a message: lower case, labels joined by dots, and the
+// offset just after the name where it starts (after a compression
+// pointer, if the name ends in one).
+struct WireName { text: Bytes, next: Int }
+
+// The name at `start`. A label is 1 to 63 bytes of letters, digits, `-`
+// and `_`; the whole name is at most 255 bytes on the wire; a compression
+// pointer must point strictly backwards, which makes a loop impossible.
+fn read_name(message: Untrusted<Bytes>, start: Int) -> Result<WireName, DnsError> {
+    var text = Bytes.new()
+    var pos = start
+    var next = -1
+    var wire = 0
+    var done = false
+    while !done {
+        if pos < 0 || pos >= message.len() {
+            return Err(DnsError.Malformed)
+        }
+        let length = message.at(pos).to_int()
+        if length == 0 {
+            if next < 0 {
+                next = pos + 1
+            }
+            done = true
+        } else if length >= 192 {
+            if pos + 1 >= message.len() {
+                return Err(DnsError.Malformed)
+            }
+            let target = (length - 192) * 256 + message.at(pos + 1).to_int()
+            if next < 0 {
+                next = pos + 2
+            }
+            if target >= pos {
+                return Err(DnsError.Malformed)
+            }
+            pos = target
+        } else if length > 63 {
+            return Err(DnsError.Malformed)
+        } else {
+            if pos + 1 + length > message.len() {
+                return Err(DnsError.Malformed)
+            }
+            wire = wire + length + 1
+            if wire > 255 {
+                return Err(DnsError.Malformed)
+            }
+            if text.len() > 0 {
+                text.push(46)
+            }
+            for i in 0..length {
+                let byte = message.at(pos + 1 + i).to_int()
+                if !name_byte(byte) {
+                    return Err(DnsError.Malformed)
+                }
+                text.push(lower(byte).to_u8())
+            }
+            pos = pos + 1 + length
+        }
+    }
+    Ok(WireName(text: text, next: next))
+}
+
+// Whether `byte` may be in a label: a letter, a digit, `-` or `_`.
+fn name_byte(byte: Int) -> Bool {
+    (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90) || (byte >= 48 && byte <= 57) || byte == 45 || byte == 95
+}
+
+// `byte` as a lower-case letter, when it is an upper-case one.
+fn lower(byte: Int) -> Int {
+    if byte >= 65 && byte <= 90 { byte + 32 } else { byte }
+}
+
+// Whether `name` (no trailing dot) is a host name this resolver asks for:
+// at most 253 bytes, labels of 1 to 63 bytes of letters, digits, `-` and
+// `_`.
+pub fn valid_name(name: String) -> Bool {
+    let bytes = name.to_bytes()
+    if bytes.len() == 0 || bytes.len() > 253 {
+        return false
+    }
+    var label = 0
+    for i in 0..bytes.len() {
+        let byte = bytes.at(i).to_int()
+        if byte == 46 {
+            if label == 0 {
+                return false
+            }
+            label = 0
+        } else if name_byte(byte) {
+            label = label + 1
+            if label > 63 {
+                return false
+            }
+        } else {
+            return false
+        }
+    }
+    label > 0
+}
+
+fn ends_with_dot(name: String) -> Bool {
+    name.len() > 1 && name.ends_with(".")
+}
+
+// The four bytes at `at` as dotted decimal.
+fn v4_text(message: Untrusted<Bytes>, at: Int) -> String {
+    let a = message.at(at).to_int()
+    let b = message.at(at + 1).to_int()
+    let c = message.at(at + 2).to_int()
+    let d = message.at(at + 3).to_int()
+    "{a}.{b}.{c}.{d}"
+}
+
+// The sixteen bytes at `at` as an IPv6 address.
+fn v6_text(message: Untrusted<Bytes>, at: Int) -> String {
+    var groups: List<Int> = []
+    for i in 0..8 {
+        groups.push(message.read_u16_be(at + 2 * i).to_int())
+    }
+    v6_from_groups(groups)
+}
+
+// Eight groups as RFC 5952 text: lower case, no leading zeros, and the
+// first longest run of two or more zero groups written as `::`.
+fn v6_from_groups(groups: List<Int>) -> String {
+    var best_at = -1
+    var best_len = 0
+    var run_at = 0
+    var run_len = 0
+    for i in 0..8 {
+        if groups.at(i) == 0 {
+            if run_len == 0 {
+                run_at = i
+            }
+            run_len = run_len + 1
+            if run_len > best_len {
+                best_len = run_len
+                best_at = run_at
+            }
+        } else {
+            run_len = 0
+        }
+    }
+    if best_len < 2 {
+        best_at = -1
+    }
+    var parts: List<String> = []
+    var text = ""
+    var i = 0
+    while i < 8 {
+        if i == best_at {
+            text = "{text}::"
+            i = i + best_len
+        } else {
+            if text != "" && !text.ends_with(":") {
+                text = "{text}:"
+            }
+            let group = hex(groups.at(i))
+            text = "{text}{group}"
+            i = i + 1
+        }
+    }
+    text
+}
+
+// `value` (0 to 65535) in lower-case hexadecimal, with no leading zeros.
+fn hex(value: Int) -> String {
+    let digits = "0123456789abcdef"
+    if value == 0 {
+        return "0"
+    }
+    var out = ""
+    var rest = value
+    while rest > 0 {
+        let digit = rest % 16
+        let char = digits.slice(digit, digit + 1)
+        out = "{char}{out}"
+        rest = rest / 16
+    }
+    out
+}
+
+// ---- Address literals ----------------------------------------------------------
+
+// `text` as an IP address: an IPv4 address in dotted decimal (four
+// numbers 0 to 255, no leading zeros) or an IPv6 address (RFC 4291, with
+// `::`, and an IPv4 tail allowed; no zone). Its canonical text, or `None`.
+pub fn parse_ip(text: Untrusted<String>) -> Option<Ip> {
+    let bytes = copied(text.to_bytes())
+    if bytes.len() == 0 || bytes.len() > 45 {
+        return None
+    }
+    var colon = false
+    for i in 0..bytes.len() {
+        if bytes.at(i).to_int() == 58 {
+            colon = true
+        }
+    }
+    if colon {
+        match v6_groups(bytes) {
+            Some(groups) => Some(Ip(text: v6_from_groups(groups), is_v6: true))
+            None => None
+        }
+    } else {
+        match v4_parts(bytes) {
+            Some(parts) => Some(Ip(text: v4_from_parts(parts), is_v6: false))
+            None => None
+        }
+    }
+}
+
+// Four numbers as dotted decimal.
+fn v4_from_parts(parts: List<Int>) -> String {
+    let a = parts.at(0)
+    let b = parts.at(1)
+    let c = parts.at(2)
+    let d = parts.at(3)
+    "{a}.{b}.{c}.{d}"
+}
+
+// A copy of `data` made one byte at a time, so a use of it is checked
+// byte by byte. Every function here that reads text does so.
+fn copied(data: Untrusted<Bytes>) -> Bytes {
+    var out = Bytes.new()
+    for i in 0..data.len() {
+        out.push(data.at(i))
+    }
+    out
+}
+
+// The four numbers of a dotted-decimal IPv4 address.
+fn v4_parts(bytes: Bytes) -> Option<List<Int>> {
+    var parts: List<Int> = []
+    var value = 0
+    var digits = 0
+    var first = 0
+    for i in 0..bytes.len() {
+        let byte = bytes.at(i).to_int()
+        if byte == 46 {
+            if digits == 0 {
+                return None
+            }
+            parts.push(value)
+            value = 0
+            digits = 0
+        } else if byte >= 48 && byte <= 57 {
+            if digits == 0 {
+                first = byte
+            } else if first == 48 {
+                return None
+            }
+            value = value * 10 + byte - 48
+            digits = digits + 1
+            if digits > 3 || value > 255 {
+                return None
+            }
+        } else {
+            return None
+        }
+    }
+    if digits == 0 {
+        return None
+    }
+    parts.push(value)
+    if parts.len() != 4 {
+        return None
+    }
+    Some(parts)
+}
+
+// The eight groups of an IPv6 address.
+fn v6_groups(bytes: Bytes) -> Option<List<Int>> {
+    // Split at the `::`, if any, into the groups before it and after it.
+    var gap = -1
+    for i in 0..bytes.len() - 1 {
+        if bytes.at(i).to_int() == 58 && bytes.at(i + 1).to_int() == 58 {
+            if gap >= 0 {
+                return None
+            }
+            gap = i
+        }
+    }
+    if gap >= 0 && gap + 2 < bytes.len() && bytes.at(gap + 2).to_int() == 58 {
+        return None
+    }
+    var head: List<Int> = []
+    var tail: List<Int> = []
+    if gap < 0 {
+        match groups_of(bytes, 0, bytes.len(), true) {
+            Some(found) => { head = found }
+            None => { return None }
+        }
+        if head.len() != 8 {
+            return None
+        }
+        return Some(head)
+    }
+    match groups_of(bytes, 0, gap, false) {
+        Some(found) => { head = found }
+        None => { return None }
+    }
+    match groups_of(bytes, gap + 2, bytes.len(), true) {
+        Some(found) => { tail = found }
+        None => { return None }
+    }
+    if head.len() + tail.len() > 7 {
+        return None
+    }
+    var out = head
+    for _ in 0..8 - head.len() - tail.len() {
+        out.push(0)
+    }
+    for group in tail {
+        out.push(group)
+    }
+    Some(out)
+}
+
+// The groups written in `bytes` from `from` up to `to`, separated by
+// colons: each 1 to 4 hexadecimal digits, and the last one, when `tail`
+// is set, possibly an IPv4 address that makes two groups. Empty text has
+// no groups.
+fn groups_of(bytes: Bytes, from: Int, to: Int, tail: Bool) -> Option<List<Int>> {
+    var out: List<Int> = []
+    if from == to {
+        return Some(out)
+    }
+    var start = from
+    var i = from
+    while i <= to {
+        if i == to || bytes.at(i).to_int() == 58 {
+            if i == start {
+                return None
+            }
+            let piece = bytes.slice(start, i)
+            var dotted = false
+            for k in 0..piece.len() {
+                if piece.at(k).to_int() == 46 {
+                    dotted = true
+                }
+            }
+            if dotted {
+                if !tail || i != to {
+                    return None
+                }
+                match v4_parts(piece) {
+                    Some(parts) => {
+                        out.push(parts.at(0) * 256 + parts.at(1))
+                        out.push(parts.at(2) * 256 + parts.at(3))
+                    }
+                    None => { return None }
+                }
+            } else {
+                if piece.len() > 4 {
+                    return None
+                }
+                var value = 0
+                for k in 0..piece.len() {
+                    let digit = hex_digit(piece.at(k).to_int())
+                    if digit < 0 {
+                        return None
+                    }
+                    value = value * 16 + digit
+                }
+                out.push(value)
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    Some(out)
+}
+
+// The value of a hexadecimal digit, or -1.
+fn hex_digit(byte: Int) -> Int {
+    if byte >= 48 && byte <= 57 {
+        byte - 48
+    } else if byte >= 97 && byte <= 102 {
+        byte - 87
+    } else if byte >= 65 && byte <= 70 {
+        byte - 55
+    } else {
+        -1
+    }
+}
+
+// ---- Configuration files --------------------------------------------------------
+
+// The words of each line of `text` that has any: separated by spaces and
+// tabs, with a comment (from `#` or `;`) removed. At most
+// `MAX_CONFIG_BYTES` bytes are read. A word is copied from integers read
+// out of `text`, and every use of one checks it.
+fn words(text: Untrusted<String>) -> List<List<Bytes>> {
+    let data = text.to_bytes()
+    let end = if data.len() > MAX_CONFIG_BYTES { MAX_CONFIG_BYTES } else { data.len() }
+    var lines: List<List<Bytes>> = []
+    var line: List<Bytes> = []
+    var word = Bytes.new()
+    var comment = false
+    for i in 0..end {
+        let byte = data.at(i).to_int()
+        if byte == 10 || byte == 13 {
+            if word.len() > 0 {
+                line.push(word)
+                word = Bytes.new()
+            }
+            if line.len() > 0 {
+                lines.push(line)
+                line = []
+            }
+            comment = false
+        } else if comment {
+        } else if byte == 35 || byte == 59 {
+            comment = true
+            if word.len() > 0 {
+                line.push(word)
+                word = Bytes.new()
+            }
+        } else if byte == 32 || byte == 9 {
+            if word.len() > 0 {
+                line.push(word)
+                word = Bytes.new()
+            }
+        } else {
+            word.push(byte.to_u8())
+        }
+    }
+    if word.len() > 0 {
+        line.push(word)
+    }
+    if line.len() > 0 {
+        lines.push(line)
+    }
+    lines
+}
+
+// A word as text, when it is a host name: lower-cased, with a trailing dot
+// removed. `None` when it is not one.
+fn name_word(word: Bytes) -> Option<String> {
+    var bytes = word
+    if bytes.len() > 1 && bytes.at(bytes.len() - 1).to_int() == 46 {
+        bytes = bytes.slice(0, bytes.len() - 1)
+    }
+    var lowered = Bytes.new()
+    for i in 0..bytes.len() {
+        lowered.push(lower(bytes.at(i).to_int()).to_u8())
+    }
+    match lowered.to_text() {
+        Some(text) => if valid_name(text) { Some(text) } else { None }
+        None => None
+    }
+}
+
+// A word as text, when it is an address literal.
+fn ip_word(word: Bytes) -> Option<Ip> {
+    match word.to_text() {
+        Some(text) => parse_ip(text)
+        None => None
+    }
+}
+
+// The entries of a hosts file: each line is an address and one or more
+// names. A line with a bad address, or no name, is skipped, and so is a
+// name that is not a host name (the rest of its line still counts).
+pub fn parse_hosts(text: Untrusted<String>) -> List<HostsEntry> {
+    var entries: List<HostsEntry> = []
+    for line in words(text) {
+        match ip_word(line.at(0)) {
+            None => {}
+            Some(address) => {
+                var names: List<String> = []
+                for i in 1..line.len() {
+                    match name_word(line.at(i)) {
+                        Some(name) => names.push(name)
+                        None => {}
+                    }
+                }
+                if names.len() > 0 {
+                    entries.push(HostsEntry(address: address, names: names))
+                }
+            }
+        }
+    }
+    entries
+}
+
+// The settings of a `resolv.conf`: `nameserver` lines (the first three
+// that are address literals), `search` and `domain` lines (the last one
+// wins; at most six names), and `options` with `ndots:`, `timeout:` and
+// `attempts:`. The defaults are `ndots` 1, `timeout` 5 seconds and
+// `attempts` 2, and the options are held to 15, 30 and 5, as the C
+// library holds them. Anything else is ignored.
+pub fn parse_resolv_conf(text: Untrusted<String>) -> ResolvConf {
+    var conf = ResolvConf(servers: [], search: [], ndots: 1, timeout_ms: 5000, attempts: 2)
+    for line in words(text) {
+        let keyword = line.at(0).to_text().unwrap_or("")
+        if keyword == "nameserver" && line.len() >= 2 {
+            if conf.servers.len() < 3 {
+                match ip_word(line.at(1)) {
+                    Some(ip) => conf.servers.push(ip.text)
+                    None => {}
+                }
+            }
+        } else if keyword == "search" || keyword == "domain" {
+            var names: List<String> = []
+            let limit = if keyword == "domain" { 2 } else { line.len() }
+            for i in 1..limit {
+                if names.len() < 6 {
+                    match name_word(line.at(i)) {
+                        Some(name) => names.push(name)
+                        None => {}
+                    }
+                }
+            }
+            conf.search = names
+        } else if keyword == "options" {
+            for i in 1..line.len() {
+                let option = line.at(i).to_text().unwrap_or("")
+                let number = option_number(option)
+                if option.starts_with("ndots:") && number >= 0 {
+                    conf.ndots = if number > 15 { 15 } else { number }
+                } else if option.starts_with("timeout:") && number >= 0 {
+                    conf.timeout_ms = (if number > 30 { 30 } else { number }) * 1000
+                } else if option.starts_with("attempts:") && number >= 1 {
+                    conf.attempts = if number > 5 { 5 } else { number }
+                }
+            }
+        }
+    }
+    conf
+}
+
+// The number after the colon of `option`, or -1 when it is not 1 to 6
+// digits.
+fn option_number(option: String) -> Int {
+    let parts = option.split(":")
+    if parts.len() != 2 {
+        return -1
+    }
+    let bytes = parts.at(1).to_bytes()
+    if bytes.len() == 0 || bytes.len() > 6 {
+        return -1
+    }
+    var value = 0
+    for i in 0..bytes.len() {
+        let byte = bytes.at(i).to_int()
+        if byte < 48 || byte > 57 {
+            return -1
+        }
+        value = value * 10 + byte - 48
+    }
+    value
+}
+
+// The configuration of this machine: the hosts file and `resolv.conf` read
+// through `fs` (`/etc/hosts` and `/etc/resolv.conf`, or on Windows the
+// hosts file in `C:\Windows\System32\drivers\etc`), and the name servers
+// the operating system lists, which only Windows has to give, since the
+// others keep theirs in `resolv.conf`. A file that cannot be read is
+// empty.
+pub fn load_config(fs: FsRead, net: NetConnect) -> Config {
+    var hosts = read_file(fs, "/etc/hosts")
+    if hosts == "" {
+        hosts = read_file(fs, "C:\\Windows\\System32\\drivers\\etc\\hosts")
+    }
+    let resolv = read_file(fs, "/etc/resolv.conf")
+    var system: List<String> = []
+    match net.system_name_servers() {
+        Ok(servers) => { system = servers }
+        Err(_) => {}
+    }
+    Config.new(hosts, resolv, system)
+}
+
+// The file at `path`, or empty text when it cannot be read.
+fn read_file(fs: FsRead, path: String) -> Untrusted<String> {
+    match fs.restrict_to_file(path).read_to_string() {
+        Ok(text) => text
+        Err(_) => ""
+    }
+}
+
+// ---- Real sockets --------------------------------------------------------------
+
+// The transport over the network: one datagram per UDP query, and a
+// length-prefixed message over TCP (RFC 1035, section 4.2.2). A name
+// server is reached by an address literal, so no name is resolved on the
+// way.
+pub cap struct NetExchange { net: NetConnect, random: Random, port: Int }
+
+impl NetExchange {
+    // A transport that connects with `net` and takes its transaction ids
+    // from `random`'s secure source.
+    pub fn new(net: NetConnect, random: Random) -> NetExchange {
+        NetExchange(net: net, random: random, port: 53)
+    }
+
+    // `new` for name servers that listen on `port`, not 53: a local test
+    // server's.
+    pub fn on_port(net: NetConnect, random: Random, port: Int) -> NetExchange {
+        NetExchange(net: net, random: random, port: port)
+    }
+}
+
+impl Exchange for NetExchange {
+    fn query_id(self) -> Int {
+        let bytes = self.random.secure_bytes(2).expose()
+        bytes.read_u16_be(0).to_int()
+    }
+
+    fn datagram(self, server: String, message: Bytes) -> Result<Untrusted<Bytes>, IoError> {
+        match self.net.restrict_to(server, self.port).exchange_datagram(message) {
+            Ok(reply) => Ok(reply)
+            Err(error) => Err(error)
+        }
+    }
+
+    fn stream(self, server: String, message: Bytes) -> Result<Untrusted<Bytes>, IoError> {
+        let connection = match self.net.restrict_to(server, self.port).connect() {
+            Ok(connection) => connection
+            Err(error) => { return Err(error) }
+        }
+        var framed = Bytes.new()
+        framed.push_u16_be(message.len().to_u16())
+        framed.append(message)
+        match connection.send_bytes(framed) {
+            Ok(_) => {}
+            Err(error) => {
+                connection.close()
+                return Err(error)
+            }
+        }
+        // The two-byte length, then that many bytes, from as many reads
+        // as the stream needs.
+        var received = Bytes.new()
+        var wanted = 2
+        var done = false
+        while !done {
+            match connection.receive_bytes() {
+                Err(error) => {
+                    connection.close()
+                    return Err(error)
+                }
+                Ok(chunk) => {
+                    if chunk.len() == 0 {
+                        connection.close()
+                        return Err(IoError(message: "connection reset"))
+                    }
+                    received.append(chunk)
+                    if received.len() >= 2 {
+                        wanted = 2 + received.read_u16_be(0).to_int()
+                    }
+                    if received.len() >= wanted && received.len() >= 2 {
+                        done = true
+                    }
+                }
+            }
+        }
+        connection.close()
+        Ok(received.slice(2, wanted))
+    }
+}

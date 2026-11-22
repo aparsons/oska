@@ -236,6 +236,13 @@ impl NetConnect {
     // that is none of those, or a port outside 1 to 65535, is not refused
     // here: `connect` fails with an `IoError` that says why.
     pub fn restrict_to(self, host: String, port: Int) -> HostConnect
+    // The DNS servers the operating system is configured with, in order,
+    // as IPv4 address literals, for `std.dns`. Windows keeps them in its
+    // network parameters (`GetNetworkParams`); every other platform
+    // keeps them in `resolv.conf`, which `std.dns` reads itself, so this
+    // gives an empty list there. It reaches nobody: it reads this
+    // machine's settings.
+    pub fn system_name_servers(self) -> Result<List<String>, IoError>
 }
 
 // A host capability: it reaches one host at one port and nothing else, so
@@ -255,6 +262,14 @@ impl HostConnect {
     pub fn name(self) -> String
     // The port this capability is confined to.
     pub fn port(self) -> Int
+    // Send `message` as one UDP datagram to the host and port this
+    // capability is confined to, and wait for one datagram back, at most
+    // 5 seconds: for `std.dns`. The host must be an IPv4 or IPv6 literal:
+    // a name is not resolved here. A datagram from anywhere else is
+    // ignored, and so is one whose first two bytes (a DNS transaction id)
+    // are not the message's own. What comes back is from outside the program, so it is
+    // untrusted.
+    pub fn exchange_datagram(self, message: Bytes) -> Result<Untrusted<Bytes>, IoError>
 }
 
 // An open connection to one host. It carries the authority to talk to

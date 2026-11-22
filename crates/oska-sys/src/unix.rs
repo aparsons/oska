@@ -194,6 +194,13 @@ pub fn fill_random(buf: &mut [u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// The name servers the operating system lists: none here. Unix keeps
+/// them in `resolv.conf`, which `std.dns` reads itself.
+#[allow(clippy::unnecessary_wraps)]
+pub fn system_name_servers() -> io::Result<Vec<String>> {
+    Ok(Vec::new())
+}
+
 /// An open directory: the root of a confined capability, or a directory
 /// beneath one. Dropping it closes the handle.
 #[derive(Debug)]
