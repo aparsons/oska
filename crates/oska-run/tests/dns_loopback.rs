@@ -209,7 +209,7 @@ fn names_resolve_over_udp_from_a_loopback_name_server() {
         "nameserver 127.0.0.1\\n",
         "",
         &[
-            ("example.com", "93.184.216.34 2001:db8::1"),
+            ("example.com", "2001:db8::1 93.184.216.34"),
             ("nope.example.com", "!host not found"),
             ("other.test", "!name server refused"),
         ],

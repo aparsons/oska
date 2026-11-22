@@ -124,7 +124,7 @@ fn a_hosts_file_and_a_resolv_conf_are_read_the_same_on_both_backends() {
     let outcome = assert_same(&Case::file("dns_config", CONFIG).with_stdin(stdin));
     assert_eq!(
         outcome.stdout,
-        "hosts: 10.0.0.5 2001:db8::5\nservers: 192.0.2.1 2001:db8::53\n\
+        "hosts: 2001:db8::5 10.0.0.5\nservers: 192.0.2.1 2001:db8::53\n\
          asked: www.corp.test www.lab.test www\nndots: 2\n",
         "{outcome:#?}"
     );

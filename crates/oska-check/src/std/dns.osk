@@ -29,7 +29,8 @@
 // for IPv4, and RFC 5952 for IPv6 (lower case, no leading zeros, the
 // longest run of zero groups written as `::`). Addresses are built from
 // integers read out of the input, so they are trusted text, as `std.sha2`'s
-// digests are trusted bytes. IPv4 addresses come before IPv6 ones.
+// digests are trusted bytes. IPv6 addresses come before IPv4 ones (RFC 6724's default policy), each
+// in the order the name server gave them.
 //
 // Every failure has Oska's own wording (`DnsError`'s `to_string`), never
 // the operating system's. The module has one audit site, an `expose()` in
@@ -191,10 +192,10 @@ pub trait Exchange {
 // ---- Resolving ---------------------------------------------------------------
 
 // The addresses of `name`, a DNS name or an address literal, in order:
-// IPv4 first, then IPv6. An address literal is its own answer, and the
+// IPv6 first, then IPv4. An address literal is its own answer, and the
 // hosts file comes before the network. Otherwise each name the search list
 // makes of `name` is asked in turn (a name with a trailing dot is asked
-// as it is), for IPv4 and then IPv6 addresses. A name server that does not
+// as it is), for IPv6 and then IPv4 addresses. A name server that does not
 // answer, or answers something other than what was asked, is skipped
 // (`attempts` rounds over every server); one that says the name does not
 // exist ends the search of that name.
@@ -215,7 +216,7 @@ pub fn resolve<T: Exchange>(config: Config, transport: T, name: String) -> Resul
     var failure = DnsError.NotFound
     for candidate in candidates(config, plain, absolute) {
         var found: List<String> = []
-        for kind in [TYPE_A, TYPE_AAAA] {
+        for kind in [TYPE_AAAA, TYPE_A] {
             match ask(config, transport, candidate, kind) {
                 Ok(answer) => {
                     for address in answer.addresses {
@@ -236,7 +237,7 @@ pub fn resolve<T: Exchange>(config: Config, transport: T, name: String) -> Resul
 }
 
 // The addresses the hosts file gives `name`, which is lower-cased first:
-// IPv4 first, then IPv6, each in file order.
+// IPv6 first, then IPv4, each in file order.
 pub fn lookup_hosts(hosts: List<HostsEntry>, name: String) -> List<String> {
     let wanted = name.to_lowercase()
     var v4: List<String> = []
@@ -256,10 +257,10 @@ pub fn lookup_hosts(hosts: List<HostsEntry>, name: String) -> List<String> {
             }
         }
     }
-    for address in v6 {
-        v4.push(address)
+    for address in v4 {
+        v6.push(address)
     }
-    v4
+    v6
 }
 
 // The names to ask for `name` (no trailing dot): as it is first when it

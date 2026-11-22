@@ -3993,7 +3993,7 @@ pub fn net_system_name_servers(net: NetConnect) -> Result<List<String>, IoError>
     // A first call with no buffer says how big the buffer must be.
     let first = rt_sys_get_network_params(0, cell)
     let size = rt_mem_load32(cell)
-    if first != 111 || size == 0 || size > 65536 {
+    if first != 111 || size < 320 || size > 65536 {
         return Err(io_error_text("the system's DNS servers cannot be read"))
     }
     let info = alloc(size + 8)
