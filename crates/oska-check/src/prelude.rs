@@ -84,6 +84,12 @@ pub static STD_MODULES: &[StdModule] = &[
         kind: StdKind::Source,
         sink_literal: None,
     },
+    StdModule {
+        path: "std.ed25519",
+        source: include_str!("std/ed25519.osk"),
+        kind: StdKind::Source,
+        sink_literal: None,
+    },
 ];
 
 /// The `std.*` module at `path`.
