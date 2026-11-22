@@ -269,7 +269,10 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
             "std.sha2",
             "std.hmac",
             "std.ed25519",
-            "std.sshsig"
+            "std.sshsig",
+            "std.ecdsa",
+            "std.rsa",
+            "std.p256"
         ]
     );
     assert!(items.iter().all(|i| !field(i, "name").starts_with("rt_")));
