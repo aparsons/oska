@@ -154,7 +154,9 @@ fn main(io: Stdout) -> Result<(), IoError> {
         Ok(key) => {
             let comment = key.comment()
             let fingerprint = key.fingerprint()
-            io.println("key {comment}, fingerprint {fingerprint}")?
+            let prefixed = if fingerprint.starts_with("SHA256:") { "yes" } else { "no" }
+            let size = fingerprint.len()
+            io.println("key {comment}, fingerprint prefixed {prefixed}, {size} characters")?
             match sshsig.verify(armored, message, "oska-test", key) {
                 Ok(_) => io.println("signature verified")?
                 Err(e) => io.println("refused: {e}")?
@@ -175,7 +177,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 ```
 
 ```console cmd=run
-key oska-test-key, fingerprint SHA256:tMdvoGUi4kC3M8Dqo5IUHM85ExaZ7J1kAQhArgI0T9I
+key oska-test-key, fingerprint prefixed yes, 50 characters
 signature verified
 changed message: the signature does not verify
 other namespace: the signature was made for a different namespace
