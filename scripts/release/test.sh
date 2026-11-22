@@ -84,6 +84,7 @@ oskac-linux-x86_64-musl
 oskac-macos-aarch64
 oskac-macos-x86_64
 oskac-windows-x86_64.exe
+oskac.spdx.json
 LIST
   diff expected listing || fail "unexpected files"
   # The SHA-256 of "binary for oskac-linux-x86_64-musl\n".
@@ -120,21 +121,23 @@ test_assemble_signs_the_digest_of_the_image_built_from_its_musl_builds() {
 # no release is written.
 test_assemble_refuses_an_image_builder_that_prints_no_digest() {
   fake_builds
-  mkdir scripts
-  cp "$here/assemble.sh" scripts/
+  # assemble.sh reads the Cargo.lock two levels above its own directory.
+  mkdir -p repo/scripts/release
+  cp "$here/assemble.sh" "$here/sbom.sh" repo/scripts/release/
+  cp "$here/../../Cargo.lock" repo/
   local printed hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   for printed in latest '' "sha256:$hex"$'\n'"sha256:$hex" "sha256:$hex x" "sha256:${hex}0" "sha512:$hex"; do
-    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$printed" >scripts/image.sh
-    chmod +x scripts/image.sh
-    if scripts/assemble.sh v1.2.3 builds out 2>err; then
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$printed" >repo/scripts/release/image.sh
+    chmod +x repo/scripts/release/image.sh
+    if repo/scripts/release/assemble.sh v1.2.3 builds out 2>err; then
       fail "assembled with image.sh printing '$printed'"
     fi
     grep -q 'not a digest' err || fail "error does not say why: $(cat err)"
     [ ! -e out/v1.2.3 ] || fail "left a release directory behind"
   done
   # The fake itself works: with a digest it assembles.
-  printf '#!/usr/bin/env bash\necho sha256:%s\n' "$hex" >scripts/image.sh
-  scripts/assemble.sh v1.2.3 builds out
+  printf '#!/usr/bin/env bash\necho sha256:%s\n' "$hex" >repo/scripts/release/image.sh
+  repo/scripts/release/assemble.sh v1.2.3 builds out
   [ "$(cat out/v1.2.3/oskac-image-digest)" = "sha256:$hex" ] || fail "the fake image.sh is not used"
 }
 
@@ -464,6 +467,167 @@ test_verify_refuses_a_signature_by_another_key() {
   both_refuse out/v1.2.3 other.pub
 }
 
+# ---- The SPDX SBOM (#551) -----------------------------------------------------
+
+# A lock with a registry crate, a git crate and two versions of one name,
+# beside the workspace's own packages, as a release with dependencies has.
+fixture_lock() {
+  cat >"$1" <<'LOCK'
+version = 3
+
+[[package]]
+name = "oskac"
+version = "1.2.3"
+dependencies = [
+ "libfoo 0.2.0",
+ "libfoo 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oska-syntax",
+]
+
+[[package]]
+name = "libfoo"
+version = "0.2.0"
+source = "git+https://example.invalid/libfoo?rev=abc#abc"
+
+[[package]]
+name = "libfoo"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+dependencies = [
+ "oska-syntax",
+]
+
+[[package]]
+name = "oska-syntax"
+version = "1.2.3"
+LOCK
+}
+
+test_the_sbom_is_spdx_and_lists_every_package_of_the_lock() {
+  fake_builds
+  "$here/assemble.sh" v1.2.3 builds out
+  local sbom=out/v1.2.3/oskac.spdx.json
+  jq -e '.spdxVersion == "SPDX-2.3" and .dataLicense == "CC0-1.0" and .SPDXID == "SPDXRef-DOCUMENT"
+    and (.documentNamespace | endswith("/releases/v1.2.3/oskac.spdx.json"))
+    and (.creationInfo.created == "2026-11-20T00:00:00Z")' "$sbom" >/dev/null ||
+    fail "not the SPDX header: $(head -c 400 "$sbom")"
+  [ "$(jq '.packages | length' "$sbom")" = "$(grep -c '^\[\[package\]\]' "$here/../../Cargo.lock")" ] ||
+    fail "the SBOM does not list every package of Cargo.lock"
+  jq -e '(.packages | map(select(.name == "oskac" and .versionInfo != "")) | length) == 1
+    and .documentDescribes == [(.packages[] | select(.name == "oskac") | .SPDXID)]' "$sbom" >/dev/null ||
+    fail "the SBOM does not describe oskac"
+  # Every id is unique, and every relationship names packages the SBOM has.
+  jq -e '([.packages[].SPDXID] | length) == ([.packages[].SPDXID] | unique | length)
+    and ([.packages[].SPDXID] as $ids | all(.relationships[]; (.relatedSpdxElement as $r | $ids | index($r) != null)))' \
+    "$sbom" >/dev/null || fail "duplicate ids or a dangling relationship"
+  grep -qE '^[0-9a-f]{64}  oskac\.spdx\.json$' out/v1.2.3/SHA256SUMS || fail "SHA256SUMS does not list the SBOM"
+}
+
+test_the_sbom_names_external_crates_with_their_checksums_and_exact_versions() {
+  fixture_lock Cargo.lock
+  "$here/sbom.sh" v1.2.3 Cargo.lock >sbom.json
+  jq -e '(.packages | length) == 4
+    and (.packages[] | select(.name == "libfoo" and .versionInfo == "1.0.0")
+         | .checksums == [{algorithm: "SHA256", checksumValue: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}]
+           and .downloadLocation == "https://crates.io/crates/libfoo/1.0.0/download"
+           and .externalRefs[0].referenceLocator == "pkg:cargo/libfoo@1.0.0")
+    and (.packages[] | select(.name == "libfoo" and .versionInfo == "0.2.0") | has("checksums") | not)
+    and (.packages[] | select(.name == "oska-syntax") | .licenseDeclared == "Apache-2.0")
+    and (.packages[] | select(.name == "libfoo" and .versionInfo == "1.0.0") | .licenseDeclared == "NOASSERTION")' \
+    sbom.json >/dev/null || fail "an external crate is not described exactly"
+  # Each of oskac's three edges goes to the version the lock names.
+  [ "$(jq '[.relationships[] | select(.relationshipType == "DEPENDS_ON")] | length' sbom.json)" = 4 ] ||
+    fail "wrong number of dependency edges"
+}
+
+test_the_sbom_is_the_same_bytes_every_time() {
+  fixture_lock Cargo.lock
+  "$here/sbom.sh" v1.2.3 Cargo.lock >one
+  "$here/sbom.sh" v1.2.3 Cargo.lock >two
+  cmp one two || fail "two runs differ"
+  "$here/sbom.sh" v1.2.4 Cargo.lock >three
+  ! cmp -s one three || fail "another tag gives the same document"
+}
+
+# Fail closed: no SBOM is better than a wrong one, and a release is never
+# assembled without it.
+test_the_sbom_refuses_input_it_cannot_describe() {
+  fixture_lock Cargo.lock
+  if SOURCE_DATE_EPOCH='' "$here/sbom.sh" v1.2.3 Cargo.lock >out.json 2>err; then
+    fail "wrote an SBOM with no SOURCE_DATE_EPOCH"
+  fi
+  if "$here/sbom.sh" v1.2.3 missing.lock >out.json 2>err; then fail "wrote an SBOM for no lock"; fi
+  if "$here/sbom.sh" 1.2.3 Cargo.lock >out.json 2>err; then fail "wrote an SBOM for a tag without v"; fi
+  : >empty.lock
+  if "$here/sbom.sh" v1.2.3 empty.lock >out.json 2>err; then fail "wrote an SBOM for an empty lock"; fi
+  sed 's/^name = "oskac"/name = "other"/' Cargo.lock >noroot.lock
+  if "$here/sbom.sh" v1.2.3 noroot.lock >out.json 2>err; then fail "wrote an SBOM with no oskac package"; fi
+  sed 's/^ "oska-syntax",$/ "ghost",/' Cargo.lock >dangling.lock
+  if "$here/sbom.sh" v1.2.3 dangling.lock >out.json 2>err; then fail "wrote an SBOM with a dangling dependency"; fi
+}
+
+test_assemble_writes_no_release_when_the_sbom_cannot_be_made() {
+  fake_builds
+  mkdir scripts
+  cp "$here/assemble.sh" "$here/image.sh" scripts/
+  printf '#!/usr/bin/env bash\nexit 1\n' >scripts/sbom.sh
+  chmod +x scripts/sbom.sh
+  if scripts/assemble.sh v1.2.3 builds out 2>err; then fail "assembled without an SBOM"; fi
+  [ ! -e out/v1.2.3 ] || fail "left a release directory behind"
+}
+
+# The point of listing it: verify.sh and the Oska verifier accept the
+# signed SBOM, and refuse a changed one, one the signature does not list,
+# and (the Oska verifier, which is stricter here as for every listed file)
+# a listed one that is a symlink.
+test_verify_accepts_the_listed_sbom() {
+  signed_release
+  [ -f out/v1.2.3/oskac.spdx.json ] || fail "no SBOM in the release"
+  "$here/verify.sh" out/v1.2.3 key.pub
+  both_accept out/v1.2.3 key.pub
+}
+
+test_verify_refuses_a_changed_sbom() {
+  signed_release
+  printf '\n' >>out/v1.2.3/oskac.spdx.json
+  if "$here/verify.sh" out/v1.2.3 key.pub; then fail "verified a changed SBOM"; fi
+  both_refuse out/v1.2.3 key.pub
+}
+
+test_verify_refuses_an_sbom_the_signature_does_not_list() {
+  signed_release
+  # The signed list is the release's own, minus the SBOM line.
+  grep -v ' oskac\.spdx\.json$' out/v1.2.3/SHA256SUMS >sums
+  mv sums out/v1.2.3/SHA256SUMS
+  rm out/v1.2.3/SHA256SUMS.sig
+  ssh-keygen -q -Y sign -f key -n oska-release out/v1.2.3/SHA256SUMS
+  if "$here/verify.sh" out/v1.2.3 key.pub; then fail "verified an SBOM that SHA256SUMS does not list"; fi
+  both_refuse out/v1.2.3 key.pub
+  # Another SBOM file beside the listed one is refused as well.
+  signed_release v1.2.4
+  cp out/v1.2.4/oskac.spdx.json out/v1.2.4/other.spdx.json
+  if "$here/verify.sh" out/v1.2.4 key.pub; then fail "verified an unlisted second SBOM"; fi
+  both_refuse out/v1.2.4 key.pub
+}
+
+test_verify_refuses_a_listed_sbom_that_is_a_symlink() {
+  signed_release
+  mv out/v1.2.3/oskac.spdx.json real.spdx.json
+  ln -s "$PWD/real.spdx.json" out/v1.2.3/oskac.spdx.json
+  if oska_verify out/v1.2.3 key.pub >/dev/null 2>&1; then fail "the Oska verifier accepted a symlinked SBOM"; fi
+}
+
+# It is a document, not a binary: latest.json's binaries stay the seven.
+test_the_staged_site_serves_the_sbom_but_lists_it_as_no_binary() {
+  staged_site 1.2.3
+  [ -f site/releases/v1.2.3/oskac.spdx.json ] || fail "the SBOM is not published"
+  cmp site/releases/v1.2.3/oskac.spdx.json out/v1.2.3/oskac.spdx.json || fail "the published SBOM differs"
+  [ "$(jq '.binaries | length' site/latest.json)" = 7 ] || fail "latest.json lists $(jq -c '.binaries | keys' site/latest.json)"
+  jq -e '.binaries | keys | all(. != "oskac.spdx.json" and . != "spdx.json")' site/latest.json >/dev/null ||
+    fail "latest.json lists the SBOM as a binary"
+}
+
 test_verify_refuses_a_file_the_checksums_do_not_cover() {
   signed_release
   printf 'extra\n' >out/v1.2.3/oskac-linux-riscv64
@@ -490,12 +654,12 @@ test_the_oska_verifier_prints_text_and_json_and_exits_0_or_1() {
   oska_verify out/v1.2.3 key.pub >text
   head -n 1 text | grep -qx 'oska-release v1.2.3: verified' || fail "first line: $(head -n 1 text)"
   grep -qF "key $(fingerprint_of key.pub)" text || fail "text lacks the key fingerprint: $(cat text)"
-  grep -q 'files: 8 checked' text || fail "text lacks the file count: $(cat text)"
+  grep -q 'files: 9 checked' text || fail "text lacks the file count: $(cat text)"
   grep -q '^  image digest: sha256:' text || fail "text lacks the image digest"
   oska_verify out/v1.2.3 key.pub --format=json >json
   jq -e --arg fp "$(fingerprint_of key.pub)" '
     .ok == true and .tag == "v1.2.3" and .key == $fp and .namespace == "oska-release"
-    and .files == 8 and (.image_digest | startswith("sha256:")) and .index == null' json >/dev/null ||
+    and .files == 9 and (.image_digest | startswith("sha256:")) and .index == null' json >/dev/null ||
     fail "JSON differs: $(cat json)"
   # A refusal: exit 1, one stderr line naming the code, and in JSON the
   # same code on stdout.

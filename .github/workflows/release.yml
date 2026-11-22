@@ -12,7 +12,9 @@
 #      from the two musl builds (scripts/release/image.sh, reproducible OCI
 #      bytes, SOURCE_DATE_EPOCH the commit's time) and lists the digest of
 #      its image index, oskac-image-digest, in SHA256SUMS, so the release
-#      signature covers the image. It writes the release notes, the
+#      signature covers the image. It lists the SPDX SBOM too
+#      (oskac.spdx.json, scripts/release/sbom.sh, from the tag's
+#      Cargo.lock), so the signature covers that. It writes the release notes, the
 #      version's CHANGELOG.md section and a footer (scripts/release/notes.sh),
 #      and fails if the version has none. smoke-image then runs both musl
 #      builds in alpine and in that image, on x86_64 and aarch64;
@@ -215,6 +217,23 @@ jobs:
           export SOURCE_DATE_EPOCH
           scripts/release/assemble.sh "$TAG" builds release "$RUNNER_TEMP/image"
           echo "image index: $(cat "release/$TAG/oskac-image-digest")"
+      # The SBOM is in SHA256SUMS, so the signature covers it. Check, on
+      # every event and before anything is signed, that it is SPDX 2.3 for
+      # this tag, lists every package of Cargo.lock and describes oskac.
+      - name: Check the SBOM
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          sbom="release/$TAG/oskac.spdx.json"
+          grep -qE '^[0-9a-f]{64}  oskac\.spdx\.json$' "release/$TAG/SHA256SUMS"
+          packages=$(grep -c '^\[\[package\]\]' Cargo.lock)
+          jq -e --arg tag "$TAG" --argjson packages "$packages" '
+            .spdxVersion == "SPDX-2.3"
+            and .documentNamespace == "https://oskalang.dev/releases/\($tag)/oskac.spdx.json"
+            and (.packages | length) == $packages
+            and (.documentDescribes | length) == 1
+            and ([.packages[] | select(.name == "oskac")] | length) == 1' "$sbom"
+          jq '{name, created: .creationInfo.created, packages: (.packages | length)}' "$sbom"
       # The GitHub Release's body: the version's CHANGELOG.md section and a
       # footer (scripts/release/notes.sh). On every event, before anything
       # is signed, so a version with no section fails the pull request's
