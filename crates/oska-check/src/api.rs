@@ -27,7 +27,16 @@ pub const PRELUDE: &str = "prelude";
 /// `std.rt` is left out: it is the runtime's system-call layer, not user
 /// API.
 pub const MODULES: &[&str] = &[
-    PRELUDE, "std.html", "std.json", "std.mcp", "std.sql", "std.proc",
+    PRELUDE,
+    "std.html",
+    "std.json",
+    "std.mcp",
+    "std.sql",
+    "std.proc",
+    "std.sha2",
+    "std.hmac",
+    "std.ed25519",
+    "std.sshsig",
 ];
 
 /// What kind of item an entry is.
@@ -111,8 +120,12 @@ impl ApiItem {
     }
 
     /// The name without a method's type arguments: `Secret.rotl` for
-    /// `Secret<U8>.rotl`. Any other name is unchanged.
+    /// `Secret<U8>.rotl`, and without a function's module: `sha256` for
+    /// `sha2.sha256`. Any other name is unchanged.
     pub fn unqualified_name(&self) -> String {
+        if self.kind == Kind::Fn {
+            return self.name.rsplit('.').next().unwrap_or("").to_string();
+        }
         if self.kind != Kind::Method {
             return self.name.clone();
         }
@@ -298,7 +311,32 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
         }
     }
     qualify_shared_methods(&mut out, &methods);
+    qualify_clashing_functions(path, &mut out);
     out
+}
+
+/// Names a function whose anchor a type of the same module has too, as
+/// `sha256` and `Sha256` do in `std.sha2` (the site lower-cases names), with
+/// the module's name: `sha2.sha256`. That is how a program calls it, and the
+/// anchor is then its own. Every other name, and so its anchor, is left as
+/// it is.
+fn qualify_clashing_functions(path: &str, out: &mut [ApiItem]) {
+    let types: Vec<String> = out
+        .iter()
+        .filter(|i| {
+            matches!(
+                i.kind,
+                Kind::Struct | Kind::Enum | Kind::Trait | Kind::Capability
+            )
+        })
+        .map(ApiItem::anchor)
+        .collect();
+    let module = path.rsplit('.').next().unwrap_or(path);
+    for item in out.iter_mut() {
+        if item.kind == Kind::Fn && types.contains(&item.anchor()) {
+            item.name = format!("{module}.{}", item.name);
+        }
+    }
 }
 
 /// Names each method that impls of one type with different type arguments

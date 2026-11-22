@@ -259,7 +259,18 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
     modules.dedup();
     assert_eq!(
         modules,
-        ["prelude", "std.html", "std.json", "std.mcp", "std.sql", "std.proc"]
+        [
+            "prelude",
+            "std.html",
+            "std.json",
+            "std.mcp",
+            "std.sql",
+            "std.proc",
+            "std.sha2",
+            "std.hmac",
+            "std.ed25519",
+            "std.sshsig"
+        ]
     );
     assert!(items.iter().all(|i| !field(i, "name").starts_with("rt_")));
     let output = oskac(&["doc", "std.rt"]);
@@ -332,6 +343,22 @@ fn methods_that_impls_of_one_type_share_are_named_with_its_type_arguments() {
         named(&items, "Box<Int>.double").unqualified_name(),
         "Box.double"
     );
+}
+
+#[test]
+fn a_function_whose_anchor_a_type_has_is_named_with_its_module() {
+    let items = fixture(
+        "// A hasher.\npub struct Sha256 { n: Int }\n\
+         // The digest.\npub fn sha256(n: Int) -> Int\n\
+         // Another.\npub fn other(n: Int) -> Int\n",
+    );
+    let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["std.fixture", "Sha256", "fixture.sha256", "other"]);
+    assert_ne!(
+        named(&items, "Sha256").anchor(),
+        named(&items, "fixture.sha256").anchor()
+    );
+    assert_eq!(named(&items, "fixture.sha256").unqualified_name(), "sha256");
 }
 
 #[test]
