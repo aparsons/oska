@@ -15,20 +15,25 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "warn"
 
-# Release builds of `oskac` use fat link-time optimisation and one codegen
-# unit: a faster interpreter and compiler and a smaller binary, for a longer
-# release build. Measured in docs/research/2026-11-memcpy-replacement.md and
+# Release builds use fat link-time optimisation and one codegen unit: a
+# faster interpreter and compiler and a smaller binary, for a longer build.
+# Measured in docs/research/2026-11-memcpy-replacement.md and
 # docs/research/2026-11-musl-oskac-performance.md (spec #577).
-#
-# A panic aborts instead of unwinding (9 to 24% faster on loops, lists and
-# recursion, no change on the site build; section 12 of the musl note).
-# `oskac` installs its own panic hook (crates/oskac/src/crash.rs): one line,
-# the temporary files removed, exit code 101 as before. `cargo test` ignores
-# this setting, so tests still unwind. A release build of `oska-eval` aborts
-# on a panic too, where a debug build catches it and goes on.
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+# The `oskac` that is shipped, benchmarked and smoke-tested (release.yml,
+# the musl job of ci.yml, bench.yml, scripts/bench-native.sh): the release
+# profile, and a panic aborts instead of unwinding (3 to 24% faster on
+# loops, lists and recursion, no change on the site build; section 12 of the
+# musl note). `oskac` installs its own panic hook (crates/oskac/src/crash.rs):
+# one line, the temporary files removed, exit code 101 as before. Build it
+# with `cargo build --profile dist -p oskac`; the binary is in `target/dist/`.
+# `cargo build --release` keeps unwinding, which `oska-eval` needs: it
+# catches a task's panic and goes on. `cargo test` ignores `panic`.
+[profile.dist]
+inherits = "release"
 panic = "abort"
 
 # Test steps are dominated by running the interpreter and compiler these

@@ -2,8 +2,9 @@
 //! never a panic of a program it runs (`P0038` and the other `P00xx` stops
 //! are reported by `oskac` and do not come here).
 //!
-//! The release profile sets `panic = "abort"`, so a panic does not unwind
-//! the stack and no `Drop` code runs. This module keeps what that code did
+//! The `dist` profile (the shipped `oskac`, see `Cargo.toml`) sets
+//! `panic = "abort"`, so a panic does not unwind the stack and no `Drop`
+//! code runs. This module keeps what that code did
 //! for the temporary files that `oskac` makes: they are listed here while
 //! they exist, and the hook below removes them before it ends the process.
 //! The hook runs on every panic, before an abort, and also in builds that
