@@ -34,6 +34,7 @@ pub const MODULES: &[&str] = &[
     "std.sql",
     "std.proc",
     "std.sha2",
+    "std.dns",
     "std.hmac",
     "std.ed25519",
     "std.sshsig",

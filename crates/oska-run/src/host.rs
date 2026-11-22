@@ -142,6 +142,26 @@ pub trait Host: Send {
         Err(no_network())
     }
 
+    /// Send one datagram to the address literal `host` at `port` and
+    /// return the one that comes back, as `HostConnect.exchange_datagram`
+    /// asks. A host with no network refuses, as `net_connect` does.
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        let _ = (host, port, message);
+        Err(no_network())
+    }
+
+    /// The DNS servers the operating system lists, as
+    /// `NetConnect.system_name_servers` asks. A host with no network
+    /// lists none.
+    fn net_name_servers(&mut self) -> io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     /// Where the program has tried to go, in order, as `t.net_attempts()`
     /// returns them: `host:port`, or `loopback:port` for a listener. A host
     /// that records none returns none.
@@ -530,6 +550,19 @@ impl Host for RealHost {
 
     fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
         oska_sys::NetListener::bind_loopback(port)
+    }
+
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        oska_sys::exchange_datagram(host, port, message)
+    }
+
+    fn net_name_servers(&mut self) -> io::Result<Vec<String>> {
+        oska_sys::system_name_servers()
     }
 
     fn take_output(&mut self) -> Output {
@@ -1158,6 +1191,16 @@ impl Host for FakeHost {
 
     fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
         self.net_attempts.push(format!("loopback:{port}"));
+        Err(no_network())
+    }
+
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        _message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        self.net_attempts.push(format!("{host}:{port}"));
         Err(no_network())
     }
 

@@ -614,6 +614,19 @@ impl Host for TestHost<'_> {
         self.world().net_listen_loopback(port)
     }
 
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        self.world().net_exchange_datagram(host, port, message)
+    }
+
+    fn net_name_servers(&mut self) -> io::Result<Vec<String>> {
+        self.world().net_name_servers()
+    }
+
     fn net_attempts(&self) -> Vec<String> {
         match &self.fake {
             Some(fake) => fake.net_attempts(),
