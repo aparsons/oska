@@ -4,9 +4,13 @@
 //!
 //! The `dist` profile (the shipped `oskac`, see `Cargo.toml`) sets
 //! `panic = "abort"`, so a panic does not unwind the stack and no `Drop`
-//! code runs. This module keeps what that code did
-//! for the temporary files that `oskac` makes: they are listed here while
-//! they exist, and the hook below removes them before it ends the process.
+//! code runs. This module keeps what that code did for the one temporary
+//! file that a long-lived `oskac` process holds, the native executable that
+//! `oskac run` writes and runs: it is listed here while it exists, and the
+//! hook below removes it before it ends the process. The staged file of a
+//! package write (`package::Staged`) is not listed: nothing between its
+//! creation and its commit can panic (each step returns an `io::Result`),
+//! and a signal that kills the process would skip `Drop` as well.
 //! The hook runs on every panic, before an abort, and also in builds that
 //! unwind, so the message and the exit code are the same in both.
 //!
