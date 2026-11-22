@@ -542,8 +542,36 @@ fn doc_page(all: Site, doc: Doc) -> Page {
     }
     // A research page says first that it is not documentation.
     let notice = research_notice(all)
-    let text = if doc.section == "research" { "{notice}\n{doc.text}" } else { doc.text }
-    Page(path: doc.page, title: doc.title, body: markdown(text, links), md: retarget(text, links))
+    var text = if doc.section == "research" { "{notice}\n{doc.text}" } else { doc.text }
+    // The security policy points to the compliance reports, when there are some.
+    if doc.repo == "SECURITY.md" && has_section(all, "compliance") {
+        text = "{text}\n## Compliance\n\nHow Oska measures up against common standards: see the [Compliance reports](docs/compliance/).\n"
+    }
+    with_pdf(Page(path: doc.page, title: doc.title, body: markdown(text, links), md: retarget(text, links)))
+}
+
+// Whether the site has the section `dir`, a subdirectory of `docs/`.
+fn has_section(all: Site, dir: String) -> Bool {
+    for section in all.sections {
+        if section.dir == dir {
+            return true
+        }
+    }
+    false
+}
+
+// A page of the compliance section, with a "Download PDF" link to the
+// same path with `.pdf`. The Pages workflow prints the PDF from the built
+// page (`scripts/site/compliance-pdf.sh`). Any other page is returned as
+// it is.
+fn with_pdf(page: Page) -> Page {
+    if !page.path.starts_with("compliance/") {
+        return page
+    }
+    let stem = page.path.slice(0, page.path.len() - 5)
+    let pdf = "/{stem}.pdf"
+    let link = markup("<p class=\"download\">").concat(anchor_to(pdf, html.text("Download PDF"))).concat(markup("</p>\n"))
+    Page(path: page.path, title: page.title, body: page.body.concat(link), md: "{page.md}\n[Download PDF]({pdf})\n")
 }
 
 // The notice at the top of every research page, as Markdown whose links
@@ -601,7 +629,7 @@ fn section_page(all: Site, section: Section) -> Page {
         let notice_md = retarget(notice, links)
         return Page(path: page, title: section.title, body: body, md: "{notice_md}\n{md}")
     }
-    Page(path: page, title: section.title, body: items.concat(markup("</ul>\n")), md: md)
+    with_pdf(Page(path: page, title: section.title, body: items.concat(markup("</ul>\n")), md: md))
 }
 
 // The URL a page is served at: `/` for `index.html`, `/adr/` for

@@ -14,6 +14,10 @@
 //   `blob/` or `tree/`, must name one that `site/tracked.txt` lists. That
 //   file is the repository's tracked files, one per line, as `git
 //   ls-files` prints them; the Pages workflow writes it before the check.
+// - A link to a `.pdf` must name a file the site has, unless the site holds
+//   a file `pdf-skipped` and the PDF's page, with `.html`: a local build,
+//   with no Chrome to print the PDFs, writes that file. The Pages
+//   workflow never does, so a missing PDF there fails the build.
 // - Every other URL is out of scope: the checker reads no network.
 //
 // Run `oskac check site/check-links.osk` for its authority report. `main`
@@ -326,6 +330,9 @@ fn problem_of(known: Known, from: Untrusted<String>, url: Untrusted<String>) -> 
         }
         page = found.unwrap_or("")
         if !has(known.files, page) {
+            if pdf_skipped(known, page) {
+                return ""
+            }
             return "the site has no {page}"
         }
     } else if from == "llms.txt" || from == "llms-full.txt" || from == "llms-research.txt" {
@@ -344,6 +351,18 @@ fn problem_of(known: Known, from: Untrusted<String>, url: Untrusted<String>) -> 
     } else {
         "{anchored} has no anchor `{fragment}`"
     }
+}
+
+// Whether `page` is a PDF the build skipped: the site holds the file
+// `pdf-skipped`, which the Pages workflow does not write, and the page the
+// PDF would print, the same path with `.html`. A local build, with no
+// Chrome, sets it; without it a missing PDF is a broken link.
+fn pdf_skipped(known: Known, page: Untrusted<String>) -> Bool {
+    if !page.ends_with(".pdf") || !has(known.files, "pdf-skipped") {
+        return false
+    }
+    let stem = page.slice(0, page.len() - 4)
+    has(known.files, "{stem}.html")
 }
 
 // What is wrong with a link to `rest`, what follows the repository's URL

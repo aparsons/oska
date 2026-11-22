@@ -2169,6 +2169,9 @@ fn real_site_staged() -> &'static BTreeMap<String, String> {
         for staged in STAGED {
             site.insert(staged.to_string(), "staged\n".to_string());
         }
+        // No Chrome here: the PDFs of the compliance section are not made,
+        // and the checker accepts that only with this file.
+        site.insert("pdf-skipped".to_string(), "\n".to_string());
         site
     })
 }
