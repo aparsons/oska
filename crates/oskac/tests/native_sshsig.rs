@@ -121,7 +121,7 @@ fn armor(blob: &[u8], width: usize, eol: &str) -> String {
     let text = base64_encode(blob);
     let mut out = format!("-----BEGIN SSH SIGNATURE-----{eol}");
     for line in text.as_bytes().chunks(width) {
-        out.push_str(std::str::from_utf8(line).unwrap());
+        out.push_str(std::str::from_utf8(line).expect("a well-formed fixture"));
         out.push_str(eol);
     }
     out.push_str(&format!("-----END SSH SIGNATURE-----{eol}"));
@@ -138,7 +138,8 @@ fn fields(blob: &[u8]) -> Vec<(usize, usize)> {
     let mut at = 10;
     let mut out = Vec::new();
     for _ in 0..5 {
-        let len = u32::from_be_bytes(blob[at..at + 4].try_into().unwrap()) as usize;
+        let len = u32::from_be_bytes(blob[at..at + 4].try_into().expect("a well-formed fixture"))
+            as usize;
         out.push((at, len));
         at += 4 + len;
     }
@@ -173,7 +174,7 @@ fn with_length(blob: &[u8], which: usize, len: u32) -> Vec<u8> {
 
 /// The key's 32 bytes, from an OpenSSH key line.
 fn key_bytes(line: &str) -> Vec<u8> {
-    let blob = base64_decode(line.split(' ').nth(1).unwrap());
+    let blob = base64_decode(line.split(' ').nth(1).expect("a well-formed fixture"));
     blob[blob.len() - 32..].to_vec()
 }
 
@@ -366,7 +367,11 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
             &format!("{label} another comment"),
             &format!(
                 "{} some other label\n",
-                TEST_KEY.trim_end().rsplit_once(' ').unwrap().0
+                TEST_KEY
+                    .trim_end()
+                    .rsplit_once(' ')
+                    .expect("a well-formed fixture")
+                    .0
             ),
             "oska-test",
             sig,
@@ -651,7 +656,13 @@ fn every_published_release_verifies_against_the_release_key() {
             "BadSignature",
         );
         // Another release's sums, which have another tag line.
-        let other = RELEASES[(RELEASES.iter().position(|r| r.0 == tag).unwrap() + 1) % 6].1;
+        let other = RELEASES[(RELEASES
+            .iter()
+            .position(|r| r.0 == tag)
+            .expect("a well-formed fixture")
+            + 1)
+            % 6]
+        .1;
         cases.verify(
             &format!("{tag} with another release's sums"),
             RELEASE_KEY,
@@ -722,7 +733,7 @@ fn fingerprints_match_ssh_keygen_and_the_runbook() {
 #[test]
 fn key_lines_are_read_strictly() {
     let good = TEST_KEY.trim_end();
-    let blob = base64_decode(good.split(' ').nth(1).unwrap());
+    let blob = base64_decode(good.split(' ').nth(1).expect("a well-formed fixture"));
     let line = |blob: &[u8]| format!("ssh-ed25519 {} x", base64_encode(blob));
     let mut cases = Cases::new();
     cases.verify("as written", good, "oska-test", SIG_SHA512, MESSAGE, "ok");
