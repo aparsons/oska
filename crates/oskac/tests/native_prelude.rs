@@ -315,6 +315,15 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "Secret.to_bytes",
+        Run::WithInput(""),
+        r#"fn main(io: Stdout, env: Env) -> Result<(), IoError> {
+    let key = env.secret("NAME").to_bytes()
+    io.println(key.len().to_string())?
+    io.println(key.expose().to_hex())
+}"#,
+    ),
+    (
         "Secret.new",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {

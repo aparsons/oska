@@ -676,6 +676,43 @@ mod programs {
         }
     }
 
+    /// `std.hmac` (#232), Oska source linked into the program with the
+    /// `std.sha2` it uses, builds for every target, and on aarch64 and
+    /// x86_64 its machine code is branch-free and addresses no memory by
+    /// a secret: the key's pads, the secret SHA-256 under them, and the
+    /// comparison of the tag with the one given, whose loop over the bytes
+    /// has no exit that depends on a byte (`std.rt.equal_constant`, which
+    /// ORs the differences together and tests the total once).
+    #[test]
+    fn the_machine_code_of_std_hmac_is_branch_free() {
+        let src = r#"use std.hmac
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let key = env.secret("HMAC_KEY").to_bytes()
+    let given = match args.get(1) {
+        Some(text) => Bytes.from_hex(text).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }
+    let valid = hmac.verify_sha256(key, "message".to_bytes(), given)
+    let _ = io.println(if valid { "valid" } else { "invalid" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "std.hmac.padded",
+                "std.sha2.compress256_secret",
+                "std.sha2.Sha256Secret.finish",
+                "std.rt.equal_constant",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
+
     /// `std.sha2`'s secret SHA-256 (#231), Oska source linked into the
     /// program, builds for every target, and on aarch64 and x86_64 its
     /// machine code is branch-free and addresses no memory by a secret:
