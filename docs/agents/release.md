@@ -39,7 +39,7 @@ monthly (1st, 05:17 UTC) or by hand on main ─▶ resign-index.yml
              dispatches pages.yml on main
 ```
 
-On a pull request, `release.yml` does a dry run: the same builds and image smoke test, signed with a throwaway key (the index too, as if none were published), and nothing published or pushed.
+On a pull request, `release.yml` does a dry run: the same builds and image smoke test, signed with a throwaway key (the index too, as if none were published), and nothing published or pushed. It builds the Oska verifier with the throwaway key (`scripts/release/build-verifier.sh`), since `stage-site.sh` needs `OSKA_VERIFY`.
 
 ## The release assets
 

@@ -228,14 +228,7 @@ verifier_for() {
   if [ ! -x "$dir/verify-release" ]; then
     builder=$(oskac_bin) || return 1
     mkdir -p "$dir"
-    [ "$(pinned_line | wc -l)" -eq 1 ] || fail "verify.osk does not pin exactly one key line"
-    local src old new
-    src=$(<"$here/verify.osk")
-    old=$(pinned_line)
-    new=$(tr -d '\n' <"$pub")
-    printf '%s\n' "${src/"$old"/"$new"}" >"$dir/verify.osk"
-    cmp -s "$here/verify.osk" "$dir/verify.osk" && [ "$old" != "$new" ] && fail "the key was not replaced"
-    "$builder" build "$dir/verify.osk" -o "$dir/verify-release" || fail "oskac build of verify.osk failed"
+    "$here/build-verifier.sh" "$builder" "$pub" "$dir/verify-release" || fail "building the verifier for $pub failed"
   fi
   printf '%s\n' "$dir/verify-release"
 }

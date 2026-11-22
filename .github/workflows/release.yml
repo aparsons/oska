@@ -252,6 +252,12 @@ jobs:
           # the real key, which this run never sees.
           scripts/release/sign-index.sh --tag "$TAG" "$key" "$key.pub" \
             "file://$RUNNER_TEMP/no-site" "$dry/$TAG"
+          # The Oska verifier, built with this run's oskac and the throwaway
+          # key in place of the pinned release key (a copy; verify.osk is
+          # not edited). Any failure stops the step.
+          scripts/release/build-verifier.sh "$PWD/builds/oskac-linux-x86_64-gnu" \
+            "$key.pub" "$RUNNER_TEMP/verify-release"
+          export OSKA_VERIFY="$RUNNER_TEMP/verify-release"
           mkdir "$RUNNER_TEMP/site"
           scripts/release/stage-site.sh "$dry" "$RUNNER_TEMP/site" "$key.pub"
           find "$RUNNER_TEMP/site" -type f | sort
