@@ -571,7 +571,7 @@ fn with_pdf(page: Page) -> Page {
     }
     let stem = page.path.slice(0, page.path.len() - 5)
     let pdf = "/{stem}.pdf"
-    let link = markup("<p class=\"download\">").concat(anchor_to(pdf, html.text("Download PDF"))).concat(markup("</p>\n"))
+    let link = markup("<p>").concat(anchor_to(pdf, html.text("Download PDF"))).concat(markup("</p>\n"))
     Page(path: page.path, title: page.title, body: page.body.concat(link), md: "{page.md}\n[Download PDF]({pdf})\n")
 }
 
