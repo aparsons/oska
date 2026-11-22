@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The checks that need a database (a term of `%` must not list every
 // order) arrive with the `std.sql` test double after v0.6.0.
 

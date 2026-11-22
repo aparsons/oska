@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Register allocation: where each temporary of a function lives, a
 //! register or a stack slot, for the whole function.
 //!

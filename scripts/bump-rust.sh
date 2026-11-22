@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Moves the pinned Rust to a new stable version.
 #
 #   scripts/bump-rust.sh 1.101.0

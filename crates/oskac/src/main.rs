@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac`: the Oska compiler command-line interface.
 
 use authority_gate::Gate;

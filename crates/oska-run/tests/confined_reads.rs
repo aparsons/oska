@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Race-free confined reads (#94): a read through a directory or file capability
 //! walks its path one component at a time beneath a handle for the root,
 //! never following a symlink, so another process that swaps a directory

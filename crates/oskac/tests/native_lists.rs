@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native lists and value semantics (ticket #132), run on both backends
 //! through the differential harness (seam 1): list literals and every
 //! `List` method for scalar, text, struct and nested-list items, `for`

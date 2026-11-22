@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.sshsig`: OpenSSH public keys and the signatures `ssh-keygen -Y
 // sign` writes (the SSHSIG format, in OpenSSH's PROTOCOL.sshsig). It reads
 // an `ssh-ed25519` key line, prints a key's `SHA256:` fingerprint as

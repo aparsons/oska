@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Programs in Oska Core (ADR 0018, #425, #426, #430, #428, #427, #429,
 //! #431): functions, `let`, `if`, `Int` and `Bool`, structs, enums and
 //! `match`, capabilities with their effects, closures, `Result` with `?`,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! [`Dir`] on Unix: `openat`, `mkdirat`, `renameat`, `unlinkat` and
 //! `fdopendir`, one component at a time, never following a symlink.
 

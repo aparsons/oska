@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `reached` method of `std.mcp`'s `Toolset` (#250): the checker writes
 //! it for every implementation from the capabilities the authority report
 //! computed, and `serve` derives each tool's annotations from it. It must

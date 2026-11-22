@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Review fixes for the type checker (spec #32): capability-safety holes
 //! found after the tickets merged, and the rules that close them.
 

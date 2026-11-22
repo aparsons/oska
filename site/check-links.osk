@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The link checker for https://oskalang.dev: `oskac run site/check-links.osk`,
 // from the root of the repository, once `site/build.osk` has written
 // `_site/` and the release files are staged in it, checks every link the

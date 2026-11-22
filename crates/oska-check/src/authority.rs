@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Authority: which built-in capabilities a type can reach, whether it is
 //! **capability-bearing**, and the report of what each function can reach
 //! through its receiver and parameters.

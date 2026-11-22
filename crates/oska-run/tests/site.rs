@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The site generator, `site/build.osk`, run through the interpreter on a
 //! [`FakeHost`].
 //!

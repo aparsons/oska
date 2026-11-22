@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac test --filter <substring>` (spec #367, ticket #371): run only the
 //! tests whose names contain the substring, case-sensitive, and say how
 //! many were filtered out. A filter that matches no test is an error, and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The changelog (#513, spec #512): `CHANGELOG.md` at the repository root
 //! holds every release's notes, and the install guide no longer does.
 //!

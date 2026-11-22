@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Every body-less prelude and `std.html` function has a native
 //! implementation (spec #125, #140).
 //!

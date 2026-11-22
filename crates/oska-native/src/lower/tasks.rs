@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scopes and tasks, in the interpreter's one-at-a-time order
 //! (`oska-run`'s `tasks.rs` is the model).
 //!

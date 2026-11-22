@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Lists: literals, the prelude's `List` methods, `for` over a list, list
 //! equality, and the drop function of a list type. `layout.rs` says how a
 //! list object is laid out. `List.eq` is `traits.rs`'s `Body::equal`,

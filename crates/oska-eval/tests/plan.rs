@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval plan`: a batch config read against the task set, the runs
 //! the batch will make, and their estimated cost, printed before anything
 //! runs. The task set is the `validate` fixture's (`greeting` and `token`

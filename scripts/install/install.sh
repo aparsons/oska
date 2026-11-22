@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Install oskac, the Oska compiler and runner, on Linux or macOS.
 #
 #   curl -fsSL https://oskalang.dev/install.sh | sh

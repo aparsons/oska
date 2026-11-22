@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Benchmark the native backend against the interpreter, on the machine it
 # runs on, aarch64 or x86_64 Linux or macOS, or x86_64 Windows (Git Bash): maintainer-run on the
 # Raspberry Pi 5 (aarch64), and on demand in CI (.github/workflows/bench.yml),

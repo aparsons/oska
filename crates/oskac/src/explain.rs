@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac explain <code>`: the catalog entry of a diagnostic code, offline.
 //!
 //! The catalog is `docs/checker.md` and `docs/runtime.md`, compiled into

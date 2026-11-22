@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The API reference: the public items of the prelude and the user-facing
 //! `std` modules, as `oskac doc` prints them and oskalang.dev publishes
 //! them (spec #294).

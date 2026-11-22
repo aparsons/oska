@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Budget`: authority to spend model tokens and calls (#251).
 //!
 //! A budget's counters live in the interpreter, not in its value: a

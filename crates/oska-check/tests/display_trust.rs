@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Turning a value that holds untrusted text into text (review fix F1 of
 //! #93): `IoError`, `SqlError` and `ProcError` keep their `message` as
 //! untrusted text, so their text form is untrusted too, by every route.

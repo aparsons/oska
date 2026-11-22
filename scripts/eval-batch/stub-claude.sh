@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # A stand-in for the `claude` CLI, for the driver's tests: test.sh installs
 # it on PATH as `claude`. It calls no model. It replays a recorded
 # transcript and leaves a recorded final workspace behind, as a real run

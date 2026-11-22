@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `load` reads the notes directory.
 
 fn load(dir: DirRead) -> Result<Untrusted<String>, IoError> {

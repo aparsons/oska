@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Seam 2 of the native backend (spec #125, ticket #128): `oskac build`
 //! on every host, with golden output.
 //!

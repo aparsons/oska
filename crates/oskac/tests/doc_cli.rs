@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac doc`, the API reference (spec #294).
 //!
 //! The reading rules (descriptions, private items, signatures, authority)

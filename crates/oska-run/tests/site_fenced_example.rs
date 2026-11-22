@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A catalog example that holds a Markdown fence (ticket #449).
 //!
 //! `E0001`'s example is a module wrapped in a ```` ``` ```` fence, so the

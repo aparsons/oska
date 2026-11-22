@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The text toolkit at runtime (#72): `starts_with`, `ends_with`,
 //! `replace`, `join`, `chars`, `slice`, and `repeat` on `String`, and
 //! `FsRead.list_dir`.

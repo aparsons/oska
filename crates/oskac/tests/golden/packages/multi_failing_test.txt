@@ -6,8 +6,8 @@ test math: double ... ok
 test util.text: shout ... FAILED
 
 failures:
-test util.text: shout: crates/oskac/tests/fixtures/packages/multi_failing_test/src/util/text.osk:6:5: error[P0011]: assertion failed: `actual == expected`: actual "hi!", expected "hi?" (bytes 80..111)
-    at test "shout" (crates/oskac/tests/fixtures/packages/multi_failing_test/src/util/text.osk:6:5)
+test util.text: shout: crates/oskac/tests/fixtures/packages/multi_failing_test/src/util/text.osk:7:5: error[P0011]: assertion failed: `actual == expected`: actual "hi!", expected "hi?" (bytes 119..150)
+    at test "shout" (crates/oskac/tests/fixtures/packages/multi_failing_test/src/util/text.osk:7:5)
 
 3 tests: 2 passed, 1 failed, 0 skipped
 --- stderr

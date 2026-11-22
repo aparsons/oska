@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Seam 2 of spec #153: every instruction form the x86_64 code generator
 //! emits, against its encoding in the Intel 64 and IA-32 Architectures
 //! Software Developer's Manual, Volume 2 (the opcode, `/r` or `/digit`,

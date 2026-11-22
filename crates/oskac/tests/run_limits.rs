@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Run limits (spec #446, ticket #450): `oskac run --max-output=<bytes>`
 //! stops a program before it writes more than that many bytes to standard
 //! output and standard error together, with `P0041` and exit code 101, on

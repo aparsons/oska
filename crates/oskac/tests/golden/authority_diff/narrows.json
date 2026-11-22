@@ -8,8 +8,8 @@ exit: 0
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/narrows/after.osk","span":{"start":309,"end":332},"source":"Fs","result":"Dir","root":"notes"},
-    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/narrows/after.osk","span":{"start":309,"end":344},"source":"Dir","result":"DirRead","root":null}
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/narrows/after.osk","span":{"start":348,"end":371},"source":"Fs","result":"Dir","root":"notes"},
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/narrows/after.osk","span":{"start":348,"end":383},"source":"Dir","result":"DirRead","root":null}
   ],
   "authority_diff": {
     "baseline": "<baseline>",

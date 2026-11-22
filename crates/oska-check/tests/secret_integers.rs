@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Secret integers (#224): `Secret<U8>`, `Secret<U32>`, `Secret<U64>`,
 //! `Secret<Bool>` and `Secret<Bytes>`. Code computes on them without
 //! exposing them, and the checker refuses every use whose behaviour would

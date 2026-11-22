@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Per-tool authority: what each tool of an implementation of `std.mcp`'s
 //! `Toolset` reaches.
 //!

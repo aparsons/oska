@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac release` (spec #155, ticket #180): one directory with an
 //! executable for every platform, a `SHA256SUMS` that names the release,
 //! and its signature, which `ssh-keygen -Y verify` accepts; and the

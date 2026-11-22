@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The checker tracer (#34): type names resolve against the prelude, and
 //! every function gets an authority report.
 

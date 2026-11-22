@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The **verdict** of `oskac check`: one value that says whether the
 //! program may go on, and the exit code that says the same. With
 //! `--format=json` it is the check object's last key, `verdict`, so an

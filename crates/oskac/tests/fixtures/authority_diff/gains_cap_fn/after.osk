@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `report`, already impure, also takes a `cap fn`, which may carry any
 // authority its caller gives it: a widening, though `report` was impure
 // before and its built-in kinds did not change.

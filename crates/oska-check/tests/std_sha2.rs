@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.sha2` (#231), the first `std` module of Oska source: a program
 //! that imports it, directly or from any module of a package, has it
 //! linked in and checked under the rules for user code. Its digests are

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Run the Oska release verifier (verify.osk) on a release directory.
 #
 #   OSKA_VERIFY=<built verify.osk> scripts/release/verify-oska.sh <release-dir> [--format=json]

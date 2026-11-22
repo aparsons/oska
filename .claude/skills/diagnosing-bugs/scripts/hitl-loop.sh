@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Human-in-the-loop feedback loop template.
 #
 # Copy this file to a temporary path, then replace the steps in main().

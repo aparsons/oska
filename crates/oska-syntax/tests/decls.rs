@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `parse_module` tests for `use`, `const`, `test`, and attributes, and
 //! for the forms v0 rejects: glob and renaming imports, unknown
 //! attributes, and `unsafe`.

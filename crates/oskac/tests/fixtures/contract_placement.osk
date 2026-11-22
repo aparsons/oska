@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Three contracts in the wrong place: on a method of a trait impl (`E0218`),
 // on `main` (`E0219`), and with a `?` inside the condition (`E0282`).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.html` as a page generator uses it (#71): escaped text goes in,
 //! rendered markup goes out to a file, and neither door lets untrusted
 //! text become markup.

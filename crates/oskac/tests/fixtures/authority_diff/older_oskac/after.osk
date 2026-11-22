@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A baseline written by an older oskac, before #149, called `run` pure.
 // This oskac reports its bounded type parameter, so `run` widened and
 // became impure; the diff says which oskac wrote the baseline.

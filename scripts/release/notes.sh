@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Print a GitHub release's body: its version's CHANGELOG.md section, then
 # a footer.
 #

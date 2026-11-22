@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Compliance section on the site (#547, spec #416).
 //!
 //! `docs/compliance/` is published like any other docs section (ADR 0006).

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Proves the workflow validator rejects the #329 bug and accepts good files.
 # Needs actionlint (see run.sh): skips without it locally, fails in CI.
 

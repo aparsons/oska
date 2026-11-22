@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Steps: 4. `?` on an error of another type converts it with `From`, a
 // call of a function written in Oska.
 //

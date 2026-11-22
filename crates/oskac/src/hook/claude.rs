@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Claude Code's hook input, as JSON on standard input: the adapter from
 //! it to the hook's own [`Edited`] or [`Finish`], and from the hook's
 //! [`Verdict`] to what Claude Code reads on standard output. It is read

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! End-to-end tests of `oskac self info` and `oskac self uninstall` (spec
 //! #191, ticket #203), in text and JSON, including refusals. Each test
 //! makes an Oska home in a temporary directory and runs a copy of `oskac`

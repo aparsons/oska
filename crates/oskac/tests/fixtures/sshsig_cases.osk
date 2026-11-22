@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Reads cases from stdin, six lines each, and prints one line a case:
 // the key line, the namespace, the armored signature (with `|` for LF and
 // `^` for CR), the message in hexadecimal, and the line `---`. The key

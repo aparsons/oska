@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `match` and patterns.
 //!
 //! Each pattern is checked against the scrutinee's type, which gives its

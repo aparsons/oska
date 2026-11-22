@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Secrets (#55): `env.secret("KEY")` is a `Secret<String>`. A secret
 //! cannot be displayed, interpolated, or compared with `==`; its value
 //! leaves the wrapper only through `.expose()`, an audit site.

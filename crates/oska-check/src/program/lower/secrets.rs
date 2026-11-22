@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The operators on secrets, lowered to the public operators on the
 //! values inside them (see [`crate::program::secrets`]).
 

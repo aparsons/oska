@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for acquire.sh, the build-slot limiter that check.sh sources. Each
 # case starts fake check runs (a few lines that source acquire.sh, log when
 # they start and end, and wait for a go-ahead file) and asserts only on the

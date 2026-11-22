@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.hmac`: HMAC-SHA-256 (RFC 2104), which authenticates a message
 // with a secret key. `hmac.sha256(key, message)` gives the tag, and
 // `hmac.verify_sha256(key, message, tag)` checks a tag received. A module

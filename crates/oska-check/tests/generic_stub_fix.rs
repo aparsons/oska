@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The E0261 fix for a missing trait method that has its own generic
 //! parameters (#46, spec #184): the stub copies the generics and their
 //! bounds, with the trait's arguments substituted and a generic renamed

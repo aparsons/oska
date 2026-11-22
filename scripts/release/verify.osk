@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The Oska release verifier: what scripts/release/verify.sh checks, written
 // in Oska with `std.sshsig` and `std.sha2`, so that Oska can verify its own
 // releases with no `ssh-keygen` and no `sha256sum`. The Pages build runs it

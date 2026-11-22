@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The system calls a Linux executable can make (#366): the reshape of
 //! the backend's `Platform` into `Platform.call`, and the `std.rt`
 //! contracts it brought, change the executables' bytes but not which

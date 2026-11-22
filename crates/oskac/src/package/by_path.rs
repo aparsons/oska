@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reading and replacing a program's files by path, where `oska-sys` has
 //! no directory handle to open them beneath: every platform but Unix, so
 //! Windows (ADR 0014). It uses only `std`.

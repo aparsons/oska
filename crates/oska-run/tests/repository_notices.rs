@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The files a reviewer expects at the top of an Apache 2.0 repository
 //! (spec #416, ticket #545): `NOTICE` (license section 4), `CODEOWNERS`,
 //! and `CONTRIBUTING.md` (inbound license, section 5; points to

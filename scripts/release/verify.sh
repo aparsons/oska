@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Verify a signed release directory.
 #
 #   scripts/release/verify.sh <release-dir> <public-key>

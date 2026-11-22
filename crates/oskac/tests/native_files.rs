@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native confined file capabilities (ticket #137), run on both backends
 //! through the differential harness (seam 1): `Fs`, `FsRead` and
 //! `FsWrite` attenuations, `Dir`, `DirRead`, `DirWrite`, `FileRead` and

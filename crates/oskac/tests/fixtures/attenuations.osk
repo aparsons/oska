@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Every way a program narrows a filesystem capability, for the golden
 // tests of the authority report's attenuations.
 

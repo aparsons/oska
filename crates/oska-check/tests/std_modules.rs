@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std` modules and sink literal tags (#51): the prelude's `std.*`
 //! modules, `use` resolving them, and a sink literal's tag naming the
 //! literal type its imported module exports.

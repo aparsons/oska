@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A package's modules run as one program (spec #115, #118): the checker
 //! joins them into one checked program, and the interpreter runs it.
 

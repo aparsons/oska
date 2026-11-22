@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Workspaces: a fresh directory outside the repo that holds a task's
 //! package, so nothing run in it can read the hidden checks or the other
 //! solution. It is removed when dropped.

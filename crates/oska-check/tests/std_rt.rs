@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.rt` is the toolchain's own (#127, ADR 0013): the system-call and
 //! memory intrinsics (`rt_sys_*`, `rt_mem_*`) exist only in its embedded
 //! source. Any `use std.rt`, or any name that is an intrinsic, anywhere

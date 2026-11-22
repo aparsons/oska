@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Target platforms: what an executable is built for, and the code
 //! generator and file each one gets.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One-bit subtyping: the solver behind both one-way flags that join, the
 //! trust flag on text (`trusted ≤ untrusted`) and the capability flag on
 //! function types (`fn ≤ cap fn`).

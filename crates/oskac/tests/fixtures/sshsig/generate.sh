@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # The commands that made the fixtures in this directory (#234). No test
 # runs this script or ssh-keygen: the outputs are committed, and the
 # tests read them. The key is a throwaway made only for the tests.

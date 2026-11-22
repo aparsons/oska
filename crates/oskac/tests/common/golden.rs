@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Golden files: compare what a test saw with a file under `tests/golden/`,
 //! or rewrite the file when `UPDATE_GOLDEN` is set.
 

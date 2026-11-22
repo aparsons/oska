@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for scripts/release/push-image.sh, which pushes the signed oskac
 # image to the registry. Run from anywhere:
 #

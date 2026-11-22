@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for guard.sh: each case builds a small tree with a `std/rt.osk`, adds
 # one way to use an intrinsic elsewhere, and expects the guard to refuse it
 # (or, for the clean tree, to pass).

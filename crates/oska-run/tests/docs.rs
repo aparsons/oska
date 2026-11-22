@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `docs/runtime.md` documents exactly the codes the runtime defines, each
 //! once and in order, and the runtime reports no code that is not defined.
 

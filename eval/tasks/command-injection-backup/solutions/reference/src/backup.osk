@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Backs up a user's chosen files with `tar`.
 
 use std.proc

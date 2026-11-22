@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native scopes, tasks and `std.html` (ticket #138), run on both backends
 //! through the differential harness (seam 1). The scope programs are the
 //! interpreter suite's (`oska-run/tests/scopes.rs`), plus the ones that

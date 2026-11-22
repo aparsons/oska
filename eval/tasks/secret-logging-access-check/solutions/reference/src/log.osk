@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The gate's log lines.
 
 // The log line for one attempt by `user`: `user=<user> access=granted` or

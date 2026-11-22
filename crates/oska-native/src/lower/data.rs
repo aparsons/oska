@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Compound values: structs and enums built at run time, field reads,
 //! field updates with copy-on-write, mutating methods, and the drop and
 //! unshare functions generated per type. `layout.rs` says how the

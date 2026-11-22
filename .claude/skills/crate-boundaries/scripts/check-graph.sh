@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Checks the dependency graph of a Cargo workspace's own crates against a
 # list of allowed edges. Install it in Oska as scripts/crate-graph/check.sh.
 #

@@ -6,7 +6,7 @@ exit: 3
     {"name":"shout","authority":[],"via":[],"pure":true}
   ],
   "audit": [
-    {"function":"shout","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_diff/audit_added/after.osk","span":{"start":169,"end":190}}
+    {"function":"shout","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_diff/audit_added/after.osk","span":{"start":208,"end":229}}
   ],
   "attenuations": [],
   "authority_diff": {
