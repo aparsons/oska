@@ -233,7 +233,7 @@ jobs:
             and (.packages | length) == $packages
             and (.documentDescribes | length) == 1
             and ([.packages[] | select(.name == "oskac")] | length) == 1' "$sbom"
-          jq '{name, created: .creationInfo.created, packages: (.packages | length)}' "$sbom"
+          jq '[.name, .creationInfo.created, (.packages | length)]' "$sbom"
       # The GitHub Release's body: the version's CHANGELOG.md section and a
       # footer (scripts/release/notes.sh). On every event, before anything
       # is signed, so a version with no section fails the pull request's
