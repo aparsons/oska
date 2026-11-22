@@ -1,9 +1,11 @@
 //! `std.x509` (#243) as programs run: Oska source linked into the program,
 //! with the `std` modules it imports, and run as Oska by both backends.
-//! The crafted chains are a test-bearing fixture
-//! (`fixtures/x509_chains.osk`, made by `scripts/x509-roots/chains.py`),
-//! which the native test corpus runs on both backends; this file runs
-//! whole programs through the differential harness, from a single file and
+//! The crafted chains are in two test files made by
+//! `scripts/x509-roots/chains.py`: `fixtures/x509_cases.osk`, the cases that
+//! need almost no signature check, which the test corpus runs on both
+//! backends, and `vectors/x509_chains.osk`, every chain, which checks about
+//! forty signatures and so runs natively here (the debug interpreter takes
+//! over a minute on it). This file also runs whole programs through the differential harness, from a single file and
 //! from a package's module, and every real root of Mozilla's store
 //! (`vectors/x509_mozilla_roots.osk`) natively.
 
@@ -23,7 +25,7 @@ use std::process::Command;
 use common::portable::Scratch;
 use differential::{assert_same, Case};
 
-const CHAINS: &str = include_str!("fixtures/x509_chains.osk");
+const CHAINS: &str = include_str!("vectors/x509_chains.osk");
 
 /// The hexadecimal certificate that `fn <name>() -> String` of the chains
 /// fixture returns.
@@ -254,6 +256,22 @@ fn a_package_module_verifies_on_both_backends() {
     let outcome = assert_same(&case);
     assert_eq!(outcome.stdout, "valid\n", "{outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+}
+
+/// Every crafted chain in `vectors/x509_chains.osk`, natively: `oskac test`
+/// on the file passes every test.
+#[test]
+fn every_crafted_chain_natively() {
+    let dir = Scratch::new("oska-x509", "chains");
+    std::fs::write(dir.join("chains.osk"), CHAINS).expect("write the tests");
+    let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["test", "chains.osk"])
+        .current_dir(&dir)
+        .output()
+        .expect("oskac runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("31 tests: 31 passed, 0 failed"), "{stdout}");
 }
 
 /// Every real root of Mozilla's store in `vectors/x509_mozilla_roots.osk`,

@@ -5,7 +5,8 @@
 //! untrusted bytes with no trust assertion, its fields and the module's
 //! helpers stay private, the module adds no audit site, and every function
 //! in it is pure. Its verdicts are held by test chains that run as Oska
-//! tests (`crates/oskac/tests/fixtures/x509_chains.osk`) and by every root
+//! tests (`crates/oskac/tests/fixtures/x509_cases.osk` on both backends and
+//! `crates/oskac/tests/vectors/x509_chains.osk` natively) and by every root
 //! of Mozilla's store (`crates/oskac/tests/vectors/x509_mozilla_roots.osk`).
 
 mod common;
