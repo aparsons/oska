@@ -660,7 +660,7 @@ test_add_bundle_lists_the_bundle_in_the_signed_checksums() {
   grep -qE '^[0-9a-f]{64}  oskac.intoto.jsonl$' out/v1.2.3/SHA256SUMS || fail "bundle not listed"
   cmp bundle.jsonl out/v1.2.3/oskac.intoto.jsonl || fail "bundle changed"
   [ "$(head -n 1 out/v1.2.3/SHA256SUMS)" = "# oska-release v1.2.3" ] || fail "tag line moved"
-  [ "$(tail -n +2 out/v1.2.3/SHA256SUMS | wc -l)" = 9 ] || fail "not 7 binaries, digest and bundle"
+  [ "$(tail -n +2 out/v1.2.3/SHA256SUMS | wc -l)" = 10 ] || fail "not 7 binaries, digest, SBOM and bundle"
   [ "$(tail -n +2 out/v1.2.3/SHA256SUMS | awk '{print $2}')" = \
     "$(tail -n +2 out/v1.2.3/SHA256SUMS | awk '{print $2}' | LC_ALL=C sort)" ] || fail "list not sorted"
   "$here/verify.sh" out/v1.2.3 key.pub
