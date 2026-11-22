@@ -538,6 +538,71 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "Budget.limit",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    let small = budget.limit(100, 2)
+    io.println(shown(small.remaining().calls == Some(2)))
+}"#,
+    ),
+    (
+        "Budget.remaining",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    io.println(shown(budget.remaining().tokens.is_some()))
+}"#,
+    ),
+    (
+        "Budget.spent",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    let spent = budget.spent()
+    let tokens = spent.tokens
+    let calls = spent.calls
+    io.println("{tokens} {calls}")
+}"#,
+    ),
+    (
+        "Budget.reserve",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    io.println(shown(budget.limit(10, 1).reserve(20).is_ok()))
+}"#,
+    ),
+    (
+        "Reservation.debit",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    match budget.reserve(20) {
+        Ok(r) => r.debit(30, 0, 0, 0)
+        Err(_) => {}
+    }
+    io.println(shown(budget.spent().tokens == 30))
+}"#,
+    ),
+    (
+        "Reservation.release",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    let small = budget.limit(10, 1)
+    match small.reserve(10) {
+        Ok(r) => r.release()
+        Err(_) => {}
+    }
+    io.println(shown(small.remaining().calls == Some(1)))
+}"#,
+    ),
+    (
+        "OverBudget.to_string",
+        Run::Main,
+        r#"fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {
+    match budget.limit(10, 1).reserve(20) {
+        Ok(_) => io.println("reserved")
+        Err(e) => io.println(e.to_string())
+    }
+}"#,
+    ),
+    (
         "Random.next_int",
         Run::Main,
         r#"fn main(io: Stdout, random: Random) -> Result<(), IoError> {
@@ -588,6 +653,95 @@ const CALLS: &[(&str, Run, &str)] = &[
         r#"test "printed" {
     let _ = t.stdout.println("seen")
     t.assert_eq(t.printed(), ["seen"])
+}"#,
+    ),
+    (
+        "TestContext.answer_approval",
+        Run::Tests,
+        r#"test "answer_approval" {
+    t.answer_approval(true)
+    t.assert(t.approver.confirm("send", []).is_some())
+    t.assert(!t.approver.confirm("send", []).is_some())
+}"#,
+    ),
+    (
+        "TestContext.approvals_asked",
+        Run::Tests,
+        r#"test "approvals_asked" {
+    let _ = t.approver.confirm("send", ["to: a"])
+    t.assert_eq(t.approvals_asked().len(), 3)
+}"#,
+    ),
+    (
+        "Approver.terminal",
+        Run::WithInput("n\n"),
+        r#"fn main(io: Stdout, stdin: Stdin, stderr: Stderr) -> Result<(), IoError> {
+    let approver = Approver.terminal(stdin, stderr)
+    io.println(shown(approver.confirm("send", []).is_some()))
+}"#,
+    ),
+    (
+        "Approver.confirm",
+        Run::WithInput("yes\n"),
+        r#"fn main(io: Stdout, stdin: Stdin, stderr: Stderr) -> Result<(), IoError> {
+    let approver = Approver.terminal(stdin, stderr)
+    io.println(shown(approver.confirm("send", ["to: a"]).is_some()))
+}"#,
+    ),
+    (
+        "Approval.summary",
+        Run::WithInput("y\n"),
+        r#"fn main(io: Stdout, stdin: Stdin, stderr: Stderr) -> Result<(), IoError> {
+    match Approver.terminal(stdin, stderr).confirm("send", []) {
+        Some(a) => io.println(a.summary())
+        None => io.println("refused")
+    }
+}"#,
+    ),
+    (
+        "Approval.details",
+        Run::WithInput("y\n"),
+        r#"fn main(io: Stdout, stdin: Stdin, stderr: Stderr) -> Result<(), IoError> {
+    match Approver.terminal(stdin, stderr).confirm("send", ["a", "b"]) {
+        Some(a) => io.println(",".join(a.details()))
+        None => io.println("refused")
+    }
+}"#,
+    ),
+    (
+        "Approval.matches",
+        Run::WithInput("y\n"),
+        r#"fn main(io: Stdout, stdin: Stdin, stderr: Stderr) -> Result<(), IoError> {
+    match Approver.terminal(stdin, stderr).confirm("send", ["a"]) {
+        Some(a) => io.println(shown(a.matches("send", ["a"]) && !a.matches("send", ["b"])))
+        None => io.println("refused")
+    }
+}"#,
+    ),
+    (
+        "Approval.consume",
+        Run::WithInput("y\n"),
+        r#"fn main(io: Stdout, stdin: Stdin, stderr: Stderr) -> Result<(), IoError> {
+    match Approver.terminal(stdin, stderr).confirm("send", ["a"]) {
+        Some(a) => {
+            io.println(shown(a.consume("send", ["a"]).is_ok()))?
+            io.println(shown(a.consume("send", ["a"]).is_ok()))
+        }
+        None => io.println("refused")
+    }
+}"#,
+    ),
+    (
+        "ApprovalError.to_string",
+        Run::WithInput("y\n"),
+        r#"fn main(io: Stdout, stdin: Stdin, stderr: Stderr) -> Result<(), IoError> {
+    match Approver.terminal(stdin, stderr).confirm("send", ["a"]) {
+        Some(a) => match a.consume("send", ["b"]) {
+            Ok(_) => io.println("consumed")
+            Err(e) => io.println(e.to_string())
+        }
+        None => io.println("refused")
+    }
 }"#,
     ),
     (

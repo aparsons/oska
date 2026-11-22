@@ -11,6 +11,7 @@ Oska has no **ambient authority**. Reading a file, opening a connection, reading
 | `Env` | Environment variables, which can hold secrets | Yes |
 | `Clock` | The time: `now_millis()` | Yes |
 | `Random` | Pseudo-random numbers: `next_int()` | Yes |
+| `Budget` | Spending model tokens and calls. Unlimited in `main`; attenuates to a smaller `Budget` with `limit(tokens, calls)`. See [Budgets](#budgets). | Yes |
 | `Net` | The network. Attenuates to `NetConnect` or `NetListen`. | No: `E0370` |
 | `Sched` | Channels and `select` | No: `E0370` |
 | `Spawn` | Starting OS processes | No: `E0370` |
@@ -212,6 +213,33 @@ test "a directory capability refuses to climb out" {
 }
 ```
 
+## Budgets
+
+A `Budget` is the authority to spend model tokens and calls. `std.llm` takes one for every request, so a function that can call a model says so in its signature. `main`'s budget is unlimited. `budget.limit(tokens, calls)` gives a child budget that draws from its parent and is clamped to what the parent has left, so attenuating a budget never widens it, and the authority report lists each `limit` call as an attenuation. Tokens are counted, not money, because prices differ by model and change.
+
+A budget's counters live in the runtime, not in its value, so every copy of a budget draws from the same counters. Before a request, `reserve(tokens)` holds that many tokens and one call. It returns `OverBudget` when the budget, or any budget it was limited from, has less left or no tokens left at all, and then nothing is spent. The `Reservation` it returns is settled once: `debit(input, output, cache_creation, cache_read)` spends the call and every token the reply used, cache tokens included, and returns the rest, and `release()` returns everything for a request that was never sent. `remaining()` gives the tokens and calls left (`None` where there is no limit), and `spent()` what was spent.
+
+```oska tests
+fn ask(budget: Budget, tokens: Int) -> Result<(), OverBudget> {
+    let reservation = budget.reserve(tokens)?
+    reservation.debit(tokens, 0, 0, 0)
+    Ok(())
+}
+
+test "a child budget stops at its limit" {
+    let child = t.budget.limit(1000, 1)
+    t.assert(ask(child, 400).is_ok())
+    t.assert(!ask(child, 100).is_ok())
+    t.assert_eq(t.budget.spent().tokens, 400)
+}
+```
+
+Input tokens are known only after a reply, so a reply can use more tokens than were reserved. They are spent all the same: a budget can end over its limit by at most what its last reply used beyond its reservation, and a budget with no tokens left refuses every further reservation, even one of no tokens.
+
+`reserve`, `debit` and `release` are for model clients such as `std.llm`. A program that debits less than a reply used cheats only itself: it can never spend more than the budget it was given allows.
+
+Natively, the counters of a budget that `limit` makes stay allocated until the program ends, so a program that calls `limit` in a long loop keeps 64 bytes for each call. Under `--max-memory` the native backend counts those bytes and the interpreter does not.
+
 ## Bundling capabilities: `cap struct`
 
 A type that holds a capability in its own fields must be declared `cap`. Leaving it out is `E0210`, and the diagnostic carries a fix that inserts `cap`.
@@ -237,6 +265,37 @@ fn main(io: Stdout) -> Result<(), IoError> {
 ```
 
 A method's receiver counts towards its authority, so a method on a `cap struct` is never pure. A generic container is capability-bearing when it holds a capability, so `List<Stdout>` needs no `cap`. A **capability-bearing type** is any type that is a capability or contains one, directly or through type arguments.
+
+## Approvals
+
+A tool that deletes a file or sends a message can require a person's yes. An `Approval` is that yes, for one action, and only an `Approver` makes one: its fields are private and it has no other constructor, so a function that takes an `Approval` cannot be called until a person has said yes. `Approval` and `Approver` live in the prelude, not in `std.llm`: approval is not specific to models, and any program that acts on someone's behalf can use it.
+
+`Approver.terminal(stdin, stderr)` asks the person at the terminal. It writes the question to standard error, never to standard output, which a pipeline or an MCP server may own, so a function that takes an `Approver` has `Stdin` and `Stderr` in its authority. `approver.confirm(summary, details)` shows the trusted summary and then each untrusted detail, such as an argument a model chose, as `dbg` shows text: in double quotes, with control, bidirectional and other invisible characters as escapes such as `\n` and `\u{202e}`, so neither can disguise itself. It returns `Some(Approval)` only when the answer is `y` or `yes`.
+
+A terminal approver trusts whoever writes to its standard input. When that is a pipe, a script or another program, the "yes" need not come from a person, so build one only when a person is at the terminal, and never over the standard input of an MCP server, which the client writes.
+
+An approval is single use. The tool it is given to calls `approval.consume(summary, details)`, which succeeds once. A second use, of the approval or of any copy of it, is refused with `ApprovalError.Used`, and an approval given for a different summary or different details with `ApprovalError.Mismatch`, which leaves it unused. `matches(summary, details)` says whether `consume` would succeed, without using it, so it is false once the approval is used; a tool that acts calls `consume`. `summary()` and `details()` say what was approved.
+
+```oska tests
+fn delete(approval: Approval, path: Untrusted<String>) -> Result<(), ApprovalError> {
+    approval.consume("delete a file", [path])?
+    Ok(())
+}
+
+test "one yes covers one action" {
+    t.answer_approval(true)
+    match t.approver.confirm("delete a file", ["notes.txt"]) {
+        Some(approval) => {
+            t.assert(delete(approval, "notes.txt").is_ok())
+            t.assert(!delete(approval, "notes.txt").is_ok())
+        }
+        None => t.fail("the script said yes")
+    }
+    t.assert_eq(t.approvals_asked().at(0).details, ["notes.txt"])
+}
+```
+
+In a test, `t.approver` answers from the test's script instead of a terminal: see [Testing](testing.md).
 
 ## Closures: `fn` and `cap fn`
 

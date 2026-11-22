@@ -299,6 +299,7 @@ fn the_authority_report_escapes_its_strings() {
             generics: Vec::new(),
         }],
         pure: false,
+        toolset: None,
     };
     assert_eq!(
         function.to_json(),

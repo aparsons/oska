@@ -19,6 +19,8 @@ use oska_check::limits;
 use oska_check::program::IntrinsicName;
 use oska_syntax::Span;
 
+use crate::approval;
+use crate::budget;
 use crate::bytes;
 use crate::confine::{self, Intent};
 use crate::data;
@@ -203,8 +205,10 @@ pub(crate) fn display_in_place(name: &IntrinsicName) -> Option<InPlace> {
 
 /// Every module's table, in the order [`lookup`] prefers them, with the
 /// `std` module whose functions it holds, for a `std` module's table.
-const TABLES: [(Option<&str>, Table); 9] = [
+const TABLES: [(Option<&str>, Table); 11] = [
     (None, INTRINSICS),
+    (None, budget::INTRINSICS),
+    (None, approval::INTRINSICS),
     (None, int_methods::INTRINSICS),
     (None, data::INTRINSICS),
     (None, bytes::INTRINSICS),
@@ -394,6 +398,10 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
             debug(&fields[1], out);
         }
         Value::Struct { ty, .. } if &**ty == builtins::SECRET => out.push_str("<redacted>"),
+        // Its one field is the runtime's own number for it.
+        Value::Struct { ty, .. } if &**ty == builtins::RESERVATION => out.push_str("<reservation>"),
+        // Its last field is the runtime's own number for it.
+        Value::Struct { ty, .. } if &**ty == builtins::APPROVAL => out.push_str("<approval>"),
         Value::Struct { ty, fields } => {
             out.push_str(ty);
             tuple(out, fields);
@@ -425,6 +433,8 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         }
         Value::Closure(_) => out.push_str("<closure>"),
         Value::Function(_) => out.push_str("<fn>"),
+        // Only the runtime's own number of its counters would show.
+        Value::Capability(Capability::Budget(_)) => out.push_str("<Budget>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
         Value::Args(args) => {
             out.push_str("Args[");

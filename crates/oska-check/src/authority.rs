@@ -14,6 +14,8 @@ use crate::link::Modules;
 use crate::ty::{Cap, Ty, SELF};
 use crate::{FunctionAuthority, Via};
 
+mod tools;
+
 /// What a type can reach.
 #[derive(Debug, Clone, Default)]
 struct Reach {
@@ -149,7 +151,15 @@ fn entries(
     with_signatures: bool,
 ) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
-    for item in &module.items {
+    // A `std` module written in Oska is the toolchain's code: the report
+    // is about the program's. Leaving it out hides no authority only
+    // because such a module reaches no capability, which its own test
+    // checks (`tests/std_json.rs`); one that does must not be left out.
+    for item in module
+        .items
+        .iter()
+        .filter(|i| !modules.in_std(i.span.start))
+    {
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = modules.function_name(item.span.start, None, &f.name.name);
@@ -159,10 +169,23 @@ fn entries(
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
+                let toolset = items
+                    .impls
+                    .iter()
+                    .find(|info| info.span == Some(item.span))
+                    .is_some_and(|info| tools::is_toolset(&info.trait_name));
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
                         let name = impl_method_name(modules, items, item, imp, method, f);
-                        functions.push(function(name, method, f, lower.clone()));
+                        let mut entry = function(name, method, f, lower.clone());
+                        if toolset && f.name.name == "call" {
+                            if let Some(target) = &lower.self_ty {
+                                entry.toolset = Some(tools::toolset(
+                                    module, decls, items, imp, f, target, &lower,
+                                ));
+                            }
+                        }
+                        functions.push(entry);
                     }
                 }
             }
@@ -267,6 +290,7 @@ fn function(name: String, item: &Item, f: &FnDecl, lower: Lower) -> FunctionAuth
         authority: total.capabilities,
         via,
         pure: !total.bearing,
+        toolset: None,
     }
 }
 

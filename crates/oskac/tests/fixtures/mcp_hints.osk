@@ -1,0 +1,68 @@
+// A toolset with one tool for each kind of authority, for the tests of
+// the annotations `mcp.serve` derives (#250). The network and process
+// capabilities have no runtime yet, so the toolset holds them as options
+// that `main` leaves empty: the tools are listed, and the checker still
+// computes what each reaches.
+use std.json
+use std.mcp
+
+cap struct Hints {
+    notes: DirRead,
+    drafts: DirWrite,
+    net: Option<NetConnect>,
+    run: Option<Spawn>,
+    out: Stdout,
+}
+
+impl mcp.Toolset for Hints {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        let none = json.Schema.object([])
+        [
+            mcp.ToolSpec.new("think", "Reach nothing.", none),
+            mcp.ToolSpec.new("read", "Read a note.", none),
+            mcp.ToolSpec.new("write", "Write a draft.", none),
+            mcp.ToolSpec.new("fetch", "Call a host.", none),
+            mcp.ToolSpec.new("launch", "Run a program.", none),
+            mcp.ToolSpec.new("shout", "Print.", none),
+        ]
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        match name {
+            "think" => mcp.ToolResult.text("done")
+            "read" => mcp.ToolResult.text(self.notes.list_dir(Path.new(".")).unwrap_or([]).len().to_string())
+            "write" => {
+                let _ = self.drafts.write(Path.new("a.txt"), "")
+                mcp.ToolResult.text("done")
+            }
+            "fetch" => {
+                match self.net {
+                    Some(_) => mcp.ToolResult.text("done")
+                    None => mcp.ToolResult.error("no network")
+                }
+            }
+            "launch" => {
+                match self.run {
+                    Some(_) => mcp.ToolResult.text("done")
+                    None => mcp.ToolResult.error("cannot launch")
+                }
+            }
+            "shout" => {
+                let _ = self.out.println("hello")
+                mcp.ToolResult.text("done")
+            }
+            _ => mcp.ToolResult.error("no such tool")
+        }
+    }
+}
+
+fn main(fs: Fs, stdin: Stdin, stdout: Stdout) -> Result<(), mcp.McpError> {
+    let tools = Hints(
+        notes: fs.read_only().restrict_to("notes"),
+        drafts: fs.write_only().restrict_to("drafts"),
+        net: None,
+        run: None,
+        out: stdout,
+    )
+    mcp.serve(stdin, stdout, mcp.ServerInfo.new("hints", "1.0.0"), tools)
+}

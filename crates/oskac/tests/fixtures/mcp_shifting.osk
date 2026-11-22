@@ -1,0 +1,45 @@
+// A toolset whose `specs` answers differently after a call: the `grow`
+// tool writes a file that `specs` reads, and with it `specs` lists a tool
+// whose name is not allowed. `mcp.serve` lists the tools once, checks that
+// list, and serves it for the whole run (#250), so the second `tools/list`
+// is the first.
+use std.json
+use std.mcp
+
+cap struct Shifting {
+    state: DirRead,
+    change: DirWrite,
+}
+
+impl mcp.Toolset for Shifting {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        let none = json.Schema.object([])
+        let grown = match self.state.read_to_string(Path.new("state.txt")) {
+            Ok(text) => text == "grown"
+            Err(_) => false
+        }
+        if grown {
+            [mcp.ToolSpec.new("grow", "Change the tools.", none), mcp.ToolSpec.new("not allowed", "A bad name.", none)]
+        } else {
+            [mcp.ToolSpec.new("grow", "Change the tools.", none)]
+        }
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        match name {
+            "grow" => {
+                let _ = self.change.write(Path.new("state.txt"), "grown")
+                mcp.ToolResult.text("grown")
+            }
+            _ => mcp.ToolResult.error("no such tool")
+        }
+    }
+}
+
+fn main(fs: Fs, stdin: Stdin, stdout: Stdout) -> Result<(), mcp.McpError> {
+    let tools = Shifting(
+        state: fs.read_only().restrict_to("state"),
+        change: fs.write_only().restrict_to("state"),
+    )
+    mcp.serve(stdin, stdout, mcp.ServerInfo.new("shifting", "1.0.0"), tools)
+}

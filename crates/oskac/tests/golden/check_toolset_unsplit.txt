@@ -1,0 +1,6 @@
+fn <Notes as std.mcp.Toolset>.specs: DirRead, Stdout (self)
+fn <Notes as std.mcp.Toolset>.call: DirRead, Stdout (self)
+  tools (not split per tool): DirRead, Stdout (self); writes to the protocol stream (Stdout)
+fn main: Fs (fs), Stdout (io)
+  crates/oskac/tests/fixtures/toolset_unsplit.osk:30:30: Fs -> FsRead: read_only (bytes 903..917)
+  crates/oskac/tests/fixtures/toolset_unsplit.osk:30:30: FsRead -> DirRead: restrict_to "notes" (bytes 903..938)

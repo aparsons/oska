@@ -33,6 +33,8 @@ use oska_check::program::{
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Frame as StackFrame, Frames, Span, MAX_FRAMES};
 
+use crate::approval::Approvals;
+use crate::budget::Budgets;
 use crate::host::Host;
 use crate::intrinsics::{self, Args, Intrinsic};
 use crate::memory;
@@ -118,6 +120,10 @@ pub struct Interpreter<'p, 'h> {
     host: &'h mut dyn Host,
     /// The scopes and tasks of the run (`tasks.rs`).
     pub(crate) tasks: Tasks,
+    /// The budgets and reservations of the run (`budget.rs`).
+    pub(crate) budgets: Budgets,
+    /// The approvals of the run (`approval.rs`).
+    pub(crate) approvals: Approvals,
     /// The calls of functions and closures running, outermost first:
     /// their depth, and a panic's call stack ([`Interpreter::stamped`]).
     calls: Vec<Call<'p>>,
@@ -237,6 +243,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             program,
             host,
             tasks: Tasks::default(),
+            budgets: Budgets::default(),
+            approvals: Approvals::default(),
             calls: Vec::new(),
             root: FrameName::Program("main"),
             caller_override: None,
@@ -528,6 +536,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// Run a test's `body` with `t`, its `TestContext`, in slot 0. Only a
     /// panic, an assertion failure included, unwinds out of it.
     pub fn run_test(&mut self, body: &Expr, t: Value) -> Result<(), Panic> {
+        self.budgets.for_test();
+        self.approvals.for_test();
         let mut frame = Frame {
             slots: vec![t],
             receiver: None,

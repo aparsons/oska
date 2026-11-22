@@ -100,6 +100,40 @@ pub struct Program {
     /// declares, such as the core IR's refusal of anything outside Oska
     /// Core (`core_ir.rs`), reads it here.
     pub declarations: Vec<Declaration>,
+    /// Every implementation of `std.mcp`'s `Toolset`, with the built-in
+    /// capabilities each of its tools reaches, as the authority report
+    /// computes them. An MCP server derives each tool's annotations from
+    /// them: the checker writes each implementation's `reached` method
+    /// from this list, and `std.mcp`'s `serve` calls it.
+    pub toolsets: Vec<Toolset>,
+}
+
+/// An implementation of `std.mcp`'s `Toolset` and the built-in
+/// capabilities its tools reach.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Toolset {
+    /// The implementing type, as [`Program::types`] names it.
+    pub implementation: String,
+    /// Each tool, by name, and the capabilities it reaches; empty when
+    /// `call` is not split per tool.
+    pub tools: Vec<(String, Vec<String>)>,
+    /// The capabilities the whole toolset reaches.
+    pub whole: Vec<String>,
+}
+
+/// What [`Toolset::capabilities`] lists for a tool that reaches a
+/// capability held by a type parameter, which could be any.
+pub const UNKNOWN_KIND: &str = "?";
+
+impl Toolset {
+    /// The capabilities the tool `name` reaches: its own when the report
+    /// splits it out, and otherwise the whole toolset's, never fewer.
+    pub fn capabilities(&self, name: &str) -> &[String] {
+        self.tools
+            .iter()
+            .find(|(tool, _)| tool == name)
+            .map_or(&self.whole, |(_, capabilities)| capabilities)
+    }
 }
 
 /// A declaration other than a function, a `use` or a `test`.

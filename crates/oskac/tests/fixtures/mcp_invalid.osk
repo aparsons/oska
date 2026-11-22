@@ -1,0 +1,47 @@
+// A server whose tools are broken the way the first argument says, for
+// the start-up failures of `mcp.serve` (#250): it must return an
+// `McpError` before it reads anything, which the program shows by
+// printing the line of input it still finds.
+use std.json
+use std.mcp
+
+struct Broken { case: Untrusted<String> }
+
+impl mcp.Toolset for Broken {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        let object = json.Schema.object([])
+        match self.case {
+            "duplicate" => [
+                mcp.ToolSpec.new("alpha", "One.", object),
+                mcp.ToolSpec.new("beta", "Two.", object),
+                mcp.ToolSpec.new("alpha", "Three.", object),
+            ]
+            "space" => [mcp.ToolSpec.new("not allowed", "Spaces.", object)]
+            "dot" => [mcp.ToolSpec.new("a.b", "A dot.", object)]
+            "accent" => [mcp.ToolSpec.new("café", "Not ASCII.", object)]
+            "empty" => [mcp.ToolSpec.new("", "No name.", object)]
+            "long" => [mcp.ToolSpec.new("a".repeat(129), "Too long.", object)]
+            "longest" => [mcp.ToolSpec.new("a".repeat(128), "As long as can be.", object)]
+            "dashes" => [mcp.ToolSpec.new("Get_user-2", "Every allowed character.", object)]
+            "string" => [mcp.ToolSpec.new("alpha", "A string.", json.Schema.string())]
+            "list" => [mcp.ToolSpec.new("alpha", "A list.", json.Schema.list(json.Schema.string()))]
+            _ => []
+        }
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        mcp.ToolResult.text("called")
+    }
+}
+
+fn main(stdin: Stdin, stdout: Stdout, args: Args) -> Result<(), IoError> {
+    let tools = Broken(case: args.get(1).unwrap_or("none"))
+    match mcp.serve(stdin, stdout, mcp.ServerInfo.new("invalid", "1.0.0"), tools) {
+        Ok(()) => stdout.println("served")?
+        Err(error) => stdout.println("error: {error}")?
+    }
+    match stdin.read_line()? {
+        Some(line) => stdout.println("unread: {line}")
+        None => stdout.println("no input left")
+    }
+}

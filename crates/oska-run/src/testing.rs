@@ -463,6 +463,16 @@ fn test_context() -> Value {
     let fields = builtins::test_context_fields()
         .iter()
         .map(|ty| {
+            if *ty == builtins::APPROVER {
+                // `t.approver`, which answers from the test's script.
+                return Value::Struct {
+                    ty: builtins::APPROVER.into(),
+                    fields: std::rc::Rc::new(vec![
+                        Value::Capability(Capability::Stdin),
+                        Value::Capability(Capability::Stderr),
+                    ]),
+                };
+            }
             let capability =
                 Capability::granted(ty).expect("a `TestContext` capability has a runtime");
             Value::Capability(capability)
