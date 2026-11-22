@@ -214,8 +214,7 @@ fn failures_read_the_same_on_every_platform() {
          not ascii: invalid host \"héllo.com\": {INVALID}\n\
          quote: invalid host \"a\\\"b\": {INVALID}\n\
          listen on 70000: port 70000 is out of range: use 0 to 65535\n\
-         listen on a taken port: listen failed: I/O error\n\
-         no port when it could not listen: 0 0\n"
+         no port when it could not listen: 0\n"
     );
     prints(
         "sockets_failures",
@@ -258,18 +257,8 @@ fn main(io: Stdout, net: Net) -> Result<(), IoError> {
             io.println("listen on 70000: {message}")?
         }
     }
-    let taken = net.listen_only().restrict_to_loopback(0)
-    let again = net.listen_only().restrict_to_loopback(taken.port())
-    match again.accept() {
-        Ok(_) => io.println("listen on a taken port: accepted")?
-        Err(e) => {
-            let message = e.message
-            io.println("listen on a taken port: {message}")?
-        }
-    }
     let first = big.port()
-    let second = again.port()
-    io.println("no port when it could not listen: {first} {second}")?
+    io.println("no port when it could not listen: {first}")?
     Ok(())
 }
 "#,
@@ -430,4 +419,26 @@ test "the real network reaches the loopback" {
             "{flags:?}: {interpreted:#?}"
         );
     }
+}
+
+/// Listening twice on one port is refused where the machine has no second
+/// loopback address to fall back on, and is not where `::1` is there, so
+/// what it gives is the machine's own business: both backends must agree.
+#[test]
+fn listening_on_a_taken_port_gives_the_same_result_on_both_backends() {
+    let outcome = assert_same(&case(
+        "sockets_taken_port",
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let taken = net.listen_only().restrict_to_loopback(0)
+    let again = net.listen_only().restrict_to_loopback(taken.port())
+    let port = again.port()
+    if port == 0 {
+        io.println("refused")
+    } else {
+        io.println("listening")
+    }
+}
+"#,
+    ));
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
 }
