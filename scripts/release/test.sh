@@ -473,6 +473,91 @@ test_verify_refuses_a_file_the_checksums_do_not_cover() {
   both_refuse out/v1.2.3 key.pub
 }
 
+# ---- The provenance bundle (add-bundle.sh) ---------------------------------------
+
+# A fixture bundle: one line of JSON, as the attest action writes.
+fake_bundle() {
+  printf '{"mediaType":"application/vnd.dev.sigstore.bundle+json"}\n' >"${1:-bundle.jsonl}"
+}
+
+# Assembles ./out/<tag> (default v1.2.3), adds a bundle, and signs it.
+bundled_release() {
+  local tag=${1:-v1.2.3}
+  [ -d builds ] || fake_builds
+  [ -f key ] || throwaway_key key
+  "$here/assemble.sh" "$tag" builds out
+  fake_bundle
+  "$here/add-bundle.sh" "out/$tag" bundle.jsonl
+  "$here/sign.sh" "out/$tag" key key.pub
+}
+
+test_add_bundle_lists_the_bundle_in_the_signed_checksums() {
+  bundled_release
+  grep -qE '^[0-9a-f]{64}  oskac.intoto.jsonl$' out/v1.2.3/SHA256SUMS || fail "bundle not listed"
+  cmp bundle.jsonl out/v1.2.3/oskac.intoto.jsonl || fail "bundle changed"
+  [ "$(head -n 1 out/v1.2.3/SHA256SUMS)" = "# oska-release v1.2.3" ] || fail "tag line moved"
+  [ "$(tail -n +2 out/v1.2.3/SHA256SUMS | wc -l)" = 9 ] || fail "not 7 binaries, digest and bundle"
+  [ "$(tail -n +2 out/v1.2.3/SHA256SUMS | awk '{print $2}')" = \
+    "$(tail -n +2 out/v1.2.3/SHA256SUMS | awk '{print $2}' | LC_ALL=C sort)" ] || fail "list not sorted"
+  "$here/verify.sh" out/v1.2.3 key.pub
+  both_accept out/v1.2.3 key.pub
+}
+
+test_verify_refuses_a_bundle_changed_after_signing() {
+  bundled_release
+  printf 'evil\n' >>out/v1.2.3/oskac.intoto.jsonl
+  if "$here/verify.sh" out/v1.2.3 key.pub; then fail "verified a changed bundle"; fi
+  both_refuse out/v1.2.3 key.pub
+}
+
+test_verify_refuses_a_bundle_the_checksums_do_not_list() {
+  signed_release
+  fake_bundle out/v1.2.3/oskac.intoto.jsonl
+  if "$here/verify.sh" out/v1.2.3 key.pub; then fail "verified an unlisted bundle"; fi
+  both_refuse out/v1.2.3 key.pub
+}
+
+test_verify_refuses_a_release_whose_listed_bundle_is_missing() {
+  bundled_release
+  rm out/v1.2.3/oskac.intoto.jsonl
+  if "$here/verify.sh" out/v1.2.3 key.pub; then fail "verified with the bundle missing"; fi
+  both_refuse out/v1.2.3 key.pub
+}
+
+test_add_bundle_refuses_an_empty_bundle_a_second_bundle_and_a_signed_release() {
+  [ -d builds ] || fake_builds
+  [ -f key ] || throwaway_key key
+  "$here/assemble.sh" v1.2.3 builds out
+  : >empty.jsonl
+  if "$here/add-bundle.sh" out/v1.2.3 empty.jsonl 2>err; then fail "took an empty bundle"; fi
+  fake_bundle
+  "$here/add-bundle.sh" out/v1.2.3 bundle.jsonl
+  if "$here/add-bundle.sh" out/v1.2.3 bundle.jsonl 2>err; then fail "took a second bundle"; fi
+  grep -q 'already' err || fail "error does not say why: $(cat err)"
+  "$here/sign.sh" out/v1.2.3 key key.pub
+  "$here/assemble.sh" v1.2.4 builds out
+  "$here/sign.sh" out/v1.2.4 key key.pub
+  if "$here/add-bundle.sh" out/v1.2.4 bundle.jsonl 2>err; then fail "changed a signed release"; fi
+  grep -q 'signed' err || fail "error does not say it is signed: $(cat err)"
+}
+
+test_stage_site_accepts_a_listed_bundle_and_keeps_it_out_of_the_binaries() {
+  bundled_release v1.2.3
+  mkdir site
+  stage_site out site key.pub
+  cmp bundle.jsonl site/releases/v1.2.3/oskac.intoto.jsonl || fail "bundle not published"
+  [ "$(jq -r '.binaries | keys | length' site/latest.json)" = 7 ] || fail "latest.json lists the bundle as a binary"
+  [ "$(jq -r '.binaries | has("oskac.intoto.jsonl")' site/latest.json)" = false ] || fail "bundle in binaries"
+}
+
+test_stage_site_refuses_an_unlisted_bundle() {
+  signed_release v1.2.3
+  fake_bundle out/v1.2.3/oskac.intoto.jsonl
+  mkdir site
+  if stage_site out site key.pub 2>err; then fail "staged an unlisted bundle"; fi
+  [ ! -e site/releases/v1.2.3 ] || fail "copied the release"
+}
+
 # ---- The Oska verifier on its own (verify.osk) -----------------------------------
 
 test_the_oska_verifier_pins_the_committed_release_key() {
