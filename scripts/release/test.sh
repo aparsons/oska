@@ -222,11 +222,11 @@ pinned_line() {
 
 # Prints the path of the Oska verifier built for the public key file $1.
 verifier_for() {
-  local pub=$1 id dir oskac
+  local pub=$1 id dir builder
   id=$(sha256sum <"$pub" | cut -c1-16)
   dir=$scratch/verifiers/$id
   if [ ! -x "$dir/verify-release" ]; then
-    oskac=$(oskac_bin) || return 1
+    builder=$(oskac_bin) || return 1
     mkdir -p "$dir"
     [ "$(pinned_line | wc -l)" -eq 1 ] || fail "verify.osk does not pin exactly one key line"
     local src old new
@@ -235,7 +235,7 @@ verifier_for() {
     new=$(tr -d '\n' <"$pub")
     printf '%s\n' "${src/"$old"/"$new"}" >"$dir/verify.osk"
     cmp -s "$here/verify.osk" "$dir/verify.osk" && [ "$old" != "$new" ] && fail "the key was not replaced"
-    "$oskac" build "$dir/verify.osk" -o "$dir/verify-release" || fail "oskac build of verify.osk failed"
+    "$builder" build "$dir/verify.osk" -o "$dir/verify-release" || fail "oskac build of verify.osk failed"
   fi
   printf '%s\n' "$dir/verify-release"
 }
@@ -593,9 +593,9 @@ test_the_oska_verifier_refuses_a_listed_file_twice_and_names_with_odd_bytes() {
 # The authority report shows a `DirRead` and the standard streams, and no
 # audit site (no `expose()` and no `.assume_trusted()`).
 test_the_oska_verifier_has_only_a_directory_read_and_the_standard_streams() {
-  local oskac report
-  oskac=$(oskac_bin)
-  report=$("$oskac" check "$here/verify.osk") || fail "oskac check refused verify.osk: $report"
+  local builder report
+  builder=$(oskac_bin)
+  report=$("$builder" check "$here/verify.osk") || fail "oskac check refused verify.osk: $report"
   # Every capability a function names.
   grep '^fn ' <<<"$report" | grep -v ': pure$' | sed 's/^fn [A-Za-z_0-9]*: //' | tr ',' '\n' |
     sed 's/^ *//; s/ (.*//' | LC_ALL=C sort -u >caps
@@ -706,7 +706,7 @@ test_a_tampered_release_that_passes_the_shell_verifier_alone_is_refused() {
 test_stage_site_refuses_releases_when_there_is_no_oska_verifier() {
   signed_release v1.2.3
   mkdir site
-  if OSKA_VERIFY= "$here/stage-site.sh" out site key.pub 2>err; then
+  if OSKA_VERIFY='' "$here/stage-site.sh" out site key.pub 2>err; then
     fail "staged a release with no Oska verifier"
   fi
   grep -q OSKA_VERIFY err || fail "error does not name OSKA_VERIFY: $(cat err)"
