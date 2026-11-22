@@ -20,6 +20,7 @@ use crate::{Attenuation, AttenuationRoot};
 pub(crate) const METHODS: &[(&str, bool)] = &[
     ("restrict_to", true),
     ("restrict_to_file", true),
+    ("restrict_to_loopback", true),
     ("read_only", false),
     ("write_only", false),
     ("limit", false),

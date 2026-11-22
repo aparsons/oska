@@ -108,7 +108,66 @@ pub enum Capability {
     /// file, or nowhere, and never [`Root::Anywhere`]. It reads or writes
     /// but not both. Only attenuation makes one.
     File(FsCap),
+    /// `Net`, `NetConnect` or `NetListen`: they only attenuate, so a
+    /// connection is made only from a host capability.
+    Net(NetCap),
+    /// A host capability, `HostConnect`: one host and one port. Only
+    /// attenuation makes one.
+    Host(HostCap),
+    /// A loopback listener, `LoopbackListen`. Only attenuation makes one.
+    Loopback(LoopbackCap),
 }
+
+/// Which of the network capabilities that only attenuate a value is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetCap {
+    /// `Net`: connecting and listening.
+    Any,
+    /// `NetConnect`.
+    Connect,
+    /// `NetListen`.
+    Listen,
+}
+
+/// A host capability: the one host and port it is confined to, both as
+/// the program gave them. Checking them is `connect`'s business, so a bad
+/// address is an `IoError` there and never a panic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostCap {
+    pub host: Rc<str>,
+    pub port: i128,
+    /// The open connection, when this is the host a `Connection` holds.
+    pub stream: Option<StreamHandle>,
+}
+
+/// An open connection, shared by the copies of its `Connection`; the
+/// last one dropped closes it.
+#[derive(Debug, Clone)]
+pub struct StreamHandle(pub Rc<oska_sys::NetStream>);
+
+impl PartialEq for StreamHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for StreamHandle {}
+
+/// A loopback listener, or why it could not be made.
+#[derive(Debug, Clone)]
+pub struct LoopbackCap(pub Result<Rc<oska_sys::NetListener>, Rc<str>>);
+
+impl PartialEq for LoopbackCap {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Ok(a), Ok(b)) => Rc::ptr_eq(a, b),
+            (Err(a), Err(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for LoopbackCap {}
 
 /// A filesystem capability's attenuation state: where it may reach, and
 /// which operations it may perform. Attenuating produces a new one that
@@ -168,6 +227,9 @@ enum Kind {
     Fs(Access),
     Dir(Access),
     File(Access),
+    Net(NetCap),
+    Host,
+    Loopback,
 }
 
 /// Each capability the runtime implements, by the name of its type: the
@@ -190,6 +252,11 @@ const IMPLEMENTED: &[(&str, Kind)] = &[
     ("DirWrite", Kind::Dir(Access::Write)),
     ("FileRead", Kind::File(Access::Read)),
     ("FileWrite", Kind::File(Access::Write)),
+    ("Net", Kind::Net(NetCap::Any)),
+    ("NetConnect", Kind::Net(NetCap::Connect)),
+    ("NetListen", Kind::Net(NetCap::Listen)),
+    ("HostConnect", Kind::Host),
+    ("LoopbackListen", Kind::Loopback),
 ];
 
 impl Capability {
@@ -200,9 +267,9 @@ impl Capability {
     }
 
     /// The capability `main` declares with the type named `ty`, if the
-    /// runtime can grant it: `Fs`, `FsRead` or `FsWrite`. A directory or
-    /// file capability has a runtime but is never granted, since only
-    /// attenuation gives it a root.
+    /// runtime can grant it: `Fs`, `FsRead`, `FsWrite`, `Net`, `NetConnect`
+    /// or `NetListen`. A directory, file or host capability has a runtime but
+    /// is never granted, since only attenuation gives it a root.
     pub fn granted(ty: &str) -> Option<Capability> {
         let (_, kind) = IMPLEMENTED.iter().find(|(name, _)| *name == ty)?;
         Some(match *kind {
@@ -217,7 +284,8 @@ impl Capability {
                 root: Root::Anywhere,
                 access,
             }),
-            Kind::Dir(_) | Kind::File(_) => return None,
+            Kind::Net(net) => Capability::Net(net),
+            Kind::Dir(_) | Kind::File(_) | Kind::Host | Kind::Loopback => return None,
         })
     }
 
@@ -233,6 +301,9 @@ impl Capability {
             Capability::Fs(fs) => Kind::Fs(fs.access),
             Capability::Dir(dir) => Kind::Dir(dir.access),
             Capability::File(file) => Kind::File(file.access),
+            Capability::Net(net) => Kind::Net(*net),
+            Capability::Host(_) => Kind::Host,
+            Capability::Loopback(_) => Kind::Loopback,
         }
     }
 
