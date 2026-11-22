@@ -419,6 +419,9 @@ fn an_item_filter_lists_the_item_and_its_methods() {
     };
     assert_eq!(names(&["List.push"]), ["List.push"]);
     assert_eq!(names(&["std.sql.connect"]), ["connect"]);
+    // A function renamed with its module (`sha2.sha256`) is still found by
+    // its path.
+    assert_eq!(names(&["std.sha2.sha256"]), ["sha2.sha256"]);
     let list = names(&["List"]);
     assert_eq!(list[0], "List");
     assert!(list.iter().skip(1).all(|n| n.starts_with("List.")));

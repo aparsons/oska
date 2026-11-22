@@ -217,7 +217,7 @@ fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
 }
 ```
 
-The release signature of the Oska toolchain itself is made in the namespace `oska-release` with the key published as `oska-release.pub`, and its fingerprint is in the [releasing guide](releasing.md). Do not take the key out of the same download as the file it signs.
+The release signature of the Oska toolchain itself is made in the namespace `oska-release` with the key published as `oska-release.pub`, and its fingerprint is in the [install guide](install.md). Do not take the key out of the same download as the file it signs.
 
 ## What to remember
 
