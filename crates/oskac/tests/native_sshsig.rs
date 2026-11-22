@@ -805,7 +805,7 @@ fn key_lines_are_read_strictly() {
     cases.key(
         "a tab",
         "ssh-ed25519\tAAAAC3NzaC1lZDI1NTE5AAAAIJkiHKcB7olfSbFctH77PhH1wdg/QVxvI544xAB2AS+g x",
-        "Malformed",
+        "UnsupportedAlgorithm",
     );
     cases.key(
         "a run of spaces",
