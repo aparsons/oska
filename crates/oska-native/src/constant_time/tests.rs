@@ -700,9 +700,9 @@ fn main(io: Stdout, env: Env, args: Args) {
         for target in Target::ALL {
             let inspected = inspect_secret_code(src, target);
             for name in [
-                "std.hmac.padded",
-                "std.sha2.compress256_secret",
-                "std.sha2.Sha256Secret.finish",
+                "pkg.std.hmac.padded",
+                "pkg.std.sha2.compress256_secret",
+                "pkg.std.sha2.Sha256Secret.finish",
                 "std.rt.equal_constant",
             ] {
                 assert!(
@@ -735,12 +735,12 @@ fn main(io: Stdout) {
         for target in Target::ALL {
             let inspected = inspect_secret_code(src, target);
             for name in [
-                "std.sha2.compress256_secret",
-                "std.sha2.big_sigma0_256_secret",
-                "std.sha2.big_sigma1_256_secret",
-                "std.sha2.small_sigma0_256_secret",
-                "std.sha2.small_sigma1_256_secret",
-                "std.sha2.Sha256Secret.finish",
+                "pkg.std.sha2.compress256_secret",
+                "pkg.std.sha2.big_sigma0_256_secret",
+                "pkg.std.sha2.big_sigma1_256_secret",
+                "pkg.std.sha2.small_sigma0_256_secret",
+                "pkg.std.sha2.small_sigma1_256_secret",
+                "pkg.std.sha2.Sha256Secret.finish",
             ] {
                 assert!(
                     inspected.get(name).is_some_and(|&n| n > 0),
