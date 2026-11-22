@@ -649,6 +649,37 @@ A new `dist` profile (`inherits = "release"`, `panic = "abort"`) builds the ship
 - **What `cargo test` does not cover:** the abort build itself. `cargo test` ignores the `panic` setting, so tests unwind and the hook ends the process with 101. The abort build was run by hand on the case above.
 - **`oska-eval`:** it catches a task's panic (`catch_unwind`) to keep a batch going. It is built with the release profile, which still unwinds, so it keeps doing so (Adam chose a separate profile over accepting the loss).
 
+## 13. Kernel-share baseline for spec #612 (2026-11-22, ticket #613)
+
+Spec #612 asks whether keeping large allocations in the process, instead of mapping and unmapping them each time, closes the rest of the musl gap. This section records the numbers that change has to beat. It changes no code.
+
+- **Tree:** `eabb226` (main after PR #607), the `dist` profile of section 12 for both builds (`cargo build --profile dist -p oskac`, with and without `--target x86_64-unknown-linux-musl`). Same kind of x86_64 KVM container as before (Intel Xeon @ 2.10GHz, 4 CPUs). Another agent's `cargo` build ran at the same time (load 3 to 4), so CPU times are noisy (about ±10% or more) and the counts are the figures to trust.
+- **Method:** `strace -f -c` for the syscall counts, one run each. A small Python script ran each command 3 times and took the run with the least CPU time, with `getrusage` of the children for minor page faults and user and system CPU. Inputs as `scripts/bench-native.sh` prepares them (`site/authority.txt`, `site/api.json`). The script is not in the repo.
+
+| Command | Build | `mmap` | `munmap` | `brk` | Minor page faults | User CPU | System CPU |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| interpreted site build | glibc | 20 | 9 | 52 | 9,074 | 2.56 s | 0.03 s |
+| interpreted site build | musl | 21,811 | 21,730 | 4 | 211,827 | 2.77 s | 0.29 s |
+| `oskac build` of the site | glibc | 16 | 4 | 54 | 4,480 | 0.02 s | 0.01 s |
+| `oskac build` of the site | musl | 598 | 521 | 3 | 7,201 | 0.03 s | 0.01 s |
+
+- **The kernel share is real for the interpreter.** musl makes about 1,100 times as many `mmap` calls as glibc (21,811 against 20) and takes 23 times as many page faults (211,827 against 9,074). Its system CPU is 0.29 s against 0.03 s. The CPU gap on the interpreted site build is 0.47 s (3.06 s against 2.59 s), and 0.26 s of it, 55%, is system time. The other 0.21 s is user time. That fits sections 9 and 11, which put the kernel at about half of the site gap.
+- **The compile is a small case.** The `oskac build` of the site takes about 0.04 s on both builds here, with 598 `mmap` calls under musl against 16 under glibc. It will not move the ratio much. (The build ran with the build cache warm, so it is not the cold 79 to 108 ms of earlier sections.)
+- **What the allocator change should do:** if the large-block reuse works, the musl `mmap` and `munmap` counts and the minor faults of the interpreted site build fall toward glibc's, and the system CPU with them. Ticket #615 checks that, and reverts the change if the site build gains under 5%.
+
+## 14. Sizing `String.join` once does not remove copies (2026-11-22, ticket #616, not merged)
+
+Ticket #616 of spec #612 asked `String.join` to size its result once and copy each part once, expecting fewer `memcpy` calls on the interpreted site build. The change was built (the interpreter's `string_join` reserves the total length and pushes each part) and its tests passed, including that a join-heavy program stops at the same place under `--max-memory`. It was measured with the counting build of section 11 (musl, `cargo build --release`, same tree, the change applied to it):
+
+| Interpreted site build | `memcpy` calls | of which 1 byte |
+| --- | ---: | ---: |
+| before | 7,494,215 | 5,260,480 |
+| after | 7,675,294 | 5,453,169 |
+
+The count went up by 2.4%, not down. The likely reasons: the standard library's `join` already sizes its result once, so there was nothing to save there, and, as I remember its source (the Rust source is not installed in this container, so I did not re-check it), it copies a short separator with an unrolled path that makes no `memcpy` call, while `push_str` of the separator calls `memcpy` each time. I did not isolate which of the two causes the extra calls. Each part is one `memcpy` either way. The one-character parts come from `String.chars` in the Oska program being joined, so the only way to make fewer calls is to avoid copying a short piece, which spec #521 rules out.
+
+The ticket's criterion (the count falls) is not met, so the change is not merged. The branch `ticket/616-join-sizing` stays local in the session. The one-byte copies are left for ticket #581 (the `memcpy` override), which is the change that makes each of them cheap.
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
