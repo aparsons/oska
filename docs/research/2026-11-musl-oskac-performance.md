@@ -580,6 +580,47 @@ What it shows:
 
 Not done: no `panic = "abort"` (ticket #583), no PGO, no `target-cpu` (see the memcpy note).
 
+## 11. Re-measured on main with LTO and the short-copy fixes (2026-11-22, spec #577, ticket #579)
+
+Spec #577 asks whether the musl build still misses spec #521's threshold (musl CPU time at most 1.10x glibc) once #570 (allocator, short copies) and the release profile of section 10 are both in. This section answers it, and says what the `memcpy` override of ticket #581 would add.
+
+- **Tree:** `a2b86a7` (main after PR #584, which includes #570). Rust 1.100.0, fat LTO and one codegen unit for every build below. Same kind of x86_64 KVM container as before (Intel Xeon @ 2.10GHz, 4 CPUs, load about 0 at the start). `scripts/bench-native.sh 5`: best CPU time of 5 runs, noise about ±10%.
+- **Override build:** the scratch research patch from the memcpy note, not code in the repo. It defines `memcpy`, `memmove`, `memset`, `memcmp`, `bcmp` and `memchr` for x86_64 musl, so it is more than the two functions of ticket #581. I did not build a version with only `memcpy` and `memmove`.
+
+### Interpreter (`oskac run --interpret`), CPU time
+
+| Workload | glibc | musl | musl / glibc | musl with the override | override / glibc |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| loop | 569 ms | 506 ms | 0.89x | 537 ms | 0.94x |
+| text | 36 ms | 69 ms | 1.92x | 39 ms | 1.08x |
+| bulk-text | 31 ms | 33 ms | 1.06x | 34 ms | 1.10x |
+| lists | 332 ms | 356 ms | 1.07x | 312 ms | 0.94x |
+| recursion | 464 ms | 447 ms | 0.96x | 473 ms | 1.02x |
+| site | 2815 ms | 3498 ms | **1.24x** | 3336 ms | **1.19x** |
+
+The native executables take the same time on both builds (the `Native` column of `bench-native.sh`, 4 to 24 ms, 277 to 286 ms for `site`).
+
+### What this shows
+
+- **The threshold still fails, on two rows.** The musl interpreter is 1.24x on the site build and 1.92x on `text`. The other four rows are at or under 1.10x. Compared with section 10 (before #570), the site ratio fell from 1.89x to 1.24x, `recursion` from 2.7x to 0.96x, and `text` from 2.4x to 1.92x. #570 and the allocator did most of the work.
+- **The override fixes `text` and does little else.** `text` goes from 1.92x to 1.08x, because the interpolation work is made of 1 to 5 byte copies. The site build gains 5% (3498 to 3336 ms) and stays at 1.19x. No row gets worse beyond the noise.
+- **The rest of the site gap is not `memcpy`.** Section 9 put the kernel at about as much of the gap as `memcpy`: musl's `malloc` still maps and unmaps groups for requests over 1 KiB, which costs page faults. That is the next lever, and it is an allocator change, not a copy change. This section did not re-measure it.
+
+### `mem*` calls on the musl build, by function and size (counting build, same tree)
+
+| Workload | `memcpy` calls | of which 1 byte | `memcmp` and `bcmp` calls | `memmove` | `memset` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| site (interpreter) | 7,494,215 | 5,260,480 (70%) | 47,669,956 | 1,000 | 153 |
+| `oskac build` of the site | 1,199,279 | 316,012 (26%) | 631,100 | 43,045 | 28,814 |
+
+Section 9 counted 7,333,502 `memcpy` calls for the interpreted site build after its fixes, so the count has not moved (7,494,215 now, within 2%). 70% of the calls left are 1-byte copies, from `String.join` of one-character texts (the fix that review dropped, section 9). The `oskac build` row is about nine times section 9's 135,216; I counted `oskac build site/build.osk -o` with a counting build, section 9 used `callgrind`, and I did not find the reason, so do not compare the two. `memcmp` is the most called function (47.7 million calls), and the override replaces it too, without closing the site gap.
+
+### Verdict for ticket #581
+
+Do not build #581 now. It fixes the `text` row (1.92x to 1.08x), and the site build stays above 1.10x without it and with it. Two cheaper steps come first: stop the 1-byte `String.join` copies in a way that review accepts (a spec #521 decision), and keep large allocations in the musl allocator so they are not mapped and unmapped each time (the kernel share). Re-measure after each. If `text` is the only row left, then #581 is a good fit.
+
+Not measured: aarch64 (ticket #582), a build with only `memcpy` and `memmove` replaced, a CPU without ERMS.
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
