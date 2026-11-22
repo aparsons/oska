@@ -210,7 +210,7 @@ Follow-up tickets: #500 (string literals), #501 (`String.chars`), #502 (intrinsi
 
 ## 7. Release profile: fat LTO and one codegen unit (2026-11-22, spec #577, ticket #580)
 
-The workspace now sets `lto = "fat"` and `codegen-units = 1` in `[profile.release]`. It was empty. Measured on the same x86_64 KVM container as the memcpy note, on the tree at `0a7a786` (before #570), with `scripts/bench-native.sh 3` (best CPU time of 3 runs; noise about ±10%). The first column is without the setting, the second with it.
+The workspace now sets `lto = "fat"` and `codegen-units = 1` in `[profile.release]`. It was empty. This is a new run on the same kind of x86_64 KVM container as the memcpy note, but a separate run: the figures differ a little from that note (for example binary size, and build time of 24 s there against 20 s here). Use this table. The tree is `0a7a786`, before #570. Times are the best CPU time of 3 runs from `scripts/bench-native.sh 3`, with noise of about ±10%. Each row gives the value without the setting, then with it, for glibc and for musl.
 
 | Measure | glibc before | glibc after | musl before | musl after |
 | --- | ---: | ---: | ---: | ---: |
@@ -225,8 +225,8 @@ The workspace now sets `lto = "fat"` and `codegen-units = 1` in `[profile.releas
 
 What it shows:
 
-- **Size and build time:** the binary is 27% smaller on glibc and 25% smaller on musl. A clean release build takes about 2.4 times (glibc) and 2 times (musl) as long. The release workflow's longest `oskac` job stays far below its `timeout-minutes` (the build is under a minute here).
-- **Speed:** LTO helps glibc more than musl. The glibc interpreter on the site build is 10% faster, and `loop` 34% faster. The musl site build is only 3% faster, and the musl `lists` and `recursion` runs are within noise or slightly slower. This is less than the 15 to 22% in the memcpy note. That note used a tree with the musl `memcpy` replaced, which lets LTO see through more calls.
+- **Size and build time:** the binary is 27% smaller on glibc and 25% smaller on musl. A clean release build takes about 2.4 times (glibc) and 2 times (musl) as long. The release workflow's `build` job has `timeout-minutes: 20`. A clean x86_64 Linux build takes under a minute here. The aarch64, macOS and Windows jobs also get the setting and were not timed.
+- **Speed:** LTO helps glibc more than musl. The glibc interpreter is 10% faster on the site build and 34% faster on `loop`. The musl site build is only 3% faster. musl `lists` (+8%) and `recursion` (+11%) are slightly slower, which is at or past the noise. The memcpy note measured a larger gain (22% on glibc) on a different run, so treat the gain as 10% or more on glibc, and small on musl.
 - **The musl to glibc ratio gets worse, not better:** the interpreter on the site build was 1.76x before (10688 against 6063 ms) and is 1.89x after (10386 against 5482 ms). The 1.10x threshold from #521 therefore has to name the profile: compare musl and glibc built with the same settings. Both columns here were measured on one pre-#570 tree and ticket #579 repeats them after #570.
 - **Native output:** the generated executables do not change. The native `site` build's small differences (236 against 257 ms) are noise, because LTO touches `oskac` itself, not the code it writes.
 

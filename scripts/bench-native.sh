@@ -18,8 +18,8 @@
 # --interpret` and the executable `oskac build` wrote, `runs` times each
 # (default 5), and prints the best CPU time of each, the speedup, and the best
 # wall-clock time of each. A run that fails, or prints other than the first
-# run did, stops the script. The interpreter's time includes checking the program, as
-# `oskac run` does; the native time is the executable alone. The
+# run did, stops the script. The interpreter's time includes checking the
+# program, as `oskac run` does; the native time is the executable alone. The
 # workloads:
 #
 #   loop        a 5M-iteration integer loop
@@ -168,6 +168,10 @@ best() {
       exit 1
     fi
     read -r cpu wall < <(awk '{ printf "%d %d\n", ($1 + $2) * 1000, $3 * 1000 }' "$work/run.time")
+    if [ -z "${cpu:-}" ] || [ -z "${wall:-}" ]; then
+      echo "bench-native.sh: $label: could not read the time of a run" >&2
+      exit 1
+    fi
     if [ -z "$best_cpu" ] || [ "$cpu" -lt "$best_cpu" ]; then
       best_cpu=$cpu
     fi
