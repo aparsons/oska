@@ -64,6 +64,13 @@ pub trait Host: Send {
     /// The next pseudo-random 64 bits.
     fn next_random(&mut self) -> u64;
 
+    /// `len` bytes for keys and nonces. The real host takes them from the
+    /// operating system's secure random source and returns its error if
+    /// that fails. A test host gives [`generator_bytes`] explicitly. Every
+    /// host says which it is: there is no default, so none can serve
+    /// generator bytes as secure ones by accident.
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>>;
+
     /// Open the directory at `path` as the root of a directory
     /// capability. Its last component must not be a symlink; earlier ones
     /// are followed, since the root is trusted text. A file there is an
@@ -311,6 +318,18 @@ impl RealHost {
     }
 }
 
+/// `len` bytes from `next`'s 64-bit words, each little-endian, the last
+/// one cut short: what a test host gives for `Random.secure_bytes`, so a
+/// test replays byte for byte. Never for a real host.
+pub fn generator_bytes(mut next: impl FnMut() -> u64, len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(len + 8);
+    while out.len() < len {
+        out.extend_from_slice(&next().to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
 impl Host for RealHost {
     /// A closed pipe ends the process quietly with 0, as `head` expects
     /// of what it reads, and as the native runtime does: the program
@@ -377,6 +396,12 @@ impl Host for RealHost {
 
     fn next_random(&mut self) -> u64 {
         self.random.next()
+    }
+
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        let mut out = vec![0; len];
+        oska_sys::fill_random(&mut out)?;
+        Ok(out)
     }
 
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
@@ -996,6 +1021,10 @@ impl Host for FakeHost {
 
     fn next_random(&mut self) -> u64 {
         self.random.next()
+    }
+
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        Ok(generator_bytes(|| self.random.next(), len))
     }
 
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {

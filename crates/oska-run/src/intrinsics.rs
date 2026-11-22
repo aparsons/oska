@@ -119,6 +119,7 @@ pub const INTRINSICS: Table = &[
     ("Path.from", Plain(path_new)),
     ("Path.new", Plain(path_new)),
     ("Random.next_int", Plain(random_next_int)),
+    ("Random.secure_bytes", Plain(random_secure_bytes)),
     ("Result.is_ok", Plain(result_is_ok)),
     ("Result.unwrap_or", Plain(result_unwrap_or)),
     ("Secret.constant_time_eq", Plain(secret_constant_time_eq)),
@@ -580,6 +581,36 @@ fn clock_now_millis(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value,
 /// `Random.next_int(self)`: from 0 up to, but excluding, 2^63.
 fn random_next_int(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(i128::from(host.next_random() >> 1)))
+}
+
+/// `Random.secure_bytes(self, n)`: `n` bytes from the operating system's
+/// secure random source, as a `Secret<Bytes>`. A negative `n` panics with
+/// `P0042` and one past [`bytes::MAX_BYTES`] with `P0043`, as
+/// `Bytes.zeroed` does. A host with no secure source ends the program,
+/// as the native runtime does, rather than fall back to a guessable one.
+fn random_secure_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let len = args[1].as_int();
+    if len < 0 {
+        return Err(Panic::new(
+            codes::BYTES_OUT_OF_RANGE,
+            format!("cannot make a buffer of {len} bytes"),
+            span,
+        ));
+    }
+    if len > bytes::MAX_BYTES as i128 {
+        return Err(Panic::new(
+            codes::BYTES_TOO_LONG,
+            format!("a buffer of {len} bytes is too long"),
+            span,
+        ));
+    }
+    let len = len as usize;
+    let Ok(data) = host.secure_bytes(len) else {
+        eprintln!("the operating system has no secure random source");
+        std::process::exit(101);
+    };
+    let bytes = memory::bytes_of_len(len, span, || data)?;
+    memory::wrap(builtins::SECRET, bytes, span)
 }
 
 // ---- Files -------------------------------------------------------------

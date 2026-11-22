@@ -622,6 +622,18 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "Random.secure_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout, random: Random) -> Result<(), IoError> {
+    let a = random.secure_bytes(16)
+    let b = random.secure_bytes(16)
+    let right_length = a.len() == 16
+    let differ = !a.constant_time_eq_secret(b)
+    let _ = io.println(shown(right_length))?
+    io.println(shown(differ))
+}"#,
+    ),
+    (
         "TestContext.assert",
         Run::Tests,
         r#"test "assert" {

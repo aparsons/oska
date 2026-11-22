@@ -20,6 +20,18 @@ use std::path::Path;
 
 use crate::refusal;
 
+/// Fill `buf` from the operating system's secure random source
+/// (`ProcessPrng`).
+pub fn fill_random(buf: &mut [u8]) -> io::Result<()> {
+    // SAFETY: `buf` is a live, writable buffer of exactly the length
+    // passed.
+    let ok = unsafe { nt::process_prng(buf.as_mut_ptr(), buf.len()) };
+    if ok == 0 {
+        return Err(io::Error::other("the system's random source failed"));
+    }
+    Ok(())
+}
+
 /// The declarations from `ntdll` this crate uses, with their values from
 /// the Windows SDK's headers (`winternl.h`, `ntifs.h`, `winnt.h`), for
 /// x86_64 Windows, the one Windows target Oska releases for.
@@ -136,6 +148,16 @@ mod nt {
         /// `RtlNtStatusToDosError`: the Win32 error code for a status.
         #[link_name = "RtlNtStatusToDosError"]
         pub fn status_to_error(status: NtStatus) -> u32;
+    }
+
+    // `ProcessPrng` is in `bcryptprimitives.dll`, which every Windows
+    // process can load; it is the system's secure random source.
+    #[link(name = "bcryptprimitives", kind = "raw-dylib")]
+    extern "system" {
+        /// `ProcessPrng`: fill `buffer` with `length` random bytes. It
+        /// returns nonzero, and always succeeds.
+        #[link_name = "ProcessPrng"]
+        pub fn process_prng(buffer: *mut u8, length: usize) -> i32;
     }
 
     // Access rights.

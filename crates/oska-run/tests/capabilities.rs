@@ -90,6 +90,9 @@ impl Host for Recording {
     fn next_random(&mut self) -> u64 {
         self.real.next_random()
     }
+    fn secure_bytes(&mut self, len: usize) -> std::io::Result<Vec<u8>> {
+        self.real.secure_bytes(len)
+    }
     fn open_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
         self.real.open_root(path)
     }
