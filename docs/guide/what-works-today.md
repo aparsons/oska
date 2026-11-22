@@ -32,7 +32,7 @@ A **No** names the code `oskac` refuses the program with, before any of it runs.
 | `std.mcp`: `serve` and `handle`, an MCP server over standard input and output | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.sql` | Yes | No (`E0371`) | No (`E0371`) | None yet: checks only |
 | `std.proc` and `Spawn` | Yes | No (`E0371`) | No (`E0371`) | None yet: checks only |
-| `Net`, `NetConnect` and `NetListen` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows, with `localhost` and IP addresses as hosts |
+| `Net`, `NetConnect` and `NetListen` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 
 `std.sql` and `std.proc` check but do not run. Their signatures are complete, so `oskac check` enforces their rules today: untrusted text cannot reach a query or a command. A program that uses them is refused by `oskac run`, `oskac test` and `oskac build`. Plan around them: keep that code behind a function you can test without it, or wait for a release that runs it.
 

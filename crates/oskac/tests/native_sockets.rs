@@ -30,9 +30,18 @@ use std::process::Command;
 
 use differential::{assert_same, Case};
 
+/// A single-file program. A Windows process needs `SYSTEMROOT` to start
+/// Winsock, which the harness otherwise clears from the environment.
+fn case(name: &str, src: &str) -> Case {
+    match std::env::var("SYSTEMROOT") {
+        Ok(root) => Case::file(name, src).with_env("SYSTEMROOT", &root),
+        Err(_) => Case::file(name, src),
+    }
+}
+
 /// What a program prints is the same on both backends, and is `expected`.
 fn prints(name: &str, src: &str, expected: &str) {
-    let outcome = assert_same(&Case::file(name, src));
+    let outcome = assert_same(&case(name, src));
     assert_eq!(outcome.exit_code, Some(0), "{name}: {outcome:#?}");
     assert_eq!(outcome.stdout, expected, "{name}: {outcome:#?}");
     assert_eq!(outcome.stderr, "", "{name}");
@@ -274,7 +283,7 @@ fn main(io: Stdout, net: Net) -> Result<(), IoError> {
 /// backends agree and that none of the valid forms is refused as a host.
 #[test]
 fn ip_literals_are_parsed_as_rust_parses_them() {
-    let outcome = assert_same(&Case::file(
+    let outcome = assert_same(&case(
         "sockets_ip_literals",
         r#"fn free_port(net: Net) -> Int {
     let listener = net.listen_only().restrict_to_loopback(0)
@@ -358,7 +367,11 @@ fn oskac_test(name: &str, src: &str, flags: &[&str], interpret: bool) -> (String
     if interpret {
         command.arg("--interpret");
     }
-    let output = command.env_clear().output().expect("oskac should run");
+    command.env_clear();
+    if let Ok(root) = std::env::var("SYSTEMROOT") {
+        command.env("SYSTEMROOT", root);
+    }
+    let output = command.output().expect("oskac should run");
     let mut shown = common::golden::mask_durations(&String::from_utf8_lossy(&output.stdout));
     shown.push_str(&String::from_utf8_lossy(&output.stderr));
     (shown, output.status.code())
