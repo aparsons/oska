@@ -3955,6 +3955,8 @@ pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
             } else {
                 got = rt_sys_random(rt_mem_add(data, done), chunk)
             }
+            // `ProcessPrng` always returns TRUE and fills every byte (the
+            // backend's `Fails::Never`), so Windows has no result to check.
             if got < 0 && !on_windows() {
                 let _ = write_text(report_fd(), "the operating system has no secure random source\n")
                 exit(101)
