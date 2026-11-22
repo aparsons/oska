@@ -171,9 +171,123 @@ test_assemble_refuses_a_tag_that_is_not_a_version() {
   fi
 }
 
-# Writes a throwaway signing key pair to ./<name> and ./<name>.pub.
+# Writes a throwaway signing key pair to ./<name> and ./<name>.pub. `key`
+# and `other` are made once for the whole run and copied, so the Oska
+# verifier, which pins its key in its source and so is built once per key
+# (verifier_for), is built once for them.
 throwaway_key() {
-  ssh-keygen -q -t ed25519 -N '' -C "$1" -f "$1"
+  case $1 in
+    key | other)
+      if [ ! -f "$scratch/suite-keys/$1" ]; then
+        mkdir -p "$scratch/suite-keys"
+        ssh-keygen -q -t ed25519 -N '' -C "$1" -f "$scratch/suite-keys/$1"
+      fi
+      cp -p "$scratch/suite-keys/$1" "$scratch/suite-keys/$1.pub" .
+      ;;
+    *) ssh-keygen -q -t ed25519 -N '' -C "$1" -f "$1" ;;
+  esac
+}
+
+# ---- The Oska verifier (verify.osk) ------------------------------------------
+#
+# Every verifier case runs through verify.sh and through the Oska verifier,
+# and the two must give the same verdict. The Oska verifier pins its release
+# key as a literal in its source, so a test builds a copy of it with the
+# throwaway key's line in place of the release key's (verifier_for), once per
+# key. A missing `oskac`, or a build that fails, fails the test; nothing here
+# skips.
+
+root=$(cd "$here/../.." && pwd)
+oskac_path=
+
+# The oskac to build verify.osk with: $OSKAC, else this checkout's debug build.
+oskac_bin() {
+  if [ -z "$oskac_path" ]; then
+    if [ -n "${OSKAC:-}" ]; then
+      oskac_path=$OSKAC
+    else
+      (cd "$root" && cargo build --locked -q -p oskac) || fail "cargo build -p oskac failed"
+      oskac_path=$(cd "$root" && cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/oskac
+    fi
+  fi
+  [ -x "$oskac_path" ] || fail "no oskac at $oskac_path"
+  printf '%s\n' "$oskac_path"
+}
+
+# The line of the release key as verify.osk pins it, and the public key
+# file's line.
+pinned_line() {
+  sed -n 's/^    "\(ssh-ed25519 [^"]*\)"$/\1/p' "$here/verify.osk"
+}
+
+# Prints the path of the Oska verifier built for the public key file $1.
+verifier_for() {
+  local pub=$1 id dir builder
+  id=$(sha256sum <"$pub" | cut -c1-16)
+  dir=$scratch/verifiers/$id
+  if [ ! -x "$dir/verify-release" ]; then
+    builder=$(oskac_bin) || return 1
+    mkdir -p "$dir"
+    [ "$(pinned_line | wc -l)" -eq 1 ] || fail "verify.osk does not pin exactly one key line"
+    local src old new
+    src=$(<"$here/verify.osk")
+    old=$(pinned_line)
+    new=$(tr -d '\n' <"$pub")
+    printf '%s\n' "${src/"$old"/"$new"}" >"$dir/verify.osk"
+    cmp -s "$here/verify.osk" "$dir/verify.osk" && [ "$old" != "$new" ] && fail "the key was not replaced"
+    "$builder" build "$dir/verify.osk" -o "$dir/verify-release" || fail "oskac build of verify.osk failed"
+  fi
+  printf '%s\n' "$dir/verify-release"
+}
+
+# stage-site.sh with the Oska verifier built for the key it is given.
+stage_site() {
+  local verifier=
+  if [ -f "$3" ]; then
+    verifier=$(verifier_for "$3") || return 1
+  fi
+  OSKA_VERIFY=$verifier "$here/stage-site.sh" "$@"
+}
+
+# Runs the Oska verifier on release directory $1, for the key file $2, with
+# the extra arguments after.
+oska_verify() {
+  local dir=$1 pub=$2 verifier
+  shift 2
+  verifier=$(verifier_for "$pub") || return 1
+  OSKA_VERIFY=$verifier "$here/verify-oska.sh" "$dir" "$@"
+}
+
+# verify.sh's verdict, and the Oska verifier's, on release directory $1 and
+# key file $2, as `accept` or `refuse` each; fails unless they agree. The
+# index files are the Oska verifier's to check, so verify.sh gets the
+# directory without them, as stage-site.sh gives it. Prints the verdict.
+both_verdict() {
+  local dir=$1 pub=$2 shell_verdict oska_verdict copy=$scratch/both-copy
+  rm -rf "$copy"
+  mkdir -p "$copy"
+  cp -R "$dir" "$copy/$(basename "$dir")"
+  rm -f "$copy/$(basename "$dir")"/release-index.json "$copy/$(basename "$dir")"/release-index.json.sig
+  if "$here/verify.sh" "$copy/$(basename "$dir")" "$pub" >/dev/null 2>&1; then shell_verdict=accept; else shell_verdict=refuse; fi
+  if oska_verify "$dir" "$pub" >/dev/null 2>&1; then oska_verdict=accept; else oska_verdict=refuse; fi
+  [ "$shell_verdict" = "$oska_verdict" ] ||
+    fail "verify.sh says $shell_verdict, the Oska verifier says $oska_verdict, for $dir"
+  printf '%s\n' "$shell_verdict"
+}
+
+# Fails unless both verifiers accept / refuse.
+both_accept() {
+  [ "$(both_verdict "$@")" = accept ] || fail "both verifiers refused $1"
+}
+both_refuse() {
+  [ "$(both_verdict "$@")" = refuse ] || fail "both verifiers accepted $1"
+}
+
+# The code the Oska verifier refuses $1 with, for the key file $2.
+oska_code() {
+  local dir=$1 pub=$2 json
+  json=$(oska_verify "$dir" "$pub" --format=json 2>/dev/null) || true
+  printf '%s' "$json" | jq -r '.code // "none"'
 }
 
 # The SHA256 fingerprint of the OpenSSH public key in file $1, as
@@ -200,6 +314,7 @@ test_a_signed_release_verifies_with_its_public_key() {
   signed_release
   [ -f out/v1.2.3/SHA256SUMS.sig ] || fail "no SHA256SUMS.sig"
   "$here/verify.sh" out/v1.2.3 key.pub
+  both_accept out/v1.2.3 key.pub
   # The signature also verifies with plain ssh-keygen, as installers do it.
   printf 'oska-release namespaces="oska-release" %s\n' "$(cat key.pub)" >allowed_signers
   ssh-keygen -Y verify -f allowed_signers -I oska-release -n oska-release \
@@ -223,6 +338,7 @@ test_verify_refuses_a_signed_release_moved_to_another_tag() {
   if "$here/verify.sh" out/v9.9.9 key.pub 2>err; then
     fail "verified v0.1.0's signed files as v9.9.9"
   fi
+  both_refuse out/v9.9.9 key.pub
   grep -q 'v0.1.0' err || fail "error does not name the signed tag: $(cat err)"
 }
 
@@ -235,6 +351,7 @@ test_verify_refuses_signed_checksums_that_name_no_tag() {
   if "$here/verify.sh" out/v1.2.3 key.pub; then
     fail "verified a SHA256SUMS that names no tag"
   fi
+  both_refuse out/v1.2.3 key.pub
 }
 
 test_verify_refuses_a_checksum_line_that_is_not_a_digest_and_a_name() {
@@ -245,13 +362,14 @@ test_verify_refuses_a_checksum_line_that_is_not_a_digest_and_a_name() {
   if "$here/verify.sh" out/v1.2.3 key.pub; then
     fail "verified a SHA256SUMS with a stray line"
   fi
+  both_refuse out/v1.2.3 key.pub
 }
 
 test_stage_site_refuses_an_old_release_republished_under_a_newer_tag() {
   signed_release v0.1.0
   cp -R out/v0.1.0 out/v9.9.9
   mkdir site
-  if "$here/stage-site.sh" out site key.pub 2>err; then
+  if stage_site out site key.pub 2>err; then
     fail "staged v0.1.0's signed files as v9.9.9"
   fi
   [ ! -e site/releases/v9.9.9 ] || fail "copied the mislabelled release"
@@ -279,6 +397,7 @@ test_verify_refuses_a_signed_image_digest_that_is_not_one_sha256_digest() {
   signed_release v1.2.3
   resign_release v1.2.3
   "$here/verify.sh" out/v1.2.3 key.pub || fail "the re-signed release does not verify"
+  both_accept out/v1.2.3 key.pub
   local good bad
   good=$(cat out/v1.2.3/oskac-image-digest)
   for bad in latest "sha256:${good#sha256:}x" "sha512:${good#sha256:}" "${good%?}" \
@@ -288,6 +407,7 @@ test_verify_refuses_a_signed_image_digest_that_is_not_one_sha256_digest() {
     if "$here/verify.sh" out/v1.2.3 key.pub 2>err; then
       fail "verified the image digest '$bad'"
     fi
+    both_refuse out/v1.2.3 key.pub
     grep -q oskac-image-digest err || fail "error does not name the digest file: $(cat err)"
   done
   # With no trailing newline it is still not the one line assemble.sh writes.
@@ -296,6 +416,7 @@ test_verify_refuses_a_signed_image_digest_that_is_not_one_sha256_digest() {
   if "$here/verify.sh" out/v1.2.3 key.pub 2>/dev/null; then
     fail "verified a digest file with no newline"
   fi
+  both_refuse out/v1.2.3 key.pub
 }
 
 # A symlink in place of the digest file would let what it points at, outside
@@ -309,6 +430,7 @@ test_verify_refuses_an_image_digest_that_is_a_symlink() {
   if "$here/verify.sh" out/v1.2.3 key.pub 2>err; then
     fail "verified a digest file that is a symlink"
   fi
+  both_refuse out/v1.2.3 key.pub
   grep -q 'not a regular file' err || fail "error does not say why: $(cat err)"
 }
 
@@ -319,6 +441,7 @@ test_verify_accepts_an_older_release_without_an_image_digest() {
   rm out/v1.2.3/oskac-image-digest
   resign_release v1.2.3
   "$here/verify.sh" out/v1.2.3 key.pub
+  both_accept out/v1.2.3 key.pub
 }
 
 test_verify_refuses_a_tampered_binary() {
@@ -327,6 +450,7 @@ test_verify_refuses_a_tampered_binary() {
   if "$here/verify.sh" out/v1.2.3 key.pub; then
     fail "verified a tampered binary"
   fi
+  both_refuse out/v1.2.3 key.pub
 }
 
 test_verify_refuses_tampered_checksums() {
@@ -335,6 +459,7 @@ test_verify_refuses_tampered_checksums() {
   if "$here/verify.sh" out/v1.2.3 key.pub; then
     fail "verified a SHA256SUMS the key did not sign"
   fi
+  both_refuse out/v1.2.3 key.pub
 }
 
 test_verify_refuses_a_signature_by_another_key() {
@@ -343,6 +468,7 @@ test_verify_refuses_a_signature_by_another_key() {
   if "$here/verify.sh" out/v1.2.3 other.pub; then
     fail "verified with a key that did not sign"
   fi
+  both_refuse out/v1.2.3 other.pub
 }
 
 test_verify_refuses_a_file_the_checksums_do_not_cover() {
@@ -351,6 +477,265 @@ test_verify_refuses_a_file_the_checksums_do_not_cover() {
   if "$here/verify.sh" out/v1.2.3 key.pub; then
     fail "verified a release with an unsigned file in it"
   fi
+  both_refuse out/v1.2.3 key.pub
+}
+
+# ---- The Oska verifier on its own (verify.osk) -----------------------------------
+
+test_the_oska_verifier_pins_the_committed_release_key() {
+  [ "$(pinned_line | wc -l)" -eq 1 ] || fail "verify.osk does not pin exactly one key line"
+  [ "$(pinned_line)" = "$(cat "$root/site/oska-release.pub")" ] ||
+    fail "the key pinned in verify.osk is not site/oska-release.pub"
+}
+
+# The key's fingerprint in the output is the one `ssh-keygen -l` prints, and
+# the runbook prints for the release key.
+test_the_oska_verifier_prints_text_and_json_and_exits_0_or_1() {
+  signed_release v1.2.3
+  local verifier
+  verifier=$(verifier_for key.pub)
+  oska_verify out/v1.2.3 key.pub >text
+  head -n 1 text | grep -qx 'oska-release v1.2.3: verified' || fail "first line: $(head -n 1 text)"
+  grep -qF "key $(fingerprint_of key.pub)" text || fail "text lacks the key fingerprint: $(cat text)"
+  grep -q 'files: 8 checked' text || fail "text lacks the file count: $(cat text)"
+  grep -q '^  image digest: sha256:' text || fail "text lacks the image digest"
+  oska_verify out/v1.2.3 key.pub --format=json >json
+  jq -e --arg fp "$(fingerprint_of key.pub)" '
+    .ok == true and .tag == "v1.2.3" and .key == $fp and .namespace == "oska-release"
+    and .files == 8 and (.image_digest | startswith("sha256:")) and .index == null' json >/dev/null ||
+    fail "JSON differs: $(cat json)"
+  # A refusal: exit 1, one stderr line naming the code, and in JSON the
+  # same code on stdout.
+  printf 'evil\n' >>out/v1.2.3/oskac-linux-aarch64-musl
+  if oska_verify out/v1.2.3 key.pub >text 2>err; then
+    fail "verified a tampered binary"
+  fi
+  [ ! -s text ] || fail "text mode printed to stdout on a refusal: $(cat text)"
+  grep -q '^verify.osk: checksum_mismatch: oskac-linux-aarch64-musl ' err || fail "stderr: $(cat err)"
+  set +e
+  oska_verify out/v1.2.3 key.pub --format=json >json 2>/dev/null
+  status=$?
+  set -e
+  [ "$status" -eq 1 ] || fail "exit code $status, not 1"
+  jq -e '.ok == false and .code == "checksum_mismatch" and (.message | contains("oskac-linux-aarch64-musl"))' json >/dev/null ||
+    fail "JSON differs: $(cat json)"
+  # Usage errors are refusals too.
+  if "$verifier" 2>/dev/null; then fail "ran with no directory"; fi
+  if "$verifier" a b 2>/dev/null; then fail "ran with two directories"; fi
+  if "$verifier" a --format=xml 2>/dev/null; then fail "ran with an unknown format"; fi
+}
+
+test_the_oska_verifier_gives_each_refusal_its_stable_code() {
+  signed_release v1.2.3
+  [ "$(oska_code out/v1.2.3 key.pub)" = none ] || fail "a good release got a code"
+  throwaway_key other
+  [ "$(oska_code out/v1.2.3 other.pub)" = bad_signature ] || fail "wrong key: $(oska_code out/v1.2.3 other.pub)"
+  # The signed files moved to another tag.
+  cp -R out/v1.2.3 out/v9.9.9
+  [ "$(oska_code out/v9.9.9 key.pub)" = wrong_tag ] || fail "moved tag: $(oska_code out/v9.9.9 key.pub)"
+  rm -r out/v9.9.9
+  # An unsigned change to the checksums.
+  cp -R out/v1.2.3 saved
+  sed -i 's/^./0/' out/v1.2.3/SHA256SUMS
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_signature ] || fail "tampered sums"
+  rm -r out/v1.2.3
+  mv saved out/v1.2.3
+  # A signed stray line.
+  printf '# a second comment\n' >>out/v1.2.3/SHA256SUMS
+  rm out/v1.2.3/SHA256SUMS.sig
+  ssh-keygen -q -Y sign -f key -n oska-release out/v1.2.3/SHA256SUMS
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_line ] || fail "bad line: $(oska_code out/v1.2.3 key.pub)"
+  rm -r out/v1.2.3
+  # The digest a signed line holds, and the file it names.
+  signed_release v1.2.3
+  printf 'evil\n' >>out/v1.2.3/oskac-macos-aarch64
+  [ "$(oska_code out/v1.2.3 key.pub)" = checksum_mismatch ] || fail "tampered binary"
+  rm -r out/v1.2.3
+  signed_release v1.2.3
+  rm out/v1.2.3/oskac-macos-aarch64
+  [ "$(oska_code out/v1.2.3 key.pub)" = checksum_mismatch ] || fail "missing binary"
+  rm -r out/v1.2.3
+  signed_release v1.2.3
+  printf 'extra\n' >out/v1.2.3/oskac-linux-riscv64
+  [ "$(oska_code out/v1.2.3 key.pub)" = extra_file ] || fail "extra file"
+  rm out/v1.2.3/oskac-linux-riscv64
+  mkdir out/v1.2.3/a-directory
+  [ "$(oska_code out/v1.2.3 key.pub)" = extra_file ] || fail "extra directory"
+  rmdir out/v1.2.3/a-directory
+  # A signed image digest that is not one digest.
+  printf 'latest\n' >out/v1.2.3/oskac-image-digest
+  resign_release v1.2.3
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_image_digest ] || fail "bad digest: $(oska_code out/v1.2.3 key.pub)"
+  # A release that has no signature file cannot be checked.
+  rm out/v1.2.3/SHA256SUMS.sig
+  [ "$(oska_code out/v1.2.3 key.pub)" = unreadable ] || fail "no signature: $(oska_code out/v1.2.3 key.pub)"
+}
+
+# A signed list with the tag line and no file is no release.
+test_both_verifiers_refuse_a_signed_list_that_names_no_file() {
+  signed_release v1.2.3
+  rm out/v1.2.3/oskac-*
+  head -n 1 out/v1.2.3/SHA256SUMS >out/v1.2.3/SHA256SUMS.new
+  mv out/v1.2.3/SHA256SUMS.new out/v1.2.3/SHA256SUMS
+  rm out/v1.2.3/SHA256SUMS.sig
+  ssh-keygen -q -Y sign -f key -n oska-release out/v1.2.3/SHA256SUMS
+  both_refuse out/v1.2.3 key.pub
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_line ] || fail "empty list: $(oska_code out/v1.2.3 key.pub)"
+}
+
+test_the_oska_verifier_refuses_a_listed_file_twice_and_names_with_odd_bytes() {
+  signed_release v1.2.3
+  local line
+  line=$(sed -n 2p out/v1.2.3/SHA256SUMS)
+  printf '%s\n' "$line" >>out/v1.2.3/SHA256SUMS
+  rm out/v1.2.3/SHA256SUMS.sig
+  ssh-keygen -q -Y sign -f key -n oska-release out/v1.2.3/SHA256SUMS
+  both_refuse out/v1.2.3 key.pub
+  [ "$(oska_code out/v1.2.3 key.pub)" = extra_file ] || fail "twice: $(oska_code out/v1.2.3 key.pub)"
+  # A file name with a control character cannot forge a line of output.
+  rm -r out/v1.2.3
+  signed_release v1.2.3
+  printf 'x\n' >"out/v1.2.3/$(printf 'evil\n::error::forged')"
+  both_refuse out/v1.2.3 key.pub
+  oska_verify out/v1.2.3 key.pub >/dev/null 2>err || true
+  [ "$(wc -l <err)" -eq 1 ] || fail "a file name made more than one line: $(cat err)"
+  grep -q '^verify.osk: extra_file: .*evil?::error::forged' err || fail "stderr: $(cat err)"
+}
+
+# The authority report shows a `DirRead` and the standard streams, and no
+# audit site (no `expose()` and no `.assume_trusted()`).
+test_the_oska_verifier_has_only_a_directory_read_and_the_standard_streams() {
+  local builder report
+  builder=$(oskac_bin)
+  report=$("$builder" check "$here/verify.osk") || fail "oskac check refused verify.osk: $report"
+  # Every capability a function names.
+  grep '^fn ' <<<"$report" | grep -v ': pure$' | sed 's/^fn [A-Za-z_0-9]*: //' | tr ',' '\n' |
+    sed 's/^ *//; s/ (.*//' | LC_ALL=C sort -u >caps
+  printf 'DirRead\nFsRead\nStdout\n' >expected
+  diff expected caps || fail "capabilities differ"
+  # The only attenuation is FsRead to a directory.
+  [ "$(grep -c 'FsRead -> DirRead: restrict_to "\."' <<<"$report")" -eq 1 ] || fail "FsRead is not narrowed once: $report"
+  [ "$(grep -c -- '->' <<<"$report")" -eq 2 ] || fail "unexpected attenuation: $report"
+  if grep -q 'audit' <<<"$report"; then fail "verify.osk has an audit site: $report"; fi
+}
+
+test_the_oska_verifier_checks_the_signed_index_in_its_namespace() {
+  signed_release v1.2.3
+  jq -n '{schema: 1, serial: 4, issued: "2026-11-13T10:00:00Z", expires: "2027-02-11T10:00:00Z",
+    latest: {tag: "v1.2.3", version: "1.2.3"}}' >out/v1.2.3/release-index.json
+  ssh-keygen -q -Y sign -f key -n oska-index out/v1.2.3/release-index.json
+  both_accept out/v1.2.3 key.pub
+  oska_verify out/v1.2.3 key.pub >text
+  grep -q '^  index: signature ok, namespace oska-index, serial 4, issued 2026-11-13T10:00:00Z, expires 2027-02-11T10:00:00Z, latest v1.2.3$' text ||
+    fail "text lacks the index: $(cat text)"
+  oska_verify out/v1.2.3 key.pub --format=json >json
+  jq -e '.index == {serial: 4, issued: "2026-11-13T10:00:00Z", expires: "2027-02-11T10:00:00Z", tag: "v1.2.3", version: "1.2.3"}' json >/dev/null ||
+    fail "JSON index differs: $(cat json)"
+  # The fields it reports are the ones verify-index.sh reports.
+  mkdir indexdir
+  cp out/v1.2.3/release-index.json out/v1.2.3/release-index.json.sig indexdir/
+  [ "$("$here/verify-index.sh" indexdir key.pub)" = '4 2027-02-11T10:00:00Z v1.2.3' ] || fail "verify-index.sh differs"
+  # Compact, reordered JSON is the same index.
+  printf '{"latest":{"version":"1.2.3","tag":"v1.2.3"},"expires":"2027-02-11T10:00:00Z","issued":"2026-11-13T10:00:00Z","serial":4,"schema":1}' \
+    >out/v1.2.3/release-index.json
+  rm out/v1.2.3/release-index.json.sig
+  ssh-keygen -q -Y sign -f key -n oska-index out/v1.2.3/release-index.json
+  [ "$(oska_code out/v1.2.3 key.pub)" = none ] || fail "compact index: $(oska_code out/v1.2.3 key.pub)"
+  # An index signed in the release namespace, an index with no signature,
+  # a signature with no index, and indexes that are not schema 1.
+  rm out/v1.2.3/release-index.json.sig
+  ssh-keygen -q -Y sign -f key -n oska-release out/v1.2.3/release-index.json
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_index ] || fail "index in the release namespace"
+  mv out/v1.2.3/release-index.json.sig sig
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_index ] || fail "index with no signature"
+  mv out/v1.2.3/release-index.json index
+  mv sig out/v1.2.3/release-index.json.sig
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_index ] || fail "signature with no index"
+  rm out/v1.2.3/release-index.json.sig
+  local bad
+  for bad in \
+    '{"schema":2,"serial":4,"issued":"2026-11-13T10:00:00Z","expires":"2027-02-11T10:00:00Z","latest":{"tag":"v1.2.3","version":"1.2.3"}}' \
+    '{"schema":1,"serial":0,"issued":"2026-11-13T10:00:00Z","expires":"2027-02-11T10:00:00Z","latest":{"tag":"v1.2.3","version":"1.2.3"}}' \
+    '{"schema":1,"serial":4,"issued":"2027-11-13T10:00:00Z","expires":"2027-02-11T10:00:00Z","latest":{"tag":"v1.2.3","version":"1.2.3"}}' \
+    '{"schema":1,"serial":4,"issued":"2026-11-13T10:00:00Z","expires":"2027-02-11T10:00:00Z","latest":{"tag":"v1.2.3","version":"1.2.4"}}' \
+    '{"schema":1,"serial":4,"issued":"2026-11-13T10:00:00Z","expires":"2027-02-11T10:00:00Z","latest":{"tag":"v1.2.3","version":"1.2.3"},"extra":1}' \
+    '{"schema":1,"serial":4,"issued":"2026-11-13","expires":"2027-02-11T10:00:00Z","latest":{"tag":"v1.2.3","version":"1.2.3"}}' \
+    '{"schema":1,"serial":1000000000000000,"issued":"2026-11-13T10:00:00Z","expires":"2027-02-11T10:00:00Z","latest":{"tag":"v1.2.3","version":"1.2.3"}}' \
+    '[]' ''; do
+    printf '%s' "$bad" >out/v1.2.3/release-index.json
+    rm -f out/v1.2.3/release-index.json.sig
+    ssh-keygen -q -Y sign -f key -n oska-index out/v1.2.3/release-index.json
+    [ "$(oska_code out/v1.2.3 key.pub)" = bad_index ] || fail "accepted the index $bad"
+    mkdir -p indexdir2
+    cp out/v1.2.3/release-index.json out/v1.2.3/release-index.json.sig indexdir2/
+    if "$here/verify-index.sh" indexdir2 key.pub 2>/dev/null; then fail "verify-index.sh accepted the index $bad"; fi
+  done
+}
+
+# SHA256SUMS signed for the index (or any other namespace) is not a release
+# signature, for either verifier.
+test_both_verifiers_refuse_a_release_signed_in_the_index_namespace() {
+  signed_release v1.2.3
+  rm out/v1.2.3/SHA256SUMS.sig
+  ssh-keygen -q -Y sign -f key -n oska-index out/v1.2.3/SHA256SUMS
+  both_refuse out/v1.2.3 key.pub
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_signature ] || fail "index namespace: $(oska_code out/v1.2.3 key.pub)"
+}
+
+# The attack the second check is for: a flaw in the system's tools (here,
+# an `ssh-keygen` that accepts every signature and a `sha256sum` that accepts
+# every file) lets a tampered release through verify.sh. The Oska verifier
+# does its own crypto, so it still refuses, and stage-site.sh, which needs
+# both, stops.
+test_a_tampered_release_that_passes_the_shell_verifier_alone_is_refused() {
+  signed_release v1.2.3
+  mkdir fakebin
+  printf '#!/bin/sh\nexit 0\n' >fakebin/ssh-keygen
+  printf '#!/bin/sh\nexit 0\n' >fakebin/sha256sum
+  chmod +x fakebin/ssh-keygen fakebin/sha256sum
+  # 1. A binary changed after signing.
+  printf 'evil\n' >>out/v1.2.3/oskac-linux-x86_64-gnu
+  PATH="$PWD/fakebin:$PATH" "$here/verify.sh" out/v1.2.3 key.pub ||
+    fail "the faked tools do not let verify.sh pass, so this test shows nothing"
+  if oska_verify out/v1.2.3 key.pub >/dev/null 2>err; then fail "the Oska verifier accepted the tampered binary"; fi
+  grep -q checksum_mismatch err || fail "stderr: $(cat err)"
+  mkdir site
+  if PATH="$PWD/fakebin:$PATH" stage_site out site key.pub 2>err; then
+    fail "staged a tampered release because verify.sh alone accepted it"
+  fi
+  grep -q 'the Oska verifier refused' err || fail "stage-site.sh did not stop at the Oska verifier: $(cat err)"
+  [ ! -e site/latest.json ] || fail "wrote a latest.json"
+  # 2. Checksums that the key did not sign.
+  rm -r out/v1.2.3 site
+  signed_release v1.2.3
+  sed -i '2s/^./0/' out/v1.2.3/SHA256SUMS
+  PATH="$PWD/fakebin:$PATH" "$here/verify.sh" out/v1.2.3 key.pub 2>/dev/null ||
+    fail "the faked tools do not let verify.sh pass the forged checksums"
+  if oska_verify out/v1.2.3 key.pub >/dev/null 2>err; then fail "the Oska verifier accepted forged checksums"; fi
+  grep -q bad_signature err || fail "stderr: $(cat err)"
+}
+
+test_stage_site_refuses_releases_when_there_is_no_oska_verifier() {
+  signed_release v1.2.3
+  mkdir site
+  if OSKA_VERIFY='' "$here/stage-site.sh" out site key.pub 2>err; then
+    fail "staged a release with no Oska verifier"
+  fi
+  grep -q OSKA_VERIFY err || fail "error does not name OSKA_VERIFY: $(cat err)"
+  if OSKA_VERIFY="$PWD/no-such-verifier" "$here/stage-site.sh" out site key.pub 2>err; then
+    fail "staged a release with a verifier that is not there"
+  fi
+  grep -q 'not an executable' err || fail "stderr: $(cat err)"
+}
+
+test_stage_site_stops_when_the_oska_verifier_pins_another_key() {
+  signed_release v1.2.3
+  throwaway_key other
+  mkdir site
+  if OSKA_VERIFY="$(verifier_for other.pub)" "$here/stage-site.sh" out site key.pub 2>err; then
+    fail "staged a release the Oska verifier refused"
+  fi
+  grep -q 'the Oska verifier refused' err || fail "stderr: $(cat err)"
 }
 
 test_sign_refuses_a_key_that_does_not_match_the_published_one() {
@@ -369,7 +754,7 @@ test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
   signed_release v1.10.0
   signed_release v2.0.0-rc.1
   mkdir site
-  OSKA_SITE_URL=https://example.test "$here/stage-site.sh" out site key.pub
+  OSKA_SITE_URL=https://example.test stage_site out site key.pub
   cmp key.pub site/oska-release.pub || fail "public key not published"
   # What is served verifies, beside the one page the site adds.
   for tag in v1.2.3 v1.10.0 v2.0.0-rc.1; do
@@ -377,6 +762,7 @@ test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
     cp -R "site/releases/$tag" "served/$tag"
     rm "served/$tag/index.html"
     "$here/verify.sh" "served/$tag" key.pub
+    both_accept "served/$tag" key.pub
     rm -r served
   done
   cat >expected.json <<'JSON'
@@ -422,7 +808,7 @@ test_stage_site_keeps_what_the_generator_wrote_in_latest_json() {
   signed_release v1.2.3
   mkdir site
   printf '{"docs": "main", "version": "stale"}\n' >site/latest.json
-  "$here/stage-site.sh" out site key.pub
+  stage_site out site key.pub
   [ "$(jq -r .docs site/latest.json)" = main ] || fail "lost the generator's field"
   [ "$(jq -r .version site/latest.json)" = 1.2.3 ] || fail "release version did not win"
   [ "$(jq -r '.binaries["linux-x86_64-gnu"]' site/latest.json)" = \
@@ -433,7 +819,7 @@ test_stage_site_publishes_installers_pinned_to_the_key_that_installs_from_it() {
   working_builds 1.2.3
   signed_release v1.2.3
   mkdir site home
-  "$here/stage-site.sh" out site key.pub
+  stage_site out site key.pub
   pinned=$(awk '{print $1, $2}' key.pub)
   grep -qF "'$pinned'" site/install.sh || fail "install.sh is not pinned to key.pub"
   grep -qF "'$pinned'" site/install.ps1 || fail "install.ps1 is not pinned to key.pub"
@@ -450,7 +836,7 @@ test_stage_site_refuses_a_release_that_does_not_verify() {
   signed_release v1.2.3
   printf 'evil\n' >>out/v1.2.3/oskac-windows-x86_64.exe
   mkdir site
-  if "$here/stage-site.sh" out site key.pub; then
+  if stage_site out site key.pub; then
     fail "staged a tampered release"
   fi
   [ ! -e site/releases/v1.2.3/oskac-windows-x86_64.exe ] || fail "copied the tampered binary"
@@ -458,14 +844,14 @@ test_stage_site_refuses_a_release_that_does_not_verify() {
 
 test_stage_site_without_releases_or_key_stages_nothing() {
   mkdir site out
-  "$here/stage-site.sh" out site missing.pub
+  stage_site out site missing.pub
   [ -z "$(ls -A site)" ] || fail "staged something from nothing"
 }
 
 test_stage_site_refuses_releases_without_a_key_to_check_them() {
   signed_release v1.2.3
   mkdir site
-  if "$here/stage-site.sh" out site missing.pub; then
+  if stage_site out site missing.pub; then
     fail "staged releases it could not verify"
   fi
 }
@@ -475,7 +861,7 @@ test_stage_site_refuses_releases_without_a_key_to_check_them() {
 test_stage_site_release_page_links_its_version_on_the_changelog() {
   signed_release v1.10.0
   mkdir site
-  OSKA_SITE_URL=https://example.test "$here/stage-site.sh" out site key.pub
+  OSKA_SITE_URL=https://example.test stage_site out site key.pub
   grep -qF '<a href="https://example.test/changelog.html#v1100">What changed in 1.10.0</a>' \
     site/releases/v1.10.0/index.html || fail "the release page does not link #v1100"
 }
@@ -483,7 +869,7 @@ test_stage_site_release_page_links_its_version_on_the_changelog() {
 test_stage_site_pre_release_page_links_its_base_version_on_the_changelog() {
   signed_release v1.10.0-rc.1
   mkdir site
-  "$here/stage-site.sh" out site key.pub
+  stage_site out site key.pub
   page=site/releases/v1.10.0-rc.1/index.html
   grep -qF '<a href="https://oskalang.dev/changelog.html#v1100">What changed in 1.10.0</a>' "$page" ||
     fail "the pre-release page does not link its base version, #v1100"
@@ -520,7 +906,7 @@ staged_site() {
   throwaway_key key
   "$here/assemble.sh" "v$version" builds out
   "$here/sign.sh" "out/v$version" key key.pub
-  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub
+  OSKA_SITE_URL="file://$PWD/site" stage_site out site key.pub
 }
 
 test_smoke_published_installs_the_latest_release_and_runs_it() {
@@ -559,7 +945,7 @@ test_smoke_published_checks_the_index_the_installer_verified() {
   "$here/sign.sh" out/v1.2.3 key key.pub
   "$here/sign-index.sh" --tag v1.2.3 key key.pub "file://$PWD/no-site" out/v1.2.3
   mkdir site
-  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub
+  OSKA_SITE_URL="file://$PWD/site" stage_site out site key.pub
   [ -f site/release-index.json ] || fail "no index published"
   "$here/smoke-published.sh" "file://$PWD/site" >smoke.out || fail "smoke failed: $(cat smoke.out)"
   grep -q '"index_verified": true' smoke.out || fail "the install did not verify the index: $(cat smoke.out)"
@@ -781,7 +1167,7 @@ releases_with_indexes() {
 
 test_stage_site_publishes_the_highest_serial_index_and_pins_installers_to_require_it() {
   releases_with_indexes
-  "$here/stage-site.sh" out site key.pub
+  stage_site out site key.pub
   cmp out/v1.3.0/release-index.json site/release-index.json || fail "did not publish serial 5"
   cmp out/v1.3.0/release-index.json.sig site/release-index.json.sig || fail "did not publish its signature"
   # The index is kept apart from the release files: what is served under
@@ -799,7 +1185,7 @@ test_stage_site_publishes_the_highest_serial_index_and_pins_installers_to_requir
 test_stage_site_without_an_index_leaves_installers_on_latest_json() {
   signed_release v1.2.3
   mkdir site
-  "$here/stage-site.sh" out site key.pub
+  stage_site out site key.pub
   [ ! -e site/release-index.json ] || fail "published an index"
   [ "$(index_pin)" = no ] || fail "installers require an index that is not there"
 }
@@ -814,7 +1200,7 @@ test_stage_site_refuses_an_index_that_does_not_verify() {
       release_namespace) sign_index_as out/v1.2.3 key oska-release ;;
       tampered) sed -i 's/"serial": 4/"serial": 9/' out/v1.2.3/release-index.json ;;
     esac
-    if "$here/stage-site.sh" out site key.pub 2>err; then
+    if stage_site out site key.pub 2>err; then
       fail "$case: staged a site with an index that does not verify"
     fi
     [ ! -e site/release-index.json ] || fail "$case: published an index"
@@ -832,7 +1218,7 @@ test_stage_site_publishes_an_expired_index_with_a_warning() {
   "$here/sign.sh" out/v1.2.3 key key.pub
   hand_index out/v1.2.3 5 v1.2.3 2026-01-03T00:00:00Z
   mkdir site
-  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub >log ||
+  OSKA_SITE_URL="file://$PWD/site" stage_site out site key.pub >log ||
     fail "the build stopped on an expired index: $(cat log)"
   grep -q '^::warning::.*release index.*expired' log || fail "no warning annotation: $(cat log)"
   cmp out/v1.2.3/release-index.json site/release-index.json || fail "did not publish the index"
@@ -850,13 +1236,13 @@ test_stage_site_publishes_an_expired_index_with_a_warning() {
 test_stage_site_publishes_the_highest_serial_even_when_older_ones_expired() {
   releases_with_indexes
   # v1.2.3's serial-4 index expired long ago; serial 5 supersedes it.
-  "$here/stage-site.sh" out site key.pub >log
+  stage_site out site key.pub >log
   cmp out/v1.3.0/release-index.json site/release-index.json || fail "did not publish serial 5"
   if grep -q 'expired' log; then fail "warned about a superseded index: $(cat log)"; fi
   rm -rf site
   mkdir site
   rm out/v1.2.3/release-index.json.sig
-  if "$here/stage-site.sh" out site key.pub 2>err; then
+  if stage_site out site key.pub 2>err; then
     fail "staged a site with an unsigned index"
   fi
 }
@@ -864,19 +1250,19 @@ test_stage_site_publishes_the_highest_serial_even_when_older_ones_expired() {
 test_stage_site_warns_when_the_index_expires_within_30_days() {
   releases_with_indexes
   hand_index out/v1.3.0 5 v1.3.0 "$(date -u -d '+29 days' +%Y-%m-%dT%H:%M:%SZ)"
-  "$here/stage-site.sh" out site key.pub >log
+  stage_site out site key.pub >log
   grep -q '^::warning::.*release index.*expires.*under 30 days' log || fail "no warning annotation: $(cat log)"
   rm -rf site
   mkdir site
   hand_index out/v1.3.0 5 v1.3.0 "$(date -u -d '+31 days' +%Y-%m-%dT%H:%M:%SZ)"
-  "$here/stage-site.sh" out site key.pub >log
+  stage_site out site key.pub >log
   if grep -q 'warning' log; then fail "warned with 31 days left: $(cat log)"; fi
 }
 
 test_stage_site_refuses_an_index_naming_a_release_it_does_not_publish() {
   releases_with_indexes
   hand_index out/v1.3.0 5 v1.4.0
-  if "$here/stage-site.sh" out site key.pub 2>err; then
+  if stage_site out site key.pub 2>err; then
     fail "staged an index naming v1.4.0, which is not published"
   fi
   grep -q 'v1.4.0' err || fail "error does not name the release: $(cat err)"
@@ -901,7 +1287,7 @@ test_resigning_an_expired_index_lets_the_latest_install_again() {
   "$here/sign.sh" out/v1.2.3 key key.pub
   hand_index out/v1.2.3 5 v1.2.3 2026-01-03T00:00:00Z
   mkdir site
-  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub >/dev/null
+  OSKA_SITE_URL="file://$PWD/site" stage_site out site key.pub >/dev/null
   mkdir resigned
   "$here/sign-index.sh" key key.pub "file://$PWD/site" resigned >/dev/null
   [ "$(jq -r .serial resigned/release-index.json)" = 6 ] || fail "serial is not 6"
@@ -911,7 +1297,7 @@ test_resigning_an_expired_index_lets_the_latest_install_again() {
   cp resigned/release-index.json resigned/release-index.json.sig "out/$tag/"
   rm -rf site
   mkdir site
-  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub >log
+  OSKA_SITE_URL="file://$PWD/site" stage_site out site key.pub >log
   if grep -q 'expire' log; then fail "warned about the fresh index: $(cat log)"; fi
   OSKA_HOME="$PWD/oska" OSKA_SITE_URL="file://$PWD/site" sh -s -- --json <site/install.sh >latest.json ||
     fail "installing the latest failed: $(cat latest.json)"

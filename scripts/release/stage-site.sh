@@ -8,6 +8,13 @@
 #   - verifies every release against <public-key> with verify.sh, and stops
 #     if any fails (verify.sh also requires the tag signed inside each
 #     release's SHA256SUMS to be the name of its directory);
+#   - verifies it a second time with the Oska verifier (verify.osk, through
+#     verify-oska.sh), which pins the release key in its source and checks the
+#     release's index too if it has one: either refusing stops the build, and
+#     so does any difference between what the two report about the index.
+#     $OSKA_VERIFY names the built verifier (`oskac build
+#     scripts/release/verify.osk -o <file>`); with releases to stage and no
+#     verifier, this stops, never skips;
 #   - copies each to <site-dir>/releases/<tag>/, with a page that links
 #     its version's notes on changelog.html;
 #   - publishes <public-key> as <site-dir>/oska-release.pub;
@@ -121,13 +128,21 @@ cp "$public" "$site/oska-release.pub"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/oska-stage-site.XXXXXXXX")
 trap 'rm -rf "$work"' EXIT
-mkdir "$work/releases" "$work/indexes"
+mkdir "$work/releases" "$work/indexes" "$work/oska"
+
+if [ ${#tags[@]} -gt 0 ]; then
+  [ -n "${OSKA_VERIFY:-}" ] ||
+    die "OSKA_VERIFY is not set: the Oska verifier is the second check on every release"
+fi
 
 for tag in "${tags[@]}"; do
   [[ $tag =~ $any ]] || die "$releases/$tag is not named for a release tag"
   [ ! -e "$site/releases/$tag" ] || die "$site/releases/$tag already exists"
   # Keep an index apart from the release files it travelled with.
   cp -R "$releases/$tag" "$work/releases/$tag"
+  # The Oska verifier sees the release as downloaded, index included.
+  mkdir "$work/oska/$tag"
+  cp -R "$releases/$tag" "$work/oska/$tag/$tag"
   for f in release-index.json release-index.json.sig; do
     if [ -e "$work/releases/$tag/$f" ]; then
       mkdir -p "$work/indexes/$tag"
@@ -135,6 +150,10 @@ for tag in "${tags[@]}"; do
     fi
   done
   "$here/verify.sh" "$work/releases/$tag" "$public"
+  "$here/verify-oska.sh" "$work/oska/$tag/$tag" --format=json >"$work/oska/$tag/report.json" ||
+    die "the Oska verifier refused $releases/$tag, which verify.sh accepted"
+  jq -e '.ok == true and .tag == $tag' --arg tag "$tag" "$work/oska/$tag/report.json" >/dev/null ||
+    die "the Oska verifier's report for $releases/$tag is not an acceptance of $tag"
   mkdir -p "$site/releases"
   mv "$work/releases/$tag" "$site/releases/$tag"
   release_page "$tag" >"$site/releases/$tag/index.html"
@@ -149,11 +168,22 @@ for dir in "$work"/indexes/*; do
   fields=$("$here/verify-index.sh" "$dir" "$public") ||
     die "the release index in $from does not verify"
   read -r serial expires named <<<"$fields"
+  oska_fields=$(jq -r '.index | "\(.serial) \(.expires) \(.tag)"' "$work/oska/$(basename "$dir")/report.json") ||
+    die "the Oska verifier's report for $from has no index"
+  [ "$oska_fields" = "$fields" ] ||
+    die "the Oska verifier reads the release index in $from as '$oska_fields', verify-index.sh as '$fields'"
   if [ "$serial" -gt "$best_serial" ]; then
     best=$dir best_serial=$serial best_expires=$expires best_tag=$named best_from=$from
   elif [ "$serial" -eq "$best_serial" ] && ! cmp -s "$dir/release-index.json" "$best/release-index.json"; then
     die "the release indexes in $best_from and $from differ but both have serial $serial; sign a new one"
   fi
+done
+# The Oska verifier finds an index exactly where verify-index.sh was given one.
+for tag in "${tags[@]}"; do
+  has=$(jq '.index != null' "$work/oska/$tag/report.json")
+  if [ -d "$work/indexes/$tag" ]; then want=true; else want=false; fi
+  [ "$has" = "$want" ] ||
+    die "the Oska verifier and verify-index.sh disagree on whether $releases/$tag has a release index"
 done
 require=()
 if [ -n "$best" ]; then
