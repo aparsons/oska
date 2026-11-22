@@ -1,0 +1,14 @@
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"<Notes as std.mcp.Toolset>.specs","authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false},
+    {"name":"<Notes as std.mcp.Toolset>.call","authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false,"toolset":{"split":false,"tools":[{"name":null,"arm":true,"authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false,"protocol_stream":true}],"default":null,"arms_without_spec":[],"specs_checked":false}},
+    {"name":"main","authority":["Fs","Stdout"],"via":[{"param":"fs","capabilities":["Fs"]},{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/toolset_unsplit.osk","span":{"start":903,"end":917},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_unsplit.osk","span":{"start":903,"end":938},"source":"FsRead","result":"DirRead","root":"notes"}
+  ],
+  "verdict": "ok"
+}

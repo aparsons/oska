@@ -71,6 +71,12 @@ pub static STD_MODULES: &[StdModule] = &[
         sink_literal: None,
         written_in_oska: true,
     },
+    StdModule {
+        path: "std.mcp",
+        source: include_str!("std/mcp.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
 ];
 
 /// The `std` modules written in Oska that `module` imports, in the order
@@ -206,8 +212,23 @@ mod tests {
     #[test]
     fn every_name_in_each_std_module_resolves_once_imported() {
         for std in super::STD_MODULES {
-            let importer =
-                oska_syntax::parse_module(&format!("use {}", std.path)).expect("a use parses");
+            // A module written in Oska sees the `std` modules it imports,
+            // as a program that imports it does; it is also checked whole,
+            // linked with them, as that program is.
+            let mut uses = vec![std.path];
+            if std.written_in_oska {
+                let report = crate::check_module(std.source);
+                assert!(
+                    report.diagnostics.is_empty(),
+                    "{}: {:#?}",
+                    std.path,
+                    report.diagnostics
+                );
+                let ast = oska_syntax::parse_module(std.source).expect("the module parses");
+                uses.extend(super::oska_std_imports(&ast).iter().map(|m| m.path));
+            }
+            let importer: String = uses.iter().map(|path| format!("use {path}\n")).collect();
+            let importer = oska_syntax::parse_module(&importer).expect("a use parses");
             let mut diagnostics = Vec::new();
             let decls = Decls::collect(&importer, &mut diagnostics);
             resolve::prelude_module(std.module(), &decls, &mut diagnostics);

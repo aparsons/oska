@@ -66,6 +66,18 @@ _Avoid_: grant file, sandbox policy, allowlist (for this concept)
 **Pure function**:
 A function with no capability-bearing parameters and no parameter whose type is or holds a bounded type parameter, whose type argument could be capability-bearing. It cannot perform effects, and it is deterministic.
 
+**Tool**:
+One operation that an agent, such as an MCP client or a model, may call by name, with JSON arguments that match its input schema. A tool reaches only what its toolset holds.
+_Avoid_: function, command, action (for this concept)
+
+**Toolset**:
+A value that describes a set of tools and runs them: a `cap struct` holding only the narrowed capabilities its tools need, implementing `std.mcp`'s `Toolset` trait.
+_Avoid_: server, tool registry (for the value itself)
+
+**Per-tool authority**:
+The authority report's entry for one tool of a toolset: the capabilities the code that runs that tool can reach, computed from its arm of the `match` on the tool's name, not the union of the whole toolset.
+_Avoid_: tool permissions, tool annotations (for this concept)
+
 **Pre-state value**:
 A value in a postcondition captured with `old(...)` when the function is entered, before a mutating method changes its receiver.
 _Avoid_: snapshot, previous value

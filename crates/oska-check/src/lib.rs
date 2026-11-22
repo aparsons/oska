@@ -476,6 +476,192 @@ pub struct FunctionAuthority {
     pub via: Vec<Via>,
     /// No parameter is capability-bearing.
     pub pure: bool,
+    /// For `call` of an implementation of `std.mcp`'s `Toolset`: what
+    /// each tool reaches (`authority/tools.rs`).
+    pub toolset: Option<ToolsetAuthority>,
+}
+
+/// The tools of an implementation of `std.mcp`'s `Toolset`, listed under
+/// its `call` method in the authority report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolsetAuthority {
+    /// The implementing type, as the checked program names it
+    /// ([`program::Program::types`]).
+    pub implementation: String,
+    /// `call` is a `match` on the tool's name whose arms are string
+    /// literals, so each tool has its own entry. When not, `tools` is one
+    /// entry, with no name, for the whole toolset.
+    pub split: bool,
+    /// One entry per literal arm, in order, then one per name that
+    /// `specs` gives a tool with no arm, which runs the default arm.
+    pub tools: Vec<ToolAuthority>,
+    /// The names of the literal arms that no spec names, when `specs`
+    /// names its tools with literals.
+    pub arms_without_spec: Vec<String>,
+    /// The default arm of a split `call`, which runs every name with no
+    /// literal arm: its entry has no name. `None` when not split.
+    pub default: Option<ToolAuthority>,
+    /// `specs` names its tools with literals, so its names were checked
+    /// against the arms of a split `call`.
+    pub specs_checked: bool,
+}
+
+/// One tool's entry in the authority report: what the code that runs it
+/// reaches, through the fields of `self`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolAuthority {
+    /// The tool's name; `None` for the entry of a toolset not split per
+    /// tool.
+    pub name: Option<String>,
+    /// The tool has its own arm; false for a spec that runs the default
+    /// arm.
+    pub arm: bool,
+    /// The built-in capabilities the tool can reach, in order of first
+    /// appearance.
+    pub authority: Vec<String>,
+    /// What supplies them: `self`, or a field such as `self.notes`.
+    pub via: Vec<Via>,
+    /// The tool reaches nothing capability-bearing.
+    pub pure: bool,
+}
+
+impl ToolAuthority {
+    /// The tool writes to standard output, which an MCP server's protocol
+    /// owns.
+    pub fn writes_protocol_stream(&self) -> bool {
+        self.authority.iter().any(|c| c == "Stdout")
+    }
+
+    /// One indented line of the human-readable report, such as
+    /// `  tool "read_note": DirRead (self.notes)`.
+    pub fn to_human(&self) -> String {
+        let label = match &self.name {
+            Some(name) => format!("tool {}", quoted(name)),
+            None => "tools (not split per tool)".to_string(),
+        };
+        let note = if self.arm {
+            ""
+        } else {
+            "; no arm: runs the default arm"
+        };
+        self.labelled(&label, note)
+    }
+
+    /// `label`, then what the entry reaches, `note`, and the protocol
+    /// stream note when it reaches `Stdout`, on one indented line.
+    fn labelled(&self, label: &str, note: &str) -> String {
+        let mut line = format!("  {label}: {}{note}", words(self.pure, &self.via));
+        if self.writes_protocol_stream() {
+            line.push_str("; writes to the protocol stream (Stdout)");
+        }
+        line
+    }
+
+    /// Render as a single-line JSON object.
+    pub fn to_json(&self) -> String {
+        let name = self
+            .name
+            .as_ref()
+            .map_or_else(|| "null".to_string(), |n| format!("\"{}\"", json_escape(n)));
+        format!(
+            "{{\"name\":{name},\"arm\":{},\"authority\":{},\"via\":[{}],\"pure\":{},\"protocol_stream\":{}}}",
+            self.arm,
+            json_strings(&self.authority),
+            via_json(&self.via),
+            self.pure,
+            self.writes_protocol_stream()
+        )
+    }
+}
+
+impl ToolsetAuthority {
+    /// The lines the human-readable report gives the toolset, each
+    /// indented and ending in a newline.
+    pub fn to_human(&self) -> String {
+        let mut out = String::new();
+        for tool in &self.tools {
+            out.push_str(&tool.to_human());
+            out.push('\n');
+        }
+        if let Some(default) = &self.default {
+            out.push_str(&default.labelled("default arm", ""));
+            out.push('\n');
+        }
+        for name in &self.arms_without_spec {
+            out.push_str(&format!("  note: arm {} has no spec\n", quoted(name)));
+        }
+        if self.split && !self.specs_checked {
+            out.push_str(
+                "  note: `specs` is not a list of `mcp.ToolSpec.new` calls with literal names, \
+                 so its names are not checked against the arms\n",
+            );
+        }
+        out
+    }
+
+    /// Render as a single-line JSON object.
+    pub fn to_json(&self) -> String {
+        let tools: Vec<String> = self.tools.iter().map(ToolAuthority::to_json).collect();
+        let default = self
+            .default
+            .as_ref()
+            .map_or_else(|| "null".to_string(), ToolAuthority::to_json);
+        format!(
+            "{{\"split\":{},\"tools\":[{}],\"default\":{default},\"arms_without_spec\":{},\"specs_checked\":{}}}",
+            self.split,
+            tools.join(","),
+            json_strings(&self.arms_without_spec),
+            self.specs_checked
+        )
+    }
+}
+
+/// `text` in double quotes, as the report shows a tool's name.
+fn quoted(text: &str) -> String {
+    format!("\"{}\"", text.escape_default())
+}
+
+/// What a function or a tool can reach, as its line of the report says
+/// it: `pure`, or each capability-bearing source with what it supplies,
+/// as `Stdout (io), FsRead (fs)`.
+fn words(pure: bool, via: &[Via]) -> String {
+    if pure {
+        return "pure".to_string();
+    }
+    let sources: Vec<String> = via
+        .iter()
+        .map(|via| {
+            let mut kinds = via.capabilities.clone();
+            kinds.extend(via.generics.iter().map(|g| format!("generic {g}")));
+            if kinds.is_empty() {
+                format!("cap fn ({})", via.param)
+            } else {
+                format!("{} ({})", kinds.join(", "), via.param)
+            }
+        })
+        .collect();
+    sources.join(", ")
+}
+
+/// The `via` entries of a function or a tool, as JSON objects joined by
+/// commas.
+fn via_json(via: &[Via]) -> String {
+    let via: Vec<String> = via
+        .iter()
+        .map(|v| {
+            let generics = if v.generics.is_empty() {
+                String::new()
+            } else {
+                format!(",\"generics\":{}", json_strings(&v.generics))
+            };
+            format!(
+                "{{\"param\":\"{}\",\"capabilities\":{}{generics}}}",
+                json_escape(&v.param),
+                json_strings(&v.capabilities)
+            )
+        })
+        .collect();
+    via.join(",")
 }
 
 /// A capability-bearing parameter and the capabilities it supplies. A
@@ -538,6 +724,9 @@ impl CheckReport {
         for function in &self.functions {
             out.push_str(&function.to_human());
             out.push('\n');
+            if let Some(toolset) = &function.toolset {
+                out.push_str(&toolset.to_human());
+            }
             let owner = FnOrTest::Fn(function.name.clone());
             self.list_attenuations(&owner, &mut listed, &mut out);
         }
@@ -589,23 +778,7 @@ impl FunctionAuthority {
     /// after the name: `pure`, or each capability-bearing parameter with
     /// what it supplies, as `Stdout (io), FsRead (fs)`.
     pub fn authority_words(&self) -> String {
-        if self.pure {
-            return "pure".to_string();
-        }
-        let sources: Vec<String> = self
-            .via
-            .iter()
-            .map(|via| {
-                let mut kinds = via.capabilities.clone();
-                kinds.extend(via.generics.iter().map(|g| format!("generic {g}")));
-                if kinds.is_empty() {
-                    format!("cap fn ({})", via.param)
-                } else {
-                    format!("{} ({})", kinds.join(", "), via.param)
-                }
-            })
-            .collect();
-        sources.join(", ")
+        words(self.pure, &self.via)
     }
 
     fn pub_marker(&self) -> &'static str {
@@ -616,30 +789,19 @@ impl FunctionAuthority {
         }
     }
 
-    /// Render as a single-line JSON object.
+    /// Render as a single-line JSON object, with a `toolset` for the
+    /// `call` of an implementation of `std.mcp`'s `Toolset`.
     pub fn to_json(&self) -> String {
-        let via: Vec<String> = self
-            .via
-            .iter()
-            .map(|v| {
-                let generics = if v.generics.is_empty() {
-                    String::new()
-                } else {
-                    format!(",\"generics\":{}", json_strings(&v.generics))
-                };
-                format!(
-                    "{{\"param\":\"{}\",\"capabilities\":{}{generics}}}",
-                    json_escape(&v.param),
-                    json_strings(&v.capabilities)
-                )
-            })
-            .collect();
+        let toolset = self
+            .toolset
+            .as_ref()
+            .map_or_else(String::new, |t| format!(",\"toolset\":{}", t.to_json()));
         format!(
-            "{{\"name\":\"{}\",{}\"authority\":{},\"via\":[{}],\"pure\":{}}}",
+            "{{\"name\":\"{}\",{}\"authority\":{},\"via\":[{}],\"pure\":{}{toolset}}}",
             json_escape(&self.name),
             if self.public { "\"pub\":true," } else { "" },
             json_strings(&self.authority),
-            via.join(","),
+            via_json(&self.via),
             self.pure
         )
     }
@@ -775,6 +937,10 @@ fn check_source(
         .is_empty()
         .then(|| program::lower::module(src, module, &items, &resolutions, &typing));
     let functions = authority::report(module, &decls, &items, &modules);
+    let program = program.map(|mut program| {
+        program.toolsets = toolsets(&functions);
+        program
+    });
     // An intrinsic name is also an unknown name; E0209 says it better.
     let refused: Vec<_> = diagnostics
         .iter()
@@ -798,4 +964,29 @@ fn check_source(
         attenuations,
         program,
     }
+}
+
+/// The implementations of `std.mcp`'s `Toolset` among `functions`, as the
+/// checked program carries them.
+fn toolsets(functions: &[FunctionAuthority]) -> Vec<program::Toolset> {
+    functions
+        .iter()
+        .filter_map(|function| {
+            let toolset = function.toolset.as_ref()?;
+            let tools = if toolset.split {
+                toolset
+                    .tools
+                    .iter()
+                    .filter_map(|t| Some((t.name.clone()?, t.authority.clone())))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Some(program::Toolset {
+                implementation: toolset.implementation.clone(),
+                tools,
+                whole: function.authority.clone(),
+            })
+        })
+        .collect()
 }

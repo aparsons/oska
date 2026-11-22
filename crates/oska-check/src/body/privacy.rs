@@ -137,6 +137,18 @@ impl Body<'_, '_, '_> {
         let Some(module) = self.foreign(declared.start) else {
             return true;
         };
+        if link::is_std_path(&module) {
+            // A `std` module's privacy is not the program's to change.
+            self.out.diagnostics.push(Diagnostic::new(
+                codes::PRIVATE_TO_MODULE,
+                format!(
+                    "`{type_name}` has fields private to `{module}`, so only that module can \
+                     build it or match its fields"
+                ),
+                span,
+            ));
+            return false;
+        }
         let diagnostic = Diagnostic::new(
             codes::PRIVATE_ITEM,
             format!(

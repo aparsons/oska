@@ -1,0 +1,36 @@
+// A toolset whose `call` is split per tool but whose `specs` does not
+// name its tools with literals, for the golden tests of per-tool
+// authority (#249): the report says the names are not checked against
+// the arms, and still lists the default arm.
+use std.json
+use std.mcp
+
+cap struct Notes {
+    notes: DirRead,
+    names: List<String>,
+}
+
+impl mcp.Toolset for Notes {
+    fn specs(self) -> List<mcp.ToolSpec> {
+        var specs: List<mcp.ToolSpec> = []
+        for name in self.names {
+            specs.push(mcp.ToolSpec.new(name, "A note tool.", json.Schema.object([])))
+        }
+        specs
+    }
+
+    fn call(self, name: String, args: json.Value) -> mcp.ToolResult {
+        match name {
+            "list" => match self.notes.list_dir(Path.new(".")) {
+                Ok(_) => mcp.ToolResult.text("listed")
+                Err(_) => mcp.ToolResult.error("cannot list the notes")
+            }
+            _ => mcp.ToolResult.error("no such tool")
+        }
+    }
+}
+
+fn main(fs: Fs) {
+    let tools = Notes(notes: fs.read_only().restrict_to("notes"), names: ["list"])
+    let _ = tools.call("list", json.Value.Null)
+}
