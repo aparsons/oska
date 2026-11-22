@@ -65,15 +65,9 @@ impl Body<'_, '_, '_> {
     /// this module; a trait's method needs the trait to be. Reports one
     /// that may not.
     pub(super) fn method_visible(&mut self, sig: &FnSig, type_name: &str, span: Span) -> bool {
-        let (declared, what) = match &sig.trait_name {
-            None => (
-                sig.declared,
-                format!("the method `{}` of `{}`", sig.name, type_name),
-            ),
-            Some(trait_name) => (
-                self.items.traits.get(trait_name).and_then(|t| t.declared),
-                format!("the trait `{}` of the method `{}`", trait_name, sig.name),
-            ),
+        let declared = match &sig.trait_name {
+            None => sig.declared,
+            Some(trait_name) => self.items.traits.get(trait_name).and_then(|t| t.declared),
         };
         let Some(declared) = declared else {
             return true;
@@ -83,6 +77,11 @@ impl Body<'_, '_, '_> {
         }
         let Some(module) = self.foreign(declared.start) else {
             return true;
+        };
+        // The message is made only for a method it refuses (#572).
+        let what = match &sig.trait_name {
+            None => format!("the method `{}` of `{}`", sig.name, type_name),
+            Some(trait_name) => format!("the trait `{}` of the method `{}`", trait_name, sig.name),
         };
         let at = self.marker_at(&declared);
         self.private(&what, &module, "pub(pkg) ", at, span);

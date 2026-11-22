@@ -87,7 +87,7 @@ pub struct Instance {
 /// [`Assumption::NoScope`], also a function type's result.
 pub fn positions(ty: &Ty, assumption: Assumption, params: &mut Vec<String>, caps: &mut Vec<u32>) {
     match ty {
-        Ty::Param(name) => params.push(name.clone()),
+        Ty::Param(name) => params.push(name.to_string()),
         Ty::Named(_, args, _) => {
             for arg in args {
                 positions(arg, assumption, params, caps);

@@ -213,7 +213,7 @@ The Linux `oskac` that links glibc dynamically, so it runs only where glibc 2.35
 _Avoid_: dynamic build, the Linux binary
 
 **musl build**:
-The Linux `oskac` that is a static executable with musl inside it, with no dynamic loader and no shared library, so it runs on any Linux, an empty container included. It is a variant of the Linux supported platform, not a platform of its own: it takes the same target platforms and builds the same bytes as the glibc build, only more slowly (ADR 0022).
+The Linux `oskac` that is a static executable with musl inside it, with no dynamic loader and no shared library, so it runs on any Linux, an empty container included. It is a variant of the Linux supported platform, not a platform of its own: it takes the same target platforms and builds the same bytes as the glibc build. It runs at about the same speed on aarch64, and up to about 1.2x slower on x86_64 for the site build and more for text-heavy work (ADR 0022; `docs/research/2026-11-musl-oskac-performance.md`).
 _Avoid_: static build, Alpine build, musl platform, musl target (for `oskac`'s own build)
 
 **Parity gate**:

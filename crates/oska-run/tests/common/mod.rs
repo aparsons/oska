@@ -24,12 +24,28 @@ pub mod site;
 pub mod skips;
 
 use oska_run::{
-    codes, run, test, FakeHost, FakeWorld, RunOutcome, TestOptions, TestReport,
-    UNSUPPORTED_EXIT_CODE,
+    codes, run, run_with_limits, test, FakeHost, FakeWorld, Limits, RunOutcome, TestOptions,
+    TestReport, UNSUPPORTED_EXIT_CODE,
 };
 
 /// The program path every helper passes as `args[0]`.
 pub const PROGRAM_PATH: &str = "prog.osk";
+
+/// Run `src` on a fresh [`FakeHost`] under `--max-memory=<limit>`, on the
+/// interpreter only: the meter is the interpreter's, so there is no native
+/// run to compare with.
+pub fn run_under_limit(src: &str, limit: u64) -> RunOutcome {
+    let limits = Limits {
+        max_memory: Some(limit),
+        ..Limits::NONE
+    };
+    run_with_limits(
+        src,
+        &mut FakeHost::new(),
+        &[PROGRAM_PATH.to_string()],
+        limits,
+    )
+}
 
 /// Run `src` on a fresh [`FakeHost`], with `args` after the program path.
 pub fn run_fake(src: &str, args: &[&str]) -> RunOutcome {

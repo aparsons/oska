@@ -4,6 +4,8 @@
 //! bodies are then checked against them with unification (`infer.rs`).
 
 use std::fmt;
+use std::ops::Deref;
+use std::rc::Rc;
 
 use crate::program::IntType;
 
@@ -15,7 +17,7 @@ pub enum Ty {
     /// [`Trust`] matters only for the types that carry a trust flag (see
     /// [`Ty::carries_trust_flag`]); every other type is always
     /// [`Trust::Trusted`].
-    Named(String, Vec<Ty>, Trust),
+    Named(Name, Vec<Ty>, Trust),
     /// `()`.
     Unit,
     /// `fn(T) -> U`, or `cap fn(T) -> U` when `cap` is [`Cap::Bearing`].
@@ -34,7 +36,7 @@ pub enum Ty {
     },
     /// A generic parameter of the enclosing declaration, or `Self` inside
     /// a trait. Rigid: it only unifies with itself.
-    Param(String),
+    Param(Name),
     /// An inference variable, solved by unification within one body.
     Var(u32),
     /// The type of an expression that never produces a value, such as a
@@ -43,6 +45,62 @@ pub enum Ty {
     /// The type of an expression that failed to check. It unifies with
     /// everything and suppresses follow-on errors.
     Error,
+}
+
+/// The name in a [`Ty::Named`] or [`Ty::Param`]. Copies of a type share
+/// it: cloning a name does not copy its text.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Name(Rc<str>);
+
+impl Name {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Deref for Name {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for Name {
+    fn from(name: &str) -> Name {
+        Name(Rc::from(name))
+    }
+}
+
+impl PartialEq<str> for Name {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for Name {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<Name> for String {
+    fn eq(&self, other: &Name) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+/// Shown as its text, as a `String` name was.
+impl fmt::Debug for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// The trust flag on a text type (ADR 0006). `Untrusted<String>` is
@@ -131,12 +189,12 @@ pub const SELF: &str = "Self";
 impl Ty {
     /// A named type without arguments, such as `Int`.
     pub fn named(name: &str) -> Ty {
-        Ty::Named(name.to_string(), Vec::new(), Trust::Trusted)
+        Ty::Named(name.into(), Vec::new(), Trust::Trusted)
     }
 
     /// A named type with arguments, such as `Result<T, E>`. Trusted.
     pub fn generic(name: &str, args: Vec<Ty>) -> Ty {
-        Ty::Named(name.to_string(), args, Trust::Trusted)
+        Ty::Named(name.into(), args, Trust::Trusted)
     }
 
     pub fn int() -> Ty {
@@ -429,6 +487,31 @@ impl fmt::Display for Ty {
             Ty::Var(_) => write!(f, "_"),
             Ty::Never => write!(f, "!"),
             Ty::Error => write!(f, "{{error}}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Where a named type's name is stored.
+    fn name_at(ty: &Ty) -> *const u8 {
+        ty.head().expect("a named type").as_ptr()
+    }
+
+    #[test]
+    fn copies_of_a_named_type_share_its_name() {
+        let ty = Ty::generic("Result", vec![Ty::int(), Ty::string()]);
+        let copies = [
+            ty.clone(),
+            ty.substitute(&[]),
+            ty.trusted_as(Trust::Untrusted),
+            ty.map_cap(&mut |cap| cap),
+        ];
+        for copy in &copies {
+            assert_eq!(copy.head(), Some("Result"));
+            assert_eq!(name_at(copy), name_at(&ty), "{copy} copied its name");
         }
     }
 }

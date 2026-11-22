@@ -25,6 +25,7 @@ mod doc;
 mod explain;
 mod fence;
 mod fix;
+mod heap;
 mod hook;
 mod json;
 mod limits;
