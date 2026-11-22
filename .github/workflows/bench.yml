@@ -55,7 +55,7 @@ jobs:
             echo
             echo "| oskac build site/build.osk | Best CPU time of 5 |"
             echo "| --- | ---: |"
-            for b in target/release/oskac "target/$(uname -m)-unknown-linux-musl/release/oskac"; do
+            for b in target/dist/oskac "target/$(uname -m)-unknown-linux-musl/dist/oskac"; do
               "$b" build site/build.osk -o "$out/site" >/dev/null
               best=""
               for _ in 1 2 3 4 5; do

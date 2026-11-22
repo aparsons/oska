@@ -142,7 +142,7 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-        run: cargo build --release --locked -p oskac ${TARGET:+--target "$TARGET"}
+        run: cargo build --profile dist --locked -p oskac ${TARGET:+--target "$TARGET"}
       - name: Name the binary for its target
         shell: bash
         env:
@@ -155,11 +155,11 @@ jobs:
           # not ship a binary under the wrong name.
           test "$(uname -m)" = "$MACHINE"
           if [ "$RUNNER_OS" = Windows ]; then
-            bin=target/release/oskac.exe
+            bin=target/dist/oskac.exe
           elif [ -n "$TARGET" ]; then
-            bin=target/$TARGET/release/oskac
+            bin=target/$TARGET/dist/oskac
           else
-            bin=target/release/oskac
+            bin=target/dist/oskac
           fi
           mkdir dist
           cp "$bin" "dist/$ASSET"

@@ -9,7 +9,7 @@
 | 0 | `main` returned `Ok` or `()`. |
 | 1 | The checker refused the program, or `main` returned `Err`: an expected failure. |
 | 2 | The program uses something the interpreter cannot run yet (`E0370`, `E0371`, `E0380`). Nothing ran. |
-| 101 | The program panicked: it has a bug. |
+| 101 | The program panicked: it has a bug. Also a bug in `oskac` itself, which prints `oskac: internal error: <message>` and asks you to report it. |
 
 ## Refusals
 
