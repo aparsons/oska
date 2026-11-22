@@ -107,8 +107,8 @@ fn base64_decode(text: &str) -> Vec<u8> {
     out
 }
 
-/// The blob of an armored signature.
-fn blob_of(armored: &str) -> Vec<u8> {
+/// The wire bytes of an armored signature.
+fn wire_of(armored: &str) -> Vec<u8> {
     let body: String = armored
         .lines()
         .filter(|l| !l.starts_with("-----"))
@@ -116,9 +116,9 @@ fn blob_of(armored: &str) -> Vec<u8> {
     base64_decode(&body)
 }
 
-/// A blob in armor, wrapped at `width` characters, lines ended by `eol`.
-fn armor(blob: &[u8], width: usize, eol: &str) -> String {
-    let text = base64_encode(blob);
+/// Wire bytes in armor, wrapped at `width` characters, lines ended by `eol`.
+fn armor(wire: &[u8], width: usize, eol: &str) -> String {
+    let text = base64_encode(wire);
     let mut out = format!("-----BEGIN SSH SIGNATURE-----{eol}");
     for line in text.as_bytes().chunks(width) {
         out.push_str(std::str::from_utf8(line).expect("a well-formed fixture"));
@@ -128,22 +128,22 @@ fn armor(blob: &[u8], width: usize, eol: &str) -> String {
     out
 }
 
-fn armored(blob: &[u8]) -> String {
-    armor(blob, 70, "\n")
+fn armored(wire: &[u8]) -> String {
+    armor(wire, 70, "\n")
 }
 
-/// The fields of an SSHSIG blob, as (offset of the length, length): the
+/// The fields of SSHSIG wire bytes, as (offset of the length, length): the
 /// public key, namespace, reserved, hash algorithm and signature.
-fn fields(blob: &[u8]) -> Vec<(usize, usize)> {
+fn fields(wire: &[u8]) -> Vec<(usize, usize)> {
     let mut at = 10;
     let mut out = Vec::new();
     for _ in 0..5 {
-        let len = u32::from_be_bytes(blob[at..at + 4].try_into().expect("a well-formed fixture"))
+        let len = u32::from_be_bytes(wire[at..at + 4].try_into().expect("a well-formed fixture"))
             as usize;
         out.push((at, len));
         at += 4 + len;
     }
-    assert_eq!(at, blob.len(), "the fixture has no trailing bytes");
+    assert_eq!(at, wire.len(), "the fixture has no trailing bytes");
     out
 }
 
@@ -153,29 +153,29 @@ const RESERVED: usize = 2;
 const HASH: usize = 3;
 const SIGNATURE: usize = 4;
 
-/// `blob` with field `which` replaced by `value`, its length fixed.
-fn with_field(blob: &[u8], which: usize, value: &[u8]) -> Vec<u8> {
-    let (at, len) = fields(blob)[which];
-    let mut out = blob[..at].to_vec();
+/// `wire` with field `which` replaced by `value`, its length fixed.
+fn with_field(wire: &[u8], which: usize, value: &[u8]) -> Vec<u8> {
+    let (at, len) = fields(wire)[which];
+    let mut out = wire[..at].to_vec();
     out.extend((value.len() as u32).to_be_bytes());
     out.extend(value);
-    out.extend(&blob[at + 4 + len..]);
+    out.extend(&wire[at + 4 + len..]);
     out
 }
 
-/// `blob` with the length of field `which` set to `len`, nothing else
+/// `wire` with the length of field `which` set to `len`, nothing else
 /// changed.
-fn with_length(blob: &[u8], which: usize, len: u32) -> Vec<u8> {
-    let (at, _) = fields(blob)[which];
-    let mut out = blob.to_vec();
+fn with_length(wire: &[u8], which: usize, len: u32) -> Vec<u8> {
+    let (at, _) = fields(wire)[which];
+    let mut out = wire.to_vec();
     out[at..at + 4].copy_from_slice(&len.to_be_bytes());
     out
 }
 
 /// The key's 32 bytes, from an OpenSSH key line.
 fn key_bytes(line: &str) -> Vec<u8> {
-    let blob = base64_decode(line.split(' ').nth(1).expect("a well-formed fixture"));
-    blob[blob.len() - 32..].to_vec()
+    let wire = base64_decode(line.split(' ').nth(1).expect("a well-formed fixture"));
+    wire[wire.len() - 32..].to_vec()
 }
 
 /// What a case should give: the verdict `sshsig.verify` prints first, or
@@ -256,13 +256,13 @@ impl Cases {
 fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
     let mut cases = Cases::new();
     for (label, sig) in [("sha512", SIG_SHA512), ("sha256", SIG_SHA256)] {
-        let blob = blob_of(sig);
-        let v = |cases: &mut Cases, what: &str, blob: &[u8], expect| {
+        let wire = wire_of(sig);
+        let v = |cases: &mut Cases, what: &str, wire: &[u8], expect| {
             cases.verify(
                 &format!("{label} {what}"),
                 TEST_KEY,
                 "oska-test",
-                &armored(blob),
+                &armored(wire),
                 MESSAGE,
                 expect,
             )
@@ -278,14 +278,14 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
         // Every change the format allows, but the signature does not
         // cover.
         for (what, text) in [
-            ("CRLF", armor(&blob, 70, "\r\n")),
-            ("one long line", armor(&blob, 1000, "\n")),
-            ("short lines", armor(&blob, 16, "\n")),
+            ("CRLF", armor(&wire, 70, "\r\n")),
+            ("one long line", armor(&wire, 1000, "\n")),
+            ("short lines", armor(&wire, 16, "\n")),
             (
                 "blank lines around",
-                format!("\n\r\n{}\n\n", armored(&blob)),
+                format!("\n\r\n{}\n\n", armored(&wire)),
             ),
-            ("no final newline", armored(&blob).trim_end().to_string()),
+            ("no final newline", armored(&wire).trim_end().to_string()),
         ] {
             cases.verify(
                 &format!("{label} {what}"),
@@ -379,10 +379,10 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
             "ok",
         );
         // The embedded key replaced by another valid one.
-        let mut other = blob[fields(&blob)[KEY].0 + 4..][..fields(&blob)[KEY].1].to_vec();
+        let mut other = wire[fields(&wire)[KEY].0 + 4..][..fields(&wire)[KEY].1].to_vec();
         let n = other.len();
         other[n - 32..].copy_from_slice(&key_bytes(OTHER_KEY));
-        let swapped = with_field(&blob, KEY, &other);
+        let swapped = with_field(&wire, KEY, &other);
         v(
             &mut cases,
             "embedded other key, test key asked",
@@ -397,19 +397,53 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
             MESSAGE,
             "BadSignature",
         );
+        // A signature by another key whose key is no point of the curve is
+        // refused as another key's, before any curve arithmetic: the key
+        // is compared as bytes first.
+        let mut not_a_point = other.clone();
+        let n = not_a_point.len();
+        not_a_point[n - 32..].fill(0);
+        not_a_point[n - 32] = 2; // y = 2 has no x on the curve
+        v(
+            &mut cases,
+            "embedded key not a point",
+            &with_field(&wire, KEY, &not_a_point),
+            "WrongKey",
+        );
+        // An empty namespace is refused, as OpenSSH refuses it, whether it
+        // is asked for or signed.
+        cases.verify(
+            &format!("{label} empty namespace asked"),
+            TEST_KEY,
+            "",
+            sig,
+            MESSAGE,
+            "WrongNamespace",
+        );
+        let empty_signed = armored(&with_field(&wire, NAMESPACE, b""));
+        for asked in ["", "oska-test"] {
+            cases.verify(
+                &format!("{label} empty namespace signed, {asked:?} asked"),
+                TEST_KEY,
+                asked,
+                &empty_signed,
+                MESSAGE,
+                "WrongNamespace",
+            );
+        }
         // The embedded key's type, and its length.
         let mut kind = other.clone();
         kind[10] = b'8';
         v(
             &mut cases,
             "embedded key type",
-            &with_field(&blob, KEY, &kind),
+            &with_field(&wire, KEY, &kind),
             "UnsupportedAlgorithm",
         );
         v(
             &mut cases,
             "embedded key short",
-            &with_field(&blob, KEY, &other[..n - 1]),
+            &with_field(&wire, KEY, &other[..n - 1]),
             "Malformed",
         );
         let mut longer = other.clone();
@@ -417,21 +451,21 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
         v(
             &mut cases,
             "embedded key long",
-            &with_field(&blob, KEY, &longer),
+            &with_field(&wire, KEY, &longer),
             "Malformed",
         );
-        // The namespace in the blob.
+        // The namespace in the signature.
         v(
             &mut cases,
-            "blob namespace",
-            &with_field(&blob, NAMESPACE, b"oska-tesu"),
+            "wire namespace",
+            &with_field(&wire, NAMESPACE, b"oska-tesu"),
             "WrongNamespace",
         );
         cases.verify(
-            &format!("{label} blob namespace asked for"),
+            &format!("{label} wire namespace asked for"),
             TEST_KEY,
             "oska-tesu",
-            &armored(&with_field(&blob, NAMESPACE, b"oska-tesu")),
+            &armored(&with_field(&wire, NAMESPACE, b"oska-tesu")),
             MESSAGE,
             "BadSignature",
         );
@@ -439,26 +473,26 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
         v(
             &mut cases,
             "reserved",
-            &with_field(&blob, RESERVED, b"x"),
+            &with_field(&wire, RESERVED, b"x"),
             "BadSignature",
         );
         // The hash algorithm's name.
         v(
             &mut cases,
             "hash name same length",
-            &with_field(&blob, HASH, b"sha513"),
+            &with_field(&wire, HASH, b"sha513"),
             "UnsupportedAlgorithm",
         );
         v(
             &mut cases,
             "hash name md5",
-            &with_field(&blob, HASH, b"md5"),
+            &with_field(&wire, HASH, b"md5"),
             "UnsupportedAlgorithm",
         );
         v(
             &mut cases,
             "hash name empty",
-            &with_field(&blob, HASH, b""),
+            &with_field(&wire, HASH, b""),
             "UnsupportedAlgorithm",
         );
         let other_hash: &[u8] = if label == "sha512" {
@@ -469,24 +503,24 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
         v(
             &mut cases,
             "hash name swapped",
-            &with_field(&blob, HASH, other_hash),
+            &with_field(&wire, HASH, other_hash),
             "BadSignature",
         );
         // The signature.
-        let (at, len) = fields(&blob)[SIGNATURE];
-        let inner = blob[at + 4..at + 4 + len].to_vec();
+        let (at, len) = fields(&wire)[SIGNATURE];
+        let inner = wire[at + 4..at + 4 + len].to_vec();
         let mut kind = inner.clone();
         kind[10] = b'8';
         v(
             &mut cases,
             "signature type",
-            &with_field(&blob, SIGNATURE, &kind),
+            &with_field(&wire, SIGNATURE, &kind),
             "UnsupportedAlgorithm",
         );
         v(
             &mut cases,
             "signature short",
-            &with_field(&blob, SIGNATURE, &inner[..len - 1]),
+            &with_field(&wire, SIGNATURE, &inner[..len - 1]),
             "Malformed",
         );
         let mut longer = inner.clone();
@@ -494,11 +528,11 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
         v(
             &mut cases,
             "signature trailing",
-            &with_field(&blob, SIGNATURE, &longer),
+            &with_field(&wire, SIGNATURE, &longer),
             "Malformed",
         );
         for byte in [len - 64, len - 33, len - 32, len - 1] {
-            let mut flipped = blob.clone();
+            let mut flipped = wire.clone();
             flipped[at + 4 + byte] ^= 0x10;
             v(
                 &mut cases,
@@ -509,57 +543,57 @@ fn signatures_made_by_ssh_keygen_verify_and_tampering_is_refused() {
         }
         // The version.
         for version in [0u32, 2, 0x0100_0000, u32::MAX] {
-            let mut blob = blob.clone();
-            blob[6..10].copy_from_slice(&version.to_be_bytes());
+            let mut wire = wire.clone();
+            wire[6..10].copy_from_slice(&version.to_be_bytes());
             v(
                 &mut cases,
                 &format!("version {version}"),
-                &blob,
+                &wire,
                 "UnsupportedVersion",
             );
         }
         // The magic.
-        let mut magic = blob.clone();
+        let mut magic = wire.clone();
         magic[5] = b'X';
         v(&mut cases, "magic", &magic, "Malformed");
         // Trailing bytes.
-        let mut trailing = blob.clone();
+        let mut trailing = wire.clone();
         trailing.push(0);
         v(&mut cases, "trailing byte", &trailing, "Malformed");
         // Every length field, made longer than what remains, one more or
         // one less.
         for which in 0..5 {
-            let (_, len) = fields(&blob)[which];
+            let (_, len) = fields(&wire)[which];
             v(
                 &mut cases,
                 &format!("length {which} huge"),
-                &with_length(&blob, which, u32::MAX),
+                &with_length(&wire, which, u32::MAX),
                 "Malformed",
             );
             v(
                 &mut cases,
                 &format!("length {which} 2^31"),
-                &with_length(&blob, which, 1 << 31),
+                &with_length(&wire, which, 1 << 31),
                 "Malformed",
             );
             v(
                 &mut cases,
                 &format!("length {which} plus one"),
-                &with_length(&blob, which, len as u32 + 1),
+                &with_length(&wire, which, len as u32 + 1),
                 "Malformed",
             );
         }
         // Cut short anywhere.
-        for cut in 0..blob.len() {
+        for cut in 0..wire.len() {
             v(
                 &mut cases,
                 &format!("cut at {cut}"),
-                &blob[..cut],
+                &wire[..cut],
                 "Malformed",
             );
         }
         // The armor.
-        let text = armored(&blob);
+        let text = armored(&wire);
         let body: Vec<&str> = text.lines().collect();
         let end = body.len() - 1;
         let join = |lines: &[&str]| format!("{}\n", lines.join("\n"));
@@ -733,8 +767,8 @@ fn fingerprints_match_ssh_keygen_and_the_runbook() {
 #[test]
 fn key_lines_are_read_strictly() {
     let good = TEST_KEY.trim_end();
-    let blob = base64_decode(good.split(' ').nth(1).expect("a well-formed fixture"));
-    let line = |blob: &[u8]| format!("ssh-ed25519 {} x", base64_encode(blob));
+    let wire = base64_decode(good.split(' ').nth(1).expect("a well-formed fixture"));
+    let line = |wire: &[u8]| format!("ssh-ed25519 {} x", base64_encode(wire));
     let mut cases = Cases::new();
     cases.verify("as written", good, "oska-test", SIG_SHA512, MESSAGE, "ok");
     cases.verify(
@@ -768,29 +802,39 @@ fn key_lines_are_read_strictly() {
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJkiHKcB7olfSbFctH77PhH1wdg/QVxvI544xAB2AS+g= x",
         "Malformed",
     );
-    cases.key("empty blob", "ssh-ed25519  x", "Malformed");
-    let mut other_type = blob.clone();
+    cases.key(
+        "a tab",
+        "ssh-ed25519\tAAAAC3NzaC1lZDI1NTE5AAAAIJkiHKcB7olfSbFctH77PhH1wdg/QVxvI544xAB2AS+g x",
+        "Malformed",
+    );
+    cases.key(
+        "a run of spaces",
+        "ssh-ed25519  AAAAC3NzaC1lZDI1NTE5AAAAIJkiHKcB7olfSbFctH77PhH1wdg/QVxvI544xAB2AS+g x",
+        "Malformed",
+    );
+    cases.key("empty wire", "ssh-ed25519  x", "Malformed");
+    let mut other_type = wire.clone();
     other_type[14] = b'8';
-    cases.key("blob of another type", &line(&other_type), "Malformed");
-    cases.key("short key", &line(&blob[..blob.len() - 1]), "Malformed");
-    let mut trailing = blob.clone();
+    cases.key("wire of another type", &line(&other_type), "Malformed");
+    cases.key("short key", &line(&wire[..wire.len() - 1]), "Malformed");
+    let mut trailing = wire.clone();
     trailing.push(0);
     cases.key("trailing byte", &line(&trailing), "Malformed");
     cases.key(
         "truncated at the length",
-        &line(&blob[..blob.len() - 34]),
+        &line(&wire[..wire.len() - 34]),
         "Malformed",
     );
-    let mut huge = blob.clone();
+    let mut huge = wire.clone();
     huge[0..4].copy_from_slice(&u32::MAX.to_be_bytes());
     cases.key("huge length", &line(&huge), "Malformed");
-    let mut not_a_point = blob.clone();
+    let mut not_a_point = wire.clone();
     let n = not_a_point.len();
     not_a_point[n - 32..].fill(0);
     not_a_point[n - 32] = 2; // y = 2 has no x on the curve
     cases.key("not a point", &line(&not_a_point), "Malformed");
-    for cut in 0..blob.len() {
-        cases.key(&format!("cut at {cut}"), &line(&blob[..cut]), "Malformed");
+    for cut in 0..wire.len() {
+        cases.key(&format!("cut at {cut}"), &line(&wire[..cut]), "Malformed");
     }
     cases.run("sshsig_key_lines");
 }

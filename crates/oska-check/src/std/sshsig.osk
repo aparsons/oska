@@ -43,7 +43,7 @@ pub enum SshsigError {
     // `END SSH SIGNATURE` line, text between or around them that is not
     // base64, or base64 that is not strictly padded.
     Armor,
-    // The bytes are not an SSHSIG blob or a key blob: a bad magic, a
+    // The bytes are not SSHSIG data or a key's wire encoding: a bad magic, a
     // truncated or oversized field, trailing bytes, or a key that is not a
     // valid Ed25519 key.
     Malformed,
@@ -75,13 +75,14 @@ impl Display for SshsigError {
 }
 
 // An OpenSSH Ed25519 public key.
-pub struct PublicKey { key: ed25519.PublicKey, blob: Bytes, comment: String }
+pub struct PublicKey { key: ed25519.PublicKey, wire: Bytes, comment: String }
 
 impl PublicKey {
     // The key an OpenSSH public key line holds: `ssh-ed25519`, a space,
     // the base64 of the key's wire encoding, and optionally a space and a
-    // comment, as in `site/oska-release.pub`. Surrounding whitespace, such
-    // as a final newline, is ignored. A line of another key type is
+    // comment, as in `site/oska-release.pub`. The fields are separated by
+    // single spaces: a tab or a run of spaces is refused (`Malformed`, or `UnsupportedAlgorithm` when a tab joins the type word to the rest).
+    // Surrounding whitespace, such as a final newline, is ignored. A line of another key type is
     // `UnsupportedAlgorithm`. The line is trusted text, as which key to
     // trust is a structural position: a pinned literal passes, and text
     // read from a file needs the caller's own `.assume_trusted()`.
@@ -100,9 +101,9 @@ impl PublicKey {
         }
         match decode_base64(parts.at(1).to_bytes()) {
             None => Err(SshsigError.Malformed)
-            Some(blob) => match key_from_blob(blob, comment) {
+            Some(wire) => match key_from_wire(wire, comment) {
                 Ok(key) => Ok(key)
-                // The line names one type and the blob another.
+                // The line names one type and the key's wire encoding another.
                 Err(SshsigError.UnsupportedAlgorithm) => Err(SshsigError.Malformed)
                 Err(error) => Err(error)
             }
@@ -118,7 +119,7 @@ impl PublicKey {
     // The key's fingerprint as `ssh-keygen -l` prints it: `SHA256:` and
     // the unpadded base64 of the SHA-256 of the key's wire encoding.
     pub fn fingerprint(self) -> String {
-        let digest = encode_base64(sha2.sha256(self.blob))
+        let digest = encode_base64(sha2.sha256(self.wire))
         "SHA256:{digest}"
     }
 
@@ -141,43 +142,20 @@ impl Signature {
     // The signature an armored SSHSIG file holds, as `ssh-keygen -Y sign`
     // writes it: the `-----BEGIN SSH SIGNATURE-----` line, base64 lines of
     // any width, and the `-----END SSH SIGNATURE-----` line, with LF or
-    // CRLF line ends and blank lines around, and nothing else. The blob
+    // CRLF line ends and blank lines around, and nothing else. The data
     // must be exactly an Ed25519 signature of version 1, with every length
-    // inside the bytes that remain. Nothing is checked about the key, the
-    // namespace or the hash except that they are well formed.
+    // inside the bytes that remain, and its key must be a valid Ed25519
+    // key. Nothing is checked about the namespace or the hash except that
+    // they are well formed.
     pub fn parse(armored: Untrusted<String>) -> Result<Signature, SshsigError> {
-        let blob = unarmor(armored.to_bytes())?
-        if blob.len() < 10 || blob.slice(0, 6) != "SSHSIG".to_bytes() {
-            return Err(SshsigError.Malformed)
-        }
-        if blob.read_u32_be(6) != 1 {
-            return Err(SshsigError.UnsupportedVersion)
-        }
-        let key_field = read_string(blob, 10)?
-        let namespace_field = read_string(blob, key_field.next)?
-        let reserved_field = read_string(blob, namespace_field.next)?
-        let hash_field = read_string(blob, reserved_field.next)?
-        let signature_field = read_string(blob, hash_field.next)?
-        if signature_field.next != blob.len() {
-            return Err(SshsigError.Malformed)
-        }
-        let key = key_from_blob(key_field.bytes, "")?
-        let namespace = text_of(namespace_field.bytes)?
-        let hash_algorithm = text_of(hash_field.bytes)?
-        let kind = read_string(signature_field.bytes, 0)?
-        if kind.bytes != key_type().to_bytes() {
-            return Err(SshsigError.UnsupportedAlgorithm)
-        }
-        let raw = read_string(signature_field.bytes, kind.next)?
-        if raw.next != signature_field.bytes.len() || raw.bytes.len() != 64 {
-            return Err(SshsigError.Malformed)
-        }
+        let parts = parse_parts(armored)?
+        let key = key_from_wire(parts.key_wire, "")?
         Ok(Signature(
             key: key,
-            namespace: namespace,
-            reserved: reserved_field.bytes,
-            hash_algorithm: hash_algorithm,
-            signature: raw.bytes
+            namespace: parts.namespace,
+            reserved: parts.reserved,
+            hash_algorithm: parts.hash_algorithm,
+            signature: parts.signature
         ))
     }
 
@@ -199,33 +177,86 @@ impl Signature {
 }
 
 // Whether `signature`, an armored SSHSIG file, is `key`'s signature of
-// `message` in `namespace`. The signature is parsed, and then refused
-// with the first of these that applies: `WrongKey` unless its key is
-// `key`, `WrongNamespace` unless its namespace is `namespace`,
-// `UnsupportedAlgorithm` unless its hash is `sha256` or `sha512`, and
-// `BadSignature` unless the Ed25519 signature of the data OpenSSH signs
-// (the magic, the namespace, the reserved field, the hash name and the
-// message's hash) verifies. The key's comment never counts. The
-// namespace is trusted text: it is the program's policy.
+// `message` in `namespace`. The signature is parsed (its key is only
+// read as far as its type and length), and then refused with the first of
+// these that applies: `WrongKey` unless its key is `key`, compared as
+// bytes before any curve arithmetic, so a signature by another key is
+// `WrongKey` even if its key is not a valid point; `WrongNamespace`
+// unless its namespace is `namespace`, and also for an empty namespace,
+// which OpenSSH refuses, on either side; `UnsupportedAlgorithm` unless
+// its hash is `sha256` or `sha512`; and `BadSignature` unless the Ed25519
+// signature of the data OpenSSH signs (the magic, the namespace, the
+// reserved field, the hash name and the message's hash) verifies. The
+// key's comment never counts. The namespace is trusted text: it is the
+// program's policy.
 pub fn verify(signature: Untrusted<String>, message: Untrusted<Bytes>, namespace: String, key: PublicKey) -> Result<(), SshsigError> {
-    let parsed = Signature.parse(signature)?
-    if parsed.key.blob != key.blob {
+    let parts = parse_parts(signature)?
+    if parts.key_wire != key.wire {
         return Err(SshsigError.WrongKey)
     }
-    if parsed.namespace.to_bytes() != namespace.to_bytes() {
+    if namespace.byte_len() == 0 || parts.namespace.byte_len() == 0 || parts.namespace.to_bytes() != namespace.to_bytes() {
         return Err(SshsigError.WrongNamespace)
     }
-    let name = parsed.hash_algorithm.to_bytes()
+    let name = parts.hash_algorithm.to_bytes()
     let digest = message_digest(name, message)?
     var signed = with_string("SSHSIG".to_bytes(), namespace.to_bytes())
-    signed = with_string(signed, parsed.reserved)
+    signed = with_string(signed, parts.reserved)
     signed = with_string(signed, name)
     signed = with_string(signed, digest)
-    if ed25519.verify(key.key, signed, parsed.signature) {
+    if ed25519.verify(key.key, signed, parts.signature) {
         Ok(())
     } else {
         Err(SshsigError.BadSignature)
     }
+}
+
+// A signature read as far as its structure goes, with its key still as
+// the wire bytes it was written in: `verify` compares those with the
+// caller's key before any curve arithmetic.
+struct Parts {
+    key_wire: Bytes,
+    namespace: String,
+    reserved: Bytes,
+    hash_algorithm: String,
+    signature: Bytes
+}
+
+// The structure of an armored signature, with nothing decoded about the
+// key but its type and length (see `key_bytes`).
+fn parse_parts(armored: Untrusted<String>) -> Result<Parts, SshsigError> {
+    let wire = unarmor(armored.to_bytes())?
+    if wire.len() < 10 || wire.slice(0, 6) != "SSHSIG".to_bytes() {
+        return Err(SshsigError.Malformed)
+    }
+    if wire.read_u32_be(6) != 1 {
+        return Err(SshsigError.UnsupportedVersion)
+    }
+    let key_field = read_string(wire, 10)?
+    let namespace_field = read_string(wire, key_field.next)?
+    let reserved_field = read_string(wire, namespace_field.next)?
+    let hash_field = read_string(wire, reserved_field.next)?
+    let signature_field = read_string(wire, hash_field.next)?
+    if signature_field.next != wire.len() {
+        return Err(SshsigError.Malformed)
+    }
+    let _ = key_bytes(key_field.bytes)?
+    let namespace = text_of(namespace_field.bytes)?
+    let hash_algorithm = text_of(hash_field.bytes)?
+    let kind = read_string(signature_field.bytes, 0)?
+    if kind.bytes != key_type().to_bytes() {
+        return Err(SshsigError.UnsupportedAlgorithm)
+    }
+    let raw = read_string(signature_field.bytes, kind.next)?
+    if raw.next != signature_field.bytes.len() || raw.bytes.len() != 64 {
+        return Err(SshsigError.Malformed)
+    }
+    Ok(Parts(
+        key_wire: key_field.bytes,
+        namespace: namespace,
+        reserved: reserved_field.bytes,
+        hash_algorithm: hash_algorithm,
+        signature: raw.bytes
+    ))
 }
 
 // ---- Wire format ----------------------------------------------------------------------
@@ -280,19 +311,26 @@ fn with_string(out: Bytes, value: Bytes) -> Bytes {
     result
 }
 
-// The key a wire-format blob holds: `string "ssh-ed25519"`, then a
-// `string` of the 32-byte key, with nothing after.
-fn key_from_blob(blob: Bytes, comment: String) -> Result<PublicKey, SshsigError> {
-    let kind = read_string(blob, 0)?
+// The 32 key bytes of a key's wire encoding: `string "ssh-ed25519"`, then
+// a `string` of the 32 bytes, with nothing after. Whether they are a point
+// of the curve is not checked.
+fn key_bytes(wire: Bytes) -> Result<Bytes, SshsigError> {
+    let kind = read_string(wire, 0)?
     if kind.bytes != key_type().to_bytes() {
         return Err(SshsigError.UnsupportedAlgorithm)
     }
-    let raw = read_string(blob, kind.next)?
-    if raw.next != blob.len() || raw.bytes.len() != 32 {
+    let raw = read_string(wire, kind.next)?
+    if raw.next != wire.len() || raw.bytes.len() != 32 {
         return Err(SshsigError.Malformed)
     }
-    match ed25519.PublicKey.from_bytes(raw.bytes) {
-        Some(key) => Ok(PublicKey(key: key, blob: blob, comment: comment))
+    Ok(raw.bytes)
+}
+
+// The key a wire encoding holds, which must be a valid Ed25519 key.
+fn key_from_wire(wire: Bytes, comment: String) -> Result<PublicKey, SshsigError> {
+    let raw = key_bytes(wire)?
+    match ed25519.PublicKey.from_bytes(raw) {
+        Some(key) => Ok(PublicKey(key: key, wire: wire, comment: comment))
         None => Err(SshsigError.Malformed)
     }
 }
@@ -424,8 +462,8 @@ fn decode_base64(text: Untrusted<Bytes>) -> Option<Bytes> {
 
 // `data` in standard base64 with no padding.
 fn encode_base64(data: Bytes) -> String {
-    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_bytes()
-    var out = Bytes.new()
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    var out = ""
     var i = 0
     while i < data.len() {
         let left = data.len() - i
@@ -436,15 +474,22 @@ fn encode_base64(data: Bytes) -> String {
         if left > 2 {
             acc = acc | data.at(i + 2).to_u32()
         }
-        out.push(alphabet.at(((acc >> 18) & 63).to_int()))
-        out.push(alphabet.at(((acc >> 12) & 63).to_int()))
+        out = with_digit(out, alphabet, (acc >> 18) & 63)
+        out = with_digit(out, alphabet, (acc >> 12) & 63)
         if left > 1 {
-            out.push(alphabet.at(((acc >> 6) & 63).to_int()))
+            out = with_digit(out, alphabet, (acc >> 6) & 63)
         }
         if left > 2 {
-            out.push(alphabet.at((acc & 63).to_int()))
+            out = with_digit(out, alphabet, acc & 63)
         }
         i = i + 3
     }
-    out.to_text().unwrap_or("")
+    out
+}
+
+// `out` with the base64 character for the 6-bit `value` added.
+fn with_digit(out: String, alphabet: String, value: U32) -> String {
+    let at = value.to_int()
+    let digit = alphabet.slice(at, at + 1)
+    "{out}{digit}"
 }

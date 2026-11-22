@@ -199,7 +199,7 @@ fn a_private_helper_cannot_be_used() {
 fn a_key_and_a_signature_cannot_be_forged_or_opened() {
     let report = check(
         "use std.sshsig\n\
-         fn peek(key: sshsig.PublicKey) -> Bytes {\n    key.blob\n}",
+         fn peek(key: sshsig.PublicKey) -> Bytes {\n    key.wire\n}",
     );
     let codes: Vec<&str> = report.diagnostics.iter().map(|d| d.code).collect();
     assert_eq!(codes, ["E0206"], "{:#?}", report.diagnostics);
