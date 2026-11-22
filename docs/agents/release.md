@@ -25,7 +25,8 @@ git tag vX.Y.Z on main ─▶ release.yml
              pages.yml on main
   tag-image  env "release", after publish: push-image.sh tags tags the image
              :vX.Y.Z (and :latest), so no tag names an unpublished release
-pages.yml ─▶ downloads every release, verify.sh each against site/oska-release.pub,
+pages.yml ─▶ downloads every release, verify.sh each against site/oska-release.pub
+             and the Oska verifier (verify.osk, built natively) too, both must accept,
              stages /releases/vX.Y.Z/ and latest.json, publishes the highest-serial
              index as /release-index.json, pins install.sh/.ps1 to the key and,
              once an index is published, to require it
@@ -54,6 +55,17 @@ On a pull request, `release.yml` does a dry run: the same builds and image smoke
 Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, and `oskac-image-digest` (see [The container image](#the-container-image)), so the signature covers each. ADR 0022 records why Linux has two builds. `scripts/release/check-linux-build-test.sh` tests both checks.
 
 **A breaking rename.** Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`. From the first release with them, those files are gone, and `latest.json`'s `binaries` has no `linux-x86_64` or `linux-aarch64` key: it has `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl` in their place (the macOS and Windows keys are unchanged). Anything that reads the old keys or downloads the old names breaks, an installer saved from before the rename included (`download_failed`); the v0.7.0 notes in the [changelog](../../CHANGELOG.md) say so (under Unreleased until v0.7.0 ships).
+
+## The second check: the Oska verifier
+
+`scripts/release/verify.osk` is an Oska program that does what `verify.sh` does, with `std.sshsig` and `std.sha2` instead of `ssh-keygen` and `sha256sum`: the SHA256SUMS signature in namespace `oska-release` by the release key, the first line `# oska-release <tag>` matching the directory's name, every other line a 64-hex digest, two spaces and a file name, each listed file's SHA-256, no unlisted file, and `oskac-image-digest` (if there) exactly one `sha256:<64 hex>` line. If the directory holds `release-index.json` and its `.sig`, it also verifies the index in namespace `oska-index` and reports its fields (it does not judge expiry or serial: that is the installers').
+
+- **Pinned key.** The release key is a literal in `verify.osk` (`release_key`); `scripts/release/test.sh` fails unless it is the line of `site/oska-release.pub`. Changing the key means changing both.
+- **Authority.** `main` takes `FsRead`, narrows it once, and has `Stdout`; `oskac check scripts/release/verify.osk` shows no other capability and no audit site, and a test requires that. It cannot write or connect.
+- **Run it.** `oskac build scripts/release/verify.osk -o verify-release`, then `OSKA_VERIFY=$PWD/verify-release scripts/release/verify-oska.sh <release-dir> [--format=json]`. Built natively it hashes the seven binaries in seconds. Exit 0 verified, 1 refused. `--format=json` prints `{"ok":false,"code":...}` with the stable codes `bad_signature`, `wrong_tag`, `bad_line`, `checksum_mismatch`, `extra_file`, and `bad_image_digest`, `bad_index`, `unreadable`, `usage`.
+- **In the Pages build.** `pages.yml` builds it with the `oskac` it just built and sets `OSKA_VERIFY`. `stage-site.sh` runs it after `verify.sh` on every release (as downloaded, index included) and stops on a refusal, on a missing or unusable `OSKA_VERIFY`, and on any difference in what the two report about the index (`verify-index.sh` and the verifier must read the same serial, expiry and tag). A failure of either check is the same failure: do not publish; treat a disagreement as a bug in one of them, or as a sign of tampering, and find out which before touching either. Never make one check skip when the other passes.
+- **Tests.** `scripts/release/test.sh` runs each verifier case (good release, wrong key, tampered binary, moved tag, bad line, extra file, image digests, an index, a release signed in `oska-index`) through both verifiers and requires the same verdict, tests the text and JSON output, and has an attack test: with an `ssh-keygen` and a `sha256sum` that accept everything, `verify.sh` alone passes a tampered release, and the Oska verifier and `stage-site.sh` refuse it. It builds the verifier with `$OSKAC`, or else `cargo build -p oskac`.
+- **Installers.** They keep `ssh-keygen` and the system SHA-256 tool, because they must run before any Oska is installed.
 
 ## The container image
 
