@@ -10,7 +10,9 @@
 # passes the directory's name, which the program takes as the tag, as
 # verify.sh takes the tag from the name too. Output and exit code are the
 # program's: 0 verified, 1 refused. A missing verifier, or a directory that
-# cannot be entered, refuses (exit 1); it never skips.
+# cannot be entered, refuses (exit 1); it never skips. A release directory
+# that is a symlink is refused by the program's directory capability, which
+# follows no symlink (verify.sh would follow it).
 
 set -euo pipefail
 

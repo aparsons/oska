@@ -571,6 +571,18 @@ test_the_oska_verifier_gives_each_refusal_its_stable_code() {
   [ "$(oska_code out/v1.2.3 key.pub)" = unreadable ] || fail "no signature: $(oska_code out/v1.2.3 key.pub)"
 }
 
+# A signed list with the tag line and no file is no release.
+test_both_verifiers_refuse_a_signed_list_that_names_no_file() {
+  signed_release v1.2.3
+  rm out/v1.2.3/oskac-*
+  head -n 1 out/v1.2.3/SHA256SUMS >out/v1.2.3/SHA256SUMS.new
+  mv out/v1.2.3/SHA256SUMS.new out/v1.2.3/SHA256SUMS
+  rm out/v1.2.3/SHA256SUMS.sig
+  ssh-keygen -q -Y sign -f key -n oska-release out/v1.2.3/SHA256SUMS
+  both_refuse out/v1.2.3 key.pub
+  [ "$(oska_code out/v1.2.3 key.pub)" = bad_line ] || fail "empty list: $(oska_code out/v1.2.3 key.pub)"
+}
+
 test_the_oska_verifier_refuses_a_listed_file_twice_and_names_with_odd_bytes() {
   signed_release v1.2.3
   local line

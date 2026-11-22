@@ -564,7 +564,10 @@ fn check_image_digest(dir: DirRead, names: List<Untrusted<String>>) -> Result<Op
     }
     let bytes = match dir.read_bytes(Path.new("oskac-image-digest")) {
         Ok(bytes) => bytes
-        Err(_) => { return Err(refuse("bad_image_digest", "oskac-image-digest is not a regular file")) }
+        Err(error) => {
+            let why = error.message
+            return Err(refuse("unreadable", "cannot read oskac-image-digest: {why}"))
+        }
     }
     let well_formed = bytes.len() == 72 && bytes.slice(0, 7) == "sha256:".to_bytes() && hex_run(bytes.slice(0, 71), 7, 64) && bytes.at(71) == 10
     if !well_formed {
@@ -604,6 +607,11 @@ fn verify_release(root: DirRead, name: Untrusted<String>) -> Result<Report, Refu
             Some(entry) => entries.push(entry)
             None => { return Err(refuse("bad_line", "SHA256SUMS has a line that is not a SHA-256 digest and a file name")) }
         }
+    }
+    // A release lists at least one file: verify.sh's `sha256sum --check`
+    // refuses a list with no checksum line.
+    if entries.len() == 0 {
+        return Err(refuse("bad_line", "SHA256SUMS lists no file"))
     }
     // 3. Every listed file has its digest.
     for entry in entries {
