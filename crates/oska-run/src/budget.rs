@@ -21,7 +21,7 @@ use oska_syntax::Span;
 
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
-use crate::intrinsics::Table;
+use crate::intrinsics::{Args, Table};
 use crate::panics::Panic;
 use crate::value::{Capability, Value};
 
@@ -231,7 +231,7 @@ fn allowance((tokens, calls): (Option<i128>, Option<i128>)) -> Value {
 /// `Budget.limit(self, tokens, calls)`.
 fn budget_limit(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let child = interp
@@ -243,7 +243,7 @@ fn budget_limit(
 /// `Budget.remaining(self)`.
 fn budget_remaining(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     Ok(allowance(interp.budgets.left(budget(&args[0]))))
@@ -252,7 +252,7 @@ fn budget_remaining(
 /// `Budget.spent(self)`.
 fn budget_spent(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let n = budget(&args[0]);
@@ -267,7 +267,7 @@ fn budget_spent(
 /// `Budget.reserve(self, tokens)`.
 fn budget_reserve(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let asked = args[1].as_int();
@@ -299,7 +299,7 @@ fn reservation(value: &Value) -> usize {
 /// every count, each at least 0, spent as tokens.
 fn reservation_debit(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let used = args[1..].iter().map(|n| n.as_int().max(0)).sum::<i128>();
@@ -312,7 +312,7 @@ fn reservation_debit(
 /// `Reservation.release(self)`.
 fn reservation_release(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     interp.budgets.settle(reservation(&args[0]), None);
@@ -323,7 +323,7 @@ fn reservation_release(
 /// call, with 100 tokens and 3 calls left`.
 fn over_budget_to_string(
     _: &mut dyn crate::host::Host,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let asked = args[0].field(0).as_int();

@@ -50,7 +50,7 @@ pub(super) fn toolset(
     lower: &Lower,
 ) -> ToolsetAuthority {
     let implementation = match target {
-        Ty::Named(name, _, _) => name.clone(),
+        Ty::Named(name, _, _) => name.to_string(),
         _ => String::new(),
     };
     let mut uses = Uses {
@@ -296,7 +296,7 @@ impl Uses<'_, '_> {
         let Ty::Named(ty, args, _) = self.target else {
             return None;
         };
-        let info = self.items.structs.get(ty)?;
+        let info = self.items.structs.get(ty.as_str())?;
         let field = info.fields.field(name)?;
         let subst: Vec<(String, Ty)> = info
             .generics

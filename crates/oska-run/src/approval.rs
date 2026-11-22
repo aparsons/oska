@@ -22,7 +22,7 @@ use oska_syntax::Span;
 
 use crate::interp::{Interpreter, Stream};
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
-use crate::intrinsics::{debug, Table};
+use crate::intrinsics::{debug, Args, Table};
 use crate::memory;
 use crate::panics::Panic;
 use crate::value::Value;
@@ -89,19 +89,19 @@ fn is_yes(answer: &str) -> bool {
 /// `Approver.terminal(stdin, stderr)`.
 fn approver_terminal(
     _: &mut dyn crate::host::Host,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     Ok(Value::Struct {
         ty: "Approver".into(),
-        fields: Rc::new(args),
+        fields: Rc::new(std::mem::take(&mut args.0)),
     })
 }
 
 /// `Approver.confirm(self, summary, details)`.
 fn approver_confirm(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     let summary = args[1].as_str().to_string();
@@ -140,7 +140,7 @@ fn approver_confirm(
 /// `Approval.summary(self)`.
 fn approval_summary(
     _: &mut dyn crate::host::Host,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     Ok(args[0].field(0))
@@ -149,7 +149,7 @@ fn approval_summary(
 /// `Approval.details(self)`.
 fn approval_details(
     _: &mut dyn crate::host::Host,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     Ok(args[0].field(1))
@@ -169,7 +169,7 @@ fn matches(approval: &Value, summary: &Value, details: &Value) -> bool {
 /// `Approval.matches(self, summary, details)`: false once it is used.
 fn approval_matches(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let unused = !interp.approvals.used[args[0].field(2).as_int() as usize];
@@ -179,7 +179,7 @@ fn approval_matches(
 /// `Approval.consume(self, summary, details)`.
 fn approval_consume(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let number = args[0].field(2).as_int() as usize;
@@ -197,7 +197,7 @@ fn approval_consume(
 /// `ApprovalError.to_string(self)`.
 fn approval_error_to_string(
     _: &mut dyn crate::host::Host,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     Ok(Value::str(if args[0].is_variant("Used") {
@@ -210,7 +210,7 @@ fn approval_error_to_string(
 /// `t.answer_approval(yes)`: `t.approver`'s answer to its next question.
 fn test_answer_approval(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     // A program can build a `TestContext` by hand, but its approvers all
@@ -224,7 +224,7 @@ fn test_answer_approval(
 /// `t.approvals_asked()`: every question `t.approver` was asked.
 fn test_approvals_asked(
     interp: &mut Interpreter<'_, '_>,
-    _: Vec<Value>,
+    _: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let asked = interp
