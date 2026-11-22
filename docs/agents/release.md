@@ -208,7 +208,7 @@ Nothing in the repo can check these settings, so verify them before a release.
    git tag -a vX.Y.Z -m "oska vX.Y.Z" && git push origin vX.Y.Z
    ```
    The push reports "Bypassed rule violations". That is the admin bypass of the tag ruleset working as intended.
-3. **Watch the tag's Release run** until build, assemble, smoke-image, sign, publish and tag-image are all green. Nothing is published before `publish` creates the GitHub Release; before that, `publish` has at most pushed the image by digest, with no tag. If a job fails before the GitHub Release exists, delete the tag, fix the problem, and tag again. Once it exists, never delete the tag: if only `tag-image` failed, run the failed jobs again; for anything else, fix forward with a new patch release (see [If a push fails](#the-container-image)). Every release job is bounded by `timeout-minutes` (build 20, smoke-image 15, the others 10), so a stuck one turns red by itself. A cancelled run is not a failed release: a superseded dry run on a pull request is cancelled on purpose, and a tag's run is never cancelled by a later push.
+3. **Watch the tag's Release run** until build, assemble, smoke-image, attest, sign, publish and tag-image are all green. Nothing is published before `publish` creates the GitHub Release; before that, `publish` has at most pushed the image by digest, with no tag. If a job fails before the GitHub Release exists, delete the tag, fix the problem, and tag again. Once it exists, never delete the tag: if only `tag-image` failed, run the failed jobs again; for anything else, fix forward with a new patch release (see [If a push fails](#the-container-image)). Every release job is bounded by `timeout-minutes` (build 20, smoke-image 15, the others 10), so a stuck one turns red by itself. A cancelled run is not a failed release: a superseded dry run on a pull request is cancelled on purpose, and a tag's run is never cancelled by a later push.
 4. **Watch the Pages run that `publish` dispatches.** Its smoke job must end with `ok: https://oskalang.dev installs oskac X.Y.Z, and it runs`. Once an index is published, the line before it must read `the install verified release index serial N, which names X.Y.Z`. Its build job logs `published release index serial N`. A `::warning::` that the index expires within 30 days means the monthly re-sign has not run: see [The monthly re-sign](#the-monthly-re-sign).
    - The warning `no release is published` means the deploy ran before GitHub listed the new release ([#89](https://github.com/aparsons/oska/issues/89)).
    - Run `gh workflow run pages.yml --ref main` and check again.
@@ -219,13 +219,14 @@ Nothing in the repo can check these settings, so verify them before a release.
 ## Checking a published release
 
 - `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"`, `"tag": "vX.Y.Z"` and the key's `"signing_key_fingerprint"`.
-- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig`, the 7 binaries (see [The release assets](#the-release-assets)), `oskac-image-digest` and `oskac.spdx.json` (valid JSON, `spdxVersion` `SPDX-2.3`, and its SHA-256 is in `SHA256SUMS`; see [The SBOM](#the-sbom)).
+- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig`, the 7 binaries (see [The release assets](#the-release-assets)), `oskac-image-digest`, `oskac.spdx.json` (valid JSON, `spdxVersion` `SPDX-2.3`, and its SHA-256 is in `SHA256SUMS`; see [The SBOM](#the-sbom)), and from v0.7.0 `oskac.intoto.jsonl` and `SHA256SUMS.intoto.jsonl`.
 - `ghcr.io/aparsons/oskac:vX.Y.Z` is the signed digest (see [Verify an image by its digest](#verify-an-image-by-its-digest)), and so is `:latest` for a stable release.
 - Verify the signature against the committed key:
   ```
   printf 'oska-release %s\n' "$(cat site/oska-release.pub)" > allowed
   ssh-keygen -Y verify -f allowed -I oska-release -n oska-release -s SHA256SUMS.sig < SHA256SUMS
   ```
+- Check the build provenance (from v0.7.0). Download a binary and run `gh attestation verify <binary> -R aparsons/oska`. It must print `Verification succeeded!` and name `release.yml` at the tag. Then download `SHA256SUMS` and run the same command on it. The release must hold `oskac.intoto.jsonl`, listed in `SHA256SUMS`, and `SHA256SUMS.intoto.jsonl`, which the list cannot name (`verify.sh` allows it by name). Threads cannot push tags, so after the first tag with attestations the maintainer runs this once by hand.
 - Run a real install into a scratch home:
   ```
   curl -fsSL https://oskalang.dev/install.sh | OSKA_HOME=$(mktemp -d) sh -s -- --json

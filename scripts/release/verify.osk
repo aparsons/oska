@@ -29,8 +29,9 @@
 //      line is 64 lower-case hex digits, two spaces and a file name of
 //      letters, digits, `.`, `_` and `-` (`bad_line`);
 //   3. every file SHA256SUMS lists has that SHA-256 (`checksum_mismatch`);
-//   4. the directory holds no file SHA256SUMS does not list, and no file
-//      is listed twice (`extra_file`);
+//   4. the directory holds no file SHA256SUMS does not list, except
+//      SHA256SUMS.intoto.jsonl, the attestation of SHA256SUMS itself, which
+//      the list cannot name, and no file is listed twice (`extra_file`);
 //   5. oskac-image-digest, if there, is exactly one line `sha256:<64 hex>`
 //      (`bad_image_digest`);
 //   6. a signed release index, release-index.json and release-index.json.sig,
@@ -640,7 +641,7 @@ fn verify_release(root: DirRead, name: Untrusted<String>) -> Result<Report, Refu
         }
     }
     for name in names {
-        var listed = name == "SHA256SUMS" || name == "SHA256SUMS.sig" || name == "release-index.json" || name == "release-index.json.sig"
+        var listed = name == "SHA256SUMS" || name == "SHA256SUMS.sig" || name == "release-index.json" || name == "release-index.json.sig" || name == "SHA256SUMS.intoto.jsonl"
         for entry in entries {
             if entry.name == name {
                 listed = true

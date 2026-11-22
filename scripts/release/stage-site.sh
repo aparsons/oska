@@ -27,7 +27,8 @@
 #     release fields win). Its signing_key_fingerprint is the SHA256
 #     fingerprint of <public-key>, as `ssh-keygen -l` prints it, which the
 #     install guide and SECURITY.md also print. Its `binaries` lists each
-#     binary in SHA256SUMS, not oskac-image-digest or oskac.spdx.json,
+#     binary in SHA256SUMS, not oskac-image-digest, oskac.spdx.json or
+#     oskac.intoto.jsonl,
 #     which are no binaries.
 #
 # URLs in latest.json start with $OSKA_SITE_URL (default
@@ -229,7 +230,7 @@ release_json=$(
       signing_namespace: "oska-release",
       installers: {sh: "\($base)/install.sh", ps1: "\($base)/install.ps1"},
       binaries: ([inputs
-        | select(. != "oskac-image-digest" and . != "oskac.spdx.json")
+        | select(. != "oskac-image-digest" and . != "oskac.spdx.json" and . != "oskac.intoto.jsonl")
         | {key: (ltrimstr("oskac-") | rtrimstr(".exe")), value: "\($url)/\(.)"}]
         | from_entries)
     }'
