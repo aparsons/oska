@@ -23,7 +23,7 @@ The musl build runs with no C library. On x86_64 it passed the confinement tests
 
 ## Considered options
 
-- **The musl build only.** One build for each processor, but every Linux user gets a slower `oskac`.
+- **The musl build only.** One build for each processor, but every Linux user gets the musl build. With its allocator (ADR 0009) it runs at about the same speed on aarch64 and up to about 1.2x slower on x86_64 for the site build, and more for text-heavy work ([research note](../research/2026-11-musl-oskac-performance.md)).
 - **A custom allocator first, then the musl build only.** This needs new `unsafe` code in `oska-sys` (ADR 0009) and takes weeks before anything ships.
 - **`+crt-static` on the glibc target.** Rejected: glibc still loads its NSS modules at run time, and the unsafe guard refuses `RUSTFLAGS` in workflows.
 - **An `oskac` with no C library at all (`no_std`).** Rejected: weeks of new `unsafe` code that works only on Linux.

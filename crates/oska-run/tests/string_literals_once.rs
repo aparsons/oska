@@ -7,27 +7,17 @@
 
 mod common;
 
-use common::{assert_runs, PROGRAM_PATH};
-use oska_run::{codes, run_with_limits, FakeHost, Limits, RunOutcome};
+use common::{assert_runs, run_under_limit};
+use oska_run::codes;
 
 /// A literal of 40 bytes, so that each copy of it is easy to see in the
 /// bytes a run holds.
 const FORTY: &str = "a literal of exactly forty bytes, padded";
 
-/// Run `src` on a fresh [`FakeHost`] under `--max-memory=<limit>`.
-fn run_under(src: &str, limit: u64) -> RunOutcome {
-    let limits = Limits {
-        max_memory: Some(limit),
-        ..Limits::NONE
-    };
-    let mut host = FakeHost::new();
-    run_with_limits(src, &mut host, &[PROGRAM_PATH.to_string()], limits)
-}
-
 /// Whether `src` runs to the end under `--max-memory=<limit>`, or stops
 /// with `P0040`.
 fn finishes_under(src: &str, limit: u64) -> bool {
-    let outcome = run_under(src, limit);
+    let outcome = run_under_limit(src, limit);
     match &outcome.panic {
         None => {
             assert_eq!(outcome.exit_code, 0, "{outcome:?}");
@@ -103,7 +93,7 @@ fn a_literal_let_go_of_gives_its_bytes_back() {
 }}
 "#
     );
-    let outcome = run_under(&src, 64 * 1024);
+    let outcome = run_under_limit(&src, 64 * 1024);
     assert_eq!(outcome.panic, None, "{outcome:?}");
     assert_eq!(outcome.stdout, "8000000\n");
 }

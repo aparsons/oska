@@ -6,19 +6,14 @@
 
 mod common;
 
-use common::{assert_runs, PROGRAM_PATH};
-use oska_run::{codes, run_with_limits, FakeHost, Limits, RunOutcome};
+use common::{assert_runs, run_under_limit};
+use oska_run::{codes, RunOutcome};
 
 /// The `--max-memory` of the metered tests: 1 MiB.
 const ONE_MIB: u64 = 1 << 20;
 
 fn run_metered(src: &str) -> RunOutcome {
-    let mut host = FakeHost::new();
-    let limits = Limits {
-        max_memory: Some(ONE_MIB),
-        ..Limits::NONE
-    };
-    run_with_limits(src, &mut host, &[PROGRAM_PATH.to_string()], limits)
+    run_under_limit(src, ONE_MIB)
 }
 
 #[test]

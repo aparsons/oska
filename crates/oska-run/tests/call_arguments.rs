@@ -8,8 +8,7 @@
 
 mod common;
 
-use common::assert_runs;
-use oska_run::{run_with_limits, FakeHost, Limits};
+use common::{assert_runs, run_under_limit};
 
 /// Every kind of call, each with a `_` parameter between two that bind:
 /// a function, a method, a mutating method, a closure that captures, a
@@ -233,12 +232,7 @@ fn main() {
 
 /// Whether `src` runs to its end under a memory limit of `limit` bytes.
 fn fits_in(src: &str, limit: u64) -> bool {
-    let mut host = FakeHost::new();
-    let limits = Limits {
-        max_memory: Some(limit),
-        ..Limits::NONE
-    };
-    let outcome = run_with_limits(src, &mut host, &["prog.osk".to_string()], limits);
+    let outcome = run_under_limit(src, limit);
     assert!(
         outcome.diagnostics.is_empty(),
         "{src} should check: {:#?}",

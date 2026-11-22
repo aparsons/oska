@@ -1,8 +1,9 @@
 # Why is the musl build of `oskac` slower than the glibc build, and what is the cheapest fix?
 
 - **Date:** 2026-11-20
-- **Scope:** Ticket #469 of spec #461 ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). On 2026-11-19 the musl build took 0.32 s to `oskac build` the site generator against 0.20 s for the glibc build, and its interpreter took 5.8 s against 3.8 s. Find where the time goes, on x86_64 and aarch64, and rank the fixes. No allocator and no `unsafe` code in this ticket.
-- **Status:** x86_64 measured here. **aarch64 is pending**: this machine is x86_64 only, and no aarch64 number below is measured. Section 5 gives the exact commands for an aarch64 runner.
+- **Current status (2026-11-22):** the musl build has an allocator (section 8) and fewer short copies (section 9). It is at spec #521's 1.10x threshold on aarch64 and still above it on x86_64, so both Linux builds stay. See the Decision at the end of section 9.
+- **Scope (as of 2026-11-20; later tickets added an allocator and `unsafe` code, see the updates below):** Ticket #469 of spec #461 ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). On 2026-11-19 the musl build took 0.32 s to `oskac build` the site generator against 0.20 s for the glibc build, and its interpreter took 5.8 s against 3.8 s. Find where the time goes, on x86_64 and aarch64, and rank the fixes. No allocator and no `unsafe` code in this ticket.
+- **Status (superseded by the 2026-11-21 update below):** x86_64 measured here. **aarch64 was pending**: this machine is x86_64 only, and no aarch64 number below is measured. Section 5 gives the exact commands for an aarch64 runner.
 - **Update 2026-11-21:** aarch64 measured on a GitHub `ubuntu-24.04-arm` runner (ticket #506). Section 5 has the figures: causes 1 and 2 hold there, cause 3 (`memcpy`) does not.
 - **Update 2026-11-21 (ticket #507):** re-measured on both processors after fixes 1 to 6. The musl build still misses the 1.10x threshold of spec #521 on most workloads: section 7.
 - **Update 2026-11-21 (ticket #523):** re-measured with the musl build's allocator (fix 7). aarch64 is at the 1.10x threshold (the site build 1.09x to 1.11x, every other workload under it in most runs); x86_64 still misses it on `text`, `bulk-text`, the site build and `oskac build`, which **(Inference)** is musl's `memcpy`: section 8.
@@ -359,13 +360,13 @@ The x86_64 runners differ from run to run, so their absolute times do too (run C
 
 ### Verdict
 
-The musl build does not meet the threshold.
+The musl build does not meet spec #521's threshold (1.10x).
 
 - **Meets it on both processors:** `loop`, and `lists` (except x86_64 run A).
 - **Misses it on both processors:** `text` (1.38x on aarch64, 1.45x to 2.73x on x86_64), the site build in the interpreter (1.22x on aarch64, 1.28x on two of three x86_64 runners), and `oskac build` of the site (1.26x to 1.29x on aarch64, 1.35x to 1.47x on x86_64).
 - **Misses it on one processor:** `recursion` (1.23x on aarch64; 1.07x to 1.13x on x86_64, a miss in 2 of 3 runs) and `bulk-text` (1.39x to 1.96x on x86_64; 1.08x to 1.11x on aarch64, a miss by one timer tick in 2 of 3 runs).
 
-The largest misses are the workloads that allocate a text on each step (`text`, `bulk-text` on x86_64) and the compile, which is where causes 1 to 3 of section 3 act. Fixes 1 to 6 narrowed the gap but did not close it, so by spec #521 fix 7 (an allocator for the musl build) applies. Fix 7 removes causes 1 and 2 but not cause 3 (`memcpy` on x86_64), which **(Inference)** `bulk-text` and `text`, the workloads that copy the most text, are most exposed to.
+The largest misses are the workloads that allocate a text on each step (`text`, `bulk-text` on x86_64) and the compile, which is where causes 1 to 3 of section 3 act. Fixes 1 to 6 narrowed the gap but did not close it, so by spec #521 fix 7 (an allocator for the musl build) applied. Fix 7 removes causes 1 and 2 but not cause 3 (`memcpy` on x86_64), which **(Inference)** `bulk-text` and `text`, the workloads that copy the most text, are most exposed to.
 
 ## 8. Re-measured with the musl build's allocator (2026-11-21, ticket #523)
 
@@ -402,7 +403,7 @@ The allocator closed most of the aarch64 gap. `text` went from 1.38x to 0.89x an
 | site (interpreter) | 2,921 / 4,418 / 3,408 ms | 3,336 / 5,146 / 3,929 ms | 1.14 / 1.16 / 1.15 | 1.28 to 1.29 (0.85 once) | No, by 0.04 to 0.06 |
 | `oskac build` of the site | 34 / 46 / 44 ms | 40 / 55 / 52 ms | 1.18 / 1.20 / 1.18 | 1.35 to 1.47 | No, by 0.08 to 0.10 |
 
-Run E's musl `loop` figure, 5 ms against 998 ms for the glibc build, is not a run time this note can explain. `scripts/bench-native.sh` checks that both backends print the same output once before timing, but does not check the exit status of the timed runs, so one of the five runs may have stopped early. It was not reproduced: on this session's x86_64 VM, the musl build of `0ed216f5` ran `loop.osk` 40 times, `examples/hello.osk` 500 times (100 of them two at a time) and `site/build.osk` 12 times, and every run exited 0 with the right output. The row is left out of the verdict.
+Run E's musl `loop` figure, 5 ms against 998 ms for the glibc build, is not a run time this note can explain. `scripts/bench-native.sh` checks that both backends print the same output once before timing, but does not check the exit status of the timed runs, so one of the five runs may have stopped early. It was not reproduced: on this session's x86_64 VM, the musl build of `0ed216f5` ran `loop.osk` 40 times, `examples/hello.osk` 500 times (100 of them two at a time) and `site/build.osk` 12 times, and every run exited 0 with the right output. The row is left out of the verdict. The wall time of that run matched the glibc build's, and the security review found that it was not an allocator failure, so it is not read as a speed result of the musl build.
 
 The allocator removed the allocation-bound part of the x86_64 gap too: `recursion` went from about 1.1x to 1.0x, `lists` stays at about 1.0x, the site build from about 1.28x to about 1.15x, and `oskac build` from about 1.4x to about 1.19x. The workloads that copy the most short texts did not move: `text` is 2.20x and 2.23x and `bulk-text` 2.00x on the two Intel runners, as before (section 7's Intel run had 2.73x and 1.96x), and 1.19x and 1.39x on the AMD runner. **Inference:** this is cause 3, musl's x86_64 `memcpy` (`rep movsq` with byte loops around it), which costs most on these Intel processors. The same workloads on aarch64, where musl's `memcpy` is not slow (section 5), are now at 0.89x and 1.04x, so the copies, not the allocations, are what is left.
 
@@ -420,11 +421,11 @@ The security review of ticket #523 found two ways the allocator makes the musl b
 
 ### Verdict
 
-With the allocator, the musl build still does not meet the 1.10x threshold of spec #521 on every workload.
+With the allocator, the musl build still does not meet spec #521's 1.10x threshold on every workload.
 
 - **aarch64: at the threshold, not clearly under it.** `loop`, `text`, `lists` and `recursion` meet it in every run. `bulk-text` and `oskac build` meet it in two of three runs, each missing once by one timer tick. The site build in the interpreter is at 1.09x, 1.10x and 1.11x: under the threshold in one run and just over it in two.
 - **x86_64: misses it.** `loop`, `lists` and `recursion` meet it. `text` (1.19x to 2.23x), `bulk-text` (1.39x to 2.00x), the site build (1.14x to 1.16x) and `oskac build` (1.18x to 1.20x) miss it.
-- **What is left is mostly `memcpy` on x86_64 (Inference).** The allocator took the allocation causes (1 and 2) out: every workload that mostly allocates is now at 0.97x to 1.02x on both processors. Spec #521 rules out replacing `memcpy` (section 3 of [2026-11-oskac-without-glibc.md](2026-11-oskac-without-glibc.md), "2026-11-21"). The next step there is step 6 of its plan: cut more short copies in Oska, for example by keeping texts as shared slices, so `text` and `bulk-text` copy less. That needs its own ticket, and so does profiling the 290 to 350 ms left in the aarch64 site build.
+- **What is left is mostly `memcpy` on x86_64 (Inference).** The allocator took the allocation causes (1 and 2) out: `loop`, `lists` and `recursion`, the workloads that mostly allocate, are now at 0.97x to 1.02x on both processors. The workloads that also copy much text are not: `text` is 1.19x to 2.23x and `bulk-text` 1.39x to 2.00x on x86_64 (section 9 has the figures after the short-copy fixes). Spec #521 rules out replacing `memcpy` (section 3 of [2026-11-oskac-without-glibc.md](2026-11-oskac-without-glibc.md), "2026-11-21"). The next step there is step 6 of its plan: cut more short copies in Oska, for example by keeping texts as shared slices, so `text` and `bulk-text` copy less. That needs its own ticket, and so does profiling the 290 to 350 ms left in the aarch64 site build.
 
 ## 9. Short copies on x86_64 (2026-11-21, ticket #572)
 
@@ -539,7 +540,17 @@ The musl build still misses the 1.10x threshold of spec #521 on x86_64, and is a
 - **aarch64:** `loop`, `text`, `bulk-text`, `lists` and `recursion` meet it in every run. The site build is at 1.098x to 1.104x over six runs (G to L), some a hair over. `oskac build` is at 1.09x to 1.16x, a miss of a few milliseconds in some runs.
 - **x86_64:** `loop` and `recursion` meet it, and `lists` except in run L. `bulk-text` meets it on Intel and missed by 0.04 to 0.05 on AMD. `text` misses (1.84x to 1.86x on Intel), as does `oskac build` (1.14x to 1.16x). The site build is at 1.095x and 1.118x.
 - **What is left is not only `memcpy`.** On `bulk-text` almost no copies remain (6,217), yet the AMD runners showed 1.15x. **Inference:** that is musl's `malloc` mapping and unmapping each 520 KB text, which is over the allocator's 1 KiB classes; this was not profiled on those runners. The same `mmap` and `munmap` churn is the kernel's 41% of the site's gap and 68% of the compile's in the profile above. Of the copies left, the shortest (the one-character `join` parts in the site build, the five pieces a line in `text`) can only be cut by not calling `memcpy` for them, which is the same as replacing it, and spec #521 rules that out.
-- **Next steps, each its own ticket:** keep requests over 1 KiB from reaching mallocng's `mmap` and `munmap` (an allocator change, so a security review), which the site build and the compile need; and decide whether `text` and the site's `join` of characters, where short copies alone still cost on Intel, are acceptable or need a different text representation, such as building an interpolated text in one piece or `String.chars` and `join` handing out slices of one text.
+- **Next steps, each its own ticket (at the time of writing; section 9's Decision below says which were taken):** keep requests over 1 KiB from reaching mallocng's `mmap` and `munmap` (an allocator change, so a security review), which the site build and the compile need; and decide whether `text` and the site's `join` of characters, where short copies alone still cost on Intel, are acceptable or need a different text representation, such as building an interpolated text in one piece or `String.chars` and `join` handing out slices of one text.
+
+### Decision (2026-11-22)
+
+Both Linux builds stay. [ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md) stands. Tickets #524 to #526, which would retire the glibc build, are closed as not planned. The musl build is at spec #521's threshold on aarch64 and above it on x86_64 (1.07x to 1.16x on the site build, more on text-heavy work), so the installer keeps choosing the glibc build where it can run.
+
+What remains:
+
+- musl's `mmap` and `munmap` for requests over 1 KiB, which is most of the kernel's share of the x86_64 gap.
+- Very short copies on Intel, where musl's `memcpy` costs most.
+- Replacing `memcpy` is out of scope per spec #521. It needs its own decision.
 
 ### Tests on the musl build
 
@@ -552,7 +563,7 @@ At `9760b76e`, on this session's x86_64 VM, with the musl target: `cargo test --
 - ~~After fixes 1 to 6, does the musl build meet a threshold? The 2026-11-19 research note suggested at most 10% slower than glibc. Decide it before fix 7.~~ Spec #521 set the threshold at 1.10x. Measured on 2026-11-21: the musl build misses it (section 7).
 - Where the last 290 to 350 ms of the aarch64 site build go with the allocator in place (section 8). ~~How much of the x86_64 gap left is `memcpy`.~~ Measured on 2026-11-21: section 9.
 - How much of the x86_64 site and compile gaps musl's `mmap` and `munmap` of requests over 1 KiB cause, measured on GitHub's runners rather than inferred from this VM's profile (section 9).
-- Run E's 5 ms musl `loop` figure (section 8): `scripts/bench-native.sh` does not check the exit status of its timed runs.
+- Run E's 5 ms musl `loop` figure (section 8): `scripts/bench-native.sh` does not check the exit status of its timed runs. Left open; the row is excluded from section 8's verdict because the wall time matched and the security review found no allocator failure.
 
 ## How this was measured
 
