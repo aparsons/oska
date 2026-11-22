@@ -1,0 +1,5 @@
+$ oskac run net.osk --interpret
+exit: 0
+--- stdout
+--- stderr
+--- written

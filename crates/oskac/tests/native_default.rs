@@ -296,8 +296,21 @@ fn a_module_with_no_runtime_is_refused_as_the_interpreter_refuses_it() {
     assert_golden("run_no_runtime", &files, &["run", "sql.osk"]);
     // Refused natively (`E0390`) and by the interpreter (`E0370`): only
     // the interpreter's refusal, with no note that it runs.
-    let net = [("net.osk", "fn main(net: Net) {}\n")];
-    assert_golden("run_ungranted", &net, &["run", "net.osk"]);
+    let spawn = [("spawn.osk", "fn main(spawn: Spawn) {}\n")];
+    assert_golden("run_ungranted", &spawn, &["run", "spawn.osk"]);
+    // The network runs on the interpreter only (ADR 0023): the native
+    // backend refuses it, an error on every platform, and `--interpret`
+    // runs it.
+    let net = [(
+        "net.osk",
+        "fn main(net: Net) {\n    let _ = net.restrict_to(\"example.com\", 443)\n}\n",
+    )];
+    assert_golden("run_net_refused_natively", &net, &["run", "net.osk"]);
+    assert_golden(
+        "run_net_interpret",
+        &net,
+        &["run", "net.osk", "--interpret"],
+    );
     assert_golden("test_no_runtime", &files, &["test", "sql.osk"]);
 }
 

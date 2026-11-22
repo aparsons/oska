@@ -26,6 +26,10 @@ _Avoid_: restricted Fs, sandboxed filesystem
 **File capability**:
 A capability confined to a single file, such as `FileRead`. Using it takes no path.
 
+**Host capability**:
+A capability confined to one host and one port, `HostConnect`. It alone can connect, and `connect()` takes no destination. `Net` and `NetConnect` only attenuate to one, with `restrict_to(host, port)` (ADR 0023). A loopback listener, `LoopbackListen`, is the listening counterpart, for a local test server.
+_Avoid_: restricted NetConnect, connect-to-any
+
 **Budget**:
 The capability to spend model tokens and calls, which a model client such as `std.llm` takes. Its counters live in the runtime, so every copy of a budget draws from the same ones. `main`'s is unlimited, and `limit` attenuates it to a child budget that draws from its parent and never has more than the parent has left. It counts tokens, not money.
 _Avoid_: quota, allowance (for the capability), wallet

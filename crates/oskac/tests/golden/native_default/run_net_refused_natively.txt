@@ -1,0 +1,6 @@
+$ oskac run net.osk
+exit: 2
+--- stdout
+--- stderr
+net.osk:2:13: error[E0390]: `oskac build` cannot compile `Net.restrict_to` yet (bytes 32..67)
+--- written

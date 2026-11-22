@@ -206,8 +206,9 @@ pub(crate) fn display_in_place(name: &IntrinsicName) -> Option<InPlace> {
 
 /// Every module's table, in the order [`lookup`] prefers them, with the
 /// `std` module whose functions it holds, for a `std` module's table.
-const TABLES: [(Option<&str>, Table); 11] = [
+const TABLES: [(Option<&str>, Table); 12] = [
     (None, INTRINSICS),
+    (None, crate::net::INTRINSICS),
     (None, budget::INTRINSICS),
     (None, approval::INTRINSICS),
     (None, int_methods::INTRINSICS),
@@ -271,7 +272,7 @@ fn text(args: &[Value], index: usize) -> &str {
 /// `Ok(())` for a write or other operation that succeeded, else
 /// `Err(IoError)` with Oska's wording of the failure, made at `span`
 /// (counted under `--max-memory`).
-fn io_unit(result: io::Result<()>, span: Span) -> Result<Value, Panic> {
+pub(crate) fn io_unit(result: io::Result<()>, span: Span) -> Result<Value, Panic> {
     match result {
         Ok(()) => Ok(Value::ok(Value::Unit)),
         Err(err) => io_failure(&err, span),
@@ -279,7 +280,7 @@ fn io_unit(result: io::Result<()>, span: Span) -> Result<Value, Panic> {
 }
 
 /// `Err(IoError)` with Oska's wording of `err`, made at `span`.
-fn io_failure(err: &io::Error, span: Span) -> Result<Value, Panic> {
+pub(crate) fn io_failure(err: &io::Error, span: Span) -> Result<Value, Panic> {
     Ok(Value::err(memory::io_error(
         &oska_sys::io_error_message(err),
         span,
@@ -289,7 +290,7 @@ fn io_failure(err: &io::Error, span: Span) -> Result<Value, Panic> {
 /// The text of the bytes read from outside, or the failure, counted
 /// under `--max-memory` once read, at `span`. Bytes that are not UTF-8
 /// are a failure, worded as Rust's `read_to_string` words it.
-fn io_text(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
+pub(crate) fn io_text(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
     let result = result.and_then(|bytes| {
         String::from_utf8(bytes).map_err(|_| {
             io::Error::new(
@@ -306,7 +307,7 @@ fn io_text(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
 
 /// The bytes read from outside, as they are, or the failure, counted
 /// under `--max-memory` once read, at `span`.
-fn io_bytes(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
+pub(crate) fn io_bytes(result: io::Result<Vec<u8>>, span: Span) -> Result<Value, Panic> {
     match result {
         Ok(bytes) => Ok(Value::ok(memory::bytes_of_len(bytes.len(), span, || {
             bytes
@@ -1013,7 +1014,7 @@ mod tests {
 
     /// The types whose methods have no runtime: the built-in capabilities
     /// the runtime does not implement, and the prelude's structs that hold
-    /// one, such as `Connection`. A program that holds one is refused
+    /// one. A program that holds one is refused
     /// before it starts (`E0370`), so none of their methods is ever
     /// called. Everything else in the prelude needs an intrinsic.
     fn no_runtime() -> Vec<String> {
@@ -1234,15 +1235,19 @@ mod tests {
     fn the_exempt_types_are_the_ones_with_no_runtime_and_have_no_intrinsics() {
         let names = bodiless_prelude_functions();
         let exempt = no_runtime();
-        for expected in [
+        for expected in ["Spawn", "Sched"] {
+            assert!(exempt.iter().any(|e| e == expected), "{exempt:?}");
+        }
+        // The network has a runtime (ADR 0023).
+        for run in [
             "Net",
             "NetConnect",
             "NetListen",
-            "Spawn",
-            "Sched",
+            "HostConnect",
+            "LoopbackListen",
             "Connection",
         ] {
-            assert!(exempt.iter().any(|e| e == expected), "{exempt:?}");
+            assert!(!exempt.iter().any(|e| e == run), "{exempt:?}");
         }
         for granted in ["Stdout", "Fs", "FsRead", "TestContext", "Args"] {
             assert!(!exempt.iter().any(|e| e == granted), "{exempt:?}");

@@ -265,9 +265,18 @@ impl Names {
     }
 }
 
-/// The directory and file capabilities. The runtime has no root to give
-/// one, so `main` cannot declare it (ADR 0008).
-const CONFINED: [&str; 5] = ["Dir", "DirRead", "DirWrite", "FileRead", "FileWrite"];
+/// The directory, file and network capabilities that only attenuation
+/// makes. The runtime has no root, host or port to give one, so `main`
+/// cannot declare it (ADR 0008, ADR 0023).
+const CONFINED: [&str; 7] = [
+    "Dir",
+    "DirRead",
+    "DirWrite",
+    "FileRead",
+    "FileWrite",
+    "HostConnect",
+    "LoopbackListen",
+];
 
 /// `main` is the root of authority: it takes only built-in capabilities
 /// and `Args`, and returns `()` or `Result<(), E>` with `E: Display`.
@@ -288,9 +297,11 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
             diagnostics.push(Diagnostic::new(
                 codes::MAIN_CONFINED,
                 format!(
-                    "`main` cannot take `{name}`: only attenuation makes a directory or file \
-                     capability, with `restrict_to` or `restrict_to_file` on `Fs`, `FsRead` or \
-                     `FsWrite`, so declare one of those and narrow it"
+                    "`main` cannot take `{name}`: only attenuation makes a directory, file or \
+                     network capability: `restrict_to` or `restrict_to_file` on `Fs`, `FsRead` \
+                     or `FsWrite`, `restrict_to` on `Net` or `NetConnect`, or \
+                     `restrict_to_loopback` on `NetListen`, so declare one of those and narrow \
+                     it"
                 ),
                 param.ty.span,
             ));

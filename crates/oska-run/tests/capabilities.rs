@@ -572,10 +572,10 @@ fn a_read_only_filesystem_cannot_write_and_a_write_only_one_cannot_read() {
 // ---- Capabilities with no runtime yet --------------------------------------
 
 #[test]
-fn a_program_given_net_is_refused_before_it_starts() {
-    assert_refused("fn main(net: Net) {\n}\n", "E0370");
+fn a_program_given_spawn_or_sched_is_refused_before_it_starts() {
+    assert_refused("fn main(spawn: Spawn) {\n}\n", "E0370");
     assert_refused(
-        "fn main(io: Stdout, net: NetConnect) {\n    let _ = io.println(\"hi\")\n}\n",
+        "fn main(io: Stdout, sched: Sched) {\n    let _ = io.println(\"hi\")\n}\n",
         "E0370",
     );
 }

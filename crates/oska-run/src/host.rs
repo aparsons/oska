@@ -127,6 +127,28 @@ pub trait Host: Send {
     /// valid UTF-8. No names lists `root`.
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>>;
 
+    /// Open a connection to `host` at `port`, as `HostConnect.connect`
+    /// asks. A host with no network refuses with an error whose message is
+    /// the same every time.
+    fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
+        let _ = (host, port);
+        Err(no_network())
+    }
+
+    /// Listen on the loopback address at `port`, as
+    /// `NetListen.restrict_to_loopback` asks.
+    fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
+        let _ = port;
+        Err(no_network())
+    }
+
+    /// Where the program has tried to go, in order, as `t.net_attempts()`
+    /// returns them: `host:port`, or `loopback:port` for a listener. A host
+    /// that records none returns none.
+    fn net_attempts(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Every line written to stdout so far, without its line break: one
     /// per `println`, as `t.printed()` returns them. A host that writes
     /// straight to the real stream records none.
@@ -142,6 +164,12 @@ pub trait Host: Send {
     /// the last call. A host that writes straight to the real streams
     /// records nothing.
     fn take_output(&mut self) -> Output;
+}
+
+/// The error of a host with no network, such as a plain test's: the same
+/// message on every platform, so a test can assert it.
+fn no_network() -> io::Error {
+    io::Error::other("network access is not available here: a plain test is offline")
 }
 
 /// The root of a directory or file capability, as a host opened it: a directory,
@@ -496,6 +524,14 @@ impl Host for RealHost {
         Vec::new()
     }
 
+    fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
+        oska_sys::NetStream::connect(host, port)
+    }
+
+    fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
+        oska_sys::NetListener::bind_loopback(port)
+    }
+
     fn take_output(&mut self) -> Output {
         Output::default()
     }
@@ -665,6 +701,9 @@ pub struct FakeHost {
     /// Symlinks, by their path, to their target's.
     links: BTreeMap<PathBuf, PathBuf>,
     random: SplitMix64,
+    /// Where the program tried to connect or listen, which this host
+    /// refused.
+    net_attempts: Vec<String>,
 }
 
 impl Default for FakeHost {
@@ -678,6 +717,7 @@ impl Default for FakeHost {
             dirs: BTreeSet::new(),
             links: BTreeMap::new(),
             random: SplitMix64::new(FAKE_SEED),
+            net_attempts: Vec::new(),
         }
     }
 }
@@ -1109,6 +1149,20 @@ impl Host for FakeHost {
         }
         let path = self.walk(root, names)?;
         self.entries(&path)
+    }
+
+    fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
+        self.net_attempts.push(format!("{host}:{port}"));
+        Err(no_network())
+    }
+
+    fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
+        self.net_attempts.push(format!("loopback:{port}"));
+        Err(no_network())
+    }
+
+    fn net_attempts(&self) -> Vec<String> {
+        self.net_attempts.clone()
     }
 
     fn take_output(&mut self) -> Output {

@@ -124,9 +124,9 @@ Each sink separates a **data position**, declared `Untrusted<String>`, from a **
 | `std.proc` | `run`'s `args: List<Untrusted<String>>` | `run`'s `program`; `run` also needs `Spawn` |
 | `std.html` | `text`'s argument, which is escaped | `TrustedHtml.new`'s `markup` |
 | Paths | `Path.from`, also as the `dir` of a directory capability's `restrict_to` | `restrict_to`'s `dir` and `restrict_to_file`'s `file` on `Fs`, `FsRead`, and `FsWrite` |
-| Network | `Connection.send`'s `body` | `NetConnect.connect`'s `host` |
+| Network | `Connection.send`'s `body` | `restrict_to`'s `host` on `Net` and `NetConnect` |
 
-Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Html.render`, and `Connection.receive`. `Db` and `Connection` are capability-bearing (`Db` holds a `NetConnect`), and every sink type except the error types has private fields, so code outside the module can't construct one (`E0271`).
+Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Html.render`, and `Connection.receive`. `Db` and `Connection` are capability-bearing (`Db` holds a `NetConnect`, `Connection` a `HostConnect`), and every sink type except the error types has private fields, so code outside the module can't construct one (`E0271`).
 
 ## Syntax diagnostic codes
 

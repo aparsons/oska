@@ -3410,12 +3410,14 @@ fn borrows_arguments(name: &str) -> bool {
 /// Whether `main` can be given a value of `ty` by `_start`: the word 0.
 /// Each of these keeps its state, if it has any (the arguments, the
 /// environment, the input buffer, the generator, the root budget), in the
-/// runtime's globals.
+/// runtime's globals. `Net`, `NetConnect` and `NetListen` have no state
+/// and no native methods yet (ADR 0023): a call of one is refused (`E0390`),
+/// so a native program holds one and reaches no network.
 fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),
         "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Budget" | "Args"
-            | "Fs" | "FsRead" | "FsWrite"
+            | "Fs" | "FsRead" | "FsWrite" | "Net" | "NetConnect" | "NetListen"
     ))
 }
 

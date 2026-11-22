@@ -625,8 +625,8 @@ fn build_refused(name: &str, src: &str) -> (Option<i32>, String) {
 fn what_needs_other_tickets_is_refused_cleanly() {
     let (name, src, what) = (
         "main_net",
-        "fn main(net: Net) {\n}\n",
-        "a `main` given `Net`",
+        "fn main(net: Net) {\n    let _ = net.restrict_to(\"example.com\", 443)\n}\n",
+        "`Net.restrict_to`",
     );
     let (code, stderr) = build_refused(name, src);
     assert_eq!(code, Some(2), "{name}: {stderr}");

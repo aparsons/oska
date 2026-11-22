@@ -1,6 +1,6 @@
-$ oskac run net.osk
+$ oskac run spawn.osk
 exit: 2
 --- stdout
 --- stderr
-net.osk:1:19: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 18..20)
+spawn.osk:1:23: error[E0370]: `oskac run` cannot grant `Spawn` yet: the capability has no runtime (bytes 22..24)
 --- written

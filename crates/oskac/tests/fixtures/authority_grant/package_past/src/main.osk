@@ -2,7 +2,7 @@
 // its grant covers.
 
 fn fetch(net: NetConnect) -> Result<Connection, IoError> {
-    net.connect("example.com", 443)
+    net.restrict_to("example.com", 443).connect()
 }
 
 fn main(io: Stdout) -> Result<(), IoError> {
