@@ -102,6 +102,18 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.x509",
+        source: include_str!("std/x509.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.x509_roots",
+        source: include_str!("std/x509_roots.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.sshsig",
         source: include_str!("std/sshsig.osk"),
         sink_literal: None,

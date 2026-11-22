@@ -40,6 +40,7 @@ pub const MODULES: &[&str] = &[
     "std.ecdsa",
     "std.rsa",
     "std.p256",
+    "std.x509",
 ];
 
 /// What kind of item an entry is.
