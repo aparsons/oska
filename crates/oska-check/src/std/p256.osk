@@ -7,9 +7,10 @@
 // a peer's point `P`. A scalar is 32 bytes, a big-endian integer, as a
 // `Secret<Bytes>` (such as `Random.secure_bytes(32)`); it is used as it is,
 // with no clamping, so a caller picks it uniformly from 1 to n - 1 as the
-// standard says. One that is a multiple of the group order n gives a
-// point at infinity, which is all-zero bytes here, since a result that
-// depended on the scalar being valid would branch on it. A peer's point is
+// standard says. One that is zero or a multiple of the group order n gives
+// the point at infinity, which is all-zero bytes here, and not `None`: an
+// `Option` that depended on the scalar would branch on the secret, which the
+// checker refuses. A scalar of n or more is taken mod n. A peer's point is
 // the SEC1 uncompressed encoding (`0x04`, `x`, `y`, 65 bytes), checked to
 // be on the curve with both coordinates below the field prime, by
 // `std.ecdsa`, whose public-key check this module uses.
