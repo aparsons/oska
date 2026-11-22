@@ -733,6 +733,10 @@ if step "workflow validation tests" --no-slot --fast-when 'scripts/actionlint/*'
   bash scripts/actionlint/test.sh
 fi
 
+if step "x509 roots generator tests" --no-slot --fast-when 'scripts/x509-roots/*' --fast-when 'crates/oska-check/src/std/x509_roots.osk'; then
+  bash scripts/x509-roots/test.sh
+fi
+
 if step "expected workflows tests" --no-slot --fast-when 'scripts/expected-workflows/*'; then
   bash scripts/expected-workflows/test.sh
 fi

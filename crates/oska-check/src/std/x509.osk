@@ -1,0 +1,1877 @@
+// `std.x509`: X.509 certificates for TLS clients (RFC 5280, RFC 9525). It
+// parses a DER certificate, builds a path from a server's certificate to a
+// trusted root, validates it, and checks the host name. A module sees it
+// only after `use std.x509`.
+//
+// A certificate comes from outside the program, so `Certificate.parse`
+// takes untrusted bytes and its DER parser is strict: a length that is
+// not minimal, an indefinite length, a high tag number, a BER form of a
+// boolean, a trailing byte after the certificate or after any structure
+// inside it is `Malformed`, so two parsers cannot read one certificate
+// two ways. The certificate it returns is trusted, as its integers and
+// bytes were read out and checked, and it holds no untrusted value.
+//
+// `verify_server` builds the path from the server's own list of
+// certificates (in any order, with extras) and the roots of a
+// `TrustConfig`, and checks for each path found: every certificate's
+// validity at the time passed in (no clock is read, so the function is
+// pure and a test pins the time), each signature (ECDSA P-256 and P-384,
+// RSA PKCS#1 v1.5 and PSS, Ed25519, with SHA-256, SHA-384 or SHA-512; MD5
+// and SHA-1 signatures are `UnsupportedAlgorithm`), basic constraints
+// (`cA` and `pathLenConstraint`), key usage (`keyCertSign` for a CA,
+// `digitalSignature` for the server's certificate), extended key usage (`serverAuth`
+// or `anyExtendedKeyUsage`: required on the server's certificate, and on a
+// CA that has the extension), name
+// constraints on the DNS names and IP addresses in the server's
+// certificate, Mozilla's "distrust after" date for the root, and the host
+// name (RFC 9525: only the certificate's `dNSName` and `iPAddress`
+// subject alternative names count, never the common name). An extension
+// marked critical that is not understood makes the certificate
+// `UnsupportedCriticalExtension`.
+//
+// Names are compared as DER bytes. A path is at most eight
+// certificates before the root and a validation makes at most 64 signature
+// checks (`LimitExceeded`); an issuer is chosen by name and, when the
+// certificate's authority key identifier and the issuer's subject key
+// identifier are both present, by that too. A CA's name constraints apply
+// to every certificate below it. The validity of the root itself is not
+// checked (the trust configuration drops a root when Mozilla does). A name
+// constraint of a kind other than DNS and IP address (directory names,
+// e-mail addresses, URIs) is ignored, as no such name is checked. A
+// presented DNS name is matched as ASCII, case-insensitively, with a
+// wildcard only as the whole leftmost label and over at least two more
+// labels; an IPv6 literal is read in its colon-separated form without an
+// embedded IPv4 part.
+//
+// The default trust configuration is a pinned copy of Mozilla's roots trusted for TLS
+// server authentication, compiled into `std.x509_roots` by
+// `scripts/x509-roots/generate.py`; a program may add roots of its own
+// from trusted bytes or replace the roots (`TrustConfig`). Every function is pure, and
+// the module has no audit site: no `expose()` and no `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012).
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+//
+// Parsing never keeps a view of the input: it copies the certificate into
+// a trusted `Bytes` first, byte by byte (the integers read from untrusted
+// bytes are trusted), then reads TLVs (`Tlv`: a tag and the byte ranges
+// of a header and its content) out of that copy. Object identifiers are
+// compared as the hexadecimal of their content bytes.
+
+use std.sha2
+use std.ecdsa
+use std.rsa
+use std.ed25519
+use std.x509_roots
+
+// Why a certificate or a chain was refused. The kinds are stable: a
+// program may match on them.
+pub enum X509Error {
+    // Not a strictly DER-encoded certificate of the shape RFC 5280 gives,
+    // or PEM text that is not certificates.
+    Malformed,
+    // A version other than v1 or v3.
+    UnsupportedVersion,
+    // An extension marked critical that this module does not understand.
+    UnsupportedCriticalExtension,
+    // A signature algorithm, or a key, this module does not support or
+    // refuses (MD5 and SHA-1 signatures, RSA keys under 2048 bits).
+    UnsupportedAlgorithm,
+    // No path leads from the certificate to a trusted root.
+    UnknownIssuer,
+    // A signature does not verify under the issuer's key.
+    BadSignature,
+    // A certificate on the path is not yet valid at the time given.
+    NotYetValid,
+    // A certificate on the path has expired at the time given.
+    Expired,
+    // An issuer on the path is not a CA: no `cA` flag in basic constraints,
+    // or key usage without `keyCertSign`.
+    NotCa,
+    // A CA's `pathLenConstraint` is exceeded.
+    PathLengthExceeded,
+    // The server's key usage lacks `digitalSignature`.
+    KeyUsage,
+    // The server's certificate has no extended key usage, or a certificate
+    // on the path has one without `serverAuth` (or `anyExtendedKeyUsage`).
+    ExtendedKeyUsage,
+    // A name in the server's certificate is outside a CA's permitted
+    // subtrees or inside an excluded one.
+    NameConstraint,
+    // The root distrusts certificates that became valid after its
+    // "distrust after" date, and this one did.
+    DistrustedRoot,
+    // The host name is not in the certificate's subject alternative names.
+    HostMismatch,
+    // Building a path took more than 64 signature checks, which bounds the
+    // work a hostile set of certificates can cause.
+    LimitExceeded,
+}
+
+impl Display for X509Error {
+    fn to_string(self) -> String {
+        match self {
+            X509Error.Malformed => "the certificate is malformed"
+            X509Error.UnsupportedVersion => "the certificate version is not supported"
+            X509Error.UnsupportedCriticalExtension => "the certificate has a critical extension that is not understood"
+            X509Error.UnsupportedAlgorithm => "the certificate uses an algorithm or key that is not supported"
+            X509Error.UnknownIssuer => "the certificate does not chain to a trusted root"
+            X509Error.BadSignature => "a certificate signature does not verify"
+            X509Error.NotYetValid => "a certificate is not yet valid"
+            X509Error.Expired => "a certificate has expired"
+            X509Error.NotCa => "an issuer is not a certificate authority"
+            X509Error.PathLengthExceeded => "the certificate path is longer than a CA allows"
+            X509Error.KeyUsage => "the certificate's key usage does not allow its use"
+            X509Error.ExtendedKeyUsage => "the certificate is not for server authentication"
+            X509Error.NameConstraint => "a name violates a name constraint"
+            X509Error.DistrustedRoot => "the root does not trust certificates issued after its distrust date"
+            X509Error.HostMismatch => "the certificate is not for this host name"
+            X509Error.LimitExceeded => "building the certificate path took too many signature checks"
+        }
+    }
+}
+
+// A certificate's public key, as far as this module reads it: an ECDSA key
+// on P-256 or P-384, an RSA key of 2048 to 8192 bits, or an Ed25519 key.
+pub enum PublicKey {
+    Ecdsa(ecdsa.PublicKey),
+    Rsa(rsa.PublicKey),
+    Ed25519(ed25519.PublicKey),
+}
+
+// How a certificate was signed. The hash and the scheme are one value, as
+// X.509 names them together.
+enum SigAlg {
+    EcdsaSha256,
+    EcdsaSha384,
+    EcdsaSha512,
+    RsaSha256,
+    RsaSha384,
+    RsaSha512,
+    PssSha256,
+    PssSha384,
+    PssSha512,
+    EdDsa,
+    Unsupported,
+}
+
+// What the extensions of a certificate say, as far as validation needs.
+struct Extensions {
+    has_basic: Bool,
+    ca: Bool,
+    path_len: Int,
+    has_key_usage: Bool,
+    key_usage: Bytes,
+    key_usage_bits: Int,
+    has_eku: Bool,
+    eku: List<String>,
+    ski: Bytes,
+    aki: Bytes,
+    dns: List<String>,
+    ips: List<Bytes>,
+    permitted_dns: List<String>,
+    excluded_dns: List<String>,
+    permitted_ips: List<Bytes>,
+    excluded_ips: List<Bytes>,
+}
+
+// A parsed X.509 certificate. Its fields are private: a certificate comes
+// only from `Certificate.parse` (or `parse_der` and `parse_pem`, or a trust
+// configuration's `with_root_der` and `with_root_pem`), so everything in it has been read and checked.
+pub struct Certificate {
+    der: Bytes,
+    tbs: Bytes,
+    algorithm: SigAlg,
+    signature: Bytes,
+    serial: Bytes,
+    issuer: Bytes,
+    subject: Bytes,
+    spki: Bytes,
+    not_before: Int,
+    not_after: Int,
+    key: Option<PublicKey>,
+    ext: Extensions,
+}
+
+impl Certificate {
+    // The certificate `der` encodes, which must be one strictly
+    // DER-encoded X.509 v1 or v3 certificate of at most 65536 bytes with
+    // nothing after it. Names, key and signature algorithms this module
+    // does not support still parse (a chain that needs them fails
+    // later); a structure that is not DER, a duplicate extension, a
+    // critical extension that is not understood, or a time that is not a
+    // valid UTC or generalized time ending in `Z` does not. The bytes
+    // may be untrusted: nothing needs a trust assertion.
+    pub fn parse(der: Untrusted<Bytes>) -> Result<Certificate, X509Error> {
+        if der.len() > 65536 {
+            return Err(X509Error.Malformed)
+        }
+        var copy = Bytes.new()
+        for i in 0..der.len() {
+            copy.push(der.at(i))
+        }
+        parse_certificate(copy)
+    }
+
+    // The certificate's DER encoding, the bytes `parse` accepted.
+    pub fn to_der(self) -> Bytes {
+        self.der
+    }
+
+    // The subject, a DER `Name`.
+    pub fn subject(self) -> Bytes {
+        self.subject
+    }
+
+    // The issuer, a DER `Name`.
+    pub fn issuer(self) -> Bytes {
+        self.issuer
+    }
+
+    // The serial number's content bytes.
+    pub fn serial(self) -> Bytes {
+        self.serial
+    }
+
+    // When the certificate becomes valid, in seconds since 1970.
+    pub fn not_before(self) -> Int {
+        self.not_before
+    }
+
+    // When the certificate expires, in seconds since 1970.
+    pub fn not_after(self) -> Int {
+        self.not_after
+    }
+
+    // Whether `issuer`'s key verifies this certificate's signature and its
+    // issuer name is `issuer`'s subject, byte for byte. Nothing else is
+    // checked: not the time, and not whether `issuer` is a CA. A
+    // certificate is its own issuer when it is self-signed.
+    pub fn signed_by(self, issuer: Certificate) -> Result<(), X509Error> {
+        if self.issuer != issuer.subject {
+            return Err(X509Error.UnknownIssuer)
+        }
+        match issuer.key {
+            Some(key) => verify_signature(self, key)
+            None => Err(X509Error.UnsupportedAlgorithm)
+        }
+    }
+
+    // Whether basic constraints say this is a CA.
+    pub fn is_ca(self) -> Bool {
+        self.ext.has_basic && self.ext.ca
+    }
+
+    // The `dNSName` entries of the subject alternative names, in lower
+    // case, as untrusted text: a name from a certificate is the server's
+    // claim, not something the program chose. An entry with a byte outside
+    // ASCII or a NUL is left out.
+    pub fn dns_names(self) -> List<Untrusted<String>> {
+        var out: List<Untrusted<String>> = []
+        for name in self.ext.dns {
+            out.push(name)
+        }
+        out
+    }
+
+    // The key, or `None` when its algorithm or curve is not supported or
+    // it is not a valid key (an RSA key under 2048 bits, a point off the
+    // curve).
+    pub fn public_key(self) -> Option<PublicKey> {
+        self.key
+    }
+
+    // Whether the subject alternative names cover `host`, as RFC 9525
+    // says: an IPv4 or IPv6 literal matches an `iPAddress` entry byte for
+    // byte, and any other name matches a `dNSName` entry, ignoring case
+    // and one trailing dot, with a `*` only as the whole leftmost label
+    // of the entry, standing for exactly one label, and only when two
+    // more labels follow it. The common name is never used. `host` is
+    // trusted text: it is the name the program chose to connect to.
+    pub fn matches_host(self, host: String) -> Bool {
+        host_matches(self, host)
+    }
+}
+
+// ---- Trust configuration ------------------------------------------------------------
+
+// A trust anchor: a root's subject, key and subject key identifier (empty
+// if it has none), and Mozilla's "distrust after" time (0 for none).
+struct Anchor { subject: Bytes, spki: Bytes, ski: Bytes, distrust_after: Int }
+
+// The roots a chain may end at.
+pub struct TrustConfig { anchors: List<Anchor> }
+
+fn anchor_of(cert: Certificate, distrust_after: Int) -> Anchor {
+    Anchor(subject: cert.subject, spki: cert.spki, ski: cert.ext.ski, distrust_after: distrust_after)
+}
+
+impl TrustConfig {
+    // Mozilla's roots trusted for TLS server authentication, as pinned in
+    // `std.x509_roots` (and decoded from hexadecimal each time this is called).
+    pub fn default() -> TrustConfig {
+        var anchors: List<Anchor> = []
+        for r in x509_roots.roots() {
+            anchors.push(Anchor(
+                subject: Bytes.from_hex(r.subject).unwrap_or(Bytes.new()),
+                spki: Bytes.from_hex(r.key).unwrap_or(Bytes.new()),
+                ski: Bytes.from_hex(r.ski).unwrap_or(Bytes.new()),
+                distrust_after: r.distrust_after
+            ))
+        }
+        TrustConfig(anchors: anchors)
+    }
+
+    // The configuration with `roots` added, each trusted as a root without
+    // a distrust date. A certificate is as trusted as the program that
+    // parsed it: the checker does not track trust on a `Certificate`, so
+    // roots read from a file are an audit site only through `with_root_der`
+    // and `with_root_pem`, which take trusted bytes and text. Use this to
+    // add certificates that the program itself vouches for.
+    pub fn with_roots(self, roots: List<Certificate>) -> TrustConfig {
+        var anchors = self.anchors
+        for cert in roots {
+            anchors.push(anchor_of(cert, 0))
+        }
+        TrustConfig(anchors: anchors)
+    }
+
+    // A configuration of only `roots`, none of Mozilla's: for a program
+    // that pins the CAs it trusts, and for tests that trust a test CA.
+    pub fn only_roots(roots: List<Certificate>) -> TrustConfig {
+        TrustConfig(anchors: []).with_roots(roots)
+    }
+
+    // The configuration and the root `der` encodes. The bytes are trusted:
+    // which roots to trust is a structural position, so a root read from a
+    // file needs the caller's own `.assume_trusted()`, which `oskac audit`
+    // lists. The certificate's subject and key are kept; the certificate
+    // is not otherwise checked.
+    pub fn with_root_der(self, der: Bytes) -> Result<TrustConfig, X509Error> {
+        let cert = parse_certificate(der)?
+        var anchors = self.anchors
+        anchors.push(anchor_of(cert, 0))
+        Ok(TrustConfig(anchors: anchors))
+    }
+
+    // The configuration and every certificate in `pem`, one or more
+    // `-----BEGIN CERTIFICATE-----` blocks. The text is trusted, as for
+    // `with_root_der`. Text outside the blocks, or a block that is not
+    // base64 of a certificate, is `Malformed`.
+    pub fn with_root_pem(self, pem: String) -> Result<TrustConfig, X509Error> {
+        var config = self
+        for der in pem_blocks(pem)? {
+            config = config.with_root_der(der)?
+        }
+        Ok(config)
+    }
+
+    // The configuration and the root `der` encodes, with Mozilla's kind of
+    // restriction: a server certificate that became valid after `after`
+    // (seconds since 1970) is `DistrustedRoot` under this root. The bytes
+    // are trusted, as for `with_root_der`.
+    pub fn with_root_distrusting_after(self, der: Bytes, after: Int) -> Result<TrustConfig, X509Error> {
+        let cert = parse_certificate(der)?
+        var anchors = self.anchors
+        anchors.push(anchor_of(cert, after))
+        Ok(TrustConfig(anchors: anchors))
+    }
+
+    // Whether the configuration has a root with `cert`'s subject and key.
+    pub fn contains(self, cert: Certificate) -> Bool {
+        for anchor in self.anchors {
+            if anchor.subject == cert.subject && anchor.spki == cert.spki {
+                return true
+            }
+        }
+        false
+    }
+
+    // How many roots the configuration holds.
+    pub fn len(self) -> Int {
+        self.anchors.len()
+    }
+}
+
+// The certificate `der` encodes: `Certificate.parse`, as a function.
+pub fn parse_der(der: Untrusted<Bytes>) -> Result<Certificate, X509Error> {
+    Certificate.parse(der)
+}
+
+// Every certificate in `pem`, one or more `-----BEGIN CERTIFICATE-----`
+// blocks with blank lines between them and nothing else outside. The text
+// may be untrusted: each block is decoded and parsed as `parse_der` does.
+// An empty text, a block that is not base64 or text outside the blocks is
+// `Malformed`.
+pub fn parse_pem(pem: Untrusted<String>) -> Result<List<Certificate>, X509Error> {
+    var out: List<Certificate> = []
+    for der in pem_blocks(pem)? {
+        out.push(parse_certificate(der)?)
+    }
+    Ok(out)
+}
+
+// ---- Verifying ----------------------------------------------------------------------
+
+// The certificates from `leaf` up to the last one before the root,
+// leaf first, of a path that leads to a root in `store` and is valid for
+// TLS server authentication at `now` (seconds since 1970). `others` is
+// the rest of what the server sent, in any order and with extras. When no
+// path is valid, the error is the first reason a path was refused, or
+// `UnknownIssuer` when none led to a root.
+pub fn verify_chain(store: TrustConfig, leaf: Certificate, others: List<Certificate>, now: Int) -> Result<List<Certificate>, X509Error> {
+    let ctx = Context(store: store, pool: others, now: now)
+    let result = search(ctx, [leaf], 0)
+    if result.ok {
+        Ok(result.path)
+    } else {
+        Err(result.error)
+    }
+}
+
+// `verify_chain` and the host name check together: the chain of `leaf`
+// for the server `host`, as `Certificate.matches_host` reads it. The name
+// is checked first, so a certificate for another host is `HostMismatch`
+// whatever its chain. `host` is trusted text.
+pub fn verify_server(store: TrustConfig, leaf: Certificate, others: List<Certificate>, host: String, now: Int) -> Result<List<Certificate>, X509Error> {
+    if !host_matches(leaf, host) {
+        return Err(X509Error.HostMismatch)
+    }
+    verify_chain(store, leaf, others, now)
+}
+
+// The most certificates a path may hold before its root, and the most
+// signature checks one validation may make: the bounds on what a hostile
+// set of certificates can cost.
+fn max_path() -> Int {
+    8
+}
+
+fn max_checks() -> Int {
+    64
+}
+
+struct Context { store: TrustConfig, pool: List<Certificate>, now: Int }
+
+// Whether `error` says only that no path was found.
+fn is_unknown(error: X509Error) -> Bool {
+    match error {
+        X509Error.UnknownIssuer => true
+        _ => false
+    }
+}
+
+fn is_limit(error: X509Error) -> Bool {
+    match error {
+        X509Error.LimitExceeded => true
+        _ => false
+    }
+}
+
+// The error to report: the first one that says more than `UnknownIssuer`.
+fn prefer(best: X509Error, error: X509Error) -> X509Error {
+    if is_unknown(best) {
+        error
+    } else {
+        best
+    }
+}
+
+// What a search found: the path or the error, and how many signature
+// checks the whole validation has made so far.
+struct Found { path: List<Certificate>, error: X509Error, ok: Bool, checks: Int }
+
+fn found(path: List<Certificate>, checks: Int) -> Found {
+    Found(path: path, error: X509Error.UnknownIssuer, ok: true, checks: checks)
+}
+
+fn failed(error: X509Error, checks: Int) -> Found {
+    Found(path: [], error: error, ok: false, checks: checks)
+}
+
+// Whether the issuer's subject key identifier rules it out: both it and
+// the certificate's authority key identifier are present and differ.
+fn other_key(cert: Certificate, issuer_ski: Bytes) -> Bool {
+    cert.ext.aki.len() > 0 && issuer_ski.len() > 0 && cert.ext.aki != issuer_ski
+}
+
+// Extends `path` (the leaf first) to a root, depth first: a root whose
+// name is the last certificate's issuer (and whose key identifier, when
+// both have one, is the one the certificate names) and whose key verifies
+// its signature ends the path, which is then validated whole; otherwise
+// each certificate of the pool that fits the same way is tried, and the
+// search backtracks. `checks` signature checks have been made; the 65th
+// stops everything with `LimitExceeded`.
+fn search(ctx: Context, path: List<Certificate>, used: Int) -> Found {
+    let last = path.at(path.len() - 1)
+    var best = X509Error.UnknownIssuer
+    var checks = used
+    for anchor in ctx.store.anchors {
+        if anchor.subject == last.issuer && !other_key(last, anchor.ski) {
+            match spki_key(anchor.spki) {
+                None => {
+                    best = prefer(best, X509Error.UnsupportedAlgorithm)
+                }
+                Some(key) => {
+                    if checks >= max_checks() {
+                        return failed(X509Error.LimitExceeded, checks)
+                    }
+                    checks = checks + 1
+                    match verify_signature(last, key) {
+                        Ok(()) => {
+                            match validate(ctx, path, anchor) {
+                                Ok(()) => {
+                                    return found(path, checks)
+                                }
+                                Err(error) => {
+                                    best = prefer(best, error)
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            best = prefer(best, error)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if path.len() >= max_path() {
+        return failed(best, checks)
+    }
+    for candidate in ctx.pool {
+        if candidate.subject == last.issuer && !other_key(last, candidate.ext.ski) && !contains_certificate(path, candidate) {
+            match candidate.key {
+                None => {
+                    best = prefer(best, X509Error.UnsupportedAlgorithm)
+                }
+                Some(key) => {
+                    if checks >= max_checks() {
+                        return failed(X509Error.LimitExceeded, checks)
+                    }
+                    checks = checks + 1
+                    match verify_signature(last, key) {
+                        Ok(()) => {
+                            var next = path
+                            next.push(candidate)
+                            let below = search(ctx, next, checks)
+                            checks = below.checks
+                            if below.ok {
+                                return found(below.path, checks)
+                            }
+                            if is_limit(below.error) {
+                                return failed(below.error, checks)
+                            }
+                            best = prefer(best, below.error)
+                        }
+                        Err(error) => {
+                            best = prefer(best, error)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    failed(best, checks)
+}
+
+fn contains_certificate(path: List<Certificate>, candidate: Certificate) -> Bool {
+    for c in path {
+        if c.der == candidate.der {
+            return true
+        }
+    }
+    false
+}
+
+// The checks on a whole path that end at `anchor`: validity, the server
+// certificate's key usage, extended key usage, the CAs' constraints,
+// name constraints, and the root's distrust date. Signatures were
+// checked as the path was built.
+fn validate(ctx: Context, path: List<Certificate>, anchor: Anchor) -> Result<(), X509Error> {
+    let leaf = path.at(0)
+    for c in path {
+        if ctx.now < c.not_before {
+            return Err(X509Error.NotYetValid)
+        }
+        if ctx.now > c.not_after {
+            return Err(X509Error.Expired)
+        }
+    }
+    if leaf.ext.has_key_usage && !key_usage_bit(leaf.ext, 0) {
+        return Err(X509Error.KeyUsage)
+    }
+    for i in 1..path.len() {
+        let ca = path.at(i)
+        if !ca.ext.has_basic || !ca.ext.ca {
+            return Err(X509Error.NotCa)
+        }
+        if ca.ext.has_key_usage && !key_usage_bit(ca.ext, 5) {
+            return Err(X509Error.NotCa)
+        }
+        // The certificates between the leaf and this CA count against its limit.
+        if ca.ext.path_len >= 0 && i - 1 > ca.ext.path_len {
+            return Err(X509Error.PathLengthExceeded)
+        }
+    }
+    // The server's certificate must name server authentication; a CA's
+    // extended key usage, when it has one, must allow it.
+    if !leaf.ext.has_eku || !allows_server_auth(leaf.ext.eku) {
+        return Err(X509Error.ExtendedKeyUsage)
+    }
+    for i in 1..path.len() {
+        let ca = path.at(i)
+        if ca.ext.has_eku && !allows_server_auth(ca.ext.eku) {
+            return Err(X509Error.ExtendedKeyUsage)
+        }
+    }
+    // A CA's name constraints apply to every certificate below it.
+    for i in 1..path.len() {
+        for j in 0..i {
+            if !names_allowed(path.at(j), path.at(i).ext) {
+                return Err(X509Error.NameConstraint)
+            }
+        }
+    }
+    if anchor.distrust_after != 0 && leaf.not_before > anchor.distrust_after {
+        return Err(X509Error.DistrustedRoot)
+    }
+    Ok(())
+}
+
+// Whether bit `bit` (0 is `digitalSignature`, 5 is `keyCertSign`) of the
+// key usage is set.
+fn key_usage_bit(ext: Extensions, bit: Int) -> Bool {
+    if bit >= ext.key_usage_bits {
+        return false
+    }
+    let byte = ext.key_usage.at(bit / 8).to_int()
+    let shifted = byte / pow2(7 - bit % 8)
+    shifted % 2 == 1
+}
+
+fn pow2(n: Int) -> Int {
+    var value = 1
+    for _ in 0..n {
+        value = value * 2
+    }
+    value
+}
+
+// `serverAuth` is 1.3.6.1.5.5.7.3.1 and `anyExtendedKeyUsage` 2.5.29.37.0.
+fn allows_server_auth(eku: List<String>) -> Bool {
+    for oid in eku {
+        if oid == "2b06010505070301" || oid == "551d2500" {
+            return true
+        }
+    }
+    false
+}
+
+// ---- Signatures ---------------------------------------------------------------------
+
+// Whether `key` verifies `cert`'s signature over its `tbsCertificate`.
+fn verify_signature(cert: Certificate, key: PublicKey) -> Result<(), X509Error> {
+    let message = cert.tbs
+    let ok = match cert.algorithm {
+        SigAlg.Unsupported => {
+            return Err(X509Error.UnsupportedAlgorithm)
+        }
+        SigAlg.EcdsaSha256 => ecdsa_ok(key, sha2.sha256(message), cert.signature)
+        SigAlg.EcdsaSha384 => ecdsa_ok(key, sha2.sha384(message), cert.signature)
+        SigAlg.EcdsaSha512 => ecdsa_ok(key, sha2.sha512(message), cert.signature)
+        SigAlg.RsaSha256 => rsa_ok(key, rsa.HashAlgorithm.Sha256, sha2.sha256(message), cert.signature, false)
+        SigAlg.RsaSha384 => rsa_ok(key, rsa.HashAlgorithm.Sha384, sha2.sha384(message), cert.signature, false)
+        SigAlg.RsaSha512 => rsa_ok(key, rsa.HashAlgorithm.Sha512, sha2.sha512(message), cert.signature, false)
+        SigAlg.PssSha256 => rsa_ok(key, rsa.HashAlgorithm.Sha256, sha2.sha256(message), cert.signature, true)
+        SigAlg.PssSha384 => rsa_ok(key, rsa.HashAlgorithm.Sha384, sha2.sha384(message), cert.signature, true)
+        SigAlg.PssSha512 => rsa_ok(key, rsa.HashAlgorithm.Sha512, sha2.sha512(message), cert.signature, true)
+        SigAlg.EdDsa => ed_ok(key, message, cert.signature)
+    }
+    if ok {
+        Ok(())
+    } else {
+        Err(X509Error.BadSignature)
+    }
+}
+
+fn ecdsa_ok(key: PublicKey, digest: Bytes, signature: Bytes) -> Bool {
+    match key {
+        PublicKey.Ecdsa(k) => ecdsa.verify_der(k, digest, signature)
+        _ => false
+    }
+}
+
+fn rsa_ok(key: PublicKey, hash: rsa.HashAlgorithm, digest: Bytes, signature: Bytes, pss: Bool) -> Bool {
+    match key {
+        PublicKey.Rsa(k) => if pss {
+            rsa.verify_pss(k, hash, digest, signature)
+        } else {
+            rsa.verify_pkcs1(k, hash, digest, signature)
+        }
+        _ => false
+    }
+}
+
+fn ed_ok(key: PublicKey, message: Bytes, signature: Bytes) -> Bool {
+    match key {
+        PublicKey.Ed25519(k) => ed25519.verify(k, message, signature)
+        _ => false
+    }
+}
+
+// ---- DER ----------------------------------------------------------------------------
+
+// A tag-length-value in a buffer: the tag byte, where the header starts,
+// and where the content starts and ends.
+struct Tlv { tag: Int, head: Int, start: Int, end: Int }
+
+// The TLV at `pos`, which must end by `limit`. The length must be
+// minimal and definite, and the tag a single byte.
+fn read_tlv(d: Bytes, pos: Int, limit: Int) -> Result<Tlv, X509Error> {
+    if pos < 0 || limit - pos < 2 {
+        return Err(X509Error.Malformed)
+    }
+    let tag = d.at(pos).to_int()
+    if tag % 32 == 31 {
+        return Err(X509Error.Malformed)
+    }
+    let first = d.at(pos + 1).to_int()
+    var length = first
+    var start = pos + 2
+    if first >= 128 {
+        let count = first - 128
+        if count == 0 || count > 3 || limit - start < count || d.at(start) == 0 {
+            return Err(X509Error.Malformed)
+        }
+        length = 0
+        for i in 0..count {
+            length = length * 256 + d.at(start + i).to_int()
+        }
+        if length < 128 {
+            return Err(X509Error.Malformed)
+        }
+        start = start + count
+    }
+    if length > limit - start {
+        return Err(X509Error.Malformed)
+    }
+    Ok(Tlv(tag: tag, head: pos, start: start, end: start + length))
+}
+
+// The TLVs that fill `t`'s content exactly.
+fn children(d: Bytes, t: Tlv) -> Result<List<Tlv>, X509Error> {
+    var out: List<Tlv> = []
+    var pos = t.start
+    while pos < t.end {
+        let child = read_tlv(d, pos, t.end)?
+        out.push(child)
+        pos = child.end
+    }
+    Ok(out)
+}
+
+// The one TLV that fills `t`'s content exactly.
+fn only_child(d: Bytes, t: Tlv) -> Result<Tlv, X509Error> {
+    let child = read_tlv(d, t.start, t.end)?
+    if child.end != t.end {
+        return Err(X509Error.Malformed)
+    }
+    Ok(child)
+}
+
+fn whole(d: Bytes, t: Tlv) -> Bytes {
+    d.slice(t.head, t.end)
+}
+
+fn content(d: Bytes, t: Tlv) -> Bytes {
+    d.slice(t.start, t.end)
+}
+
+// The value of a non-negative INTEGER of at most four bytes, minimally
+// encoded.
+fn small_integer(d: Bytes, t: Tlv) -> Result<Int, X509Error> {
+    let n = t.end - t.start
+    if t.tag != 2 || n < 1 || n > 4 || d.at(t.start) >= 128 {
+        return Err(X509Error.Malformed)
+    }
+    if n > 1 && d.at(t.start) == 0 && d.at(t.start + 1) < 128 {
+        return Err(X509Error.Malformed)
+    }
+    var value = 0
+    for i in 0..n {
+        value = value * 256 + d.at(t.start + i).to_int()
+    }
+    Ok(value)
+}
+
+// A BOOLEAN, which in DER is 00 or FF.
+fn boolean(d: Bytes, t: Tlv) -> Result<Bool, X509Error> {
+    if t.tag != 1 || t.end - t.start != 1 {
+        return Err(X509Error.Malformed)
+    }
+    let b = d.at(t.start)
+    if b == 255 {
+        return Ok(true)
+    }
+    if b == 0 {
+        return Ok(false)
+    }
+    Err(X509Error.Malformed)
+}
+
+// ---- Certificates -------------------------------------------------------------------
+
+fn parse_certificate(d: Bytes) -> Result<Certificate, X509Error> {
+    let top = read_tlv(d, 0, d.len())?
+    if top.tag != 48 || top.end != d.len() {
+        return Err(X509Error.Malformed)
+    }
+    let parts = children(d, top)?
+    if parts.len() != 3 || parts.at(0).tag != 48 || parts.at(1).tag != 48 || parts.at(2).tag != 3 {
+        return Err(X509Error.Malformed)
+    }
+    let sig = parts.at(2)
+    if sig.end - sig.start < 1 || d.at(sig.start) != 0 {
+        return Err(X509Error.Malformed)
+    }
+    let fields = children(d, parts.at(0))?
+    var i = 0
+    var version = 1
+    if fields.len() > 0 && fields.at(0).tag == 160 {
+        version = small_integer(d, only_child(d, fields.at(0))?)? + 1
+        if version != 2 && version != 3 {
+            return Err(X509Error.UnsupportedVersion)
+        }
+        i = 1
+    }
+    // serial, signature, issuer, validity, subject, subjectPublicKeyInfo
+    if fields.len() < i + 6 {
+        return Err(X509Error.Malformed)
+    }
+    let serial = fields.at(i)
+    if serial.tag != 2 || serial.end - serial.start < 1 || serial.end - serial.start > 21 {
+        return Err(X509Error.Malformed)
+    }
+    let inner_alg = fields.at(i + 1)
+    if inner_alg.tag != 48 || whole(d, inner_alg) != whole(d, parts.at(1)) {
+        return Err(X509Error.Malformed)
+    }
+    let issuer = fields.at(i + 2)
+    let validity = fields.at(i + 3)
+    let subject = fields.at(i + 4)
+    let spki = fields.at(i + 5)
+    if issuer.tag != 48 || issuer.end == issuer.start || subject.tag != 48 || validity.tag != 48 || spki.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    let times = children(d, validity)?
+    if times.len() != 2 {
+        return Err(X509Error.Malformed)
+    }
+    let not_before = parse_time(d, times.at(0))?
+    let not_after = parse_time(d, times.at(1))?
+    check_spki_shape(d, spki)?
+    var ext = no_extensions()
+    var next = i + 6
+    // issuerUniqueID [1] and subjectUniqueID [2], which v2 and v3 allow.
+    if version >= 2 && next < fields.len() && fields.at(next).tag == 129 {
+        next = next + 1
+    }
+    if version >= 2 && next < fields.len() && fields.at(next).tag == 130 {
+        next = next + 1
+    }
+    if version == 3 && next < fields.len() && fields.at(next).tag == 163 {
+        ext = parse_extensions(d, fields.at(next))?
+        next = next + 1
+    }
+    if next != fields.len() {
+        return Err(X509Error.Malformed)
+    }
+    let algorithm = parse_signature_algorithm(d, parts.at(1))?
+    let spki_bytes = whole(d, spki)
+    Ok(Certificate(
+        der: d,
+        tbs: whole(d, parts.at(0)),
+        algorithm: algorithm,
+        signature: d.slice(sig.start + 1, sig.end),
+        serial: content(d, serial),
+        issuer: whole(d, issuer),
+        subject: whole(d, subject),
+        spki: spki_bytes,
+        not_before: not_before,
+        not_after: not_after,
+        key: spki_key(spki_bytes),
+        ext: ext
+    ))
+}
+
+fn no_extensions() -> Extensions {
+    Extensions(
+        has_basic: false,
+        ca: false,
+        path_len: -1,
+        has_key_usage: false,
+        key_usage: Bytes.new(),
+        key_usage_bits: 0,
+        has_eku: false,
+        eku: [],
+        ski: Bytes.new(),
+        aki: Bytes.new(),
+        dns: [],
+        ips: [],
+        permitted_dns: [],
+        excluded_dns: [],
+        permitted_ips: [],
+        excluded_ips: []
+    )
+}
+
+// ---- Time ---------------------------------------------------------------------------
+
+// `count` decimal digits at `pos`, or -1.
+fn digits(d: Bytes, pos: Int, count: Int) -> Int {
+    var value = 0
+    for i in 0..count {
+        let c = d.at(pos + i).to_int()
+        if c < 48 || c > 57 {
+            return -1
+        }
+        value = value * 10 + c - 48
+    }
+    value
+}
+
+fn days_in_month(year: Int, month: Int) -> Int {
+    if month == 2 {
+        if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+            29
+        } else {
+            28
+        }
+    } else if month == 4 || month == 6 || month == 9 || month == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+// Days from 1970-01-01 to the civil date, for years from 1.
+fn days_from_civil(year: Int, month: Int, day: Int) -> Int {
+    let y = if month <= 2 { year - 1 } else { year }
+    let era = y / 400
+    let yoe = y - era * 400
+    let mp = (month + 9) % 12
+    let doy = (153 * mp + 2) / 5 + day - 1
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    era * 146097 + doe - 719468
+}
+
+// A UTCTime `YYMMDDHHMMSSZ` (years 1950 to 2049) or a GeneralizedTime
+// `YYYYMMDDHHMMSSZ`, in seconds since 1970. Seconds are required, and
+// fractions, offsets and a missing `Z` are refused.
+fn parse_time(d: Bytes, t: Tlv) -> Result<Int, X509Error> {
+    var pos = t.start
+    var year = 0
+    if t.tag == 23 && t.end - t.start == 13 {
+        let yy = digits(d, pos, 2)
+        if yy < 0 {
+            return Err(X509Error.Malformed)
+        }
+        year = if yy >= 50 { 1900 + yy } else { 2000 + yy }
+        pos = pos + 2
+    } else if t.tag == 24 && t.end - t.start == 15 {
+        year = digits(d, pos, 4)
+        if year < 0 {
+            return Err(X509Error.Malformed)
+        }
+        pos = pos + 4
+    } else {
+        return Err(X509Error.Malformed)
+    }
+    let month = digits(d, pos, 2)
+    let day = digits(d, pos + 2, 2)
+    let hour = digits(d, pos + 4, 2)
+    let minute = digits(d, pos + 6, 2)
+    let second = digits(d, pos + 8, 2)
+    if d.at(pos + 10) != 90 || month < 1 || month > 12 || year < 1 {
+        return Err(X509Error.Malformed)
+    }
+    if day < 1 || day > days_in_month(year, month) || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 {
+        return Err(X509Error.Malformed)
+    }
+    Ok(days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second)
+}
+
+// ---- Algorithms and keys ------------------------------------------------------------
+
+fn sha256_oid() -> String {
+    "608648016503040201"
+}
+
+fn sha384_oid() -> String {
+    "608648016503040202"
+}
+
+fn sha512_oid() -> String {
+    "608648016503040203"
+}
+
+// The `AlgorithmIdentifier`'s object identifier, as hexadecimal of its
+// content, and its parameters if any.
+struct Algorithm { oid: String, params: Option<Tlv> }
+
+fn read_algorithm(d: Bytes, t: Tlv) -> Result<Algorithm, X509Error> {
+    if t.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    let parts = children(d, t)?
+    if parts.len() < 1 || parts.len() > 2 || parts.at(0).tag != 6 || parts.at(0).end == parts.at(0).start {
+        return Err(X509Error.Malformed)
+    }
+    let params = if parts.len() == 2 { Some(parts.at(1)) } else { None }
+    Ok(Algorithm(oid: content(d, parts.at(0)).to_hex(), params: params))
+}
+
+fn is_null(t: Option<Tlv>) -> Bool {
+    match t {
+        Some(p) => p.tag == 5 && p.end == p.start
+        None => false
+    }
+}
+
+fn is_absent(t: Option<Tlv>) -> Bool {
+    match t {
+        Some(_) => false
+        None => true
+    }
+}
+
+// The hash a hash algorithm's OID names, as 256, 384 or 512, or 0 when
+// the algorithm is anything else or has parameters other than NULL or none.
+fn hash_of(d: Bytes, t: Tlv) -> Int {
+    match read_algorithm(d, t) {
+        Err(_) => 0
+        Ok(a) => if !is_null(a.params) && !is_absent(a.params) {
+            0
+        } else if a.oid == sha256_oid() {
+            256
+        } else if a.oid == sha384_oid() {
+            384
+        } else if a.oid == sha512_oid() {
+            512
+        } else {
+            0
+        }
+    }
+}
+
+fn parse_signature_algorithm(d: Bytes, t: Tlv) -> Result<SigAlg, X509Error> {
+    let a = read_algorithm(d, t)?
+    if a.oid == "2a8648ce3d040302" && is_absent(a.params) {
+        return Ok(SigAlg.EcdsaSha256)
+    }
+    if a.oid == "2a8648ce3d040303" && is_absent(a.params) {
+        return Ok(SigAlg.EcdsaSha384)
+    }
+    if a.oid == "2a8648ce3d040304" && is_absent(a.params) {
+        return Ok(SigAlg.EcdsaSha512)
+    }
+    if a.oid == "2a864886f70d01010b" && is_null(a.params) {
+        return Ok(SigAlg.RsaSha256)
+    }
+    if a.oid == "2a864886f70d01010c" && is_null(a.params) {
+        return Ok(SigAlg.RsaSha384)
+    }
+    if a.oid == "2a864886f70d01010d" && is_null(a.params) {
+        return Ok(SigAlg.RsaSha512)
+    }
+    if a.oid == "2b6570" && is_absent(a.params) {
+        return Ok(SigAlg.EdDsa)
+    }
+    if a.oid == "2a864886f70d01010a" {
+        return pss_algorithm(d, a.params)
+    }
+    // Everything else, MD5 and SHA-1 signatures included, parses and
+    // fails when a path needs it.
+    Ok(SigAlg.Unsupported)
+}
+
+// `RSASSA-PSS-params`: the hash, MGF1 over the same hash, and a salt as
+// long as the digest, the only form `rsa.verify_pss` checks.
+fn pss_algorithm(d: Bytes, params: Option<Tlv>) -> Result<SigAlg, X509Error> {
+    let p = match params {
+        Some(t) => t
+        None => {
+            return Ok(SigAlg.Unsupported)
+        }
+    }
+    if p.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    let fields = children(d, p)?
+    if fields.len() < 3 || fields.len() > 4 || fields.at(0).tag != 160 || fields.at(1).tag != 161 || fields.at(2).tag != 162 {
+        return Ok(SigAlg.Unsupported)
+    }
+    let hash = hash_of(d, only_child(d, fields.at(0))?)
+    let mask = read_algorithm(d, only_child(d, fields.at(1))?)?
+    var mask_hash = 0
+    if mask.oid == "2a864886f70d010108" {
+        match mask.params {
+            Some(inner) => {
+                mask_hash = hash_of(d, inner)
+            }
+            None => {}
+        }
+    }
+    let salt = small_integer(d, only_child(d, fields.at(2))?)?
+    if fields.len() == 4 {
+        if fields.at(3).tag != 163 || small_integer(d, only_child(d, fields.at(3))?)? != 1 {
+            return Ok(SigAlg.Unsupported)
+        }
+    }
+    if hash == 0 || mask_hash != hash || salt != hash / 8 {
+        return Ok(SigAlg.Unsupported)
+    }
+    if hash == 256 {
+        Ok(SigAlg.PssSha256)
+    } else if hash == 384 {
+        Ok(SigAlg.PssSha384)
+    } else {
+        Ok(SigAlg.PssSha512)
+    }
+}
+
+// A SubjectPublicKeyInfo must be an `AlgorithmIdentifier` and a BIT STRING
+// of whole bytes, and nothing else.
+fn check_spki_shape(d: Bytes, spki: Tlv) -> Result<(), X509Error> {
+    let parts = children(d, spki)?
+    if parts.len() != 2 || parts.at(0).tag != 48 || parts.at(1).tag != 3 {
+        return Err(X509Error.Malformed)
+    }
+    let bits = parts.at(1)
+    if bits.end - bits.start < 1 || d.at(bits.start) != 0 {
+        return Err(X509Error.Malformed)
+    }
+    read_algorithm(d, parts.at(0))?
+    Ok(())
+}
+
+// The key a SubjectPublicKeyInfo holds, or `None` for an algorithm this
+// module does not read or a key it refuses.
+fn spki_key(spki: Bytes) -> Option<PublicKey> {
+    let top = match read_tlv(spki, 0, spki.len()) {
+        Ok(t) => t
+        Err(_) => {
+            return None
+        }
+    }
+    if top.tag != 48 || top.end != spki.len() {
+        return None
+    }
+    let parts = match children(spki, top) {
+        Ok(p) => p
+        Err(_) => {
+            return None
+        }
+    }
+    if parts.len() != 2 || parts.at(1).tag != 3 || parts.at(1).end - parts.at(1).start < 1 {
+        return None
+    }
+    let alg = match read_algorithm(spki, parts.at(0)) {
+        Ok(a) => a
+        Err(_) => {
+            return None
+        }
+    }
+    let bits = parts.at(1)
+    let key = spki.slice(bits.start + 1, bits.end)
+    if alg.oid == "2a8648ce3d0201" {
+        // id-ecPublicKey, with the named curve as its parameter.
+        let curve = match alg.params {
+            Some(p) => p
+            None => {
+                return None
+            }
+        }
+        if curve.tag != 6 {
+            return None
+        }
+        let name = content(spki, curve).to_hex()
+        if name == "2a8648ce3d030107" {
+            return match ecdsa.PublicKey.from_bytes(ecdsa.Curve.P256, key) {
+                Some(k) => Some(PublicKey.Ecdsa(k))
+                None => None
+            }
+        }
+        if name == "2b81040022" {
+            return match ecdsa.PublicKey.from_bytes(ecdsa.Curve.P384, key) {
+                Some(k) => Some(PublicKey.Ecdsa(k))
+                None => None
+            }
+        }
+        return None
+    }
+    if alg.oid == "2a864886f70d010101" && is_null(alg.params) {
+        let seq = match read_tlv(key, 0, key.len()) {
+            Ok(t) => t
+            Err(_) => {
+                return None
+            }
+        }
+        if seq.tag != 48 || seq.end != key.len() {
+            return None
+        }
+        let ints = match children(key, seq) {
+            Ok(p) => p
+            Err(_) => {
+                return None
+            }
+        }
+        if ints.len() != 2 || ints.at(0).tag != 2 || ints.at(1).tag != 2 {
+            return None
+        }
+        // Both integers are positive.
+        if ints.at(0).end == ints.at(0).start || ints.at(1).end == ints.at(1).start {
+            return None
+        }
+        if key.at(ints.at(0).start) >= 128 || key.at(ints.at(1).start) >= 128 {
+            return None
+        }
+        return match rsa.PublicKey.from_components(content(key, ints.at(0)), content(key, ints.at(1))) {
+            Some(k) => Some(PublicKey.Rsa(k))
+            None => None
+        }
+    }
+    if alg.oid == "2b6570" && is_absent(alg.params) {
+        return match ed25519.PublicKey.from_bytes(key) {
+            Some(k) => Some(PublicKey.Ed25519(k))
+            None => None
+        }
+    }
+    None
+}
+
+// ---- Extensions ---------------------------------------------------------------------
+
+// Extensions that are understood well enough, or irrelevant enough to
+// path validation, that a critical one is no obstacle: subject and
+// authority key identifiers, certificate policies and mappings, policy
+// constraints, inhibit any-policy, CRL distribution points and authority
+// information access.
+fn ignorable_extension(oid: String) -> Bool {
+    oid == "551d0e" || oid == "551d23" || oid == "551d20" || oid == "551d21" || oid == "551d24" || oid == "551d36" || oid == "551d1f" || oid == "2b06010505070101" || oid == "551d09" || oid == "551d10" || oid == "551d12" || oid == "551d2e"
+}
+
+fn parse_extensions(d: Bytes, wrapper: Tlv) -> Result<Extensions, X509Error> {
+    let seq = only_child(d, wrapper)?
+    if seq.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    let list = children(d, seq)?
+    if list.len() == 0 {
+        return Err(X509Error.Malformed)
+    }
+    var x = no_extensions()
+    var seen: List<String> = []
+    for e in list {
+        if e.tag != 48 {
+            return Err(X509Error.Malformed)
+        }
+        let f = children(d, e)?
+        if f.len() < 2 || f.len() > 3 || f.at(0).tag != 6 || f.at(0).end == f.at(0).start {
+            return Err(X509Error.Malformed)
+        }
+        let oid = content(d, f.at(0)).to_hex()
+        var critical = false
+        if f.len() == 3 {
+            // DER leaves a false `critical` out.
+            if !boolean(d, f.at(1))? {
+                return Err(X509Error.Malformed)
+            }
+            critical = true
+        }
+        let v = f.at(f.len() - 1)
+        if v.tag != 4 {
+            return Err(X509Error.Malformed)
+        }
+        for earlier in seen {
+            if earlier == oid {
+                return Err(X509Error.Malformed)
+            }
+        }
+        seen.push(oid)
+        if oid == "551d13" {
+            x = basic_constraints(d, v, x)?
+        } else if oid == "551d0f" {
+            x = key_usage(d, v, x)?
+        } else if oid == "551d25" {
+            x = extended_key_usage(d, v, x)?
+        } else if oid == "551d11" {
+            x = subject_alt_names(d, v, x)?
+        } else if oid == "551d1e" {
+            x = name_constraints(d, v, x)?
+        } else if oid == "551d0e" {
+            x = subject_key_id(d, v, x)?
+        } else if oid == "551d23" {
+            x = authority_key_id(d, v, x)?
+        } else if critical && !ignorable_extension(oid) {
+            return Err(X509Error.UnsupportedCriticalExtension)
+        }
+    }
+    Ok(x)
+}
+
+// The subject key identifier: an OCTET STRING.
+fn subject_key_id(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let id = only_child(d, v)?
+    if id.tag != 4 {
+        return Err(X509Error.Malformed)
+    }
+    out.ski = content(d, id)
+    Ok(out)
+}
+
+// The authority key identifier: a SEQUENCE whose `keyIdentifier [0]`, if
+// present, is the issuer's key identifier. The issuer's name and serial
+// number, if present, are not used.
+fn authority_key_id(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let seq = only_child(d, v)?
+    if seq.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    for field in children(d, seq)? {
+        if field.tag == 128 {
+            out.aki = content(d, field)
+        }
+    }
+    Ok(out)
+}
+
+fn basic_constraints(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let seq = only_child(d, v)?
+    if seq.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    let f = children(d, seq)?
+    var i = 0
+    out.has_basic = true
+    if i < f.len() && f.at(i).tag == 1 {
+        // DER leaves the default `false` out.
+        if !boolean(d, f.at(i))? {
+            return Err(X509Error.Malformed)
+        }
+        out.ca = true
+        i = i + 1
+    }
+    if i < f.len() {
+        out.path_len = small_integer(d, f.at(i))?
+        i = i + 1
+    }
+    if i != f.len() {
+        return Err(X509Error.Malformed)
+    }
+    Ok(out)
+}
+
+fn key_usage(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let bits = only_child(d, v)?
+    let n = bits.end - bits.start
+    if bits.tag != 3 || n < 1 {
+        return Err(X509Error.Malformed)
+    }
+    let unused = d.at(bits.start).to_int()
+    if unused > 7 || (n == 1 && unused != 0) {
+        return Err(X509Error.Malformed)
+    }
+    out.has_key_usage = true
+    out.key_usage = d.slice(bits.start + 1, bits.end)
+    out.key_usage_bits = 8 * (n - 1) - unused
+    Ok(out)
+}
+
+fn extended_key_usage(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let seq = only_child(d, v)?
+    if seq.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    out.has_eku = true
+    for oid in children(d, seq)? {
+        if oid.tag != 6 || oid.end == oid.start {
+            return Err(X509Error.Malformed)
+        }
+        out.eku.push(content(d, oid).to_hex())
+    }
+    Ok(out)
+}
+
+// Whether every byte is ASCII and none is NUL.
+fn plain_ascii(b: Bytes) -> Bool {
+    for i in 0..b.len() {
+        if b.at(i) == 0 || b.at(i) >= 128 {
+            return false
+        }
+    }
+    true
+}
+
+// A `dNSName` as lower-case text, or `None` unless it is plain ASCII.
+fn dns_text(b: Bytes) -> Option<String> {
+    if !plain_ascii(b) {
+        return None
+    }
+    match b.to_text() {
+        Some(text) => Some(text.to_lowercase())
+        None => None
+    }
+}
+
+fn subject_alt_names(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let seq = only_child(d, v)?
+    if seq.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    for name in children(d, seq)? {
+        if name.tag == 130 {
+            match dns_text(content(d, name)) {
+                Some(text) => {
+                    out.dns.push(text)
+                }
+                None => {}
+            }
+        } else if name.tag == 135 {
+            let n = name.end - name.start
+            if n != 4 && n != 16 {
+                return Err(X509Error.Malformed)
+            }
+            out.ips.push(content(d, name))
+        }
+    }
+    Ok(out)
+}
+
+fn name_constraints(d: Bytes, v: Tlv, x: Extensions) -> Result<Extensions, X509Error> {
+    var out = x
+    let seq = only_child(d, v)?
+    if seq.tag != 48 {
+        return Err(X509Error.Malformed)
+    }
+    for tree in children(d, seq)? {
+        // permittedSubtrees [0], excludedSubtrees [1]
+        if tree.tag != 160 && tree.tag != 161 {
+            return Err(X509Error.Malformed)
+        }
+        let permitted = tree.tag == 160
+        var count = 0
+        for subtree in children(d, tree)? {
+            if subtree.tag != 48 {
+                return Err(X509Error.Malformed)
+            }
+            let f = children(d, subtree)?
+            // The base alone: minimum 0 and no maximum are the only values RFC 5280 allows.
+            if f.len() != 1 {
+                return Err(X509Error.Malformed)
+            }
+            count = count + 1
+            let base = f.at(0)
+            if base.tag == 130 {
+                if !plain_ascii(content(d, base)) {
+                    return Err(X509Error.Malformed)
+                }
+                let text = content(d, base).to_text().unwrap_or("").to_lowercase()
+                if permitted {
+                    out.permitted_dns.push(text)
+                } else {
+                    out.excluded_dns.push(text)
+                }
+            } else if base.tag == 135 {
+                let n = base.end - base.start
+                if n != 8 && n != 32 {
+                    return Err(X509Error.Malformed)
+                }
+                if permitted {
+                    out.permitted_ips.push(content(d, base))
+                } else {
+                    out.excluded_ips.push(content(d, base))
+                }
+            }
+        }
+        if count == 0 {
+            return Err(X509Error.Malformed)
+        }
+    }
+    Ok(out)
+}
+
+// ---- Names --------------------------------------------------------------------------
+
+// Whether `name` is `base` or below it. A base with a leading dot
+// matches only the names below it. An empty base matches every name.
+fn dns_in_subtree(name: String, base: String) -> Bool {
+    if base == "" {
+        return true
+    }
+    if base.starts_with(".") {
+        return name.ends_with(base)
+    }
+    name == base || name.ends_with(".{base}")
+}
+
+// A wildcard name stands for the names below its base.
+fn constraint_name(name: String) -> String {
+    if name.starts_with("*.") {
+        name.slice(2, name.len())
+    } else {
+        name
+    }
+}
+
+// Whether `address` (4 or 16 bytes) is inside `subnet`, an address and a
+// mask of the same length.
+fn ip_in_subtree(address: Bytes, subnet: Bytes) -> Bool {
+    let n = address.len()
+    if subnet.len() != 2 * n {
+        return false
+    }
+    for i in 0..n {
+        if (address.at(i) & subnet.at(n + i)) != (subnet.at(i) & subnet.at(n + i)) {
+            return false
+        }
+    }
+    true
+}
+
+// Whether the DNS names and addresses of `leaf` satisfy `ca`'s name
+// constraints.
+fn names_allowed(leaf: Certificate, ca: Extensions) -> Bool {
+    for raw in leaf.ext.dns {
+        let name = constraint_name(raw)
+        for base in ca.excluded_dns {
+            if dns_in_subtree(name, base) {
+                return false
+            }
+        }
+        if ca.permitted_dns.len() > 0 {
+            var inside = false
+            for base in ca.permitted_dns {
+                if dns_in_subtree(name, base) {
+                    inside = true
+                }
+            }
+            if !inside {
+                return false
+            }
+        }
+    }
+    for address in leaf.ext.ips {
+        for subnet in ca.excluded_ips {
+            if ip_in_subtree(address, subnet) {
+                return false
+            }
+        }
+        // Only subnets of the address' own family limit it.
+        var family = false
+        var inside = false
+        for subnet in ca.permitted_ips {
+            if subnet.len() == 2 * address.len() {
+                family = true
+                if ip_in_subtree(address, subnet) {
+                    inside = true
+                }
+            }
+        }
+        if family && !inside {
+            return false
+        }
+    }
+    true
+}
+
+// ---- Host names ---------------------------------------------------------------------
+
+// The value of a hexadecimal digit, or -1.
+fn hex_value(c: String) -> Int {
+    let all = "0123456789abcdef".chars()
+    for i in 0..all.len() {
+        if all.at(i) == c {
+            return i
+        }
+    }
+    -1
+}
+
+// The four bytes of an IPv4 literal such as `192.0.2.1`, or `None`.
+fn parse_ipv4(text: String) -> Option<Bytes> {
+    let parts = text.split(".")
+    if parts.len() != 4 {
+        return None
+    }
+    var out = Bytes.new()
+    for part in parts {
+        let n = part.len()
+        if n < 1 || n > 3 || (n > 1 && part.starts_with("0")) {
+            return None
+        }
+        var value = 0
+        for c in part.chars() {
+            let digit = hex_value(c)
+            if digit < 0 || digit > 9 {
+                return None
+            }
+            value = value * 10 + digit
+        }
+        if value > 255 {
+            return None
+        }
+        out.push(value.to_u8())
+    }
+    Some(out)
+}
+
+// The groups of one side of an IPv6 literal, or `None`.
+fn ipv6_groups(text: String) -> Option<List<Int>> {
+    var out: List<Int> = []
+    if text == "" {
+        return Some(out)
+    }
+    for group in text.split(":") {
+        let n = group.len()
+        if n < 1 || n > 4 {
+            return None
+        }
+        var value = 0
+        for c in group.chars() {
+            let digit = hex_value(c)
+            if digit < 0 {
+                return None
+            }
+            value = value * 16 + digit
+        }
+        out.push(value)
+    }
+    Some(out)
+}
+
+// The 16 bytes of an IPv6 literal in lower-case colon-separated form,
+// with at most one `::`, or `None`.
+fn parse_ipv6(text: String) -> Option<Bytes> {
+    var groups: List<Int> = []
+    let halves = text.split("::")
+    if halves.len() == 1 {
+        match ipv6_groups(text) {
+            Some(g) => {
+                groups = g
+            }
+            None => {
+                return None
+            }
+        }
+        if groups.len() != 8 {
+            return None
+        }
+    } else if halves.len() == 2 {
+        let left = match ipv6_groups(halves.at(0)) {
+            Some(g) => g
+            None => {
+                return None
+            }
+        }
+        let right = match ipv6_groups(halves.at(1)) {
+            Some(g) => g
+            None => {
+                return None
+            }
+        }
+        if left.len() + right.len() > 7 {
+            return None
+        }
+        for g in left {
+            groups.push(g)
+        }
+        for _ in 0..(8 - left.len() - right.len()) {
+            groups.push(0)
+        }
+        for g in right {
+            groups.push(g)
+        }
+    } else {
+        return None
+    }
+    var out = Bytes.new()
+    for g in groups {
+        out.push((g / 256).to_u8())
+        out.push((g % 256).to_u8())
+    }
+    Some(out)
+}
+
+// Whether the presented name `pattern` (lower case) covers `host`.
+fn dns_matches(pattern: String, host: String) -> Bool {
+    if !pattern.starts_with("*.") {
+        return !pattern.contains("*") && pattern == host
+    }
+    let rest = pattern.slice(2, pattern.len())
+    if rest.contains("*") || !rest.contains(".") || rest.starts_with(".") || rest.contains("..") || rest.ends_with(".") {
+        return false
+    }
+    let labels = host.split(".")
+    if labels.len() < 3 {
+        return false
+    }
+    let first = labels.at(0)
+    if first.len() == 0 {
+        return false
+    }
+    host.slice(first.len() + 1, host.len()) == rest
+}
+
+fn host_matches(cert: Certificate, host: String) -> Bool {
+    var name = host.to_lowercase()
+    if name.contains(":") {
+        match parse_ipv6(name) {
+            Some(address) => {
+                for ip in cert.ext.ips {
+                    if ip == address {
+                        return true
+                    }
+                }
+            }
+            None => {}
+        }
+        return false
+    }
+    match parse_ipv4(name) {
+        Some(address) => {
+            for ip in cert.ext.ips {
+                if ip == address {
+                    return true
+                }
+            }
+            return false
+        }
+        None => {}
+    }
+    if name.ends_with(".") {
+        name = name.slice(0, name.len() - 1)
+    }
+    if name == "" || name.starts_with(".") || name.contains("..") || !plain_ascii(name.to_bytes()) {
+        return false
+    }
+    for pattern in cert.ext.dns {
+        if dns_matches(pattern, name) {
+            return true
+        }
+    }
+    false
+}
+
+// ---- PEM ----------------------------------------------------------------------------
+
+// The value of the base64 character `c` (a byte), or -1.
+fn base64_value(c: Int) -> Int {
+    if c >= 65 && c <= 90 {
+        c - 65
+    } else if c >= 97 && c <= 122 {
+        c - 71
+    } else if c >= 48 && c <= 57 {
+        c + 4
+    } else if c == 43 {
+        62
+    } else if c == 47 {
+        63
+    } else {
+        -1
+    }
+}
+
+// The bytes `text` encodes in strictly padded standard base64.
+fn decode_base64(text: Untrusted<Bytes>) -> Option<Bytes> {
+    let n = text.len()
+    if n == 0 || n % 4 != 0 {
+        return None
+    }
+    var padding = 0
+    if text.at(n - 1) == 61 {
+        padding = 1
+        if text.at(n - 2) == 61 {
+            padding = 2
+        }
+    }
+    var out = Bytes.new()
+    var i = 0
+    while i < n {
+        var acc: U32 = 0
+        var count = 4
+        if i + 4 == n {
+            count = 4 - padding
+        }
+        for j in 0..4 {
+            var v = 0
+            if j < count {
+                v = base64_value(text.at(i + j).to_int())
+                if v < 0 {
+                    return None
+                }
+            }
+            acc = (acc << 6) | v.to_u32()
+        }
+        out.push((acc >> 16).wrapping_to_u8())
+        if count > 2 {
+            out.push((acc >> 8).wrapping_to_u8())
+        }
+        if count > 3 {
+            out.push(acc.wrapping_to_u8())
+        }
+        if count == 3 && (acc & 255) != 0 {
+            return None
+        }
+        if count == 2 && (acc & 65535) != 0 {
+            return None
+        }
+        i = i + 4
+    }
+    Some(out)
+}
+
+// The DER of every certificate block of `pem`. Blank lines may stand
+// between blocks, and nothing else may stand outside them.
+fn pem_blocks(pem: Untrusted<String>) -> Result<List<Bytes>, X509Error> {
+    var blocks: List<Bytes> = []
+    var inside = false
+    var body = ""
+    for raw in pem.lines() {
+        let line = raw.trim()
+        if !inside {
+            if line == "-----BEGIN CERTIFICATE-----" {
+                inside = true
+                body = ""
+            } else if line != "" {
+                return Err(X509Error.Malformed)
+            }
+        } else if line == "-----END CERTIFICATE-----" {
+            match decode_base64(body.to_bytes()) {
+                Some(der) => {
+                    blocks.push(der)
+                }
+                None => {
+                    return Err(X509Error.Malformed)
+                }
+            }
+            inside = false
+        } else {
+            body = "{body}{line}"
+        }
+    }
+    if inside || blocks.len() == 0 {
+        return Err(X509Error.Malformed)
+    }
+    Ok(blocks)
+}
