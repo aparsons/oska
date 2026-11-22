@@ -556,6 +556,30 @@ What remains:
 
 At `9760b76e`, on this session's x86_64 VM, with the musl target: `cargo test --target x86_64-unknown-linux-musl -p oska-sys -p oska-run` (the `oska-run` tests, `short_copies.rs` among them, and the allocator's stress tests) and `cargo test --target x86_64-unknown-linux-musl -p oskac --test native_files --test native_parity --test native_default` (the differential suite, which runs this `oskac`'s interpreter against its native executables) passed, as they did at `2a14a06d`. CI's `musl` job runs the same commands; it passed at `6c47e617` and at `9760b76e`.
 
+## 10. Release profile: fat LTO and one codegen unit (2026-11-22, spec #577, ticket #580)
+
+The workspace now sets `lto = "fat"` and `codegen-units = 1` in `[profile.release]`. It was empty. This is a new run on the same kind of x86_64 KVM container as the memcpy note, but a separate run: the figures differ a little from that note (for example binary size, and build time of 24 s there against 20 s here). Use this table. The tree is `0a7a786`, before #570. Times are the best CPU time of 3 runs from `scripts/bench-native.sh 3`, with noise of about ±10%. Each row gives the value without the setting, then with it, for glibc and for musl.
+
+| Measure | glibc before | glibc after | musl before | musl after |
+| --- | ---: | ---: | ---: | ---: |
+| `cargo build --release -p oskac`, clean | 20 s | 48 s | 25 s | 50 s |
+| `oskac` binary size | 6.14 MiB | 4.45 MiB | 6.12 MiB | 4.58 MiB |
+| Interpreter, `loop` | 677 ms | 446 ms | 593 ms | 452 ms |
+| Interpreter, `text` | 102 ms | 95 ms | 241 ms | 232 ms |
+| Interpreter, `lists` | 631 ms | 499 ms | 622 ms | 672 ms |
+| Interpreter, `recursion` | 488 ms | 487 ms | 1192 ms | 1327 ms |
+| Interpreter, `site` | 6063 ms | 5482 ms | 10688 ms | 10386 ms |
+| Native `site` build | 236 ms | 257 ms | 236 ms | 242 ms |
+
+What it shows:
+
+- **Size and build time:** the binary is 27% smaller on glibc and 25% smaller on musl. A clean release build takes about 2.4 times (glibc) and 2 times (musl) as long. The release workflow's `build` job has `timeout-minutes: 20`. A clean x86_64 Linux build takes under a minute here. The aarch64, macOS and Windows jobs also get the setting and were not timed.
+- **Speed:** LTO helps glibc more than musl. The glibc interpreter is 10% faster on the site build and 34% faster on `loop`. The musl site build is only 3% faster. musl `lists` (+8%) and `recursion` (+11%) are slightly slower, which is at or past the noise. The memcpy note measured a larger gain (22% on glibc) on a different run, so treat the gain as 10% or more on glibc, and small on musl.
+- **The musl to glibc ratio gets worse, not better:** the interpreter on the site build was 1.76x before (10688 against 6063 ms) and is 1.89x after (10386 against 5482 ms). The 1.10x threshold from #521 therefore has to name the profile: compare musl and glibc built with the same settings. Both columns here were measured on one pre-#570 tree and ticket #579 repeats them after #570.
+- **Native output:** the generated executables do not change. The native `site` build's small differences (236 against 257 ms) are noise, because LTO touches `oskac` itself, not the code it writes.
+
+Not done: no `panic = "abort"` (ticket #583), no PGO, no `target-cpu` (see the memcpy note).
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.

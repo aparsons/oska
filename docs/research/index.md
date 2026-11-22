@@ -23,6 +23,7 @@ Each note answers one question, with its sources and the date it was written. A 
 - [Calling Windows through kernel32 and ntdll](2026-11-windows-kernel32-calls.md) (2026-11-19): the same question for Windows, which has no file descriptors, signals or `errno`. Accepted before the Windows backend was built; see [ADR 0020](../adr/0020-windows-intrinsics-are-kernel32-and-ntdll-calls.md).
 - [An `oskac` that does not need glibc](2026-11-oskac-without-glibc.md) (2026-11-19): how the Linux `oskac` can run on any Linux, a `FROM scratch` container included, by building it for musl. See [ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md).
 - [Why the musl build of `oskac` is slower](2026-11-musl-oskac-performance.md) (2026-11-20): the time goes to musl's C library (its allocator, returning memory to the kernel, and `memcpy`), but the cheapest fix is in Oska: allocate and copy less. Measured on x86_64 only; aarch64 is pending.
+- [How to replace `memcpy` in the musl build, and what else would speed up native performance](2026-11-memcpy-replacement.md) (2026-11-22): replace only `memcpy` and `memmove`, on x86_64 musl, in `oska-sys`: measured to close about a third of the interpreter gap and over half of the compile gap, before PR #570 (after it, less). `lto = "fat"` is the cheaper, larger win (10 to 22% on the glibc interpreter, less on musl). aarch64 is not measured.
 
 ## Installing, releases and the site
 
