@@ -558,6 +558,47 @@ test_stage_site_refuses_an_unlisted_bundle() {
   [ ! -e site/releases/v1.2.3 ] || fail "copied the release"
 }
 
+# Build provenance (spec #295): only the attest job may mint attestations
+# (id-token and attestations write), it runs on tags only, and it runs
+# before sign so the signature covers the listed bundle.
+test_only_the_attest_job_can_write_attestations_and_only_on_tags() {
+  local workflows=$here/../../.github/workflows file found=
+  for file in "$workflows"/*.yml; do
+    if grep -Eq '^permissions:.*(id-token|attestations|write-all)' "$file" ||
+      [ -n "$(awk '/^permissions:/ {p = 1; next} /^[^ ]/ {p = 0} p && /id-token|attestations/' "$file")" ]; then
+      fail "$(basename "$file") gives attestation rights to every job"
+    fi
+    while read -r job; do
+      [ -n "$job" ] || continue
+      found="$found $(basename "$file"):$job"
+    done < <(jobs_matching "$file" 'attestations:|write-all')
+  done
+  [ "$found" = " release.yml:attest" ] || fail "jobs with attestation rights:$found"
+  local wf=$here/../../.github/workflows/release.yml attest
+  # pages.yml's deploy job has id-token for Pages; in the release workflow
+  # only attest has it.
+  [ "$(jobs_matching "$wf" 'id-token:')" = attest ] || fail "a release job other than attest has id-token"
+  attest=$(job_text "$wf" attest)
+  grep -q '^    if: github.event_name == '"'push'"'$' <<<"$attest" || fail "attest runs on a pull request"
+  grep -q '^    needs: \[assemble, smoke-image\]$' <<<"$attest" || fail "attest does not follow assemble and the smoke test"
+  grep -q 'actions/attest-build-provenance@[0-9a-f]\{40\} # v' <<<"$attest" || fail "the attest action is not pinned by SHA"
+  grep -q 'scripts/release/add-bundle.sh' <<<"$attest" || fail "attest does not list the bundle"
+  grep -q 'SHA256SUMS.intoto.jsonl' <<<"$attest" || fail "attest does not publish the attestation of SHA256SUMS"
+  grep -q 'name: attested-' <<<"$(job_text "$wf" sign)" || fail "sign does not sign what attest produced"
+}
+
+# SHA256SUMS cannot list its own attestation: it is the one unlisted file
+# the verifiers allow, by name, and no other unlisted file is.
+test_verify_allows_the_attestation_of_the_checksums_by_name_only() {
+  bundled_release
+  fake_bundle out/v1.2.3/SHA256SUMS.intoto.jsonl
+  "$here/verify.sh" out/v1.2.3 key.pub
+  both_accept out/v1.2.3 key.pub
+  fake_bundle out/v1.2.3/other.intoto.jsonl
+  if "$here/verify.sh" out/v1.2.3 key.pub; then fail "verified another unlisted bundle"; fi
+  both_refuse out/v1.2.3 key.pub
+}
+
 # ---- The Oska verifier on its own (verify.osk) -----------------------------------
 
 test_the_oska_verifier_pins_the_committed_release_key() {
@@ -1589,8 +1630,8 @@ test_the_release_smoke_tests_the_musl_builds_on_both_processors() {
   grep -q 'scripts/release/smoke-image.sh ' <<<"$smoke" || fail "does not run smoke-image.sh"
   # shellcheck disable=SC2016 # the workflow's own text, not expanded here
   grep -q 'test "$(uname -m)" = "$MACHINE"' <<<"$smoke" || fail "does not check the processor"
-  grep -q '^    needs: \[assemble, smoke-image\]$' <<<"$(job_text "$wf" sign)" ||
-    fail "sign does not wait for the smoke test"
+  grep -q '^    needs: \[assemble, smoke-image, attest\]$' <<<"$(job_text "$wf" sign)" ||
+    fail "sign does not wait for the smoke test and the attestations"
 }
 
 test_the_index_is_resigned_monthly_and_on_demand_from_main_only() {
