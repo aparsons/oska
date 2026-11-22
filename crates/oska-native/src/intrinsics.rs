@@ -115,6 +115,19 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ),
     ("Clock.now_millis", Prelude::Runtime("clock_now_millis")),
     ("Random.next_int", Prelude::Runtime("random_next_int")),
+    ("Budget.limit", Prelude::Runtime("budget_limit")),
+    ("Budget.remaining", Prelude::Runtime("budget_remaining")),
+    ("Budget.spent", Prelude::Runtime("budget_spent")),
+    ("Budget.reserve", Prelude::Runtime("budget_reserve")),
+    ("Reservation.debit", Prelude::Runtime("reservation_debit")),
+    (
+        "Reservation.release",
+        Prelude::Runtime("reservation_release"),
+    ),
+    (
+        "OverBudget.to_string",
+        Prelude::Runtime("over_budget_to_string"),
+    ),
     ("String.to_string", Prelude::Identity),
     ("String.eq", Prelude::Runtime("string_eq")),
     ("Int.to_string", Prelude::Runtime("int_to_string")),
@@ -1321,6 +1334,33 @@ mod tests {
         let mut implemented_sorted = implemented.clone();
         implemented_sorted.sort_unstable();
         assert_eq!(declared_sorted, implemented_sorted);
+    }
+
+    /// `std.rt` builds and reads a `Reservation` as its own `Hold`, so the
+    /// two must have the same fields, of the same types, in order.
+    #[test]
+    fn a_reservation_is_laid_out_as_std_rt_s_hold() {
+        use oska_check::program::TypeDeclKind;
+        let fields = |program: &oska_check::program::Program, name: &str| match &program
+            .types
+            .get(name)
+            .map(|decl| &decl.kind)
+        {
+            Some(TypeDeclKind::Struct(fields)) => {
+                fields.iter().map(|f| f.ty.to_string()).collect::<Vec<_>>()
+            }
+            other => panic!("`{name}` is not a struct: {other:?}"),
+        };
+        let rt = oska_check::check_toolchain_rt()
+            .program
+            .expect("std.rt should check");
+        let user = oska_check::check_module(
+            "fn main(budget: Budget) {\n    let _ = budget.reserve(1)\n}\n",
+        )
+        .program
+        .expect("the program should check");
+        assert_eq!(fields(&rt, "Hold"), ["Int", "Int", "Bool"]);
+        assert_eq!(fields(&user, "Reservation"), fields(&rt, "Hold"));
     }
 
     #[test]

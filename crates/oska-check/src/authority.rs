@@ -149,7 +149,15 @@ fn entries(
     with_signatures: bool,
 ) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
-    for item in &module.items {
+    // A `std` module written in Oska is the toolchain's code: the report
+    // is about the program's. Leaving it out hides no authority only
+    // because such a module reaches no capability, which its own test
+    // checks (`tests/std_json.rs`); one that does must not be left out.
+    for item in module
+        .items
+        .iter()
+        .filter(|i| !modules.in_std(i.span.start))
+    {
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = modules.function_name(item.span.start, None, &f.name.name);

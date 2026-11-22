@@ -42,6 +42,9 @@ impl Body<'_, '_> {
             Type::Named { name, .. } if name == layout::TASK => Ok(self.text("<task>")),
             Type::Named { name, .. } if name == builtins::APPROVAL => Ok(self.text("<approval>")),
             Type::Named { name, .. } if name == layout::SCOPE => Ok(self.text("<scope>")),
+            Type::Named { name, .. } if name == builtins::RESERVATION => {
+                Ok(self.text("<reservation>"))
+            }
             Type::Named { name, .. } if name == builtins::ARGS => {
                 self.call_runtime("debug_args", vec![value], span)
             }
@@ -254,7 +257,7 @@ impl Body<'_, '_> {
 /// holds a directory or file.
 fn capability_text(name: &str) -> Option<String> {
     let access = match name {
-        "Stdin" | "Stdout" | "Stderr" | "Env" | "Clock" | "Random" => {
+        "Stdin" | "Stdout" | "Stderr" | "Env" | "Clock" | "Random" | "Budget" => {
             return Some(format!("<{name}>"))
         }
         "Fs" => "ReadWrite",

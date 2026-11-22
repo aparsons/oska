@@ -37,6 +37,15 @@ impl Body<'_, '_, '_> {
     /// Report the use at `span` of `what`, private to `module`, with a fix
     /// that inserts `marker` at `at`.
     fn private(&mut self, what: &str, module: &str, marker: &str, at: usize, span: Span) {
+        if link::is_std_path(module) {
+            // A `std` module's privacy is not the program's to change.
+            self.out.diagnostics.push(Diagnostic::new(
+                codes::PRIVATE_TO_MODULE,
+                format!("{what} is private to `{module}`"),
+                span,
+            ));
+            return;
+        }
         let shown = marker.trim_end();
         let diagnostic = Diagnostic::new(
             codes::PRIVATE_ITEM,

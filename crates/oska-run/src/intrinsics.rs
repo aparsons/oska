@@ -15,6 +15,7 @@ use oska_check::limits;
 use oska_syntax::Span;
 
 use crate::approval;
+use crate::budget;
 use crate::bytes;
 use crate::confine::{self, Intent};
 use crate::data;
@@ -123,6 +124,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'));
     [
         INTRINSICS,
+        budget::INTRINSICS,
         approval::INTRINSICS,
         int_methods::INTRINSICS,
         data::INTRINSICS,
@@ -283,6 +285,8 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
             debug(&fields[1], out);
         }
         Value::Struct { ty, .. } if &**ty == builtins::SECRET => out.push_str("<redacted>"),
+        // Its one field is the runtime's own number for it.
+        Value::Struct { ty, .. } if &**ty == builtins::RESERVATION => out.push_str("<reservation>"),
         // Its last field is the runtime's own number for it.
         Value::Struct { ty, .. } if &**ty == builtins::APPROVAL => out.push_str("<approval>"),
         Value::Struct { ty, fields } => {
@@ -316,6 +320,8 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         }
         Value::Closure(_) => out.push_str("<closure>"),
         Value::Function(_) => out.push_str("<fn>"),
+        // Only the runtime's own number of its counters would show.
+        Value::Capability(Capability::Budget(_)) => out.push_str("<Budget>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
         Value::Args(args) => {
             out.push_str("Args[");

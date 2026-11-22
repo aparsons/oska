@@ -140,6 +140,21 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`Budget`",
+        Probe::Program(
+            "fn main(io: Stdout, budget: Budget) -> Result<(), IoError> {\n    \
+             let small = budget.limit(100, 1)\n    \
+             let shown = match small.reserve(500) {\n        \
+             Ok(r) => {\n            \
+             r.release()\n            \
+             \"reserved\"\n        \
+             }\n        \
+             Err(e) => e.to_string()\n    \
+             }\n    \
+             io.println(shown)\n}\n",
+        ),
+    ),
+    (
         "`Approval` and `Approver`",
         Probe::Tests(
             "fn send(approval: Approval) -> Bool {\n    \
@@ -191,6 +206,16 @@ const PROBES: &[(&str, Probe)] = &[
              fn main(io: Stdout, env: Env) -> Result<(), IoError> {\n    \
              let name = env.get(\"OSKA_PROBE_UNSET\").unwrap_or(\"<world>\")\n    \
              io.println(html.text(name).render().assume_trusted())\n}\n",
+        ),
+    ),
+    (
+        "`std.json`",
+        Probe::Program(
+            "use std.json\n\n\
+             fn main(io: Stdout, env: Env) -> Result<(), IoError> {\n    \
+             let name = env.get(\"OSKA_PROBE_UNSET\").unwrap_or(\"ada\")\n    \
+             let value = json.Value.Object([json.Member(key: \"name\", value: json.Value.Text(name))])\n    \
+             io.println(json.encode(value))\n}\n",
         ),
     ),
     (

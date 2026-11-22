@@ -244,8 +244,8 @@ test \"each test starts with an empty script\" {{
 fn a_test_context_built_by_hand_in_a_program_has_no_script() {
     let outcome = run_on(
         FakeHost::new().with_stdin("n\n"),
-        "fn main(io: Stdout, stdin: Stdin, stderr: Stderr, fs: Fs, clock: Clock, random: Random) -> Result<(), IoError> {
-    let t = TestContext(fs: fs, clock: clock, random: random, stdout: io, approver: Approver.terminal(stdin, stderr))
+        "fn main(io: Stdout, stdin: Stdin, stderr: Stderr, fs: Fs, clock: Clock, random: Random, budget: Budget) -> Result<(), IoError> {
+    let t = TestContext(fs: fs, clock: clock, random: random, stdout: io, budget: budget, approver: Approver.terminal(stdin, stderr))
     t.answer_approval(true)
     match t.approver.confirm(\"send\", []) {
         Some(_) => io.println(\"approved\")?

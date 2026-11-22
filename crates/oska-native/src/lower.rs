@@ -122,7 +122,7 @@ const COUNTED_MEMORY: [(&str, &str); 3] = [
 ];
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
-pub const GLOBALS: u32 = 53;
+pub const GLOBALS: u32 = 54;
 
 /// The runtime's writable word that holds the address of the call stack
 /// (`std.rt`'s "The call stack"), where each counted call stores the
@@ -141,7 +141,7 @@ const STEPS_WORD: u32 = GLOBALS;
 /// Under `--max-memory`, the word after the step counter's holds the
 /// report of the panic (`P0040`) that `std.rt`'s memory limit stops the
 /// program with; without the flag the word is not there. It is a fixed
-/// word, 54, so that `std.rt` can name it whether or not the step counter
+/// word, 55, so that `std.rt` can name it whether or not the step counter
 /// is there too.
 const MEMORY_REPORT_WORD: u32 = GLOBALS + 1;
 
@@ -3403,12 +3403,12 @@ fn borrows_arguments(name: &str) -> bool {
 
 /// Whether `main` can be given a value of `ty` by `_start`: the word 0.
 /// Each of these keeps its state, if it has any (the arguments, the
-/// environment, the input buffer, the generator), in the runtime's
-/// globals.
+/// environment, the input buffer, the generator, the root budget), in the
+/// runtime's globals.
 fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),
-        "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Args"
+        "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Budget" | "Args"
             | "Fs" | "FsRead" | "FsWrite"
     ))
 }
@@ -3600,11 +3600,11 @@ fn main(io: Stdout) {
     };
 
     /// Under `--max-memory` the writable data holds the memory limit's
-    /// report in word 54, past the step counter's word, whether or not the
+    /// report in word 55, past the step counter's word, whether or not the
     /// step counter is there; the call area is unchanged.
     #[test]
     fn max_memory_adds_its_report_word_after_the_step_counter() {
-        assert_eq!(super::MEMORY_REPORT_WORD, 54, "std.rt names word 54");
+        assert_eq!(super::MEMORY_REPORT_WORD, 55, "std.rt names word 55");
         for target in Target::ALL {
             let plain = lower(target, Limits::NONE);
             for max_steps in [None, Some(1000)] {
