@@ -183,6 +183,14 @@ sha256sum --ignore-missing -c SHA256SUMS
 3. The first line of `SHA256SUMS` must be `# oska-release v0.6.0`, the release you asked for.
 4. `sha256sum` must print `OK` for the binary you downloaded. On macOS, use `shasum -a 256 --ignore-missing -c SHA256SUMS`.
 
+From v0.7.0, you can also check where a binary was built. Each release's binaries have a GitHub build-provenance attestation: a statement signed by GitHub that the release workflow of `aparsons/oska` built the file from a given commit. With the [GitHub CLI](https://cli.github.com/), download the file and run:
+
+```sh
+gh attestation verify "$asset" -R aparsons/oska
+```
+
+It must print `Verification succeeded!` and name the workflow `aparsons/oska/.github/workflows/release.yml` and the tag. The attestations are in the release's `oskac.intoto.jsonl`, which `SHA256SUMS` lists, and the one for `SHA256SUMS` itself is in `SHA256SUMS.intoto.jsonl`. This check needs `gh` and a network; the installers do not make it, and checking the signature above stays the check that needs no outside service. v0.6.0 and earlier have no attestation. See [what provenance proves](threat-model.md#the-supply-chain).
+
 v0.6.0 and earlier have one Linux file for each processor, `oskac-linux-x86_64` or `oskac-linux-aarch64`. From v0.7.0, set `asset` to the build you want instead: `oskac-linux-x86_64-gnu` or `oskac-linux-x86_64-musl` (see [the two Linux builds](#the-two-linux-builds)).
 
 ### Run oskac in a container
