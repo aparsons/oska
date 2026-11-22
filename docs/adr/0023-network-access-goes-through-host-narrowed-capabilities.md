@@ -1,6 +1,6 @@
 # Network access goes through host-narrowed capabilities, and `Net` only attenuates
 
-The ticket for spec #228 calls this "ADR 0015". That number was already taken by [ADR 0015](0015-macos-intrinsics-are-libsystem-calls.md), so this is the next free one.
+- **Status:** Accepted (2026-11-22), for spec #228 (#237). Mirrors [ADR 0008](0008-file-access-goes-through-confined-capabilities.md) for the network.
 
 ## Decision
 

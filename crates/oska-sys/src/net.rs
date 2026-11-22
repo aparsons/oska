@@ -44,7 +44,7 @@ impl NetStream {
     /// name, an IPv4 literal or an IPv6 literal, and `port` is 1 to 65535;
     /// anything else is an error that says so, and no socket is opened.
     pub fn connect(host: &str, port: i128) -> io::Result<NetStream> {
-        let port = check_port(port)?;
+        let port = check_port(port, 1)?;
         let address = parse_host(host)?;
         let failed = |why: &str| {
             io::Error::other(format!(
@@ -130,12 +130,7 @@ impl NetListener {
     /// Listen on the loopback address at `port`, 0 to 65535: 0 chooses a
     /// free one. `127.0.0.1` is tried first, then `::1`.
     pub fn bind_loopback(port: i128) -> io::Result<NetListener> {
-        let port = u16::try_from(port).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("port {port} is out of range: use 0 to 65535"),
-            )
-        })?;
+        let port = check_port(port, 0)?;
         let socket = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
             .or_else(|_| TcpListener::bind((Ipv6Addr::LOCALHOST, port)))
             .map_err(|err| failure("listen", &err))?;
@@ -169,15 +164,17 @@ impl NetListener {
     }
 }
 
-/// `port` as the port number it names, or why it names none.
-fn check_port(port: i128) -> io::Result<u16> {
+/// `port` as the port number it names, or why it names none: a port is
+/// `lowest` (0 for a listener, which lets the system choose; 1 for a
+/// connection) to 65535.
+fn check_port(port: i128, lowest: u16) -> io::Result<u16> {
     u16::try_from(port)
         .ok()
-        .filter(|port| *port != 0)
+        .filter(|port| *port >= lowest)
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("port {port} is out of range: use 1 to 65535"),
+                format!("port {port} is out of range: use {lowest} to 65535"),
             )
         })
 }
@@ -284,10 +281,10 @@ mod tests {
 
     #[test]
     fn a_port_is_1_to_65535() {
-        assert_eq!(check_port(1).ok(), Some(1));
-        assert_eq!(check_port(65535).ok(), Some(65535));
+        assert_eq!(check_port(1, 1).ok(), Some(1));
+        assert_eq!(check_port(65535, 1).ok(), Some(65535));
         for bad in [0, -1, 65536] {
-            let err = check_port(bad).expect_err("an error");
+            let err = check_port(bad, 1).expect_err("an error");
             assert_eq!(
                 err.to_string(),
                 format!("port {bad} is out of range: use 1 to 65535")
