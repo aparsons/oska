@@ -72,6 +72,8 @@ pub enum Check {
     Secret,
     /// `Bytes.zeroed`: `P0042` on the word 0, `P0043` on -1.
     Zeroed,
+    /// `Random.secure_bytes`: as `Zeroed`, the capability first.
+    SecureBytes,
     /// `Bytes.slice`: `P0042` on the word 0.
     BytesSlice,
     /// `Bytes.set`: `P0002` on the word 0.
@@ -115,6 +117,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ),
     ("Clock.now_millis", Prelude::Runtime("clock_now_millis")),
     ("Random.next_int", Prelude::Runtime("random_next_int")),
+    (
+        "Random.secure_bytes",
+        Prelude::Checked("random_secure_bytes", Check::SecureBytes),
+    ),
     ("Budget.limit", Prelude::Runtime("budget_limit")),
     ("Budget.remaining", Prelude::Runtime("budget_remaining")),
     ("Budget.spent", Prelude::Runtime("budget_spent")),
@@ -1302,6 +1308,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_text", Runtime::Identity),
     ("rt_mem_secret", Runtime::Identity),
     ("rt_mem_as_secret", Runtime::Identity),
+    ("rt_mem_as_secret_bytes", Runtime::Identity),
     ("rt_mem_as_io_error", Runtime::Identity),
     ("rt_mem_path", Runtime::Identity),
     ("rt_mem_as_path", Runtime::Identity),

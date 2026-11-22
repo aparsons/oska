@@ -64,6 +64,20 @@ pub trait Host: Send {
     /// The next pseudo-random 64 bits.
     fn next_random(&mut self) -> u64;
 
+    /// `len` bytes for keys and nonces. The real host takes them from the
+    /// operating system's secure random source and returns its error if
+    /// that fails. The default, which the test hosts use, is the
+    /// pseudo-random generator's bytes (each 64 bits little-endian, the
+    /// last one cut short), so a test replays byte for byte.
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(len + 8);
+        while out.len() < len {
+            out.extend_from_slice(&self.next_random().to_le_bytes());
+        }
+        out.truncate(len);
+        Ok(out)
+    }
+
     /// Open the directory at `path` as the root of a directory
     /// capability. Its last component must not be a symlink; earlier ones
     /// are followed, since the root is trusted text. A file there is an
@@ -377,6 +391,12 @@ impl Host for RealHost {
 
     fn next_random(&mut self) -> u64 {
         self.random.next()
+    }
+
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        let mut out = vec![0; len];
+        oska_sys::fill_random(&mut out)?;
+        Ok(out)
     }
 
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {

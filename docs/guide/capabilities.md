@@ -10,7 +10,7 @@ Oska has no **ambient authority**. Reading a file, opening a connection, reading
 | `Fs` | The filesystem, but only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). | Yes |
 | `Env` | Environment variables, which can hold secrets | Yes |
 | `Clock` | The time: `now_millis()` | Yes |
-| `Random` | Pseudo-random numbers: `next_int()` | Yes |
+| `Random` | Pseudo-random numbers: `next_int()`, and secure bytes for keys: `secure_bytes(n)` | Yes |
 | `Budget` | Spending model tokens and calls. Unlimited in `main`; attenuates to a smaller `Budget` with `limit(tokens, calls)`. See [Budgets](#budgets). | Yes |
 | `Net` | The network. Attenuates to `NetConnect` or `NetListen`. | No: `E0370` |
 | `Sched` | Channels and `select` | No: `E0370` |
