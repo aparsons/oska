@@ -528,8 +528,9 @@ Once escape hatches exist, the following policy applies:
   2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
   3. Native backends for x86_64 Linux, macOS and Windows (v0.4.0 to v0.6.0), which turn the parity gate on.
   4. `Bytes`, the bitwise and wrapping operations, and secret integers (#209), the first language work under the parity gate.
-  5. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
-  6. git fetch, minimal version selection, the lockfile, and authority approval (#12).
+  5. The first crypto in Oska, after `Bytes` and before TLS: `std.sha2`, `std.hmac`, `std.ed25519` and `std.sshsig`, enough to verify a release's SSH signature (#227; see [the guide](guide/hashing-and-signatures.md)).
+  6. The `NetConnect` runtime and a TLS 1.3 client, with the rest of the crypto it needs, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
+  7. git fetch, minimal version selection, the lockfile, and authority approval (#12).
 - **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).
 - **Formatting:** deterministic, with a single canonical style.
 
