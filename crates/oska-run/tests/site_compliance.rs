@@ -157,3 +157,133 @@ fn the_link_check_passes_when_the_pdfs_exist() {
     let outcome = check_links(&site, &[]);
     assert!(succeeded(&outcome), "{outcome:#?}");
 }
+
+// ---- The real section (#548) -------------------------------------------------------------
+//
+// The index, the FAQ and the report template, built from the repository's
+// own `docs/compliance/`.
+
+const STANDARDS: [&str; 10] = [
+    "Apache License 2.0",
+    "NIST SP 800-218",
+    "OpenSSF Open Source Project Security Baseline",
+    "SLSA",
+    "SPDX",
+    "ISO/IEC 25010",
+    "NIST Cybersecurity Framework 2.0",
+    "OpenSSF Scorecard",
+    "ISO/IEC 5230",
+    "ISO/IEC 18974",
+];
+
+fn doc(name: &str) -> String {
+    let path = site::repository_root().join("docs/compliance").join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// Whole words, so that "certified" is not "certification".
+fn has_word(text: &str, word: &str) -> bool {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| w == word)
+}
+
+#[test]
+fn the_index_lists_all_ten_standards() {
+    let index = doc("index.md");
+    for standard in STANDARDS {
+        assert!(index.contains(standard), "the index lacks {standard}");
+    }
+    let page = &site::real_site()["compliance/index.html"];
+    for standard in STANDARDS {
+        assert!(page.contains(standard), "the page lacks {standard}");
+    }
+}
+
+#[test]
+fn the_faq_links_evidence_for_every_answer_and_gives_no_legal_advice() {
+    let faq = doc("faq.md");
+    let answers: Vec<&str> = faq.split("\n## ").skip(1).collect();
+    assert!(
+        answers.len() >= 5,
+        "license, SBOM, signatures, provenance, vulnerability"
+    );
+    for answer in &answers {
+        assert!(
+            answer.contains("](") && (answer.contains("https://") || answer.contains("../")),
+            "an answer has no evidence link: {answer}"
+        );
+    }
+    let lower = faq.to_lowercase();
+    assert!(lower.contains("own counsel"), "{faq}");
+    assert!(lower.contains("no legal advice"), "{faq}");
+    assert!(lower.contains("export"), "{faq}");
+    assert!(
+        faq.contains("Conforms"),
+        "the FAQ explains the Conforms rule"
+    );
+    assert!(lower.contains("low-rated"), "{faq}");
+}
+
+#[test]
+fn the_template_fixes_the_sections_the_scale_and_the_determination_rule() {
+    let template = doc("template.md");
+    for heading in [
+        "Executive summary",
+        "Scope",
+        "Determination",
+        "Findings with recommendations",
+        "Observations with recommendations",
+        "Conclusions",
+    ] {
+        assert!(
+            template.contains(&format!("\n### {heading}\n")),
+            "the template lacks the section {heading}"
+        );
+    }
+    for word in ["High", "Medium", "Low", "likelihood", "impact"] {
+        assert!(template.contains(word), "the template lacks {word}");
+    }
+    for word in ["Conforms", "Partially conforms", "Does not conform"] {
+        assert!(template.contains(word), "the template lacks {word}");
+    }
+    assert!(template.contains("self-assessment"), "{template}");
+    assert!(template.contains("Finding") && template.contains("Observation"));
+    assert!(
+        template.contains("can sit beside a Low-rated"),
+        "the rule that Conforms can sit beside a Low-rated unmet requirement"
+    );
+    assert!(template.contains("no third party"), "{template}");
+}
+
+#[test]
+fn the_compliance_pages_use_the_glossary_terms_and_name_the_project_as_author() {
+    for name in ["index.md", "faq.md", "template.md"] {
+        let text = doc(name);
+        for banned in ["audit", "audits", "certification", "attestation"] {
+            assert!(!has_word(&text, banned), "{name} says {banned}");
+        }
+        for person in ["claude", "anthropic", "adam", "parsons", "agent", "ai"] {
+            assert!(!has_word(&text, person), "{name} names {person}");
+        }
+        assert!(text.contains("Oska project"), "{name} names no author");
+    }
+}
+
+#[test]
+fn the_real_section_is_built_with_pdf_links_and_no_dead_link() {
+    let mut site = site::real_site();
+    for page in ["compliance/index", "compliance/faq", "compliance/template"] {
+        let html = site
+            .get(&format!("{page}.html"))
+            .unwrap_or_else(|| panic!("no {page}.html"));
+        assert!(html.contains(&format!("href=\"/{page}.pdf\"")), "{page}");
+        assert!(site.contains_key(&format!("{page}.md")), "{page}.md");
+    }
+    assert!(site["security.html"].contains("href=\"/compliance/\""));
+    site.insert("pdf-skipped".to_string(), "\n".to_string());
+    let tracked = site::tracked_files();
+    let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
+    let outcome = check_links(&site, &tracked);
+    assert!(succeeded(&outcome), "{outcome:#?}");
+}
