@@ -1,6 +1,6 @@
 # How these reports are written
 
-Every report in the [Compliance section](index.md) follows this template. The Oska project writes each one as a **self-assessment**: the project judges itself against one outside standard and cites a pinned commit or release for each claim. No third party performed or certified it, and a reader should not rate it as if one had.
+Every report in the [Compliance section](index.md) follows this template. The Oska project writes each one as a **self-assessment**: the project judges itself against one outside standard and cites a pinned commit or release for each claim. Be clear that no third party performed or certified it, and do not rate it as if one had.
 
 ## The six sections
 

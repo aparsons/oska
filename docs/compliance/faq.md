@@ -12,7 +12,7 @@ Not yet. A release does not list an SBOM among its assets: the files it ships ar
 
 ## Are releases signed?
 
-Yes. Every release is signed with the release key, which is published at [oskalang.dev/oska-release.pub](https://oskalang.dev/oska-release.pub) and committed as [site/oska-release.pub](https://github.com/aparsons/oska/blob/main/site/oska-release.pub). The installers have the key built in. To check a release by hand, follow [verify a release by hand](../guide/install.md#verify-a-release-by-hand), and see [Verifying a release](../../SECURITY.md#verifying-a-release) in the security policy for the key's fingerprint.
+Yes. Every release is signed with the release key, which is committed as [site/oska-release.pub](https://github.com/aparsons/oska/blob/main/site/oska-release.pub). The installers have the key built in. To check a release by hand, follow [verify a release by hand](../guide/install.md#verify-a-release-by-hand), and see [Verifying a release](../../SECURITY.md#verifying-a-release) in the security policy for the key's fingerprint.
 
 ## Does Oska publish build provenance?
 
