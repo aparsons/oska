@@ -59,9 +59,13 @@ pub use wording::{
 };
 
 pub use heap::SizeClassAlloc;
-pub use net::{NetListener, NetStream};
+pub use net::{exchange_datagram, NetListener, NetStream};
+#[cfg(unix)]
+pub use unix::system_name_servers;
 #[cfg(unix)]
 pub use unix::{effective_uid, fill_random, Dir};
+#[cfg(windows)]
+pub use windows::system_name_servers;
 #[cfg(windows)]
 pub use windows::{fill_random, Dir};
 

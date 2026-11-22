@@ -116,6 +116,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::Checked("bytes_select", Check::BytesSelect),
     ),
     ("Clock.now_millis", Prelude::Runtime("clock_now_millis")),
+    (
+        "NetConnect.system_name_servers",
+        Prelude::Runtime("net_system_name_servers"),
+    ),
     ("Random.next_int", Prelude::Runtime("random_next_int")),
     (
         "Random.secure_bytes",
@@ -490,8 +494,8 @@ pub enum Sys {
     Send,
     Recv,
     Poll,
-    // Windows' own calls, one per kernel32 or bcryptprimitives function
-    // (ADR 0020): no other platform has them.
+    // Windows' own calls, one per kernel32, ntdll, bcryptprimitives or
+    // iphlpapi function (ADR 0020, ADR 0024): no other platform has them.
     GetStdHandle,
     WriteFile,
     ReadFile,
@@ -518,6 +522,7 @@ pub enum Sys {
     WsaStartup,
     CloseSocket,
     IoctlSocket,
+    GetNetworkParams,
 }
 
 /// What the backend gives `std.rt` for a target platform: how its
@@ -1126,11 +1131,12 @@ fn windows_only(call: Sys) -> bool {
             | Sys::WsaStartup
             | Sys::CloseSocket
             | Sys::IoctlSocket
+            | Sys::GetNetworkParams
     )
 }
 
-/// `windows-x86_64`: every call is a function of `kernel32.dll` or
-/// `bcryptprimitives.dll`, through the import table, by the Windows x64
+/// `windows-x86_64`: every call is a function of `kernel32.dll`,
+/// `ntdll.dll`, `bcryptprimitives.dll` or `iphlpapi.dll`, through the import table, by the Windows x64
 /// convention, and a failure is `-GetLastError()` (ADR 0020). The POSIX
 /// calls are absent.
 pub const WINDOWS_X86_64: Platform = Platform {
@@ -1148,6 +1154,7 @@ const KERNEL32: &str = "KERNEL32.dll";
 const NTDLL: &str = "ntdll.dll";
 const BCRYPTPRIMITIVES: &str = "bcryptprimitives.dll";
 const WS2_32: &str = "WS2_32.dll";
+const IPHLPAPI: &str = "IPHLPAPI.DLL";
 
 /// A function of `kernel32.dll` that takes `args` of the intrinsic's
 /// arguments, gives a `BOOL` and fails with `FALSE`.
@@ -1338,11 +1345,20 @@ const WS_POLL: Import = ws("WSAPoll", 3);
 const WS_CLOSE_SOCKET: Import = ws("closesocket", 1);
 /// `ioctlsocket(socket, command, &argument)`.
 const WS_IOCTL_SOCKET: Import = ws("ioctlsocket", 3);
+/// `GetNetworkParams(info, size)`: the system's DNS servers in a
+/// `FIXED_INFO`. It returns the Win32 error code itself (0 on success,
+/// 111 when `size` is too small), so `std.rt` reads the result as it is
+/// (ADR 0024).
+const GET_NETWORK_PARAMS: Import = Import {
+    library: IPHLPAPI,
+    fails: Fails::Never,
+    ..win("GetNetworkParams", 2)
+};
 
 /// Every function a Windows executable imports, `kernel32.dll`'s first:
 /// always all of them, so the import table depends on the target alone.
 /// [`GET_LAST_ERROR`] is first ([`Platform::errno`]).
-const WINDOWS_IMPORTS: [&Import; 38] = [
+const WINDOWS_IMPORTS: [&Import; 39] = [
     &GET_LAST_ERROR,
     &GET_STD_HANDLE,
     &WRITE_FILE,
@@ -1367,6 +1383,7 @@ const WINDOWS_IMPORTS: [&Import; 38] = [
     &NT_QUERY_DIRECTORY_FILE,
     &NT_STATUS_TO_ERROR,
     &PROCESS_PRNG,
+    &GET_NETWORK_PARAMS,
     &WSA_STARTUP,
     &WS_SOCKET,
     &WS_CONNECT,
@@ -1423,6 +1440,7 @@ fn windows_call(call: Sys) -> OsCall {
         Sys::Poll => &WS_POLL,
         Sys::CloseSocket => &WS_CLOSE_SOCKET,
         Sys::IoctlSocket => &WS_IOCTL_SOCKET,
+        Sys::GetNetworkParams => &GET_NETWORK_PARAMS,
         _ => return OsCall::Absent,
     })
 }
@@ -1520,6 +1538,10 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_wsa_startup", Runtime::Syscall(Sys::WsaStartup)),
     ("rt_sys_close_socket", Runtime::Syscall(Sys::CloseSocket)),
     ("rt_sys_ioctl_socket", Runtime::Syscall(Sys::IoctlSocket)),
+    (
+        "rt_sys_get_network_params",
+        Runtime::Syscall(Sys::GetNetworkParams),
+    ),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),
     ("rt_mem_load32", Runtime::Load(Width::W32)),
@@ -2267,6 +2289,16 @@ mod tests {
                 11,
                 false,
                 Status,
+                &[],
+            ),
+            // GetNetworkParams returns its error code, not a BOOL.
+            (
+                "rt_sys_get_network_params",
+                "IPHLPAPI.DLL",
+                "GetNetworkParams",
+                2,
+                false,
+                Never,
                 &[],
             ),
             // ProcessPrng: "Always returns TRUE".

@@ -30,6 +30,10 @@ pub const INTRINSICS: Table = &[
     ("Connection.send", Plain(connection_send)),
     ("Connection.send_bytes", Plain(connection_send_bytes)),
     ("HostConnect.connect", Plain(host_connect)),
+    (
+        "HostConnect.exchange_datagram",
+        Plain(host_exchange_datagram),
+    ),
     ("HostConnect.name", Plain(host_name)),
     ("HostConnect.port", Plain(host_port)),
     ("LoopbackListen.accept", Plain(loopback_accept)),
@@ -38,6 +42,7 @@ pub const INTRINSICS: Table = &[
     ("Net.listen_only", Plain(listen_only)),
     ("Net.restrict_to", Plain(restrict_to)),
     ("NetConnect.restrict_to", Plain(restrict_to)),
+    ("NetConnect.system_name_servers", Plain(system_name_servers)),
     (
         "NetListen.restrict_to_loopback",
         Plain(restrict_to_loopback),
@@ -114,6 +119,33 @@ fn host_connect(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Valu
     let cap = host_cap(&args[0]).clone();
     match host.net_connect(&cap.host, cap.port) {
         Ok(stream) => Ok(Value::ok(connection(&cap, stream, span)?)),
+        Err(err) => io_failure(&err, span),
+    }
+}
+
+/// `HostConnect.exchange_datagram(self, message)`.
+fn host_exchange_datagram(
+    host: &mut dyn Host,
+    args: &mut Args,
+    span: Span,
+) -> Result<Value, Panic> {
+    let cap = host_cap(&args[0]).clone();
+    io_bytes(
+        host.net_exchange_datagram(&cap.host, cap.port, args[1].as_bytes()),
+        span,
+    )
+}
+
+/// `NetConnect.system_name_servers(self)`.
+fn system_name_servers(host: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
+    match host.net_name_servers() {
+        Ok(servers) => {
+            let mut items = Vec::with_capacity(servers.len());
+            for server in &servers {
+                items.push(memory::text(server, span)?);
+            }
+            Ok(Value::ok(memory::list(items, span)?))
+        }
         Err(err) => io_failure(&err, span),
     }
 }
