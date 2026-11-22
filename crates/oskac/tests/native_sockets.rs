@@ -441,4 +441,16 @@ fn listening_on_a_taken_port_gives_the_same_result_on_both_backends() {
 "#,
     ));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    // Where the machine has no `::1`, the second bind has nowhere to fall
+    // back to and is refused on Linux and macOS, where the port is held
+    // without `SO_REUSEADDR` sharing. Windows' rules differ.
+    let has_ipv6_loopback = std::net::TcpListener::bind("[::1]:0").is_ok();
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        let expected = if has_ipv6_loopback {
+            "listening\n"
+        } else {
+            "refused\n"
+        };
+        assert_eq!(outcome.stdout, expected, "{outcome:#?}");
+    }
 }
