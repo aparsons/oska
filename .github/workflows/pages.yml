@@ -52,16 +52,22 @@ jobs:
             printf '%s %s\n' "$date" "$file"
           done < "$RUNNER_TEMP/sources" > site/lastmod.txt
       - run: ./target/release/oskac run site/build.osk
+      # The Oska release verifier, built natively with this `oskac`: the
+      # second check on every release, beside verify.sh (stage-site.sh).
+      - run: ./target/release/oskac build scripts/release/verify.osk -o "$RUNNER_TEMP/verify-release"
       # Releases are stored in GitHub Releases (see release.yml). Fetch them
       # all, verify each against the committed key, and publish them under
       # _site/releases/<tag>/ with _site/latest.json and the key. A release
       # may carry a signed release index: the highest serial that verifies
       # is published as _site/release-index.json, and the installers are
-      # then pinned to require it (stage-site.sh).
+      # then pinned to require it (stage-site.sh). Each release is verified
+      # twice, by verify.sh and by the Oska verifier built above; either
+      # refusing, or the two disagreeing, stops the build.
       - name: Add signed releases
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          OSKA_VERIFY: ${{ runner.temp }}/verify-release
         run: |
           releases="$RUNNER_TEMP/releases"
           mkdir -p "$releases"

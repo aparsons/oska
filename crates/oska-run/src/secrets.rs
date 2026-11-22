@@ -8,6 +8,7 @@
 //! and `ct_select` pick as [`crate::bytes::select`] does, after every
 //! operand is evaluated. The interpreter makes no timing promise: the
 //! constant-time guarantee is a property of native executables (ADR 0012).
+//! `Secret<String>.to_bytes` is `String.to_bytes` on the text inside.
 //! `expose` and the comparisons are in `intrinsics.rs`.
 
 use std::rc::Rc;
@@ -41,6 +42,10 @@ pub const INTRINSICS: Table = &[
         Plain(|h, a, s| lifted("wrapping_to_u32", h, a, s)),
     ),
     ("Secret.at", Plain(|h, a, s| lifted("at", h, a, s))),
+    (
+        "Secret.to_bytes",
+        Plain(|h, a, s| lifted("to_bytes", h, a, s)),
+    ),
     ("Secret.slice", Plain(|h, a, s| lifted("slice", h, a, s))),
     (
         "Secret.read_u32_be",
@@ -143,6 +148,7 @@ fn type_name(value: &Value) -> &'static str {
     match value {
         Value::Int(_, int) => int.name(),
         Value::Bytes(_) => "Bytes",
+        Value::Str(_) => "String",
         other => unreachable!("the checker gives secrets of this type no methods: {other:?}"),
     }
 }

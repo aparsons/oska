@@ -621,52 +621,132 @@ mod programs {
         assert!(lower(src, Target::LinuxX86_64).is_ok(), "fixed, it builds");
     }
 
+    /// The machine code `src` lowers to for `target`, inspected: every
+    /// instruction that reads a secret has no conditional branch, and reads
+    /// or writes memory only in the stack frame, unless it is a load, store
+    /// or call, whose address the guard has shown is public. Returns how
+    /// many such instructions each function has.
+    fn inspect_secret_code(src: &str, target: Target) -> HashMap<String, usize> {
+        let module = lower(src, target).expect("it lowers");
+        let marked = secrets(&module.functions).expect("the code is constant-time");
+        let selected = target.trace(&module);
+        let mut inspected: HashMap<String, usize> = HashMap::new();
+        for ((function, marked), selected) in module.functions.iter().zip(&marked).zip(&selected) {
+            for (inst, code) in function.insts.iter().zip(selected) {
+                if !inst.uses().iter().any(|&t| marked[t as usize]) {
+                    continue;
+                }
+                *inspected.entry(function.name.clone()).or_default() += 1;
+                let at = format!("{target:?}, `{}`: {inst:?}", function.name);
+                assert_eq!(code.conditional_branches, 0, "{at}");
+                let addressed = matches!(
+                    inst,
+                    Inst::Load { .. }
+                        | Inst::Store { .. }
+                        | Inst::Call { .. }
+                        | Inst::CallIndirect { .. }
+                );
+                if !addressed {
+                    assert_eq!(code.other_accesses, 0, "{at}");
+                }
+            }
+        }
+        // The trace sees branches and loads where public values decide
+        // them, so it would see them where a secret did.
+        let all = selected.iter().flatten();
+        assert!(all.clone().any(|code| code.conditional_branches > 0));
+        assert!(all.clone().any(|code| code.other_accesses > 0));
+        inspected
+    }
+
     /// On aarch64 and on x86_64, for every target, the machine code of
-    /// every instruction that reads a secret has no conditional branch,
-    /// and reads or writes memory only in the stack frame, unless it is a
-    /// load, store or call, whose address the guard has shown is public.
+    /// every secret operation is branch-free ([`inspect_secret_code`]).
     /// Each operation's function, and each `std.rt` function that handles
     /// secret bytes, is inspected.
     #[test]
     fn the_machine_code_of_every_secret_operation_is_branch_free() {
         for target in Target::ALL {
-            let module = lower(SECRET_OPS, target).expect("it lowers");
-            let marked = secrets(&module.functions).expect("the code is constant-time");
-            let selected = target.trace(&module);
-            let mut inspected: HashMap<&str, usize> = HashMap::new();
-            for ((function, marked), selected) in
-                module.functions.iter().zip(&marked).zip(&selected)
-            {
-                for (inst, code) in function.insts.iter().zip(selected) {
-                    if !inst.uses().iter().any(|&t| marked[t as usize]) {
-                        continue;
-                    }
-                    *inspected.entry(function.name.as_str()).or_default() += 1;
-                    let at = format!("{target:?}, `{}`: {inst:?}", function.name);
-                    assert_eq!(code.conditional_branches, 0, "{at}");
-                    let addressed = matches!(
-                        inst,
-                        Inst::Load { .. }
-                            | Inst::Store { .. }
-                            | Inst::Call { .. }
-                            | Inst::CallIndirect { .. }
-                    );
-                    if !addressed {
-                        assert_eq!(code.other_accesses, 0, "{at}");
-                    }
-                }
-            }
+            let inspected = inspect_secret_code(SECRET_OPS, target);
             for name in SECRET_FUNCTIONS {
                 assert!(
                     inspected.get(name).is_some_and(|&n| n > 0),
                     "{target:?}: nothing in `{name}` inspected: {inspected:?}"
                 );
             }
-            // The trace sees branches and loads where public values decide
-            // them, so it would see them where a secret did.
-            let all = selected.iter().flatten();
-            assert!(all.clone().any(|code| code.conditional_branches > 0));
-            assert!(all.clone().any(|code| code.other_accesses > 0));
+        }
+    }
+
+    /// `std.hmac` (#232), Oska source linked into the program with the
+    /// `std.sha2` it uses, builds for every target, and on aarch64 and
+    /// x86_64 its machine code is branch-free and addresses no memory by
+    /// a secret: the key's pads, the secret SHA-256 under them, and the
+    /// comparison of the tag with the one given, whose loop over the bytes
+    /// has no exit that depends on a byte (`std.rt.equal_constant`, which
+    /// ORs the differences together and tests the total once).
+    #[test]
+    fn the_machine_code_of_std_hmac_is_branch_free() {
+        let src = r#"use std.hmac
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let key = env.secret("HMAC_KEY").to_bytes()
+    let given = match args.get(1) {
+        Some(text) => Bytes.from_hex(text).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }
+    let valid = hmac.verify_sha256(key, "message".to_bytes(), given)
+    let _ = io.println(if valid { "valid" } else { "invalid" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.hmac.padded",
+                "pkg.std.sha2.compress256_secret",
+                "pkg.std.sha2.Sha256Secret.finish",
+                "std.rt.equal_constant",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
+
+    /// `std.sha2`'s secret SHA-256 (#231), Oska source linked into the
+    /// program, builds for every target, and on aarch64 and x86_64 its
+    /// machine code is branch-free and addresses no memory by a secret:
+    /// the compression over secret words, its functions of a word, and
+    /// the end of the hash, which reads the state. (The hasher's `update`
+    /// moves secret bytes but reads none.)
+    #[test]
+    fn the_machine_code_of_std_sha2s_secret_hash_is_branch_free() {
+        let src = r#"use std.sha2
+
+fn main(io: Stdout) {
+    let key = Secret.new("key material".to_bytes())
+    var h = sha2.Sha256Secret.new()
+    h.update(key)
+    h.update(Secret.new(Bytes.zeroed(100)))
+    let same = h.finish().constant_time_eq_secret(sha2.sha256_secret(key))
+    let _ = io.println(if same { "same" } else { "different" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.sha2.compress256_secret",
+                "pkg.std.sha2.big_sigma0_256_secret",
+                "pkg.std.sha2.big_sigma1_256_secret",
+                "pkg.std.sha2.small_sigma0_256_secret",
+                "pkg.std.sha2.small_sigma1_256_secret",
+                "pkg.std.sha2.Sha256Secret.finish",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
         }
     }
 }

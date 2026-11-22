@@ -66,6 +66,30 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: false,
     },
     StdModule {
+        path: "std.sha2",
+        source: include_str!("std/sha2.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.hmac",
+        source: include_str!("std/hmac.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.ed25519",
+        source: include_str!("std/ed25519.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.sshsig",
+        source: include_str!("std/sshsig.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.json",
         source: include_str!("std/json.osk"),
         sink_literal: None,

@@ -3,8 +3,9 @@
 //! (`Secret.new`, the wrapping and bitwise operators with a secret or a
 //! public operand, rotations, conversions, `ct_eq`, `ct_select`, the
 //! `Secret<Bool>` logic, `Secret<Bytes>`'s reads, pushes and comparisons,
-//! and a struct field) and checks cleanly, its `audit` listing only the
-//! `expose()` calls. `tests/fixtures/secrets/refused.osk` has one
+//! `Secret<String>.to_bytes` and a struct field) and checks cleanly, its
+//! `audit` listing only the `expose()` calls.
+//! `tests/fixtures/secrets/refused.osk` has one
 //! function per refusal (`E0353` to `E0356`, and `E0351` on a secret
 //! integer and a secret buffer), each with its span and, where there is
 //! one, its machine fix.

@@ -259,7 +259,18 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
     modules.dedup();
     assert_eq!(
         modules,
-        ["prelude", "std.html", "std.json", "std.mcp", "std.sql", "std.proc"]
+        [
+            "prelude",
+            "std.html",
+            "std.json",
+            "std.mcp",
+            "std.sql",
+            "std.proc",
+            "std.sha2",
+            "std.hmac",
+            "std.ed25519",
+            "std.sshsig"
+        ]
     );
     assert!(items.iter().all(|i| !field(i, "name").starts_with("rt_")));
     let output = oskac(&["doc", "std.rt"]);
@@ -335,6 +346,22 @@ fn methods_that_impls_of_one_type_share_are_named_with_its_type_arguments() {
 }
 
 #[test]
+fn a_function_whose_anchor_a_type_has_is_named_with_its_module() {
+    let items = fixture(
+        "// A hasher.\npub struct Sha256 { n: Int }\n\
+         // The digest.\npub fn sha256(n: Int) -> Int\n\
+         // Another.\npub fn other(n: Int) -> Int\n",
+    );
+    let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["std.fixture", "Sha256", "fixture.sha256", "other"]);
+    assert_ne!(
+        named(&items, "Sha256").anchor(),
+        named(&items, "fixture.sha256").anchor()
+    );
+    assert_eq!(named(&items, "fixture.sha256").unqualified_name(), "sha256");
+}
+
+#[test]
 fn a_filter_without_type_arguments_lists_every_impls_method() {
     let items = json_items(&["Secret.rotl"]);
     let names: Vec<&str> = items.iter().map(|i| field(i, "name")).collect();
@@ -392,6 +419,9 @@ fn an_item_filter_lists_the_item_and_its_methods() {
     };
     assert_eq!(names(&["List.push"]), ["List.push"]);
     assert_eq!(names(&["std.sql.connect"]), ["connect"]);
+    // A function renamed with its module (`sha2.sha256`) is still found by
+    // its path.
+    assert_eq!(names(&["std.sha2.sha256"]), ["sha2.sha256"]);
     let list = names(&["List"]);
     assert_eq!(list[0], "List");
     assert!(list.iter().skip(1).all(|n| n.starts_with("List.")));

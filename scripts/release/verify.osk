@@ -1,0 +1,719 @@
+// The Oska release verifier: what scripts/release/verify.sh checks, written
+// in Oska with `std.sshsig` and `std.sha2`, so that Oska can verify its own
+// releases with no `ssh-keygen` and no `sha256sum`. The Pages build runs it
+// beside verify.sh for every release it stages (stage-site.sh), and both
+// must accept; either refusing stops the build. The installers keep using
+// `ssh-keygen` and the system SHA-256 tool: they must run before any Oska is
+// installed.
+//
+//   oskac build scripts/release/verify.osk -o verify-release
+//   scripts/release/verify-oska.sh <release-dir> [--format=json]
+//
+// or, run from the directory that holds the release directory,
+//
+//   verify-release <release-dir-name> [--format=json]
+//
+// Its authority is the release directory, read-only (`DirRead`, narrowed
+// from `FsRead`), and the standard streams: `oskac check
+// scripts/release/verify.osk` shows nothing else, so it cannot write a file
+// or open a connection. The directory is named relative to the working
+// directory, and a directory capability refuses an absolute path, a `..`
+// that climbs out, and any symlink beneath the root, so verify-oska.sh
+// changes into the parent first. The last component of the name is the tag.
+//
+// It checks, in the order verify.sh does, that:
+//   1. SHA256SUMS.sig is a signature of SHA256SUMS in the namespace
+//      `oska-release` by the pinned release key below (`bad_signature`);
+//   2. the first line of SHA256SUMS is `# oska-release <tag>`, where <tag>
+//      is the name of the release directory (`wrong_tag`), and every other
+//      line is 64 lower-case hex digits, two spaces and a file name of
+//      letters, digits, `.`, `_` and `-` (`bad_line`);
+//   3. every file SHA256SUMS lists has that SHA-256 (`checksum_mismatch`);
+//   4. the directory holds no file SHA256SUMS does not list, and no file
+//      is listed twice (`extra_file`);
+//   5. oskac-image-digest, if there, is exactly one line `sha256:<64 hex>`
+//      (`bad_image_digest`);
+//   6. a signed release index, release-index.json and release-index.json.sig,
+//      if either is there: both are, the signature is by the same key in
+//      the namespace `oska-index`, and the index is the schema-1 format
+//      verify-index.sh checks (`bad_index`). Its expiry and serial policy
+//      belong to the installers, as they do to verify-index.sh. A release
+//      directory as sign.sh leaves it has no index; the release run attaches
+//      one beside the files, and stage-site.sh takes it out before verify.sh.
+//
+// Anything that cannot be checked refuses: a file that cannot be read is
+// `unreadable`, never skipped. Success prints what it checked and exits
+// with 0. Refusal exits with 1 and prints one line to stderr, `verify.osk:
+// <code>: <why>`. `--format=json` also prints, to stdout, one object:
+//
+//   {"ok":true,"tag":"v1.2.3","key":"SHA256:...","namespace":"oska-release",
+//    "files":8,"image_digest":"sha256:..."|null,
+//    "index":{"serial":4,"issued":"...","expires":"...","tag":"v1.2.3",
+//             "version":"1.2.3"}|null}
+//   {"ok":false,"code":"checksum_mismatch","message":"..."}
+//
+// The codes are `bad_signature`, `wrong_tag`, `bad_line`, `checksum_mismatch`
+// and `extra_file`, as in verify.sh's reasons, and `bad_image_digest`,
+// `bad_index`, `unreadable` and `usage`. Text that came from the release
+// is printed with every byte outside printable ASCII replaced by `?`, so a
+// file name cannot forge a line or a CI annotation.
+//
+// This code is hand-written crypto on top of hand-written crypto, and it is
+// a second check: it is never the only one (ADR 0012).
+
+use std.sha2
+use std.sshsig
+
+// The release key, pinned as a literal: the whole line of
+// site/oska-release.pub. A test (scripts/release/test.sh) fails unless it
+// is that file's line, so the key this program trusts is the one the site
+// publishes, and is read here, in its source.
+fn release_key() -> String {
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK1mgi1PCfr+Xc7xB/1TjH8haBMmfNwJO0VSKdmFyPWL oska-release"
+}
+
+// Why a release was refused: a stable code, and what was wrong.
+struct Refusal { code: String, why: Untrusted<String> }
+
+fn refuse(code: String, why: Untrusted<String>) -> Refusal {
+    Refusal(code: code, why: why)
+}
+
+// The fields of a release index, as the signed file spells them. Each text
+// was checked against the format, and is printed through `safe` anyway.
+struct Index {
+    serial: Int,
+    issued: Untrusted<String>,
+    expires: Untrusted<String>,
+    tag: Untrusted<String>,
+    version: Untrusted<String>,
+}
+
+// What a release that verified holds.
+struct Report {
+    tag: Untrusted<String>,
+    fingerprint: String,
+    files: Int,
+    image_digest: Option<Untrusted<String>>,
+    index: Option<Index>,
+}
+
+// One line of SHA256SUMS after the first.
+struct Entry { digest: Untrusted<String>, name: Untrusted<String> }
+
+// ---- Printing -------------------------------------------------------------------
+
+// `text` with every byte outside printable ASCII (0x20 to 0x7e) replaced by
+// `?`.
+fn safe(text: Untrusted<String>) -> Untrusted<String> {
+    let bytes = text.to_bytes()
+    var out = Bytes.new()
+    for i in 0..bytes.len() {
+        let byte = bytes.at(i)
+        if byte >= 32 && byte <= 126 {
+            out.push(byte)
+        } else {
+            out.push(63)
+        }
+    }
+    out.to_text().unwrap_or("?")
+}
+
+// `text` as the contents of a JSON string.
+fn quoted(text: Untrusted<String>) -> Untrusted<String> {
+    let plain = safe(text).replace("\\", "\\\\").replace("\"", "\\\"")
+    "\"{plain}\""
+}
+
+fn quoted_or_null(text: Option<Untrusted<String>>) -> Untrusted<String> {
+    match text {
+        Some(value) => quoted(value)
+        None => "null"
+    }
+}
+
+fn index_json(index: Option<Index>) -> Untrusted<String> {
+    match index {
+        None => "null"
+        Some(found) => {
+            let issued = quoted(found.issued)
+            let expires = quoted(found.expires)
+            let tag = quoted(found.tag)
+            let version = quoted(found.version)
+            let serial = found.serial
+            "\{\"serial\":{serial},\"issued\":{issued},\"expires\":{expires},\"tag\":{tag},\"version\":{version}\}"
+        }
+    }
+}
+
+fn report_json(report: Report) -> Untrusted<String> {
+    let tag = quoted(report.tag)
+    let key = quoted(report.fingerprint)
+    let files = report.files
+    let digest = quoted_or_null(report.image_digest)
+    let index = index_json(report.index)
+    "\{\"ok\":true,\"tag\":{tag},\"key\":{key},\"namespace\":\"oska-release\",\"files\":{files},\"image_digest\":{digest},\"index\":{index}\}"
+}
+
+fn refusal_json(refusal: Refusal) -> Untrusted<String> {
+    let code = refusal.code
+    let why = quoted(refusal.why)
+    "\{\"ok\":false,\"code\":\"{code}\",\"message\":{why}\}"
+}
+
+fn print_report(out: Stdout, report: Report) -> Result<(), IoError> {
+    let tag = safe(report.tag)
+    let key = report.fingerprint
+    let files = report.files
+    out.println("oska-release {tag}: verified")?
+    out.println("  signature: ok, namespace oska-release, key {key}")?
+    out.println("  files: {files} checked, none unlisted")?
+    match report.image_digest {
+        Some(digest) => {
+            let shown = safe(digest)
+            out.println("  image digest: {shown}")?
+        }
+        None => {}
+    }
+    match report.index {
+        Some(found) => {
+            let serial = found.serial
+            let issued = safe(found.issued)
+            let expires = safe(found.expires)
+            let latest = safe(found.tag)
+            out.println("  index: signature ok, namespace oska-index, serial {serial}, issued {issued}, expires {expires}, latest {latest}")?
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+// ---- Reading --------------------------------------------------------------------
+
+fn load(dir: DirRead, name: String) -> Result<Untrusted<Bytes>, Refusal> {
+    match dir.read_bytes(Path.new(name)) {
+        Ok(bytes) => Ok(bytes)
+        Err(error) => {
+            let why = error.message
+            Err(refuse("unreadable", "cannot read {name}: {why}"))
+        }
+    }
+}
+
+fn is_digit(byte: U8) -> Bool {
+    byte >= 48 && byte <= 57
+}
+
+fn is_hex(byte: U8) -> Bool {
+    is_digit(byte) || (byte >= 97 && byte <= 102)
+}
+
+// A file name SHA256SUMS may list: letters, digits, `.`, `_` and `-`.
+fn is_name_byte(byte: U8) -> Bool {
+    is_digit(byte) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 46 || byte == 95 || byte == 45
+}
+
+// Whether `bytes` from `start` to the end are `count` lower-case hex digits.
+fn hex_run(bytes: Untrusted<Bytes>, start: Int, count: Int) -> Bool {
+    if bytes.len() != start + count {
+        return false
+    }
+    for i in start..bytes.len() {
+        if !is_hex(bytes.at(i)) {
+            return false
+        }
+    }
+    true
+}
+
+// The last component of the directory's name, which is the tag, or `None`
+// for a name with no component to speak of (empty, `.` or `..`).
+fn tag_of(name: Untrusted<String>) -> Option<Untrusted<String>> {
+    var last: Option<Untrusted<String>> = None
+    for part in name.split("/") {
+        if part.len() > 0 {
+            last = Some(part)
+        }
+    }
+    match last {
+        None => None
+        Some(part) => if part == "." || part == ".." { None } else { Some(part) }
+    }
+}
+
+// The lines of SHA256SUMS: split at each LF, and a final LF ends the last
+// line instead of starting an empty one. A CR is part of a line, so a line
+// that ends in one is refused as `bad_line`.
+fn sums_lines(text: Untrusted<String>) -> List<Untrusted<String>> {
+    var lines: List<Untrusted<String>> = List.new()
+    for piece in text.split("\n") {
+        lines.push(piece)
+    }
+    if lines.len() > 0 && lines.at(lines.len() - 1) == "" {
+        var kept: List<Untrusted<String>> = List.new()
+        for i in 0..lines.len() - 1 {
+            kept.push(lines.at(i))
+        }
+        return kept
+    }
+    lines
+}
+
+// One checksum line: 64 lower-case hex digits, two spaces and a name.
+fn parse_entry(line: Untrusted<String>) -> Option<Entry> {
+    let bytes = line.to_bytes()
+    if bytes.len() < 67 || bytes.at(64) != 32 || bytes.at(65) != 32 {
+        return None
+    }
+    for i in 0..64 {
+        if !is_hex(bytes.at(i)) {
+            return None
+        }
+    }
+    for i in 66..bytes.len() {
+        if !is_name_byte(bytes.at(i)) {
+            return None
+        }
+    }
+    Some(Entry(digest: line.slice(0, 64), name: line.slice(66, line.len())))
+}
+
+// ---- The release's own signature ------------------------------------------------
+
+fn pinned_key() -> Result<sshsig.PublicKey, Refusal> {
+    match sshsig.PublicKey.parse(release_key()) {
+        Ok(key) => Ok(key)
+        Err(error) => {
+            let why = error.to_string()
+            Err(refuse("bad_signature", "the pinned release key is unusable: {why}"))
+        }
+    }
+}
+
+// Verifies `signature_name` over `message` in `namespace` by the pinned key.
+fn check_signature(dir: DirRead, message: Untrusted<Bytes>, signature_name: String, namespace: String, code: String) -> Result<(), Refusal> {
+    let key = pinned_key()?
+    let armored = load(dir, signature_name)?
+    let text = match armored.to_text() {
+        Some(text) => text
+        None => { return Err(refuse(code, "{signature_name} is not text")) }
+    }
+    match sshsig.verify(text, message, namespace, key) {
+        Ok(_) => Ok(())
+        Err(error) => {
+            let why = error.to_string()
+            Err(refuse(code, "{signature_name} is not a valid signature by the release key in the namespace {namespace}: {why}"))
+        }
+    }
+}
+
+// ---- The release index ----------------------------------------------------------
+
+// A cursor into the index's bytes, and what was read there.
+struct Cursor { at: Int }
+
+fn skip_space(bytes: Untrusted<Bytes>, start: Int) -> Int {
+    var at = start
+    while at < bytes.len() && (bytes.at(at) == 32 || bytes.at(at) == 10 || bytes.at(at) == 13 || bytes.at(at) == 9) {
+        at = at + 1
+    }
+    at
+}
+
+// The position after `mark` (skipping space before it), or `None`.
+fn mark_at(bytes: Untrusted<Bytes>, start: Int, mark: U8) -> Option<Int> {
+    let at = skip_space(bytes, start)
+    if at < bytes.len() && bytes.at(at) == mark {
+        Some(at + 1)
+    } else {
+        None
+    }
+}
+
+struct Text { value: Untrusted<String>, next: Int }
+
+// A JSON string with no escape and only printable ASCII in it, after
+// skipping space.
+fn string_at(bytes: Untrusted<Bytes>, start: Int) -> Option<Text> {
+    let open = mark_at(bytes, start, 34)?
+    var at = open
+    while at < bytes.len() && bytes.at(at) != 34 {
+        let byte = bytes.at(at)
+        if byte < 32 || byte > 126 || byte == 92 {
+            return None
+        }
+        at = at + 1
+    }
+    if at >= bytes.len() {
+        return None
+    }
+    let inner = bytes.slice(open, at).to_text()?
+    Some(Text(value: inner, next: at + 1))
+}
+
+struct Number { value: Int, next: Int }
+
+// A non-negative JSON integer of 1 to 15 digits and no leading zero, after
+// skipping space.
+fn number_at(bytes: Untrusted<Bytes>, start: Int) -> Option<Number> {
+    let from = skip_space(bytes, start)
+    var at = from
+    while at < bytes.len() && is_digit(bytes.at(at)) {
+        at = at + 1
+    }
+    let width = at - from
+    if width < 1 || width > 15 || (width > 1 && bytes.at(from) == 48) {
+        return None
+    }
+    let value = bytes.slice(from, at).to_text()?.parse_int()?
+    Some(Number(value: value, next: at))
+}
+
+// Whether `text` is `YYYY-MM-DDTHH:MM:SSZ`.
+fn is_time(text: Untrusted<String>) -> Bool {
+    let bytes = text.to_bytes()
+    if bytes.len() != 20 {
+        return false
+    }
+    for i in 0..20 {
+        let byte = bytes.at(i)
+        let dash = i == 4 || i == 7
+        let colon = i == 13 || i == 16
+        if dash {
+            if byte != 45 { return false }
+        } else if colon {
+            if byte != 58 { return false }
+        } else if i == 10 {
+            if byte != 84 { return false }
+        } else if i == 19 {
+            if byte != 90 { return false }
+        } else if !is_digit(byte) {
+            return false
+        }
+    }
+    true
+}
+
+// Whether the time `a` is before the time `b`; both are `is_time`.
+fn time_before(a: Untrusted<String>, b: Untrusted<String>) -> Bool {
+    let left = a.to_bytes()
+    let right = b.to_bytes()
+    for i in 0..20 {
+        if left.at(i) < right.at(i) {
+            return true
+        }
+        if left.at(i) > right.at(i) {
+            return false
+        }
+    }
+    false
+}
+
+// Whether `tag` is `v` and three numbers separated by dots, and `version`
+// is the same without the `v`.
+fn is_tag_and_version(tag: Untrusted<String>, version: Untrusted<String>) -> Bool {
+    let bytes = tag.to_bytes()
+    if bytes.len() < 6 || bytes.at(0) != 118 {
+        return false
+    }
+    var dots = 0
+    var digits = 0
+    for i in 1..bytes.len() {
+        let byte = bytes.at(i)
+        if byte == 46 {
+            if digits == 0 { return false }
+            dots = dots + 1
+            digits = 0
+        } else if is_digit(byte) {
+            digits = digits + 1
+        } else {
+            return false
+        }
+    }
+    dots == 2 && digits > 0 && version.to_bytes() == bytes.slice(1, bytes.len())
+}
+
+struct Latest { tag: Untrusted<String>, version: Untrusted<String>, next: Int }
+
+// `{"tag": "...", "version": "..."}`, with the two keys in either order.
+fn latest_at(bytes: Untrusted<Bytes>, start: Int) -> Option<Latest> {
+    var at = mark_at(bytes, start, 123)?
+    var tag: Option<Untrusted<String>> = None
+    var version: Option<Untrusted<String>> = None
+    for round in 0..2 {
+        if round == 1 {
+            at = mark_at(bytes, at, 44)?
+        }
+        let key = string_at(bytes, at)?
+        at = mark_at(bytes, key.next, 58)?
+        let value = string_at(bytes, at)?
+        at = value.next
+        if key.value == "tag" && !tag.is_some() {
+            tag = Some(value.value)
+        } else if key.value == "version" && !version.is_some() {
+            version = Some(value.value)
+        } else {
+            return None
+        }
+    }
+    at = mark_at(bytes, at, 125)?
+    Some(Latest(tag: tag?, version: version?, next: at))
+}
+
+// The index, if it is a schema-1 release index: an object with exactly the
+// keys `schema` (1), `serial` (1 to 999999999999999), `issued` and
+// `expires` (UTC times, `expires` after `issued`) and `latest` (a tag
+// `vX.Y.Z` and its version), nothing before or after it but space. Stricter
+// than verify-index.sh's jq in what it spells (no escapes, no fraction or
+// exponent, no repeated key), never looser.
+fn parse_index(bytes: Untrusted<Bytes>) -> Option<Index> {
+    var at = mark_at(bytes, 0, 123)?
+    var schema: Option<Int> = None
+    var serial: Option<Int> = None
+    var issued: Option<Untrusted<String>> = None
+    var expires: Option<Untrusted<String>> = None
+    var latest: Option<Latest> = None
+    for round in 0..5 {
+        if round > 0 {
+            at = mark_at(bytes, at, 44)?
+        }
+        let key = string_at(bytes, at)?
+        at = mark_at(bytes, key.next, 58)?
+        if key.value == "schema" && !schema.is_some() {
+            let number = number_at(bytes, at)?
+            schema = Some(number.value)
+            at = number.next
+        } else if key.value == "serial" && !serial.is_some() {
+            let number = number_at(bytes, at)?
+            serial = Some(number.value)
+            at = number.next
+        } else if key.value == "issued" && !issued.is_some() {
+            let text = string_at(bytes, at)?
+            issued = Some(text.value)
+            at = text.next
+        } else if key.value == "expires" && !expires.is_some() {
+            let text = string_at(bytes, at)?
+            expires = Some(text.value)
+            at = text.next
+        } else if key.value == "latest" && !latest.is_some() {
+            let found = latest_at(bytes, at)?
+            latest = Some(found)
+            at = found.next
+        } else {
+            return None
+        }
+    }
+    at = mark_at(bytes, at, 125)?
+    if skip_space(bytes, at) != bytes.len() {
+        return None
+    }
+    let found = latest?
+    let from = issued?
+    let until = expires?
+    if schema? != 1 || serial? < 1 || !is_time(from) || !is_time(until) || !time_before(from, until) {
+        return None
+    }
+    if !is_tag_and_version(found.tag, found.version) {
+        return None
+    }
+    Some(Index(serial: serial?, issued: from, expires: until, tag: found.tag, version: found.version))
+}
+
+// Verifies the index beside the release, if one is there.
+fn check_index(dir: DirRead, names: List<Untrusted<String>>) -> Result<Option<Index>, Refusal> {
+    var has_index = false
+    var has_signature = false
+    for name in names {
+        if name == "release-index.json" {
+            has_index = true
+        }
+        if name == "release-index.json.sig" {
+            has_signature = true
+        }
+    }
+    if !has_index && !has_signature {
+        return Ok(None)
+    }
+    if !has_index || !has_signature {
+        return Err(refuse("bad_index", "the release has only one of release-index.json and release-index.json.sig"))
+    }
+    let bytes = load(dir, "release-index.json")?
+    check_signature(dir, bytes, "release-index.json.sig", "oska-index", "bad_index")?
+    match bytes.to_text() {
+        None => Err(refuse("bad_index", "release-index.json is not text"))
+        Some(_) => match parse_index(bytes) {
+            Some(index) => Ok(Some(index))
+            None => Err(refuse("bad_index", "release-index.json is not a schema-1 release index"))
+        }
+    }
+}
+
+// ---- The release ----------------------------------------------------------------
+
+// The digest file, if the release has one: exactly one line `sha256:<64
+// hex digits>` and its line break.
+fn check_image_digest(dir: DirRead, names: List<Untrusted<String>>) -> Result<Option<Untrusted<String>>, Refusal> {
+    var present = false
+    for name in names {
+        if name == "oskac-image-digest" {
+            present = true
+        }
+    }
+    if !present {
+        return Ok(None)
+    }
+    let bytes = match dir.read_bytes(Path.new("oskac-image-digest")) {
+        Ok(bytes) => bytes
+        Err(error) => {
+            let why = error.message
+            return Err(refuse("unreadable", "cannot read oskac-image-digest: {why}"))
+        }
+    }
+    let well_formed = bytes.len() == 72 && bytes.slice(0, 7) == "sha256:".to_bytes() && hex_run(bytes.slice(0, 71), 7, 64) && bytes.at(71) == 10
+    if !well_formed {
+        return Err(refuse("bad_image_digest", "oskac-image-digest is not one line 'sha256:<64 hex digits>'"))
+    }
+    match bytes.slice(0, 71).to_text() {
+        Some(text) => Ok(Some(text))
+        None => Err(refuse("bad_image_digest", "oskac-image-digest is not text"))
+    }
+}
+
+fn verify_release(root: DirRead, name: Untrusted<String>) -> Result<Report, Refusal> {
+    let tag = match tag_of(name) {
+        Some(tag) => tag
+        None => { return Err(refuse("usage", "the release directory needs a name, not . or ..")) }
+    }
+    let dir = root.restrict_to(Path.from(name))
+    let sums = load(dir, "SHA256SUMS")?
+    // 1. The signature.
+    check_signature(dir, sums, "SHA256SUMS.sig", "oska-release", "bad_signature")?
+    // 2. The tag line, and the shape of every other line.
+    let text = match sums.to_text() {
+        Some(text) => text
+        None => { return Err(refuse("bad_line", "SHA256SUMS is not text")) }
+    }
+    let lines = sums_lines(text)
+    let signed = lines.get(0).unwrap_or("")
+    if signed != "# oska-release {tag}" {
+        let named = signed.replace("# oska-release ", "")
+        let shown = safe(named)
+        let wanted = safe(tag)
+        return Err(refuse("wrong_tag", "SHA256SUMS is signed for '{shown}', not for {wanted}"))
+    }
+    var entries: List<Entry> = List.new()
+    for i in 1..lines.len() {
+        match parse_entry(lines.at(i)) {
+            Some(entry) => entries.push(entry)
+            None => { return Err(refuse("bad_line", "SHA256SUMS has a line that is not a SHA-256 digest and a file name")) }
+        }
+    }
+    // A release lists at least one file: verify.sh's `sha256sum --check`
+    // refuses a list with no checksum line.
+    if entries.len() == 0 {
+        return Err(refuse("bad_line", "SHA256SUMS lists no file"))
+    }
+    // 3. Every listed file has its digest.
+    for entry in entries {
+        let file = match dir.read_bytes(Path.from(entry.name)) {
+            Ok(bytes) => bytes
+            Err(_) => { return Err(refuse("checksum_mismatch", "{entry.name} is listed in SHA256SUMS and cannot be read")) }
+        }
+        if sha2.sha256(file).to_hex() != entry.digest {
+            return Err(refuse("checksum_mismatch", "{entry.name} does not match SHA256SUMS"))
+        }
+    }
+    // 4. Nothing else is in the directory, and nothing is listed twice.
+    let names = match dir.list_dir(Path.new(".")) {
+        Ok(names) => names
+        Err(error) => {
+            let why = error.message
+            return Err(refuse("unreadable", "cannot list the release directory: {why}"))
+        }
+    }
+    for i in 0..entries.len() {
+        for j in 0..i {
+            if entries.at(i).name == entries.at(j).name {
+                let twice = safe(entries.at(i).name)
+                return Err(refuse("extra_file", "SHA256SUMS lists {twice} twice"))
+            }
+        }
+    }
+    for name in names {
+        var listed = name == "SHA256SUMS" || name == "SHA256SUMS.sig" || name == "release-index.json" || name == "release-index.json.sig"
+        for entry in entries {
+            if entry.name == name {
+                listed = true
+            }
+        }
+        if !listed {
+            return Err(refuse("extra_file", "the release holds {name}, which SHA256SUMS does not list"))
+        }
+    }
+    // 5. The image digest, and 6. the index.
+    let image_digest = check_image_digest(dir, names)?
+    let index = check_index(dir, names)?
+    let key = pinned_key()?
+    Ok(Report(tag: tag, fingerprint: key.fingerprint(), files: entries.len(), image_digest: image_digest, index: index))
+}
+
+// ---- The command line -----------------------------------------------------------
+
+struct Command { directory: Option<Untrusted<String>>, json: Bool, bad: Bool }
+
+// `<release-dir> [--format=json|--format=text]`, in either order.
+fn command_of(args: Args) -> Command {
+    var directory: Option<Untrusted<String>> = None
+    var json = false
+    var bad = false
+    var at = 1
+    var more = true
+    while more {
+        match args.get(at) {
+            None => { more = false }
+            Some(arg) => {
+                if arg == "--format=json" {
+                    json = true
+                } else if arg == "--format=text" {
+                    json = false
+                } else if arg.starts_with("-") || directory.is_some() {
+                    bad = true
+                } else {
+                    directory = Some(arg)
+                }
+            }
+        }
+        at = at + 1
+    }
+    Command(directory: directory, json: json, bad: bad)
+}
+
+fn main(read: FsRead, args: Args, out: Stdout) -> Result<(), IoError> {
+    let command = command_of(args)
+    let result = match command.directory {
+        Some(name) => if command.bad {
+            Err(refuse("usage", "usage: verify-release <release-dir> [--format=json]"))
+        } else {
+            verify_release(read.restrict_to("."), name)
+        }
+        None => Err(refuse("usage", "usage: verify-release <release-dir> [--format=json]"))
+    }
+    match result {
+        Ok(report) => {
+            if command.json {
+                out.println(report_json(report))?
+            } else {
+                print_report(out, report)?
+            }
+            Ok(())
+        }
+        Err(refusal) => {
+            if command.json {
+                out.println(refusal_json(refusal))?
+            }
+            let code = refusal.code
+            let why = safe(refusal.why)
+            Err(IoError(message: "verify.osk: {code}: {why}"))
+        }
+    }
+}

@@ -625,6 +625,9 @@ impl Linker {
             let written = written.join(".");
             match self.paths.iter().position(|p| *p == written) {
                 Some(target) if is_std_path(&written) => {
+                    // An import among the modules counts toward a cycle
+                    // (`E0207`), as a package module's does.
+                    scope.imports.push((target, path_span(&u.path)));
                     self.module_use(index, target, u, scope);
                 }
                 _ => self.std_use(u, scope),
@@ -840,6 +843,17 @@ impl Linker {
         Some(declared.key.clone())
     }
 
+    /// Module `index` as a `use` names it: `pkg.util` for a package's, and
+    /// a `std` module's own path.
+    fn module_shown(&self, index: usize) -> String {
+        let path = &self.paths[index];
+        if is_std_path(path) {
+            path.clone()
+        } else {
+            format!("{PKG}.{path}")
+        }
+    }
+
     /// Report every import cycle once, naming each module in it.
     fn cycles(&mut self) {
         let edges: Vec<Vec<(usize, Span)>> =
@@ -858,9 +872,9 @@ impl Linker {
             reported.extend(cycle.iter().map(|(m, _)| *m));
             let mut names: Vec<String> = cycle
                 .iter()
-                .map(|(m, _)| format!("`{PKG}.{}`", self.paths[*m]))
+                .map(|(m, _)| format!("`{}`", self.module_shown(*m)))
                 .collect();
-            names.push(format!("`{PKG}.{}`", self.paths[start]));
+            names.push(format!("`{}`", self.module_shown(start)));
             let span = cycle.first().map_or(Span { start: 0, end: 0 }, |(_, s)| *s);
             self.diagnostics.push(Diagnostic::new(
                 codes::IMPORT_CYCLE,
@@ -1465,5 +1479,112 @@ impl Rewriter<'_> {
             vec![Edit::insert(module_start, format!("use {path}\n"))],
         );
         self.report(diagnostic, tag_span);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{link, Parsed};
+    use crate::codes;
+
+    /// Link modules given as `(path, source)`, joined as `package.rs`
+    /// joins them, as a single file with the `std` modules it imports. The
+    /// paths of `std` modules must be registered ones; the sources are
+    /// made up, so that no registered module need form a cycle.
+    fn linked(modules: &[(&str, &str)]) -> super::Linked {
+        let mut text = String::new();
+        let mut parsed = Vec::new();
+        for (path, source) in modules {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            let start = text.len();
+            text.push_str(source);
+            let ast = oska_syntax::parse_module_at(&text, start).expect("the module parses");
+            parsed.push(Parsed {
+                module: path.to_string(),
+                ast,
+            });
+        }
+        link(&text, parsed, true)
+    }
+
+    /// `std` modules written in Oska may import each other, but not in a
+    /// cycle, which is refused naming each module as `use` names it.
+    #[test]
+    fn a_cycle_of_std_modules_is_refused() {
+        let found = linked(&[
+            ("main", "use std.json\nfn main() {\n    json.a()\n}"),
+            ("std.json", "use std.mcp\npub fn a() {\n    mcp.b()\n}"),
+            ("std.mcp", "use std.json\npub fn b() {\n    json.a()\n}"),
+        ]);
+        let cycles: Vec<&str> = found
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == codes::IMPORT_CYCLE)
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(cycles.len(), 1, "{:#?}", found.diagnostics);
+        assert!(
+            cycles[0].contains("`std.json` imports `std.mcp` imports `std.json`"),
+            "{}",
+            cycles[0]
+        );
+    }
+
+    /// One `std` module uses another's `pub` items only, as any other
+    /// module does: a private item or a `pub(pkg)` one is `E0360`, with no
+    /// fix.
+    #[test]
+    fn a_std_module_cannot_use_anothers_private_items() {
+        let found = linked(&[
+            ("main", "use std.mcp\nfn main() {\n    mcp.a()\n}"),
+            (
+                "std.mcp",
+                "use std.json\npub fn a() {\n    json.hidden()\n    json.shared()\n}",
+            ),
+            ("std.json", "fn hidden() { }\npub(pkg) fn shared() { }"),
+        ]);
+        let private: Vec<&str> = found
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == codes::PRIVATE_TO_MODULE && d.fix.is_none())
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(private.len(), 2, "{:#?}", found.diagnostics);
+        assert_eq!(found.diagnostics.len(), 2, "{:#?}", found.diagnostics);
+        assert!(
+            private[0].contains("`hidden` is private to `std.json`"),
+            "{}",
+            private[0]
+        );
+        assert!(
+            private[1].contains("`shared` is private to `std.json`"),
+            "{}",
+            private[1]
+        );
+    }
+
+    /// Without a cycle, one `std` module's `use` of another links like a
+    /// package module's, and every name becomes the item's key; the
+    /// single file's own items keep their names.
+    #[test]
+    fn a_std_module_may_import_another() {
+        let found = linked(&[
+            ("main", "use std.mcp\nfn main() {\n    mcp.a()\n}"),
+            ("std.mcp", "use std.json\npub fn a() {\n    json.b()\n}"),
+            ("std.json", "pub fn b() { }"),
+        ]);
+        assert!(found.diagnostics.is_empty(), "{:#?}", found.diagnostics);
+        let names: Vec<&str> = super::declared_names(&found.module).collect();
+        assert_eq!(names, ["main", "pkg.std.mcp.a", "pkg.std.json.b"]);
+        assert!(
+            found
+                .module
+                .items
+                .iter()
+                .all(|item| !matches!(item.kind, oska_syntax::ast::ItemKind::Use(_))),
+            "the `use`s are resolved and removed"
+        );
     }
 }

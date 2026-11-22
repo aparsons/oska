@@ -119,6 +119,17 @@ fn secret_call(
             let mut args = args;
             Ok(conceal(args.remove(0)))
         }
+        // `Secret<String>.to_bytes` is `String.to_bytes` on the text
+        // inside, made secret, as a method of a secret integer is below.
+        ("to_bytes", Some(Type::String)) => {
+            let text = args.into_iter().map(reveal).collect();
+            Ok(conceal(intrinsic(
+                "String.to_bytes".to_string(),
+                text,
+                result_inner.expect("`to_bytes` gives a secret"),
+                span,
+            )))
+        }
         // `Secret<String>`'s comparisons and `expose` stay intrinsics.
         (_, Some(Type::String)) | ("expose", _) => Err(args),
         ("constant_time_eq" | "constant_time_eq_secret", Some(_)) => Ok(ExprKind::Call {

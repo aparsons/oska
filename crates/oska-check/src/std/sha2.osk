@@ -1,0 +1,476 @@
+// `std.sha2`: the SHA-256 and SHA-512 hash functions of FIPS 180-4, in
+// one call (`sha2.sha256(data)`) or a piece at a time (`Sha256`,
+// `Sha512`). A module sees them only after `use std.sha2`.
+//
+// A digest is trusted `Bytes`, whatever the trust of the data hashed: it
+// is a fixed-length value computed from integers read out of the data,
+// which the data cannot shape into anything structural. `sha256_secret`
+// and `Sha256Secret` hash a `Secret<Bytes>`, such as key material, into
+// a secret digest, in constant time: no branch or memory address depends
+// on the secret bytes. Only the length of the data, and so the number of
+// blocks and the padding, is public.
+//
+// Every function here is a pure function, and the module has no audit
+// site: no `expose()` and no `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by FIPS 180-4's examples, NIST CAVP's SHA-256 and SHA-512
+// byte-message vectors, and digests recorded from `sha256sum` and
+// `sha512sum` for every length from 0 to 130 bytes, on the interpreter
+// and natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+
+// The SHA-256 digest of `data`: 32 bytes.
+pub fn sha256(data: Untrusted<Bytes>) -> Bytes {
+    var hasher = Sha256.new()
+    hasher.update(data)
+    hasher.finish()
+}
+
+// The SHA-512 digest of `data`: 64 bytes.
+pub fn sha512(data: Untrusted<Bytes>) -> Bytes {
+    var hasher = Sha512.new()
+    hasher.update(data)
+    hasher.finish()
+}
+
+// The SHA-256 digest of secret `data`, as a secret: 32 bytes, computed in
+// constant time. The length of `data` is public.
+pub fn sha256_secret(data: Secret<Bytes>) -> Secret<Bytes> {
+    var hasher = Sha256Secret.new()
+    hasher.update(data)
+    hasher.finish()
+}
+
+// A SHA-256 digest being computed, a piece of data at a time. It is a
+// value: a copy made part-way hashes on independently of the original,
+// so a shared prefix is hashed once.
+pub struct Sha256 { state: List<U32>, pending: Bytes, length: Int }
+
+impl Sha256 {
+    // A hasher that has hashed nothing yet.
+    pub fn new() -> Sha256 {
+        Sha256(state: initial256(), pending: Bytes.new(), length: 0)
+    }
+
+    // Hash `data` after everything hashed so far. Hashing the data in any
+    // number of pieces, empty ones included, gives the digest of the
+    // pieces joined.
+    pub fn update(var self, data: Untrusted<Bytes>) {
+        self.length = self.length + data.len()
+        var at = 0
+        if self.pending.len() > 0 {
+            while at < data.len() && self.pending.len() < 64 {
+                self.pending.push(data.at(at))
+                at = at + 1
+            }
+            if self.pending.len() < 64 {
+                return
+            }
+            self.state = compress256(self.state, self.pending, 0)
+            self.pending = Bytes.new()
+        }
+        while data.len() - at >= 64 {
+            self.state = compress256(self.state, data, at)
+            at = at + 64
+        }
+        while at < data.len() {
+            self.pending.push(data.at(at))
+            at = at + 1
+        }
+    }
+
+    // The SHA-256 digest of everything hashed: 32 bytes.
+    pub fn finish(self) -> Bytes {
+        var block = self.pending
+        block.append(padding(self.pending.len(), 64))
+        block.push_u64_be((self.length * 8).to_u64())
+        var state = self.state
+        var at = 0
+        while at < block.len() {
+            state = compress256(state, block, at)
+            at = at + 64
+        }
+        var digest = Bytes.new()
+        for word in state {
+            digest.push_u32_be(word)
+        }
+        digest
+    }
+}
+
+// A SHA-512 digest being computed, a piece of data at a time. Like
+// `Sha256`, it is a value.
+pub struct Sha512 { state: List<U64>, pending: Bytes, length: Int }
+
+impl Sha512 {
+    // A hasher that has hashed nothing yet.
+    pub fn new() -> Sha512 {
+        Sha512(state: initial512(), pending: Bytes.new(), length: 0)
+    }
+
+    // Hash `data` after everything hashed so far. Hashing the data in any
+    // number of pieces, empty ones included, gives the digest of the
+    // pieces joined.
+    pub fn update(var self, data: Untrusted<Bytes>) {
+        self.length = self.length + data.len()
+        var at = 0
+        if self.pending.len() > 0 {
+            while at < data.len() && self.pending.len() < 128 {
+                self.pending.push(data.at(at))
+                at = at + 1
+            }
+            if self.pending.len() < 128 {
+                return
+            }
+            self.state = compress512(self.state, self.pending, 0)
+            self.pending = Bytes.new()
+        }
+        while data.len() - at >= 128 {
+            self.state = compress512(self.state, data, at)
+            at = at + 128
+        }
+        while at < data.len() {
+            self.pending.push(data.at(at))
+            at = at + 1
+        }
+    }
+
+    // The SHA-512 digest of everything hashed: 64 bytes.
+    pub fn finish(self) -> Bytes {
+        var block = self.pending
+        block.append(padding(self.pending.len(), 128))
+        // The length in bits is 128 bits wide; a `Bytes` never holds
+        // enough for its high half to be anything but zero.
+        block.push_u64_be(0)
+        block.push_u64_be((self.length * 8).to_u64())
+        var state = self.state
+        var at = 0
+        while at < block.len() {
+            state = compress512(state, block, at)
+            at = at + 128
+        }
+        var digest = Bytes.new()
+        for word in state {
+            digest.push_u64_be(word)
+        }
+        digest
+    }
+}
+
+// A SHA-256 digest of secret data being computed, a piece at a time, in
+// constant time. Like `Sha256`, it is a value. The lengths of the pieces
+// are public.
+pub struct Sha256Secret { state: List<Secret<U32>>, pending: Secret<Bytes>, length: Int }
+
+impl Sha256Secret {
+    // A hasher that has hashed nothing yet.
+    pub fn new() -> Sha256Secret {
+        var state: List<Secret<U32>> = List.new()
+        for word in initial256() {
+            state.push(Secret.new(word))
+        }
+        Sha256Secret(state: state, pending: Secret.new(Bytes.new()), length: 0)
+    }
+
+    // Hash secret `data` after everything hashed so far. Hashing the data
+    // in any number of pieces, empty ones included, gives the digest of
+    // the pieces joined.
+    pub fn update(var self, data: Secret<Bytes>) {
+        self.length = self.length + data.len()
+        var at = 0
+        if self.pending.len() > 0 {
+            let take = min(64 - self.pending.len(), data.len())
+            self.pending.append(data.slice(0, take))
+            at = take
+            if self.pending.len() < 64 {
+                return
+            }
+            self.state = compress256_secret(self.state, self.pending, 0)
+            self.pending = Secret.new(Bytes.new())
+        }
+        while data.len() - at >= 64 {
+            self.state = compress256_secret(self.state, data, at)
+            at = at + 64
+        }
+        self.pending.append(data.slice(at, data.len()))
+    }
+
+    // The SHA-256 digest of everything hashed, as a secret: 32 bytes.
+    pub fn finish(self) -> Secret<Bytes> {
+        var block = self.pending
+        var tail = padding(self.pending.len(), 64)
+        tail.push_u64_be((self.length * 8).to_u64())
+        block.append(Secret.new(tail))
+        var state = self.state
+        var at = 0
+        while at < block.len() {
+            state = compress256_secret(state, block, at)
+            at = at + 64
+        }
+        var digest = Secret.new(Bytes.new())
+        for word in state {
+            digest.push_u32_be(word)
+        }
+        digest
+    }
+}
+
+// The smaller of `a` and `b`.
+fn min(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+// The padding after `pending` bytes of a last block of `size` bytes, up to
+// the message length: the byte 128, then zeros up to the last 8 bytes
+// (SHA-256) or 16 bytes (SHA-512) of a block. The length is the caller's.
+fn padding(pending: Int, size: Int) -> Bytes {
+    let room = size / 8
+    var pad = Bytes.new()
+    pad.push(128)
+    while (pending + pad.len()) % size != size - room {
+        pad.push(0)
+    }
+    pad
+}
+
+// ---- SHA-256 (FIPS 180-4, sections 4.1.2, 5.3.3 and 6.2) ------------------
+
+// The initial hash value (section 5.3.3), in decimal: Oska has no
+// hexadecimal literals.
+fn initial256() -> List<U32> {
+    [
+        1779033703, 3144134277, 1013904242, 2773480762,
+        1359893119, 2600822924, 528734635, 1541459225
+    ]
+}
+
+// The 64 round constants (section 4.2.2), in decimal.
+fn constants256() -> List<U32> {
+    [
+        1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
+        3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580,
+        3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986,
+        2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895,
+        666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037,
+        2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344,
+        430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779,
+        1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
+    ]
+}
+
+fn big_sigma0_256(x: U32) -> U32 {
+    x.rotr(2) ^ x.rotr(13) ^ x.rotr(22)
+}
+
+fn big_sigma1_256(x: U32) -> U32 {
+    x.rotr(6) ^ x.rotr(11) ^ x.rotr(25)
+}
+
+fn small_sigma0_256(x: U32) -> U32 {
+    x.rotr(7) ^ x.rotr(18) ^ (x >> 3)
+}
+
+fn small_sigma1_256(x: U32) -> U32 {
+    x.rotr(17) ^ x.rotr(19) ^ (x >> 10)
+}
+
+// `state` after the 64-byte block of `data` at `offset` (section 6.2.2).
+fn compress256(state: List<U32>, data: Untrusted<Bytes>, offset: Int) -> List<U32> {
+    let k = constants256()
+    var w: List<U32> = List.new()
+    for t in 0..16 {
+        w.push(data.read_u32_be(offset + t * 4))
+    }
+    for t in 16..64 {
+        let s1 = small_sigma1_256(w.at(t - 2))
+        let s0 = small_sigma0_256(w.at(t - 15))
+        w.push(s1.wrapping_add(w.at(t - 7)).wrapping_add(s0).wrapping_add(w.at(t - 16)))
+    }
+    var a = state.at(0)
+    var b = state.at(1)
+    var c = state.at(2)
+    var d = state.at(3)
+    var e = state.at(4)
+    var f = state.at(5)
+    var g = state.at(6)
+    var h = state.at(7)
+    for t in 0..64 {
+        let ch = (e & f) ^ (~e & g)
+        let maj = (a & b) ^ (a & c) ^ (b & c)
+        let t1 = h.wrapping_add(big_sigma1_256(e)).wrapping_add(ch).wrapping_add(k.at(t)).wrapping_add(w.at(t))
+        let t2 = big_sigma0_256(a).wrapping_add(maj)
+        h = g
+        g = f
+        f = e
+        e = d.wrapping_add(t1)
+        d = c
+        c = b
+        b = a
+        a = t1.wrapping_add(t2)
+    }
+    [
+        state.at(0).wrapping_add(a), state.at(1).wrapping_add(b),
+        state.at(2).wrapping_add(c), state.at(3).wrapping_add(d),
+        state.at(4).wrapping_add(e), state.at(5).wrapping_add(f),
+        state.at(6).wrapping_add(g), state.at(7).wrapping_add(h)
+    ]
+}
+
+// ---- SHA-256 over secret words ------------------------------------------
+//
+// The same compression over secret integers, which wrap on `+`. It is a
+// function of its own, not `compress256` made generic, so that a public
+// digest never needs an `expose()`.
+
+fn big_sigma0_256_secret(x: Secret<U32>) -> Secret<U32> {
+    x.rotr(2) ^ x.rotr(13) ^ x.rotr(22)
+}
+
+fn big_sigma1_256_secret(x: Secret<U32>) -> Secret<U32> {
+    x.rotr(6) ^ x.rotr(11) ^ x.rotr(25)
+}
+
+fn small_sigma0_256_secret(x: Secret<U32>) -> Secret<U32> {
+    x.rotr(7) ^ x.rotr(18) ^ (x >> 3)
+}
+
+fn small_sigma1_256_secret(x: Secret<U32>) -> Secret<U32> {
+    x.rotr(17) ^ x.rotr(19) ^ (x >> 10)
+}
+
+// `state` after the 64-byte block of secret `data` at `offset`, which is
+// public (section 6.2.2).
+fn compress256_secret(state: List<Secret<U32>>, data: Secret<Bytes>, offset: Int) -> List<Secret<U32>> {
+    let k = constants256()
+    var w: List<Secret<U32>> = List.new()
+    for t in 0..16 {
+        w.push(data.read_u32_be(offset + t * 4))
+    }
+    for t in 16..64 {
+        w.push(small_sigma1_256_secret(w.at(t - 2)) + w.at(t - 7) + small_sigma0_256_secret(w.at(t - 15)) + w.at(t - 16))
+    }
+    var a = state.at(0)
+    var b = state.at(1)
+    var c = state.at(2)
+    var d = state.at(3)
+    var e = state.at(4)
+    var f = state.at(5)
+    var g = state.at(6)
+    var h = state.at(7)
+    for t in 0..64 {
+        let ch = (e & f) ^ (~e & g)
+        let maj = (a & b) ^ (a & c) ^ (b & c)
+        let t1 = h + big_sigma1_256_secret(e) + ch + k.at(t) + w.at(t)
+        let t2 = big_sigma0_256_secret(a) + maj
+        h = g
+        g = f
+        f = e
+        e = d + t1
+        d = c
+        c = b
+        b = a
+        a = t1 + t2
+    }
+    [
+        state.at(0) + a, state.at(1) + b, state.at(2) + c, state.at(3) + d,
+        state.at(4) + e, state.at(5) + f, state.at(6) + g, state.at(7) + h
+    ]
+}
+
+// ---- SHA-512 (FIPS 180-4, sections 4.1.3, 5.3.5 and 6.4) ------------------
+
+// The initial hash value (section 5.3.5), in decimal.
+fn initial512() -> List<U64> {
+    [
+        7640891576956012808, 13503953896175478587, 4354685564936845355, 11912009170470909681,
+        5840696475078001361, 11170449401992604703, 2270897969802886507, 6620516959819538809
+    ]
+}
+
+// The 80 round constants (section 4.2.3), in decimal.
+fn constants512() -> List<U64> {
+    [
+        4794697086780616226, 8158064640168781261, 13096744586834688815, 16840607885511220156,
+        4131703408338449720, 6480981068601479193, 10538285296894168987, 12329834152419229976,
+        15566598209576043074, 1334009975649890238, 2608012711638119052, 6128411473006802146,
+        8268148722764581231, 9286055187155687089, 11230858885718282805, 13951009754708518548,
+        16472876342353939154, 17275323862435702243, 1135362057144423861, 2597628984639134821,
+        3308224258029322869, 5365058923640841347, 6679025012923562964, 8573033837759648693,
+        10970295158949994411, 12119686244451234320, 12683024718118986047, 13788192230050041572,
+        14330467153632333762, 15395433587784984357, 489312712824947311, 1452737877330783856,
+        2861767655752347644, 3322285676063803686, 5560940570517711597, 5996557281743188959,
+        7280758554555802590, 8532644243296465576, 9350256976987008742, 10552545826968843579,
+        11727347734174303076, 12113106623233404929, 14000437183269869457, 14369950271660146224,
+        15101387698204529176, 15463397548674623760, 17586052441742319658, 1182934255886127544,
+        1847814050463011016, 2177327727835720531, 2830643537854262169, 3796741975233480872,
+        4115178125766777443, 5681478168544905931, 6601373596472566643, 7507060721942968483,
+        8399075790359081724, 8693463985226723168, 9568029438360202098, 10144078919501101548,
+        10430055236837252648, 11840083180663258601, 13761210420658862357, 14299343276471374635,
+        14566680578165727644, 15097957966210449927, 16922976911328602910, 17689382322260857208,
+        500013540394364858, 748580250866718886, 1242879168328830382, 1977374033974150939,
+        2944078676154940804, 3659926193048069267, 4368137639120453308, 4836135668995329356,
+        5532061633213252278, 6448918945643986474, 6902733635092675308, 7801388544844847127
+    ]
+}
+
+fn big_sigma0_512(x: U64) -> U64 {
+    x.rotr(28) ^ x.rotr(34) ^ x.rotr(39)
+}
+
+fn big_sigma1_512(x: U64) -> U64 {
+    x.rotr(14) ^ x.rotr(18) ^ x.rotr(41)
+}
+
+fn small_sigma0_512(x: U64) -> U64 {
+    x.rotr(1) ^ x.rotr(8) ^ (x >> 7)
+}
+
+fn small_sigma1_512(x: U64) -> U64 {
+    x.rotr(19) ^ x.rotr(61) ^ (x >> 6)
+}
+
+// `state` after the 128-byte block of `data` at `offset` (section 6.4.2).
+fn compress512(state: List<U64>, data: Untrusted<Bytes>, offset: Int) -> List<U64> {
+    let k = constants512()
+    var w: List<U64> = List.new()
+    for t in 0..16 {
+        w.push(data.read_u64_be(offset + t * 8))
+    }
+    for t in 16..80 {
+        let s1 = small_sigma1_512(w.at(t - 2))
+        let s0 = small_sigma0_512(w.at(t - 15))
+        w.push(s1.wrapping_add(w.at(t - 7)).wrapping_add(s0).wrapping_add(w.at(t - 16)))
+    }
+    var a = state.at(0)
+    var b = state.at(1)
+    var c = state.at(2)
+    var d = state.at(3)
+    var e = state.at(4)
+    var f = state.at(5)
+    var g = state.at(6)
+    var h = state.at(7)
+    for t in 0..80 {
+        let ch = (e & f) ^ (~e & g)
+        let maj = (a & b) ^ (a & c) ^ (b & c)
+        let t1 = h.wrapping_add(big_sigma1_512(e)).wrapping_add(ch).wrapping_add(k.at(t)).wrapping_add(w.at(t))
+        let t2 = big_sigma0_512(a).wrapping_add(maj)
+        h = g
+        g = f
+        f = e
+        e = d.wrapping_add(t1)
+        d = c
+        c = b
+        b = a
+        a = t1.wrapping_add(t2)
+    }
+    [
+        state.at(0).wrapping_add(a), state.at(1).wrapping_add(b),
+        state.at(2).wrapping_add(c), state.at(3).wrapping_add(d),
+        state.at(4).wrapping_add(e), state.at(5).wrapping_add(f),
+        state.at(6).wrapping_add(g), state.at(7).wrapping_add(h)
+    ]
+}
