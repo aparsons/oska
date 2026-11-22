@@ -498,6 +498,12 @@ pub struct ToolsetAuthority {
     /// The names of the literal arms that no spec names, when `specs`
     /// names its tools with literals.
     pub arms_without_spec: Vec<String>,
+    /// The default arm of a split `call`, which runs every name with no
+    /// literal arm: its entry has no name. `None` when not split.
+    pub default: Option<ToolAuthority>,
+    /// `specs` names its tools with literals, so its names were checked
+    /// against the arms of a split `call`.
+    pub specs_checked: bool,
 }
 
 /// One tool's entry in the authority report: what the code that runs it
@@ -529,16 +535,22 @@ impl ToolAuthority {
     /// One indented line of the human-readable report, such as
     /// `  tool "read_note": DirRead (self.notes)`.
     pub fn to_human(&self) -> String {
-        let mut line = match &self.name {
-            Some(name) => format!("  tool {}: {}", quoted(name), words(self.pure, &self.via)),
-            None => format!(
-                "  tools (not split per tool): {}",
-                words(self.pure, &self.via)
-            ),
+        let label = match &self.name {
+            Some(name) => format!("tool {}", quoted(name)),
+            None => "tools (not split per tool)".to_string(),
         };
-        if !self.arm {
-            line.push_str("; no arm: runs the default arm");
-        }
+        let note = if self.arm {
+            ""
+        } else {
+            "; no arm: runs the default arm"
+        };
+        self.labelled(&label, note)
+    }
+
+    /// `label`, then what the entry reaches, `note`, and the protocol
+    /// stream note when it reaches `Stdout`, on one indented line.
+    fn labelled(&self, label: &str, note: &str) -> String {
+        let mut line = format!("  {label}: {}{note}", words(self.pure, &self.via));
         if self.writes_protocol_stream() {
             line.push_str("; writes to the protocol stream (Stdout)");
         }
@@ -571,8 +583,18 @@ impl ToolsetAuthority {
             out.push_str(&tool.to_human());
             out.push('\n');
         }
+        if let Some(default) = &self.default {
+            out.push_str(&default.labelled("default arm", ""));
+            out.push('\n');
+        }
         for name in &self.arms_without_spec {
             out.push_str(&format!("  note: arm {} has no spec\n", quoted(name)));
+        }
+        if self.split && !self.specs_checked {
+            out.push_str(
+                "  note: `specs` is not a list of `mcp.ToolSpec.new` calls with literal names, \
+                 so its names are not checked against the arms\n",
+            );
         }
         out
     }
@@ -580,11 +602,16 @@ impl ToolsetAuthority {
     /// Render as a single-line JSON object.
     pub fn to_json(&self) -> String {
         let tools: Vec<String> = self.tools.iter().map(ToolAuthority::to_json).collect();
+        let default = self
+            .default
+            .as_ref()
+            .map_or_else(|| "null".to_string(), ToolAuthority::to_json);
         format!(
-            "{{\"split\":{},\"tools\":[{}],\"arms_without_spec\":{}}}",
+            "{{\"split\":{},\"tools\":[{}],\"default\":{default},\"arms_without_spec\":{},\"specs_checked\":{}}}",
             self.split,
             tools.join(","),
-            json_strings(&self.arms_without_spec)
+            json_strings(&self.arms_without_spec),
+            self.specs_checked
         )
     }
 }

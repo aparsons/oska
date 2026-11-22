@@ -74,6 +74,8 @@ pub(super) fn toolset(
             split: false,
             tools: vec![tool(None, true, whole)],
             arms_without_spec: Vec::new(),
+            default: None,
+            specs_checked: false,
         };
     };
     let mut shared = Vec::new();
@@ -100,6 +102,7 @@ pub(super) fn toolset(
         })
         .and_then(spec_names);
     let mut arms_without_spec = Vec::new();
+    let specs_checked = specs.is_some();
     if let Some(specs) = specs {
         for (name, _) in &arms {
             if !specs.contains(name) {
@@ -118,6 +121,8 @@ pub(super) fn toolset(
         split: true,
         tools,
         arms_without_spec,
+        default: Some(tool(None, false, reached(&mut uses, default))),
+        specs_checked,
     }
 }
 
@@ -169,6 +174,15 @@ fn split<'b>(body: &'b Block, call: &FnDecl) -> Option<Split<'b>> {
         return None;
     };
     if !matches!(&scrutinee.kind, ExprKind::Name(n) if n.name == *name) {
+        return None;
+    }
+    // A `let` before the `match` that rebinds the name makes the match
+    // on another value. A parameter cannot be assigned, and a `let` in a
+    // nested block ends with it.
+    if before
+        .iter()
+        .any(|stmt| matches!(&stmt.kind, StmtKind::Let { name: bound, .. } if bound.name == *name))
+    {
         return None;
     }
     let (default, literal) = arms.split_last()?;

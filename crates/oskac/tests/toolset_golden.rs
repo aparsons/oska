@@ -13,13 +13,20 @@
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test toolset_golden` and review
 //! the diff.
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 use std::process::Command;
 
-/// `oskac check` on the fixture `name`, with `format` if given: its
-/// stdout, and whether it succeeded.
+use common::golden::assert_golden_file;
+use common::portable::literal_path;
+
+/// `oskac check` on the fixture `name`, run from the repository's root
+/// with the fixture's path as written there, so the report names it the
+/// same way on every platform, with `format` if given: its stdout, and
+/// whether it succeeded.
 fn check(name: &str, format: Option<&str>) -> (String, bool) {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = literal_path(Path::new(env!("CARGO_MANIFEST_DIR")), &["..", ".."]);
     let mut command = Command::new(env!("CARGO_BIN_EXE_oskac"));
     command
         .args(["check", &format!("crates/oskac/tests/fixtures/{name}")])
@@ -32,19 +39,14 @@ fn check(name: &str, format: Option<&str>) -> (String, bool) {
     (stdout, output.status.success())
 }
 
+/// Assert that `actual` is the golden file `name`; `UPDATE_GOLDEN=1`
+/// rewrites it.
 fn assert_golden(actual: &str, name: &str) {
-    let golden: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(name);
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&golden, actual).expect("should write the golden file");
-    }
-    let expected = std::fs::read_to_string(&golden).expect("golden file should exist");
-    assert!(
-        actual == expected,
-        "the report differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended\n{actual}",
-        golden.display()
+    let golden = literal_path(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["tests", "golden", name],
     );
+    assert_golden_file(&golden, actual);
 }
 
 #[test]
@@ -73,4 +75,11 @@ fn an_unsplit_toolset_has_one_entry_in_the_json_report() {
     let (stdout, ok) = check("toolset_unsplit.osk", Some("--format=json"));
     assert!(ok, "the fixture should check cleanly: {stdout}");
     assert_golden(&stdout, "check_toolset_unsplit.json");
+}
+
+#[test]
+fn a_toolset_whose_specs_are_not_literal_says_its_names_are_not_checked() {
+    let (stdout, ok) = check("toolset_unchecked.osk", None);
+    assert!(ok, "the fixture should check cleanly: {stdout}");
+    assert_golden(&stdout, "check_toolset_unchecked.txt");
 }

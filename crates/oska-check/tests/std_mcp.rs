@@ -160,6 +160,33 @@ fn a_spec_with_no_arm_runs_the_default_arm() {
     assert!(toolset.tools[0].arm);
     assert!(!toolset.tools[1].arm);
     assert!(toolset.arms_without_spec.is_empty());
+    assert!(toolset.specs_checked);
+}
+
+/// The authority of the default arm of `toolset`, which is split.
+fn default_arm(toolset: &ToolsetAuthority) -> Vec<&str> {
+    let default = toolset
+        .default
+        .as_ref()
+        .expect("a split toolset has a default arm");
+    assert_eq!(default.name, None);
+    assert!(!default.arm);
+    default.authority.iter().map(String::as_str).collect()
+}
+
+#[test]
+fn the_default_arm_is_reported_when_every_spec_has_an_arm() {
+    let call = "        match name {\n            \
+                \"read\" => listed(self.notes)\n            \
+                \"write\" => mcp.ToolResult.text(\"ok\")\n            \
+                _ => {\n                let _ = self.drafts\n                \
+                mcp.ToolResult.error(\"unknown\")\n            }\n        }";
+    let (toolset, _) = toolset_of(&toolset(FIELDS, NO_HELPERS, SPECS, call));
+    assert_eq!(
+        tools(&toolset),
+        [(Some("read"), vec!["DirRead"]), (Some("write"), vec![])]
+    );
+    assert_eq!(default_arm(&toolset), ["DirWrite"]);
 }
 
 #[test]
@@ -177,6 +204,25 @@ fn specs_with_names_that_are_not_literals_give_no_notes() {
         [(Some("read"), vec!["DirRead"]), (Some("other"), vec![])]
     );
     assert!(toolset.arms_without_spec.is_empty());
+    assert!(!toolset.specs_checked);
+}
+
+#[test]
+fn the_default_arm_is_reported_when_specs_are_not_literal() {
+    let specs = "        let input = json.Schema.object([])\n        \
+                 let name = \"read\"\n        \
+                 [mcp.ToolSpec.new(name, \"Read.\", input)]";
+    let call = "        match name {\n            \
+                \"read\" => listed(self.notes)\n            \
+                _ => {\n                shown(self.out, \"unknown\")\n                \
+                mcp.ToolResult.error(\"unknown\")\n            }\n        }";
+    let (toolset, _) = toolset_of(&toolset(FIELDS, NO_HELPERS, specs, call));
+    assert_eq!(tools(&toolset), [(Some("read"), vec!["DirRead"])]);
+    assert_eq!(default_arm(&toolset), ["Stdout"]);
+    assert!(toolset
+        .default
+        .as_ref()
+        .is_some_and(|d| d.writes_protocol_stream()));
 }
 
 #[test]
@@ -188,6 +234,10 @@ fn a_call_that_is_not_a_match_of_literal_arms_is_not_split() {
         // A guarded arm may fall through to the next.
         "        match name {\n            \
          \"read\" if self.limit > 0 => listed(self.notes)\n            \
+         _ => mcp.ToolResult.error(\"unknown\")\n        }",
+        // The name parameter shadowed before the match.
+        "        let name = \"read\"\n        match name {\n            \
+         \"read\" => listed(self.notes)\n            \
          _ => mcp.ToolResult.error(\"unknown\")\n        }",
         // A match on something other than the name.
         "        let other = \"read\"\n        match other {\n            \
@@ -203,6 +253,7 @@ fn a_call_that_is_not_a_match_of_literal_arms_is_not_split() {
             "{call}"
         );
         assert!(toolset.tools[0].writes_protocol_stream());
+        assert!(toolset.default.is_none(), "{call}");
     }
 }
 
@@ -358,4 +409,16 @@ fn a_tool_spec_and_result_are_built_only_by_their_functions() {
         "{:#?}",
         report.diagnostics
     );
+}
+
+#[test]
+fn a_std_item_in_a_trait_argument_is_named_by_its_std_path() {
+    let src = "use std.json\n\n\
+               trait Holds<T> {\n    fn held(self) -> T\n}\n\n\
+               struct Doc { value: json.Value }\n\n\
+               impl Holds<json.Value> for Doc {\n    fn held(self) -> json.Value {\n        self.value\n    }\n}\n";
+    let report = check(src);
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let names: Vec<&str> = report.functions.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["<Doc as Holds<std.json.Value>>.held"]);
 }

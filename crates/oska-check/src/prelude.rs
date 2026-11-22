@@ -212,10 +212,11 @@ mod tests {
     #[test]
     fn every_name_in_each_std_module_resolves_once_imported() {
         for std in super::STD_MODULES {
+            // A module written in Oska sees the `std` modules it imports,
+            // as a program that imports it does; it is also checked whole,
+            // linked with them, as that program is.
+            let mut uses = vec![std.path];
             if std.written_in_oska {
-                // Checked as a program's module, linked with the `std`
-                // modules written in Oska that it imports, as a program
-                // that imports it is.
                 let report = crate::check_module(std.source);
                 assert!(
                     report.diagnostics.is_empty(),
@@ -223,10 +224,11 @@ mod tests {
                     std.path,
                     report.diagnostics
                 );
-                continue;
+                let ast = oska_syntax::parse_module(std.source).expect("the module parses");
+                uses.extend(super::oska_std_imports(&ast).iter().map(|m| m.path));
             }
-            let importer =
-                oska_syntax::parse_module(&format!("use {}", std.path)).expect("a use parses");
+            let importer: String = uses.iter().map(|path| format!("use {path}\n")).collect();
+            let importer = oska_syntax::parse_module(&importer).expect("a use parses");
             let mut diagnostics = Vec::new();
             let decls = Decls::collect(&importer, &mut diagnostics);
             resolve::prelude_module(std.module(), &decls, &mut diagnostics);

@@ -2,7 +2,7 @@
   "diagnostics": [],
   "functions": [
     {"name":"<Notes as std.mcp.Toolset>.specs","authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false},
-    {"name":"<Notes as std.mcp.Toolset>.call","authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false,"toolset":{"split":false,"tools":[{"name":null,"arm":true,"authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false,"protocol_stream":true}],"arms_without_spec":[]}},
+    {"name":"<Notes as std.mcp.Toolset>.call","authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false,"toolset":{"split":false,"tools":[{"name":null,"arm":true,"authority":["DirRead","Stdout"],"via":[{"param":"self","capabilities":["DirRead","Stdout"]}],"pure":false,"protocol_stream":true}],"default":null,"arms_without_spec":[],"specs_checked":false}},
     {"name":"main","authority":["Fs","Stdout"],"via":[{"param":"fs","capabilities":["Fs"]},{"param":"io","capabilities":["Stdout"]}],"pure":false}
   ],
   "audit": [],

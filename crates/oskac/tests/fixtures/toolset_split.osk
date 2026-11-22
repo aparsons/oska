@@ -1,7 +1,8 @@
 // A toolset whose `call` is a `match` on the tool's name with literal
 // arms, for the golden tests of per-tool authority (#249). Each tool
 // reaches only the fields its arm uses; `forget` has a spec but no arm,
-// and `shout` an arm but no spec, and writes to standard output.
+// so it runs the default arm, and `shout` an arm but no spec. `shout`
+// and the default arm write to standard output.
 use std.json
 use std.mcp
 
@@ -29,7 +30,10 @@ impl mcp.Toolset for Notes {
                 let _ = self.out.println("called")
                 mcp.ToolResult.text("ok")
             }
-            _ => mcp.ToolResult.error("no such tool")
+            _ => {
+                let _ = self.out.println("no such tool")
+                mcp.ToolResult.error("no such tool")
+            }
         }
     }
 }

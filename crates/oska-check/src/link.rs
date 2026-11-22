@@ -171,8 +171,7 @@ impl Modules {
     /// with `std`, so the name is still the package's alone.
     pub fn trait_method_name(&self, type_key: &str, trait_ref: &str, name: &str) -> String {
         let name = ItemKey::parse(name).map_or(name, |key| key.name);
-        let trait_ref = trait_ref.replace(&format!("{PKG}.std."), "std.");
-        crate::program::trait_method(type_key, &trait_ref, name)
+        crate::program::trait_method(type_key, &std_keys_shown(trait_ref), name)
     }
 }
 
@@ -320,6 +319,27 @@ fn key_in(module: &str, name: &str, plain_entry: bool) -> String {
     } else {
         key(module, name)
     }
+}
+
+/// `text`, a type as the report writes it, with each key of an item of a
+/// `std` module written in Oska shown by its `std` path: `pkg.std.mcp.Toolset`
+/// is `std.mcp.Toolset`, in a type argument too. A key starts a name, so
+/// `pkg.std.` is replaced only where no name character comes before it.
+fn std_keys_shown(text: &str) -> String {
+    let prefix = format!("{PKG}.std.");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(&prefix) {
+        let starts_name = !rest[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| is_name_char(c) || c == '.');
+        out.push_str(&rest[..at]);
+        out.push_str(if starts_name { "std." } else { &prefix });
+        rest = &rest[at + prefix.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Whether `module` is the path of a `std` module written in Oska, joined

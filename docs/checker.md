@@ -69,10 +69,11 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
   - `via`: each capability-bearing parameter and the capabilities it supplies, in parameter order. A method's receiver appears as `self`. A `cap fn` parameter is listed with no capabilities, because a closure's capabilities are not written in its type; it still makes the function impure.
     - A parameter whose type is or holds a bounded type parameter, such as `tools: T` or `all: List<T>` in `fn run<T: Toolset>`, is listed too, with the type parameters in `generics`: `{"param":"tools","capabilities":[],"generics":["T"]}`. Its type argument may be capability-bearing, and the bound gives the body methods to call on it, so the function can perform effects through it. The human report shows it as `generic T (tools)`. An impl's type parameters count for its methods, and a trait's `Self` counts for its default methods (`generic Self (self)`), since `Self` is bounded by the trait. An unbounded type parameter has no methods to call, so it is not listed. `generics` is absent when there are none.
   - `pure`: `true` when no parameter, the receiver included, is capability-bearing or holds a bounded type parameter.
-  - `toolset`: on the `call` method of an implementation of `std.mcp`'s `Toolset` only, absent on every other entry. It lists each tool's own authority, so a reviewer sees each tool's blast radius, not the union of all of them, as in `{"split":true,"tools":[{"name":"read_note","arm":true,"authority":["DirRead"],"via":[{"param":"self.notes","capabilities":["DirRead"]}],"pure":false,"protocol_stream":false}],"arms_without_spec":[]}`. The human report lists the tools on indented lines under `call`'s, as `  tool "read_note": DirRead (self.notes)`.
-    - `split`: `true` when `call`'s body is a `match` on its name parameter whose arms are string literals, unguarded, and a final `_` or binding arm. Each literal arm is one tool. A tool reaches the capability-bearing fields of `self` its arm uses (`via` names each as `self.notes`), those that the methods of the same type it calls on `self` use, transitively, and those that statements before the `match` use. A field given to a function is a use of that field; any other use of `self`, such as passing it whole, reaches all of it (`self`).
+  - `toolset`: on the `call` method of an implementation of `std.mcp`'s `Toolset` only, absent on every other entry. It lists each tool's own authority, so a reviewer sees each tool's blast radius, not the union of all of them, as in `{"split":true,"tools":[{"name":"read_note","arm":true,"authority":["DirRead"],"via":[{"param":"self.notes","capabilities":["DirRead"]}],"pure":false,"protocol_stream":false}],"default":{"name":null,"arm":false,"authority":[],"via":[],"pure":true,"protocol_stream":false},"arms_without_spec":[],"specs_checked":true}`. The human report lists the tools on indented lines under `call`'s, as `  tool "read_note": DirRead (self.notes)`.
+    - `split`: `true` when `call`'s body is a `match` on its name parameter whose arms are string literals, unguarded, and a final `_` or binding arm. Each literal arm is one tool. A tool reaches the capability-bearing fields of `self` its arm uses (`via` names each as `self.notes`), those that the methods of the same type it calls on `self` use, transitively, and those that statements before the `match` use. A field given to a function is a use of that field; any other use of `self`, such as passing it whole, reaches all of it (`self`). A `let` before the `match` that rebinds the name parameter makes the toolset not split.
+    - `default`: the default arm of a split `call`, which runs every name with no literal arm, as an entry with a `null` name; `null` when not split. The human report shows it as `  default arm: pure`.
     - When `split` is `false`, `tools` holds one entry with a `null` name for the whole toolset, with all of `self`'s authority; the human report shows it as `  tools (not split per tool): DirRead, Stdout (self)`. The report is never more precise than the code.
-    - When `specs` returns a list literal of `mcp.ToolSpec.new` calls, perhaps followed by `.with_title(...)`, whose names are string literals, a spec with no arm is listed as a tool with `"arm":false`, with the default arm's authority, which runs it (the human report adds `; no arm: runs the default arm`), and `arms_without_spec` names each arm no spec names (the human report adds `  note: arm "shout" has no spec`). These are report notes, not diagnostics.
+    - When `specs` returns a list literal of `mcp.ToolSpec.new` calls, perhaps followed by `.with_title(...)`, whose names are string literals, a spec with no arm is listed as a tool with `"arm":false`, with the default arm's authority, which runs it (the human report adds `; no arm: runs the default arm`), and `arms_without_spec` names each arm no spec names (the human report adds `  note: arm "shout" has no spec`). `specs_checked` says whether that check ran; when a split toolset's `specs` has another shape, it is `false` and the human report says so in a note. These are report notes, not diagnostics.
     - `protocol_stream`: `true` when the tool reaches `Stdout`, which an MCP server's protocol owns: whatever the tool prints can corrupt its framing. The human report adds `; writes to the protocol stream (Stdout)`.
     - The checked program carries each tool's capabilities (`Program::toolsets`), and a tool the report does not split out gets the whole toolset's, so a server can derive a tool's annotations from them.
 - **`audit`**: every **audit site**, in source order. It is always present, and is `[]` when there are none.
@@ -816,7 +817,7 @@ A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when 
 | `E0354` | A secret deciding a memory address: a secret as the index, offset, slice bound, length or count of a prelude method (`List.at`, `Bytes.read_u32_be`, `String.slice`, `Bytes.zeroed`, `String.repeat`), or a secret where it must be `Hash`, as a hash key: a `Hash` bound, or a call to `.hash()`. Reported instead of `E0220`; a secret passed to an `Int` parameter of the module's own function is a plain `E0220`. Spans the argument, the call, or the method name. | None: index with a public value. | — |
 | `E0355` | A secret deciding a variable-time instruction or a panic: an operand of `/` or `%`, or a secret shift amount (the right operand of `<<` or `>>`) or rotation amount (`rotl`, `rotr`). Spans the operation, or the amount of a rotation. | None. | — |
 | `E0356` | A secret ordered with `<`, `<=`, `>` or `>=`, on either side. Spans the comparison. | None: compare for equality with `ct_eq`, or read the values with `.expose()`. | — |
-| `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified; or something private to a `std` module written in Oska, such as `std.json`, used from a program: an item, a field, or a struct with private fields, built or matched. Spans the name, or the constructor or pattern. No `std` module declares a private name yet: no program can reach this code, so it has no example. | None: the module keeps it private. | — |
+| `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified; or something private to a `std` module written in Oska, such as `std.json`, used from a program: an item, a field, or a struct with private fields, built or matched. Spans the name, or the constructor or pattern. | None: the module keeps it private. | — |
 | `E0400` | `oska.toml` is malformed: a table header with no `]`, a key with no `=`, no value after `=`, a string that is not closed or has an unknown escape (`\u` and `\U` take exactly 4 and 8 hex digits), text after a value, a carriage return not followed by a line feed, a byte-order mark, or text that is not UTF-8. Spans the offending text; the manifest's path, line and column are in the report. A byte-order mark, or a bare carriage return, is reported alone. | Remove a byte-order mark. | machine |
 | `E0401` | `oska.toml` uses TOML outside the strict subset (tables, single-line strings, arrays of strings, comments). The message names the feature: dotted keys, dates, multiline strings, inline tables, arrays of tables, quoted keys, integers, floats, booleans, or nested arrays. Spans the unsupported text. | None. | — |
 | `E0402` | An unknown key or table in `oska.toml`: milestone 1 accepts only `[package]`, with the keys `name`, `version` and `oska`. A key outside any table is also unknown. Spans the key, or the table's name. | Replace the name with the single closest known name, when one is close enough. | maybe |
@@ -833,7 +834,7 @@ A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when 
 
 ### Checker examples
 
-Each code has a program that fails with exactly that code and the same program fixed. `E0360` has no example: no `std` module declares a private name yet, so no program can reach it. `E0411` has no example: a symlink cannot be written in a documentation example.
+Each code has a program that fails with exactly that code and the same program fixed. `E0411` has no example: a symlink cannot be written in a documentation example.
 
 Each package example is a whole package, written as its files one after another: a line `==> path <==` starts a file. `oskac check` runs the package (`run` and `tests` in the block's info string run it, or test it, instead).
 
@@ -2443,6 +2444,24 @@ fn small(k: Secret<U32>) -> Bool {
 ```oska fixed=E0356
 fn small(k: Secret<U32>) -> Secret<Bool> {
     (k >> 4).ct_eq(Secret.new(0))
+}
+```
+
+#### `E0360`
+
+```oska error=E0360
+use std.json
+
+fn zero() -> json.Number {
+    json.Number(text: "0")
+}
+```
+
+```oska fixed=E0360
+use std.json
+
+fn zero() -> json.Number {
+    json.Number.from_int(0)
 }
 ```
 
