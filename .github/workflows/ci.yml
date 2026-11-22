@@ -122,12 +122,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: test "$(uname -m)" = x86_64
       - run: rustup target add "$TARGET"
-      - run: cargo build --release --locked -p oskac --target "$TARGET"
+      - run: cargo build --profile dist --locked -p oskac --target "$TARGET"
       # Static: no dynamic loader (`PT_INTERP`) and no shared library
       # (`DT_NEEDED`), so it runs on any Linux and in an empty root. The
       # release's own check, tested by check-linux-build-test.sh.
       - name: The musl build is static
-        run: scripts/release/check-linux-build.sh musl "target/$TARGET/release/oskac"
+        run: scripts/release/check-linux-build.sh musl "target/$TARGET/dist/oskac"
       # The confinement escape tests, the stress tests of the musl build's
       # allocator (crates/oska-sys/tests/allocator.rs, ticket #523) and the
       # interpreter, then the differential suite (the native backend
@@ -145,7 +145,7 @@ jobs:
         run: |
           root=$(mktemp -d)
           chmod 0755 "$root"
-          install -m 0755 "target/$TARGET/release/oskac" "$root/oskac"
+          install -m 0755 "target/$TARGET/dist/oskac" "$root/oskac"
           install -m 0644 examples/hello.osk "$root/hello.osk"
           mkdir -m 1777 "$root/tmp"
           # chroot(2) needs root (CAP_SYS_CHROOT); --userspec then drops to 65532.

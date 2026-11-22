@@ -68,11 +68,11 @@ if [ -n "${OSKA_BENCH_TARGET:-}" ]; then
     echo "bench-native.sh: OSKA_BENCH_TARGET=$OSKA_BENCH_TARGET is for ${OSKA_BENCH_TARGET%%-*}, but this machine is $host_arch: its oskac cannot run here" >&2
     exit 1
   fi
-  cargo build --release --quiet -p oskac --target "$OSKA_BENCH_TARGET"
-  oskac="$root/target/$OSKA_BENCH_TARGET/release/oskac$exe"
+  cargo build --profile dist --quiet -p oskac --target "$OSKA_BENCH_TARGET"
+  oskac="$root/target/$OSKA_BENCH_TARGET/dist/oskac$exe"
 else
-  cargo build --release --quiet -p oskac
-  oskac="$root/target/release/oskac$exe"
+  cargo build --profile dist --quiet -p oskac
+  oskac="$root/target/dist/oskac$exe"
 fi
 
 cat >"$work/loop.osk" <<'EOF'

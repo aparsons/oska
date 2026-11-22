@@ -1609,7 +1609,7 @@ test_ci_checks_the_musl_build_with_the_release_check() {
   musl=$(job_text "$here/../../.github/workflows/ci.yml" musl)
   [ -n "$musl" ] || fail "ci.yml has no musl job"
   # shellcheck disable=SC2016 # the workflow's own text, not expanded here
-  grep -qF 'scripts/release/check-linux-build.sh musl "target/$TARGET/release/oskac"' <<<"$musl" ||
+  grep -qF 'scripts/release/check-linux-build.sh musl "target/$TARGET/dist/oskac"' <<<"$musl" ||
     fail "the musl job does not run check-linux-build.sh musl"
   if grep -Eq 'readelf|objdump' <<<"$musl"; then
     fail "the musl job has its own static check"
