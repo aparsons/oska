@@ -54,7 +54,7 @@ struct Mac {
     page: u64,
     /// The functions its executables import from `libSystem`, in the
     /// order of the import table (ADR 0015: the list is reviewed surface).
-    imports: [&'static str; 24],
+    imports: [&'static str; 35],
     /// Whether this host runs its executables.
     is_host: bool,
 }
@@ -428,7 +428,7 @@ fn segments_of(mac: &Mac) {
 
 /// The functions every `macos-aarch64` executable imports from
 /// `libSystem`, in the order of its import table.
-const IMPORTS: [&str; 24] = [
+const IMPORTS: [&str; 35] = [
     "___error",
     "_read",
     "_write",
@@ -453,12 +453,23 @@ const IMPORTS: [&str; 24] = [
     "_getpid",
     "_kill",
     "__exit",
+    "_socket",
+    "_connect",
+    "_bind",
+    "_listen",
+    "_accept",
+    "_getsockname",
+    "_getsockopt",
+    "_setsockopt",
+    "_send",
+    "_recv",
+    "_poll",
 ];
 
 /// [`IMPORTS`] for `macos-x86_64`: the same, but the functions that take
 /// or give a `struct stat` or `struct dirent` are their 64-bit-inode
 /// variants, which C's headers select on x86_64 and arm64 has alone.
-const IMPORTS_X86_64: [&str; 24] = [
+const IMPORTS_X86_64: [&str; 35] = [
     "___error",
     "_read",
     "_write",
@@ -483,6 +494,17 @@ const IMPORTS_X86_64: [&str; 24] = [
     "_getpid",
     "_kill",
     "__exit",
+    "_socket",
+    "_connect",
+    "_bind",
+    "_listen",
+    "_accept",
+    "_getsockname",
+    "_getsockopt",
+    "_setsockopt",
+    "_send",
+    "_recv",
+    "_poll",
 ];
 
 #[test]

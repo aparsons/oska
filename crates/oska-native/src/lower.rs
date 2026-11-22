@@ -1191,8 +1191,10 @@ impl<'l, 'p> Body<'l, 'p> {
             rhs: one,
             target: shared,
         });
-        if layout::is_confined(ty) {
+        if layout::is_directory(ty) {
             self.call_runtime("root_drop", vec![value], NOWHERE)?;
+        } else if layout::is_socket(ty) {
+            self.call_runtime("sock_drop", vec![value], NOWHERE)?;
         } else if matches!(ty, Type::Fn { .. }) {
             if self.dropping {
                 let code = self.load(value, layout::FN_DROP);
@@ -3410,9 +3412,9 @@ fn borrows_arguments(name: &str) -> bool {
 /// Whether `main` can be given a value of `ty` by `_start`: the word 0.
 /// Each of these keeps its state, if it has any (the arguments, the
 /// environment, the input buffer, the generator, the root budget), in the
-/// runtime's globals. `Net`, `NetConnect` and `NetListen` have no state
-/// and no native methods yet (ADR 0023): a call of one is refused (`E0390`),
-/// so a native program holds one and reaches no network.
+/// runtime's globals. `Net`, `NetConnect` and `NetListen` have no state:
+/// they only attenuate (ADR 0023), and what they give, a host capability or
+/// a loopback listener, is an object.
 fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),

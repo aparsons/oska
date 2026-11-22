@@ -5,7 +5,7 @@
 
 ## Decision
 
-ADR 0015's rule holds on Windows: a `std.rt` system-call intrinsic is **one call of the operating system's interface**. On Windows that is one function of `kernel32.dll` or `ntdll.dll`, or `ProcessPrng` of `bcryptprimitives.dll` for random bytes, which neither of the two provides.
+ADR 0015's rule holds on Windows: a `std.rt` system-call intrinsic is **one call of the operating system's interface**. On Windows that is one function of `kernel32.dll` or `ntdll.dll`, or `ProcessPrng` of `bcryptprimitives.dll` for random bytes, which neither of the two provides, or one function of `ws2_32.dll` for a socket (Winsock, spec #228), which neither provides either.
 
 Because Windows' functions are not POSIX-shaped, Windows has **its own intrinsics**, one per function, named for it and taking its arguments in its order, out-parameters included (`rt_sys_write_file(handle, buf, count, done)` for `WriteFile`). A platform lowers an intrinsic it does not have to a constant failure, with no call.
 

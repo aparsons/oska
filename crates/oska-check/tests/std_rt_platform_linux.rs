@@ -71,6 +71,28 @@ fn linux_shared() -> Vec<(&'static str, i128)> {
         ("e_intr", 4),
         ("e_pipe", 32),
         ("e_pipe_alt", 0),
+        // Sockets (spec #228). asm-generic/socket.h: SOL_SOCKET, SO_ERROR
+        // and SO_REUSEADDR; linux/socket.h: AF_INET6; asm-generic/poll.h:
+        // POLLIN and POLLOUT, with `ppoll` taking a `struct timespec`; a
+        // `struct sockaddr` starts with a 16-bit family, not a length.
+        ("af_inet6", 10),
+        ("sol_socket", 1),
+        ("so_error", 4),
+        ("so_reuseaddr", 2),
+        ("poll_in", 0x1),
+        ("poll_out", 0x4),
+        ("poll_timespec", 1),
+        ("sockaddr_length_byte", 0),
+        // asm-generic/errno.h: EAGAIN, EINPROGRESS, ECONNREFUSED,
+        // ECONNRESET, ECONNABORTED, ETIMEDOUT, ENETUNREACH, EHOSTUNREACH.
+        ("e_would_block", 11),
+        ("e_in_progress", 115),
+        ("e_refused", 111),
+        ("e_reset", 104),
+        ("e_aborted", 103),
+        ("e_timed_out", 110),
+        ("e_net_unreach", 101),
+        ("e_host_unreach", 113),
     ]
 }
 

@@ -32,26 +32,24 @@ const PRELUDE: &str = include_str!("../../oska-check/src/prelude.osk");
 /// `std.html`'s source.
 const STD_HTML: &str = include_str!("../../oska-check/src/std/html.osk");
 
-/// Why the network has no native implementation yet.
-const NATIVE_NETWORK: &str = "networking runs on the interpreter first (spec #228); the native \
-backend refuses it (`E0390`) until its own ticket";
+/// Why the native test host does not record network attempts yet.
+const NATIVE_NET_ATTEMPTS: &str =
+    "a native plain test refuses `t.net` as the interpreter does, but \
+does not record where it was asked to go: `t.net_attempts` is a later ticket of spec #228";
 
 /// The types, or `Type.method` names, that no backend implements, with
 /// why. A program given a type that has no runtime is refused before it
-/// runs, by the interpreter (`E0370`) and the native backend alike. The
-/// network (ADR 0023) runs on the interpreter first: the native backend
-/// refuses it (`E0390`), which the parity gate reports, until its own
-/// ticket of spec #228. `std.sql` and `std.proc` have no runtime on
-/// either backend either: a program importing one is refused (`E0371`),
-/// so their body-less functions are not scanned at all.
+/// runs, by the interpreter (`E0370`) and the native backend alike.
+/// `TestContext.net_attempts` has a runtime on the interpreter only.
+/// `std.sql` and `std.proc` have no runtime on either backend either: a
+/// program importing one is refused (`E0371`), so their body-less
+/// functions are not scanned at all.
 const EXEMPT: &[(&str, &str)] = &[
-    ("Net", NATIVE_NETWORK),
-    ("NetConnect", NATIVE_NETWORK),
-    ("NetListen", NATIVE_NETWORK),
-    ("HostConnect", NATIVE_NETWORK),
-    ("LoopbackListen", NATIVE_NETWORK),
-    ("Connection", NATIVE_NETWORK),
-    ("TestContext.net_attempts", NATIVE_NETWORK),
+    ("TestContext.net_attempts", NATIVE_NET_ATTEMPTS),
+    (
+        "HostConnect.exchange_datagram",
+        "interpreter-first: the native backend refuses it with E0390 (ADR 0024)",
+    ),
     ("Spawn", "process spawning has no runtime yet"),
     ("Sched", "scheduling has no runtime yet"),
 ];
@@ -1822,6 +1820,165 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {
     io.println(42.to_string())
+}"#,
+    ),
+    (
+        "Net.connect_only",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let connect = net.connect_only()
+    let host = connect.restrict_to("127.0.0.1", 9)
+    io.println(host.name())
+}"#,
+    ),
+    (
+        "Net.listen_only",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let port = listener.port()
+    io.println(if port > 0 { "listening" } else { "not listening" })
+}"#,
+    ),
+    (
+        "Net.restrict_to",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let host = net.restrict_to("example.com", 443)
+    io.println(host.name())
+}"#,
+    ),
+    (
+        "NetConnect.restrict_to",
+        Run::Main,
+        r#"fn main(io: Stdout, net: NetConnect) -> Result<(), IoError> {
+    let host = net.restrict_to("example.org", 8080)
+    io.println(host.name())
+}"#,
+    ),
+    (
+        "NetListen.restrict_to_loopback",
+        Run::Main,
+        r#"fn main(io: Stdout, net: NetListen) -> Result<(), IoError> {
+    let listener = net.restrict_to_loopback(70000)
+    match listener.accept() {
+        Ok(_) => io.println("accepted")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "HostConnect.name",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    io.println(net.restrict_to("host.example", 1).name())
+}"#,
+    ),
+    (
+        "HostConnect.port",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    io.println(net.restrict_to("host.example", 4321).port().to_string())
+}"#,
+    ),
+    (
+        "HostConnect.connect",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    match net.restrict_to("not a host", 1).connect() {
+        Ok(_) => io.println("connected")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "NetConnect.system_name_servers",
+        Run::Main,
+        r#"fn main(io: Stdout, net: NetConnect) -> Result<(), IoError> {
+    let servers = net.system_name_servers()?
+    io.println(if servers.len() <= 16 { "listed" } else { "too many" })
+}"#,
+    ),
+    (
+        "LoopbackListen.accept",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.restrict_to("127.0.0.1", listener.port()).connect()?
+    let server = listener.accept()?
+    io.println(server.host())
+}"#,
+    ),
+    (
+        "LoopbackListen.port",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    io.println(if listener.port() > 0 { "a port" } else { "no port" })
+}"#,
+    ),
+    (
+        "Connection.send",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.restrict_to("127.0.0.1", listener.port()).connect()?
+    let server = listener.accept()?
+    client.send("sent")?
+    io.println(server.receive()?)
+}"#,
+    ),
+    (
+        "Connection.receive",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.restrict_to("127.0.0.1", listener.port()).connect()?
+    let server = listener.accept()?
+    server.send("received")?
+    io.println(client.receive()?)
+}"#,
+    ),
+    (
+        "Connection.send_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.restrict_to("127.0.0.1", listener.port()).connect()?
+    let server = listener.accept()?
+    client.send_bytes("bytes".to_bytes())?
+    io.println(server.receive()?)
+}"#,
+    ),
+    (
+        "Connection.receive_bytes",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.restrict_to("127.0.0.1", listener.port()).connect()?
+    let server = listener.accept()?
+    server.send("hex")?
+    io.println(client.receive_bytes()?.assume_trusted().to_hex())
+}"#,
+    ),
+    (
+        "Connection.host",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.restrict_to("localhost", listener.port()).connect()?
+    io.println(client.host())
+}"#,
+    ),
+    (
+        "Connection.close",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.restrict_to("127.0.0.1", listener.port()).connect()?
+    let server = listener.accept()?
+    client.close()
+    io.println(server.receive()?)
 }"#,
     ),
     (

@@ -298,14 +298,13 @@ fn a_module_with_no_runtime_is_refused_as_the_interpreter_refuses_it() {
     // the interpreter's refusal, with no note that it runs.
     let spawn = [("spawn.osk", "fn main(spawn: Spawn) {}\n")];
     assert_golden("run_ungranted", &spawn, &["run", "spawn.osk"]);
-    // The network runs on the interpreter only (ADR 0023): the native
-    // backend refuses it, an error on every platform, and `--interpret`
-    // runs it.
+    // The network runs on both backends (ADR 0023, ticket #238 of spec
+    // #228): a program that only narrows a capability runs the same.
     let net = [(
         "net.osk",
         "fn main(net: Net) {\n    let _ = net.restrict_to(\"example.com\", 443)\n}\n",
     )];
-    assert_golden("run_net_refused_natively", &net, &["run", "net.osk"]);
+    assert_golden("run_net_native", &net, &["run", "net.osk"]);
     assert_golden(
         "run_net_interpret",
         &net,

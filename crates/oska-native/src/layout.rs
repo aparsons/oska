@@ -21,9 +21,14 @@
 //!   - a `Bytes`: `[count][length][capacity][bytes...]`, room for
 //!     `capacity` bytes (a multiple of 8) of which the first `length` are
 //!     there, packed; it holds no references;
-//!   - a directory or file capability ([`is_confined`]): `std.rt`'s
+//!   - a directory or file capability ([`is_directory`]): `std.rt`'s
 //!     `Root`, `[count][handle][path][name][why]`, which `std.rt`'s
 //!     `root_drop` releases, closing its handle;
+//!   - a host capability or loopback listener ([`is_socket`]): `std.rt`'s
+//!     `Sock`, `[count][handle][host][port][why]`, which `sock_drop`
+//!     releases, closing its socket. A `Connection` is the prelude's
+//!     struct with the one field `host`, a `Sock` whose handle is the
+//!     open socket;
 //!   - a function value (a closure, or a named function used as a value):
 //!     `[count][code][drop][captured 0][captured 1]...`, the address of
 //!     the code a call runs, which takes the object itself before the
@@ -107,11 +112,28 @@ pub fn is_counted(program: &Program, ty: &Type) -> bool {
 /// Whether `ty` is a directory or file capability: an object holding an
 /// open directory handle (`std.rt`'s `Root`), released by `std.rt`'s
 /// `root_drop` rather than a generated drop function.
-pub fn is_confined(ty: &Type) -> bool {
+pub fn is_directory(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, .. } if builtins::is_capability(name) && matches!(
         name.as_str(),
         "Dir" | "DirRead" | "DirWrite" | "FileRead" | "FileWrite"
     ))
+}
+
+/// Whether `ty` is a network capability that is an object: a host
+/// capability or a loopback listener, `std.rt`'s `Sock`, which holds a
+/// socket and is released by `std.rt`'s `sock_drop`.
+pub fn is_socket(ty: &Type) -> bool {
+    matches!(ty, Type::Named { name, .. } if builtins::is_capability(name) && matches!(
+        name.as_str(),
+        "HostConnect" | "LoopbackListen"
+    ))
+}
+
+/// Whether `ty` is a capability that is an object holding an operating
+/// system handle, released by `std.rt` and not by a generated drop
+/// function ([`is_directory`], [`is_socket`]).
+pub fn is_confined(ty: &Type) -> bool {
+    is_directory(ty) || is_socket(ty)
 }
 
 /// The type of the items of `ty`, when it is a list.
