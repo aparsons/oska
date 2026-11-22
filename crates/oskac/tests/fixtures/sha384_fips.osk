@@ -1,0 +1,213 @@
+// `std.sha384` against FIPS 180-4's examples and digests recorded from
+// coreutils' `sha384sum`, on both backends (the native test corpus runs
+// every test-bearing fixture). The message of length `n` is the bytes
+// `(k * 7 + 3) % 256` for `k` below `n`, made by `message`. The
+// one-million-`a` example runs as a program, in `native_kex_primitives.rs`.
+
+use std.sha384
+use std.sha2
+
+fn hex(text: String) -> Bytes {
+    Bytes.from_hex(text).unwrap_or(Bytes.new())
+}
+
+fn message(n: Int) -> Bytes {
+    var out = Bytes.new()
+    for k in 0..n {
+        out.push(((k * 7 + 3) % 256).to_u8())
+    }
+    out
+}
+
+// FIPS 180-4's examples: the empty message, "abc", and the two-block
+// message of 896 bits.
+test "sha384 of the FIPS 180-4 examples" {
+    t.assert_eq(sha384.sha384("abc".to_bytes()).to_hex(), "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7")
+    t.assert_eq(sha384.sha384("".to_bytes()).to_hex(), "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b")
+    t.assert_eq(sha384.sha384("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu".to_bytes()).to_hex(), "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039")
+}
+
+test "digests recorded from sha384sum, part 1 of 4" {
+    t.assert_eq(sha384.sha384(message(0)).to_hex(), "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b")
+    t.assert_eq(sha384.sha384(message(1)).to_hex(), "8a6c69af6fb6247635f837958446fb8f10e39bd5fbc244f7e635176339a3be614f6394247f01dbe1126c178c7bd48cb5")
+    t.assert_eq(sha384.sha384(message(2)).to_hex(), "9f99702641c7fa8edcee3c4f8bc365aa9353fd7d79a11ddb22efc5ea97341a8d878588c421c4059f66cca96c75eb55d6")
+    t.assert_eq(sha384.sha384(message(3)).to_hex(), "de5060203c58b419f136c17666d339a05705575827e3600f0475f6fb3089870aede26c5a0903dea5938bcded4ee9e619")
+    t.assert_eq(sha384.sha384(message(4)).to_hex(), "b76a3e6f53555d7e829c3c95c5ecae76f7e3af737a4df12edf8e0334d562005f184921ac9940da9377269f7f70ac31c5")
+    t.assert_eq(sha384.sha384(message(5)).to_hex(), "be9216712b44dce60822bf1fa84d0be10cba04e82a0aee79bbf179dcbf62d372be2c23b32279b306a209e35d2715e4c8")
+    t.assert_eq(sha384.sha384(message(6)).to_hex(), "f67188a721c3b47d4753b3bf90ba865f31f87790ea0cf27358c55ccd09b9b7115ab6134c73a60dd4dd38b9fa9542bde2")
+    t.assert_eq(sha384.sha384(message(7)).to_hex(), "8922548812bc1eec8a6557f088cebdbbe3276ba9d2ff4ae25b8393d2825ba7a71ecdbf1517339be683875a59e8af4246")
+    t.assert_eq(sha384.sha384(message(8)).to_hex(), "3901c39c9eafcb99a433cd13c0f11362c613802b7329fbfa15f753f6d9002d3d310bb936b6e1316410bbd403563b507c")
+    t.assert_eq(sha384.sha384(message(9)).to_hex(), "fe69455a8c0f813dc9a2231fec06f49b870802f608e7408fe7977db0254485b1fc84c38e972b845960ef73ccb30b35ed")
+    t.assert_eq(sha384.sha384(message(10)).to_hex(), "ef9b5ed3530b90be7b48544ad86a7abe4b0dd317a7dec6a6fb01193f626003c649a5e6bea83256ff66a49eba453699e0")
+    t.assert_eq(sha384.sha384(message(11)).to_hex(), "c23ecf48ab3c8d7d2b22ba18add4c32e6ea3152744e4b571ab227634c698e7f7d4503f65952d46c34faed83ec4e39e66")
+    t.assert_eq(sha384.sha384(message(12)).to_hex(), "4402e4594d25306a56f2fd4323147d1609b8cddb2d9310210f954b493c383dc0d131d4df2f6d5fb70d749ba369b200e4")
+    t.assert_eq(sha384.sha384(message(13)).to_hex(), "17d24b0cd91628ac72aa5be04a956bf737491258f8d7013feca9d0828d9fad65622233a921bd955332f85f3deba13cfd")
+    t.assert_eq(sha384.sha384(message(14)).to_hex(), "549dc6f8b5cf07333b26f850244afaef7a9e5e411e3f58a6fb6ca29bac2dc969ac28cfb6f2453f8a8a3868426c3dc105")
+    t.assert_eq(sha384.sha384(message(15)).to_hex(), "a0104cbc668b7df02d7fdcab8e7ab31bb3bba153237aeb3f77f83a6b8994181f03d56bdca48218ca8a042bf353c8b10a")
+    t.assert_eq(sha384.sha384(message(16)).to_hex(), "7010620fb19d73d4c49453f748ead23ce1866a361d479e279259d34c795502698946bdd32670ab57edc5c08490989b98")
+    t.assert_eq(sha384.sha384(message(17)).to_hex(), "e518d85e910748a30fd8a2c480f320340c997e7f2cb835c162cf23829ea7c0bea732d7e388a19766c75e4ffab118d42c")
+    t.assert_eq(sha384.sha384(message(18)).to_hex(), "86bc671ddeeca4d0f0a8a0c80d978b2b48bff8d225c6103b5b36f2af115e34c2ac21f64dfacb2c5b27963d7c06374ece")
+    t.assert_eq(sha384.sha384(message(19)).to_hex(), "cfabbeefa48af0f0006a9533e3f87127bb54fe06e0d4bfac63ec0cff7dac2dd5209afb2aa7a8bab9951bbca56a5e2d9e")
+    t.assert_eq(sha384.sha384(message(20)).to_hex(), "4bb4fa793f4a4adb23170db7db8b90650b2f75a82288328a9cbe0d06307a16c2fee23bd52c13f40c4a7de16719ff1fdb")
+    t.assert_eq(sha384.sha384(message(21)).to_hex(), "bf23454fb31b1d28b928fb3deb9e64a1e9959b67ec39f699abb3f9a8b382132c547d5c79d70b3bfba2c6cc62c1deb0e7")
+    t.assert_eq(sha384.sha384(message(22)).to_hex(), "77b6c33482e6f37bd11f5e37ae06994b1b0e850ddc607122c5a91280e12ab585ae9a3bb0cd0b50b1554eb6d9b77ab256")
+    t.assert_eq(sha384.sha384(message(23)).to_hex(), "237d394e221d8f8bfdc470a5533864b70159db0b826728784eb44bab641097f6fa38227eeb0d5c7b24ed8fe2d47f2600")
+    t.assert_eq(sha384.sha384(message(24)).to_hex(), "a801ea40f27cd1df68fbb7f688b43e951e69227f2ead735235e2e34ab05ca4d200809a84616607e8e19fadaa610fdad7")
+    t.assert_eq(sha384.sha384(message(25)).to_hex(), "1d68c697a0db2d657c19d0595ca16d57b356f9e5bf55cc3676c08cbba391dd93187e5e92fae5d78a5d559830e137f911")
+    t.assert_eq(sha384.sha384(message(26)).to_hex(), "ed33b83cfaa6159d9a64a0ea5bff301477923457800b05b192ec23e20ad6e72cbfa9927272fe628325abdce7ce572882")
+    t.assert_eq(sha384.sha384(message(27)).to_hex(), "78ff00fe631c725b47010f04af3aaa0fd9b549da9644b70ae8a5f90a58453d2588bbe91550f9d33242770a8fc60a35b6")
+    t.assert_eq(sha384.sha384(message(28)).to_hex(), "974211d55186757541e247cf6b34379a08cd439468788614f2c575a14774afcb5a24c326d0edc542fb63f452c52cec60")
+    t.assert_eq(sha384.sha384(message(29)).to_hex(), "eb14f33ba79e15c23c171f5c048d361302d95798e2da207042b697ebbdc5bd664d243b24859444ff90a3d80564c7eac8")
+    t.assert_eq(sha384.sha384(message(30)).to_hex(), "9c8003acd71e1b1dbb1e05cd9e07b90ac3b7fb5f1a11058c16eafb14f1639f6d2894b9bcb9ecb2832ea7388550d8f74e")
+    t.assert_eq(sha384.sha384(message(31)).to_hex(), "2c05a67b3229fc8b992aeee4b069dae5cf150aa4f965c5ee9346d572e48f50e84c97bedf6985eafde54073bfeb2cdd61")
+    t.assert_eq(sha384.sha384(message(32)).to_hex(), "a1510e040678027e36dd6a1e6db6746b17bea09ce12cd75745f00d9273dabfc457ad22231b46ea2d729503cae98a5968")
+    t.assert_eq(sha384.sha384(message(33)).to_hex(), "7c9fe32d2b17042f1516dde48a85907fe3960d134bbddb7619c21d6efa5c1084db9c9e5a3b873197594c6106dfcd7188")
+    t.assert_eq(sha384.sha384(message(34)).to_hex(), "07223af609a7906a00b520a26a92ed4b6d33bb7c6bcfad6bf6e6a9a1f3d3119783312613faf6cdf3b8acb4a6b3b7de59")
+    t.assert_eq(sha384.sha384(message(35)).to_hex(), "130bad44f7ef32cd60cdd9259c3eac39ff3d028a9f71c6ec8a81b7d4075158a3e6c6960387f4d08ea2dd5fe8700f4765")
+    t.assert_eq(sha384.sha384(message(36)).to_hex(), "5c62cb3f754679b55b2e1b32ecfd9ae0b6769686481636695b1d26a56401e0cad077d0b2de6e810162032fd1d68bfdb7")
+    t.assert_eq(sha384.sha384(message(37)).to_hex(), "b16db60bd440044f4489f70eb1ac76d7c4941950067566fd24956cf67f8ef3d835ccb69feb6c341d38f6ac68c05f865c")
+    t.assert_eq(sha384.sha384(message(38)).to_hex(), "83b2fb12fd217306199380dd5260bb9b46035daf6d5ee6c58849d2d521ba65fedb1f54e5c59cbc942d33babbca4f73aa")
+    t.assert_eq(sha384.sha384(message(39)).to_hex(), "43375257dd5eb246200094c4daa5111d5d2dc32753c3ee0d32906663772304dbc46085cd08e936eae768947878099a98")
+}
+
+test "digests recorded from sha384sum, part 2 of 4" {
+    t.assert_eq(sha384.sha384(message(40)).to_hex(), "5abf8fa03aba28317552516cb32c4aeffea6b7ebceb939fac348a5dd80352522994bbf75f7af2537c7e2fcff62db6fa9")
+    t.assert_eq(sha384.sha384(message(41)).to_hex(), "53c37b02ded811e2a798ca80b57385aae68d437732d45294a92d289216e54ba4c1cfb6a1cc9ee137b367b62a1f8868e5")
+    t.assert_eq(sha384.sha384(message(42)).to_hex(), "138927e72bd39e9b3409f9c690948aef877d3155404322b20dc86e698ca2a2b51aa977c80e1c86d4bfab81016cf9ad00")
+    t.assert_eq(sha384.sha384(message(43)).to_hex(), "43eafaf0c4486a51a4ea7ef0c32ef56023e5b3d89f71c1346107889b6226e041c9daf349dc34d47ea0fabd225bbca096")
+    t.assert_eq(sha384.sha384(message(44)).to_hex(), "b94b4e925f18ee0fe07b2bf22ccf053c7c6e808d70aa54eb3d0fb7738cea96bf998fc09620f20e9cc62277634f82706c")
+    t.assert_eq(sha384.sha384(message(45)).to_hex(), "dc963b6e78487f32a205ca9947c2d0a57adaa1735a5afd2e8e1c24ae21cb334c0a22094cb994189b1a543ac760269bb3")
+    t.assert_eq(sha384.sha384(message(46)).to_hex(), "b6e2fb412c2bef7e4382e13dffc09d6789568e8d08bd8af82ab24bd6d84c31b17c334ca8c82e14deb6f11669c3e1602a")
+    t.assert_eq(sha384.sha384(message(47)).to_hex(), "1da5a14db93742728d3ab005b35434ccaa5cb35fac6ae54136559fc4b71f2cddf34372f165b1fb01818aceaa69510abf")
+    t.assert_eq(sha384.sha384(message(48)).to_hex(), "30c38fe0b14ef59b661a265c9df3d6c3720236016c4db2d8ba2aea293d2b490cb8303f21cbe5ac82f2962f1646492e7a")
+    t.assert_eq(sha384.sha384(message(49)).to_hex(), "5eae5fe208f0996e644c774fc1f24f8af8612eca5e6081bdce303261da1aac62487aed146ecd689504f0b607814575ad")
+    t.assert_eq(sha384.sha384(message(50)).to_hex(), "e804da5485ed0d787420a5684288a82c112bce3e8593247c2005ba351bd7806cca76fb02bf6e32e54c4421262b1f1400")
+    t.assert_eq(sha384.sha384(message(51)).to_hex(), "407e212a4ad26095025e573a30419ba9d3a38043a200fd766d38e4d6b0110ef58f2ba158357442fbd24c3b78b3902bfd")
+    t.assert_eq(sha384.sha384(message(52)).to_hex(), "9b259d10bbc3b6fb774eead98c4f15773b474104caf886a3f6ab4e7cb57d507268b3f3a705012363ea71e906ccf214ca")
+    t.assert_eq(sha384.sha384(message(53)).to_hex(), "cf8e725e94c969dacce5f1e93630bd5cf23ab52eb88ad3206a7d1816027ab975863b1bda225639cdb483158bfaa9e623")
+    t.assert_eq(sha384.sha384(message(54)).to_hex(), "67a41627e0049fccdc634592164987cae088c723f23019b1068565f86c0a7f4f2e5c6c96d7ad3cac417ad5e900e9ca52")
+    t.assert_eq(sha384.sha384(message(55)).to_hex(), "fc2728f452750d08b5dbad1aea53202e7fc19c06894d13e36c433b0444a899277c49f16e0577c03db0f0605578836ef6")
+    t.assert_eq(sha384.sha384(message(56)).to_hex(), "6c969a865f38d2eaac60b7963a84c97ba27bcb76e589cbe1e2e89ead6aee4ad0337a4268f054be49c604ddd99692036d")
+    t.assert_eq(sha384.sha384(message(57)).to_hex(), "a6c1a73ce16f33c777d99dd4a66304bc5de531caab5aa4f80b46eaf18b08b45875aa2b385bc511d5a5f1985cad2e5dee")
+    t.assert_eq(sha384.sha384(message(58)).to_hex(), "5559fb8cc2af37b06dc8351add8f9bf1092526962f55d274273126ea4e859710442d1f9c0e9725bf87fe4a8a50af8bfd")
+    t.assert_eq(sha384.sha384(message(59)).to_hex(), "e71b61ea36d5dee454fe085d4351924ab16a0e5d04b079f4bda20e55a98a927269f1cccac78ac74cd92bfa9eeb474d07")
+    t.assert_eq(sha384.sha384(message(60)).to_hex(), "53e4945123aa31370dddf2d1b28abd4787fc64b066a7ae9bf836a71c4746ab044daad6c7de1d996f7b712aa3d9ec2269")
+    t.assert_eq(sha384.sha384(message(61)).to_hex(), "b1692dd5a3789cc5517273942ca77940b6479b5dd3a5a8adf38f8fbdd11b2549e994b5da36d6cc9aeaf0c2046e2ca760")
+    t.assert_eq(sha384.sha384(message(62)).to_hex(), "b198a69afef785fd299b31597c74156bffa062dfc859897a07a89ff4b85077edc7c696389eab0e6883e9afcf828c0ea6")
+    t.assert_eq(sha384.sha384(message(63)).to_hex(), "be67a9a1162c1d97f183980dc811f4f4f835b8b850eb32ecbf87397b26369bc6646a8f2234940dcff142b627c8e21ebb")
+    t.assert_eq(sha384.sha384(message(64)).to_hex(), "99d26430f561864c2f7d90b68650b960c86c85d6bf7f54ceeee404bdd59663a7f05588b5c750b862a2a24f6a9ad4c050")
+    t.assert_eq(sha384.sha384(message(65)).to_hex(), "cada16d798ec25243470f7827eb89a2402d52680b092dffc0f59f5a919e5058aebf7ad79dba85c61b179d23534d7c855")
+    t.assert_eq(sha384.sha384(message(66)).to_hex(), "7df9dc377079a235c27a947505a2a9be26d088d8b525587d90ff06b868d1c32769a298dae4b626fed1a8f99ac3755649")
+    t.assert_eq(sha384.sha384(message(67)).to_hex(), "c2012b3c77ae0f79face530f0547dd6bfc5a56479b0f58b2dc2069a1f27bd7337020c4e803ae85364b9ea8b0987bf49a")
+    t.assert_eq(sha384.sha384(message(68)).to_hex(), "f0882f75d8999cfaf26df907a7e44d6b155a8a66b0069fde192ad885b3e4aab368101d9f3e4462c0e852fcc8dcc697fc")
+    t.assert_eq(sha384.sha384(message(69)).to_hex(), "68c01673e92ab4dd6de6dc8c5ec48995407231b1b15c1df702a09d857f5395482c2820effcc2da73df1c15192ae999cd")
+    t.assert_eq(sha384.sha384(message(70)).to_hex(), "f7c387e71f3cbd4e27f8df78c05b2600c81264bf16246a488832beb73d2cfc603c13de0441b245f41fff87f1f70d47bc")
+    t.assert_eq(sha384.sha384(message(71)).to_hex(), "4d26e3712db7cb4095e52b36254add302e97ab53fa4809a6575ddec80e4159c9ac58a7382f3cc851fe79705a03c176f1")
+    t.assert_eq(sha384.sha384(message(72)).to_hex(), "860acfbc1c8e1e935be9058d50b0cbf891cfa8cdfa64823ff908835c5b566e0536bd7dab709ee59e1c75b8ac6fc7fd65")
+    t.assert_eq(sha384.sha384(message(73)).to_hex(), "7d497f080e034ecf28bcdf26dcf11ef39237e93481784d02e55064736520b1c6c34e8a09068e203ac27b9be438941149")
+    t.assert_eq(sha384.sha384(message(74)).to_hex(), "7afcabe21b7548fd515f82633bfcda1a7eb4e1c7717fd439f44c64f5b4bcc02fa6e2a159231b92aa4bfa0e5b65e5392c")
+    t.assert_eq(sha384.sha384(message(75)).to_hex(), "23cbe1604f9200303f51a79907137a3591226dc1cff4cdc51b212fc2fa0ef0a3946424c607ed4f7a39a68dc15271b1a5")
+    t.assert_eq(sha384.sha384(message(76)).to_hex(), "080fcd785717888f37a22d0595267f4e464c46ca497892c16aa3095b6b3bb7d8ba0fc2b20cac464edbd49fd159f5043a")
+    t.assert_eq(sha384.sha384(message(77)).to_hex(), "ea3ebb31d362982a00c1cc1d8f8016a6e8450278d2fc54f88cedb88202ef48f6889333a7fe3fed0074683c1489dbea4a")
+    t.assert_eq(sha384.sha384(message(78)).to_hex(), "b05015caec5c26d3c07f7b465cd249b295680d42388b5456ab8dec263cf894e73cc1dd6695e8265cdfa5e854d35a604e")
+    t.assert_eq(sha384.sha384(message(79)).to_hex(), "dee8af8b8cc95fd455412a76f55413f6d24414593f4d71d5c78be08a53df780b410488860aef1b6a1bfa94c549666db1")
+}
+
+test "digests recorded from sha384sum, part 3 of 4" {
+    t.assert_eq(sha384.sha384(message(80)).to_hex(), "a66fae8645cbb2c39e7321f5cf12db5b0227c05a7149e97d559505433b8e6f33ccd13187cf2ccfd05439cee63e116d94")
+    t.assert_eq(sha384.sha384(message(81)).to_hex(), "60d7a9ea777d9cdce9383c36b17b3e79b7953bbdf7abdb41701365337fecf18cb113ea0e284b7b6facda58b315bc870f")
+    t.assert_eq(sha384.sha384(message(82)).to_hex(), "55b76eaebcdd9e50581e05cf9299f40189d9f55ad30aa7208501da76f628e723119c195cc78e5fa3adb73c712bb36e01")
+    t.assert_eq(sha384.sha384(message(83)).to_hex(), "de881cd319830052a760c3b782aad43f30d75358b7897dbe2c5292dfdb75c9325083291cf57ae09c954ab8611fa8252f")
+    t.assert_eq(sha384.sha384(message(84)).to_hex(), "db08417de7081e124fea2ba20536fbe660a45ce82c0850c00e417cd1ea23f16e8bbcb1941f1bfe7b453015af1ee11759")
+    t.assert_eq(sha384.sha384(message(85)).to_hex(), "8a514e07eac0d0400c74e7357285e575c69007a6ab62306847b6b71b93860dd0da42956dc4dd33ec733bf43661260cbc")
+    t.assert_eq(sha384.sha384(message(86)).to_hex(), "caf9bfb0b99d33712a3e369652b1337f523cf52a32d89341a193f6009e63aaa801559776540e885c710e8ac4e21ecd58")
+    t.assert_eq(sha384.sha384(message(87)).to_hex(), "7dc2867d48bf0a2d15d1295c8a1296b7d2c28253c069e3910eac577c324f45f3f3dccdfeee60dbf1aef50103cca3934a")
+    t.assert_eq(sha384.sha384(message(88)).to_hex(), "cb279cdf9fe4fce4dc572da54a1161778c067bd8a2f711965b32098b712e801d96ee75bca3d1a39a4b190ee250bae65c")
+    t.assert_eq(sha384.sha384(message(89)).to_hex(), "fcd66de690cf7ab6eacf97992455ce60ac5ca7ded0910caf9e2e9a4ef1c64c4e8e9fa5fb9e8434d8c80b6b6df96c5d25")
+    t.assert_eq(sha384.sha384(message(90)).to_hex(), "5d2ded7bdae817167734b9e2e90007a318308aa4bcf17fd910d9492b456d37aff482b866215c86683684966fad25947e")
+    t.assert_eq(sha384.sha384(message(91)).to_hex(), "47c961b864ff67ffaf72bdfd0a78abc02fc14b4977080f605c3efde25b0a458430dee3d2528772a3107716b3acb10ae6")
+    t.assert_eq(sha384.sha384(message(92)).to_hex(), "8086072cfe9bd374087a5953a6b9c58a8c8b5b6f0f8d0b719e3da30bca369cb5b66e4637c59101e60481b5f4dd3c81bc")
+    t.assert_eq(sha384.sha384(message(93)).to_hex(), "c3ee0d80f7cfdca9ead0b8f87be49e2ef104bd1059631303c17bdfdd198093295fe14215e59b42028b29f94a577190c0")
+    t.assert_eq(sha384.sha384(message(94)).to_hex(), "3f594e02da9a702e2ffea4b2a4820c736cdb3ef60c94a0dd232e38876bc22a70bc0ff46de52bd684046f5a7844d82e9e")
+    t.assert_eq(sha384.sha384(message(95)).to_hex(), "8245d90b2f1977de84538e70da3f28709f17b2a1778738a851ff9e04af9d15e202261d7da15f98e442f27928cf173da3")
+    t.assert_eq(sha384.sha384(message(96)).to_hex(), "cf76924ec78452951cf42ee7587a182f2baa03872271e71784d16e119f9a7111605b24da5e967b4d3e14da657135f947")
+    t.assert_eq(sha384.sha384(message(97)).to_hex(), "782caac690031d3a39589f7f2384e8a77f6595dce13f4a9de8f6e00123a8cdca8f154772bf0025c52ee8682b1745a6f5")
+    t.assert_eq(sha384.sha384(message(98)).to_hex(), "d04342ccc541ea03558080960c5a5d6aeb2ec3a69db74074a4e162290526c167740e6ea76722e277cb5663c012e4f156")
+    t.assert_eq(sha384.sha384(message(99)).to_hex(), "da68aedf5f08446f33019521b95d16c0caf9c4ecb40fa8918c937614712946db183bb8606099ae52a03bdd4034f4a858")
+    t.assert_eq(sha384.sha384(message(100)).to_hex(), "1aa8af329d9f02c30c9453404c8e73a9924d6146003185447af576827564074c7dfd2ebfb9534578c9cf54a4879260ad")
+    t.assert_eq(sha384.sha384(message(101)).to_hex(), "f4954f706796514ece1d8478aebc7507ba3242b245ac329f98bb5ea67f8df168d32c52f29967ddb403dfb22d0071c23b")
+    t.assert_eq(sha384.sha384(message(102)).to_hex(), "2cf66f3ded9ec37f71b2a02c0342dcce1d8b6fc8adad32f2991e536aec4296f717b3de3fe70f9c5b456ce7bb1f9a5658")
+    t.assert_eq(sha384.sha384(message(103)).to_hex(), "200cef8e2ce7914c369cb3c51ea65583ad34ea96ed0bedc84d988a047e6d37686427da77d59e0a15d4ef9154f52b0540")
+    t.assert_eq(sha384.sha384(message(104)).to_hex(), "82d191618c0ce9412a7ae38e2f268d93a8a78df196519e770efd82e590a132c471ab84453e170c42a60a3871b38203df")
+    t.assert_eq(sha384.sha384(message(105)).to_hex(), "1d911b9badafc99bd4ca995c971f2b895389c449c0ca34208cdfb0887b8fa4593308eea578560153f3e7c70e9d5c61a1")
+    t.assert_eq(sha384.sha384(message(106)).to_hex(), "7bb1422f5c7febc5b930989b09038baf3b61707cc3324d89eb1b88dee4722907af010c9074b96d561541498bf5dc2853")
+    t.assert_eq(sha384.sha384(message(107)).to_hex(), "81cba414e094b2ce7ae221f32d80407d3f97d531d175f9c168702bd2c8d90ebae7316b4c8eb66a2487c35a18666669e4")
+    t.assert_eq(sha384.sha384(message(108)).to_hex(), "a3ee52fb6ce7e33b671947b5d233dc50f259ef3d059b917173ce51e2f822a56b4dd0fb2cc6dda64ef811b0ad7e467d54")
+    t.assert_eq(sha384.sha384(message(109)).to_hex(), "f25ec17c1dc098ca78e49a4428f2abf6e2dc3be485af85a57048d419a61e0a0f5b7088e4b46a9cc9c53d1aa3f4f54037")
+    t.assert_eq(sha384.sha384(message(110)).to_hex(), "632778628f59b233252fd41d30012eebc7b7eb367e431971d9353d8242340b55b8c7daa9c0cf6d2daa4a186d05f95851")
+    t.assert_eq(sha384.sha384(message(111)).to_hex(), "341388a9dc2275074e90cf394323761919761c805fd9e370977c9966a0e8c81a52135f02577670b0071638a4a26dbc31")
+    t.assert_eq(sha384.sha384(message(112)).to_hex(), "619cc5d06138526d70659eccf602d197e63e1050e22039a7feb40a30a5b2b08fb03729e291df12f8c576e6f1cd8af22a")
+    t.assert_eq(sha384.sha384(message(113)).to_hex(), "484a92d02b61b620ccae687fce4cd073eb995294a777d5deb5356bc8c1e2ce984f63f16420058ac5da666fda410a4feb")
+    t.assert_eq(sha384.sha384(message(114)).to_hex(), "a08e07d91b941f50faa6edab029ce04f08b600617b2e9adf08632aad94d496da70ca6a149a94ea5bdd96eebdbc9b222b")
+    t.assert_eq(sha384.sha384(message(115)).to_hex(), "c5951e696d7aca85d61fa07d4e58fe3358f2aacbc4279765fcfaa39eb086b32c8088df63cf48ad39ed6d5a0f064fbd09")
+    t.assert_eq(sha384.sha384(message(116)).to_hex(), "8ab9b2a8db750704ed462077b231a4302f15781e3169f0b36fc33cc8725d575b4ae22e22bac0e93c0782b1fd18d53bff")
+    t.assert_eq(sha384.sha384(message(117)).to_hex(), "05c1d4e5f9240220db413484eb2a8bdb78265c2d312629540421e68314e1b01d4658b237ee0f4add680ae4a381e6a7d0")
+    t.assert_eq(sha384.sha384(message(118)).to_hex(), "13a0ea45595270b826180679c8125e577c36c912386fb13b9c415027040a7d3e03dfe2553576159071169dfa9eb839cb")
+    t.assert_eq(sha384.sha384(message(119)).to_hex(), "9c284d266fc91c33a7f6ecbb0326646b3ed15cc33fd8bf968267c21991ca1a434dd65c64ee22c7dd6f5423950f605560")
+}
+
+test "digests recorded from sha384sum, part 4 of 4" {
+    t.assert_eq(sha384.sha384(message(120)).to_hex(), "96faef865acb7c55ae34422444b4380e520de69f373ddb14c7ee2420c3f93cc220fca9952c0a4fe9dbfddf350ac40127")
+    t.assert_eq(sha384.sha384(message(121)).to_hex(), "92a286f37323a101e9de8c64e0084b5a2cad5a337538b280bbd8e3bbf046810cb49816fadc2355d11f5e96d7a33f2023")
+    t.assert_eq(sha384.sha384(message(122)).to_hex(), "b30881d1dde3be63725833ba39514b0803da7191e59d00bb89cd8af1ff402bf69ea2ede07862db1b0857f21873c59c42")
+    t.assert_eq(sha384.sha384(message(123)).to_hex(), "0422a2bcc88fe9f6a3fd4f6841a863c509052fb6c3f6ce5d4d369ec921a05508b02a9c8f0fbf8d00e90115c41127a618")
+    t.assert_eq(sha384.sha384(message(124)).to_hex(), "b571f5de39d8dd81c69f739e8a4c8c252276a308591e8e04fdd959f3646bd804bdf82dec1137ae506a1b718a7c0974ef")
+    t.assert_eq(sha384.sha384(message(125)).to_hex(), "49d9cb273f3f0eb1fe7a1164dddca521c9cea02ae651366fec3a566d850badac43c1f78c9c5209a562c5625cca69d10b")
+    t.assert_eq(sha384.sha384(message(126)).to_hex(), "b743863b5eed9647ed7061849f14d38e773be4afc213d8ad1868ffc58f53ce5e6aec2b087e75558cd25f6e6dedac4efc")
+    t.assert_eq(sha384.sha384(message(127)).to_hex(), "f8234ab81f5f9641c656680825a9bbb3c2616bcc80b65d5e479a4d96742e1b8742330c9e8256ef5f03caa932487044ca")
+    t.assert_eq(sha384.sha384(message(128)).to_hex(), "e8480e9c4dd90f88104a79cbaccec48edbd798a142b4f241d726dc252f1502350e824c7d18dadd59d7d716919fb8f9bf")
+    t.assert_eq(sha384.sha384(message(129)).to_hex(), "430173387764874661acba1e914e50f6d0fbac534809e859b1da4396fad3d5f24c25c6a2d02486d8fbda3994713d981a")
+    t.assert_eq(sha384.sha384(message(130)).to_hex(), "8511cd6cba3115ed4d1293aaaf566eb0cd40b32edeb5dc8baeda1fe188285d2feea8995a8c0275235ddac92c1eb8e9bd")
+    t.assert_eq(sha384.sha384(message(191)).to_hex(), "a4d7466e3644c879052374ff2c12ba12123e64af8cf23d10e4ab22ac6b29719022ddcb5036d63853fd1845b2078d9a52")
+    t.assert_eq(sha384.sha384(message(192)).to_hex(), "c497fa1625f82dd6064e64a34061165a471357bbf8b992d3b5ec39f5223640fe24838568cda2dea624f1eeb20a75bc75")
+    t.assert_eq(sha384.sha384(message(239)).to_hex(), "fc75ded15c6080ff96ac03391fc1302ca180128e4b6a4a2f17782f2ec016fc3f79b48b5fed3305fb7fdff9fd29434525")
+    t.assert_eq(sha384.sha384(message(240)).to_hex(), "4c4bc5dae174dd68cb5a62e066e01e339e4980e4a35531b732dcf88e9c579e66f7c0d044779e2eda8a597684ca7cffd6")
+    t.assert_eq(sha384.sha384(message(241)).to_hex(), "011613cbf097010685028f1c71bb41001a85fa1fef15834ec7a871f0f2a5176442d9b937cef9356c4261ea366dbadcb8")
+    t.assert_eq(sha384.sha384(message(255)).to_hex(), "15f3347894a150a64eb82a7044bb5ec8b1d33488716fce4932ba73beb97eabd1ad796bc0a569129ba98120ae1ed7edce")
+    t.assert_eq(sha384.sha384(message(256)).to_hex(), "23f0634552ba15289fa02c8a37e3a391e79e230dca05db03a7696630c5ba3a3352d1624f52832e4d6183c0eb70198e9a")
+    t.assert_eq(sha384.sha384(message(257)).to_hex(), "233012efa9647f875d85d37154bffb19077acae572625ebfdc80d3a538447cb754aca3a3a5bdd41df8bf8870e1f0f2bd")
+    t.assert_eq(sha384.sha384(message(260)).to_hex(), "5fbb8db2bdfb8d2ea0c3361c06a3598e2b733befc83ff799f4d1f9ad26dd0fcdd0c0917a107f1c21132dfe28953e9de7")
+}
+
+// A message hashed in pieces, empty ones included, gives the digest of the
+// pieces joined, at every split point of a message of three blocks.
+test "hashing in two pieces gives the digest of the whole" {
+    let whole = message(300)
+    let expected = sha384.sha384(whole).to_hex()
+    for split in 0..301 {
+        var hasher = sha384.Sha384.new()
+        hasher.update(whole.slice(0, split))
+        hasher.update(Bytes.new())
+        hasher.update(whole.slice(split, 300))
+        t.assert_eq(hasher.finish().to_hex(), expected)
+    }
+}
+
+// A copy made part-way hashes on independently, so a shared prefix, a
+// handshake transcript, is hashed once.
+test "a hasher is a value" {
+    var prefix = sha384.Sha384.new()
+    prefix.update("abc".to_bytes())
+    var first = prefix
+    var second = prefix
+    first.update("d".to_bytes())
+    second.update("e".to_bytes())
+    t.assert_eq(prefix.finish().to_hex(), sha384.sha384("abc".to_bytes()).to_hex())
+    t.assert_eq(first.finish().to_hex(), sha384.sha384("abcd".to_bytes()).to_hex())
+    t.assert_eq(second.finish().to_hex(), sha384.sha384("abce".to_bytes()).to_hex())
+}
+
+// SHA-384 is not SHA-512 cut to 48 bytes: it starts from other constants.
+test "sha384 is not a truncated sha512" {
+    t.assert(sha384.sha384("abc".to_bytes()) != sha2.sha512("abc".to_bytes()).slice(0, 48))
+}

@@ -37,6 +37,11 @@ pub const MODULES: &[&str] = &[
     "std.hmac",
     "std.ed25519",
     "std.sshsig",
+    "std.sha384",
+    "std.hkdf",
+    "std.x25519",
+    "std.chacha20poly1305",
+    "std.aes128gcm",
 ];
 
 /// What kind of item an entry is.

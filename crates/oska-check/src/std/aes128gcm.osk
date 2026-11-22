@@ -1,0 +1,369 @@
+// `std.aes128gcm`: AES-128-GCM authenticated encryption (NIST SP 800-38D),
+// the cipher TLS 1.3 requires of every implementation
+// (`TLS_AES_128_GCM_SHA256`). A module sees it only after
+// `use std.aes128gcm`. `seal(key, nonce, aad, plaintext)` encrypts and
+// authenticates, and `open(key, nonce, aad, sealed)` checks and decrypts.
+//
+// The key, the plaintext and everything computed from them are secret:
+// held in secret integers and `Secret<Bytes>`, so no branch or memory
+// address depends on them. AES is bitsliced: the 16 bytes of a block are
+// held as eight bit planes, one 16-bit lane a byte, and the S-box is the
+// inverse in GF(2^8) (the byte raised to the power 254) computed with AND
+// and XOR over the planes, so there is no table indexed by a secret. GHASH
+// multiplies in GF(2^128) bit by bit, with a mask where a branch would be.
+// The nonce and the additional data are public, and so are the lengths of
+// everything. Plaintext that is not secret is passed as
+// `Secret.new(plaintext)`.
+//
+// `seal` gives the ciphertext and the 16-byte tag as a `Secret<Bytes>`,
+// which the caller exposes in its own code to put on the wire: the module
+// has no way to make a secret public. `open` compares the tag in constant
+// time, decrypts only when it matches, and gives the plaintext as a
+// `Secret<Bytes>`, or `None` for a forged or damaged message. The nonce is
+// 12 bytes, the one length TLS uses.
+//
+// A key and a nonce must never be used together twice: the module does not
+// and cannot check. Every function here is a pure function, and the module
+// has no audit site: no `expose()` and no `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by the test cases of the GCM specification (1 to 4, which use a
+// 96-bit nonce), Wycheproof's AES-GCM vectors, messages sealed with
+// OpenSSL for other lengths, and a forgery test for every bit of a
+// message, on the interpreter and natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+//
+// A block is a list of eight `Secret<U32>` planes: bit `i` of plane `j` is
+// bit `j` of block byte `i`, for `i` below 16, and the bits above are
+// zero. Bytes are in the order of the block, which is the order of the
+// AES state read column by column, so lane `4 * column + row` holds the
+// state's byte at that row and column.
+
+// `plaintext` encrypted under the 16-byte `key` and the 12-byte `nonce`,
+// with `aad` authenticated but not encrypted, as SP 800-38D, section 7.1,
+// says: the ciphertext, as long as the plaintext, then the 16-byte tag.
+// `None` unless the key is 16 bytes and the nonce 12.
+pub fn seal(key: Secret<Bytes>, nonce: Untrusted<Bytes>, aad: Untrusted<Bytes>, plaintext: Secret<Bytes>) -> Option<Secret<Bytes>> {
+    if key.len() != 16 || nonce.len() != 12 {
+        return None
+    }
+    let keys = round_keys(key)
+    let prefix = copied(nonce)
+    var sealed = counter_mode(keys, prefix, plaintext)
+    sealed.append(tag_of(keys, prefix, copied(aad), sealed))
+    Some(sealed)
+}
+
+// `sealed`, a ciphertext and its 16-byte tag as `seal` gives them,
+// decrypted under `key` and `nonce` with `aad`, as SP 800-38D, section
+// 7.2, says. `None` when the key is not 16 bytes, the nonce not 12,
+// `sealed` shorter than a tag, or the tag wrong: the tag is compared in
+// constant time, and nothing is decrypted before it matches.
+pub fn open(key: Secret<Bytes>, nonce: Untrusted<Bytes>, aad: Untrusted<Bytes>, sealed: Untrusted<Bytes>) -> Option<Secret<Bytes>> {
+    if key.len() != 16 || nonce.len() != 12 || sealed.len() < 16 {
+        return None
+    }
+    let keys = round_keys(key)
+    let prefix = copied(nonce)
+    let size = sealed.len() - 16
+    let ciphertext = Secret.new(copied(sealed.slice(0, size)))
+    let tag = tag_of(keys, prefix, copied(aad), ciphertext)
+    if !tag.constant_time_eq(sealed.slice(size, size + 16)) {
+        return None
+    }
+    Some(counter_mode(keys, prefix, ciphertext))
+}
+
+// The GCM tag (SP 800-38D, section 7.1): GHASH of the padded `aad` and
+// `ciphertext` and their bit lengths, under the hash key `H`, XORed with
+// the encryption of the first counter block `J0`.
+fn tag_of(keys: List<List<Secret<U32>>>, prefix: Bytes, aad: Bytes, ciphertext: Secret<Bytes>) -> Secret<Bytes> {
+    let hash_key = encrypt(keys, Secret.new(Bytes.zeroed(16)))
+    var data = Secret.new(aad)
+    data.append(Secret.new(Bytes.zeroed((16 - aad.len() % 16) % 16)))
+    data.append(ciphertext)
+    data.append(Secret.new(Bytes.zeroed((16 - ciphertext.len() % 16) % 16)))
+    data.push_u64_be(Secret.new((aad.len() * 8).to_u64()))
+    data.push_u64_be(Secret.new((ciphertext.len() * 8).to_u64()))
+    let digest = ghash(hash_key, data)
+    let mask = encrypt(keys, Secret.new(counter_block(prefix, 1)))
+    var tag = Secret.new(Bytes.new())
+    for i in 0..16 {
+        tag.push(digest.at(i) ^ mask.at(i))
+    }
+    tag
+}
+
+// `data` XORed with the keystream of counter blocks 2, 3, ... (SP 800-38D,
+// section 6.5): the same function encrypts and decrypts.
+fn counter_mode(keys: List<List<Secret<U32>>>, prefix: Bytes, data: Secret<Bytes>) -> Secret<Bytes> {
+    var out = Secret.new(Bytes.new())
+    var counter: U32 = 2
+    var at = 0
+    while at < data.len() {
+        let stream = encrypt(keys, Secret.new(counter_block(prefix, counter)))
+        let n = if data.len() - at < 16 { data.len() - at } else { 16 }
+        for i in 0..n {
+            out.push(data.at(at + i) ^ stream.at(i))
+        }
+        at = at + 16
+        counter = counter.wrapping_add(1)
+    }
+    out
+}
+
+// The 16-byte counter block: the 12-byte nonce, then `counter` in 32 bits.
+fn counter_block(prefix: Bytes, counter: U32) -> Bytes {
+    var out = prefix
+    out.push_u32_be(counter)
+    out
+}
+
+// ---- GHASH (SP 800-38D, section 6.4) --------------------------------------
+
+// GHASH of `data`, whole 16-byte blocks, under the hash key `h`: for each
+// block, `x = (x ^ block) * h` in GF(2^128).
+fn ghash(h: Secret<Bytes>, data: Secret<Bytes>) -> Secret<Bytes> {
+    let h_hi = h.read_u64_be(0)
+    let h_lo = h.read_u64_be(8)
+    var x_hi: Secret<U64> = Secret.new(0)
+    var x_lo: Secret<U64> = Secret.new(0)
+    var at = 0
+    while at < data.len() {
+        let a_hi = x_hi ^ data.read_u64_be(at)
+        let a_lo = x_lo ^ data.read_u64_be(at + 8)
+        var z_hi: Secret<U64> = Secret.new(0)
+        var z_lo: Secret<U64> = Secret.new(0)
+        var v_hi = h_hi
+        var v_lo = h_lo
+        for i in 0..128 {
+            // Bit `i` of `a`, counted from the top of the first byte.
+            let bit = if i < 64 { (a_hi >> (63 - i).to_u64()) & 1 } else { (a_lo >> (127 - i).to_u64()) & 1 }
+            let take = word_mask(bit)
+            z_hi = z_hi ^ (v_hi & take)
+            z_lo = z_lo ^ (v_lo & take)
+            // `v` shifted right a bit, with the reduction polynomial
+            // xored in when a bit fell off the end.
+            let fell = word_mask(v_lo & 1)
+            v_lo = (v_lo >> 1) | (v_hi << 63)
+            v_hi = (v_hi >> 1) ^ (fell & 16212958658533785600)
+        }
+        x_hi = z_hi
+        x_lo = z_lo
+        at = at + 16
+    }
+    var out = Secret.new(Bytes.new())
+    out.push_u64_be(x_hi)
+    out.push_u64_be(x_lo)
+    out
+}
+
+// All ones when the secret `bit` is 1 and all zeros when it is 0.
+fn word_mask(bit: Secret<U64>) -> Secret<U64> {
+    let none: Secret<U64> = Secret.new(0)
+    none - bit
+}
+
+// ---- AES-128 (FIPS 197), bitsliced ----------------------------------------
+
+// The 11 round keys of `key` (FIPS 197, section 5.2), as blocks.
+fn round_keys(key: Secret<Bytes>) -> List<List<Secret<U32>>> {
+    var keys: List<List<Secret<U32>>> = [to_planes(key)]
+    let rcon: List<U32> = [1, 2, 4, 8, 16, 32, 64, 128, 27, 54]
+    for r in 0..10 {
+        keys.push(next_key(keys.at(r), rcon.at(r)))
+    }
+    keys
+}
+
+// The round key after `key`: word 0 is word 0 XOR SubWord(RotWord(word 3))
+// XOR `rcon`, and each later word is its own XOR the word before it. Over
+// lanes, the column XOR is a prefix XOR (each column takes the columns
+// before it), and the first column's new part is copied to every column.
+fn next_key(key: List<Secret<U32>>, rcon: U32) -> List<Secret<U32>> {
+    let boxed = sub_bytes(key)
+    var out: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        let plane = key.at(j)
+        let prefix = (plane ^ (plane << 4) ^ (plane << 8) ^ (plane << 12)) & 65535
+        // Lane `r` of the first column takes `S[word 3][(r + 1) % 4]`.
+        var word: Secret<U32> = Secret.new(0)
+        for r in 0..4 {
+            let src = 12 + (r + 1) % 4
+            word = word | (((boxed.at(j) >> src.to_u32()) & 1) << r.to_u32())
+        }
+        // Lane 0 also takes the round constant.
+        word = word ^ ((rcon >> j.to_u32()) & 1)
+        out.push(prefix ^ word ^ (word << 4) ^ (word << 8) ^ (word << 12))
+    }
+    out
+}
+
+// The 16 bytes of `block` as eight planes.
+fn to_planes(block: Secret<Bytes>) -> List<Secret<U32>> {
+    var planes: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        var plane: Secret<U32> = Secret.new(0)
+        for i in 0..16 {
+            plane = plane | (((block.at(i) >> j.to_u8()) & 1).to_u32() << i.to_u32())
+        }
+        planes.push(plane)
+    }
+    planes
+}
+
+// The 16 bytes of eight planes.
+fn from_planes(planes: List<Secret<U32>>) -> Secret<Bytes> {
+    var out = Secret.new(Bytes.new())
+    for i in 0..16 {
+        var byte: Secret<U32> = Secret.new(0)
+        for j in 0..8 {
+            byte = byte | (((planes.at(j) >> i.to_u32()) & 1) << j.to_u32())
+        }
+        out.push(byte.wrapping_to_u8())
+    }
+    out
+}
+
+// `block` encrypted: an initial key addition, nine full rounds and a last
+// round without MixColumns (FIPS 197, section 5.1).
+fn encrypt(keys: List<List<Secret<U32>>>, block: Secret<Bytes>) -> Secret<Bytes> {
+    var state = add_key(to_planes(block), keys.at(0))
+    for r in 1..10 {
+        state = add_key(mix_columns(shift_rows(sub_bytes(state))), keys.at(r))
+    }
+    from_planes(add_key(shift_rows(sub_bytes(state)), keys.at(10)))
+}
+
+fn add_key(state: List<Secret<U32>>, key: List<Secret<U32>>) -> List<Secret<U32>> {
+    var out: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        out.push(state.at(j) ^ key.at(j))
+    }
+    out
+}
+
+// ShiftRows: row `r` rotated left by `r` columns, so lane `l` takes lane
+// `(l + 4 r) % 16`, for the lanes of row `r` (those with `l % 4 == r`).
+fn shift_rows(state: List<Secret<U32>>) -> List<Secret<U32>> {
+    var out: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        let plane = state.at(j)
+        var moved: Secret<U32> = Secret.new(0)
+        for r in 0..4 {
+            let by = (4 * r).to_u32()
+            let turned = ((plane >> by) | (plane << (16 - by))) & 65535
+            moved = moved | (turned & (4369 << r.to_u32()))
+        }
+        out.push(moved)
+    }
+    out
+}
+
+// The planes with each column's rows turned up by `k`: lane `(r, c)` takes
+// the byte at row `(r + k) % 4` of its column.
+fn turned(plane: Secret<U32>, k: Int) -> Secret<U32> {
+    // The lanes of the rows below `4 - k` take their byte from `k` lanes up,
+    // and the others from `4 - k` lanes down.
+    let low: U32 = if k == 1 { 30583 } else if k == 2 { 13107 } else { 4369 }
+    ((plane >> k.to_u32()) & low) | ((plane << (4 - k).to_u32()) & (65535 ^ low))
+}
+
+// MixColumns (FIPS 197, section 5.1.3): each byte of a column becomes
+// 2 a_r + 3 a_(r+1) + a_(r+2) + a_(r+3) in GF(2^8).
+fn mix_columns(state: List<Secret<U32>>) -> List<Secret<U32>> {
+    var one: List<Secret<U32>> = List.new()
+    var two: List<Secret<U32>> = List.new()
+    var three: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        one.push(turned(state.at(j), 1))
+        two.push(turned(state.at(j), 2))
+        three.push(turned(state.at(j), 3))
+    }
+    let first = times_two(state)
+    let second = times_two(one)
+    var out: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        out.push(first.at(j) ^ second.at(j) ^ one.at(j) ^ two.at(j) ^ three.at(j))
+    }
+    out
+}
+
+// Every byte times x in GF(2^8), with the AES polynomial x^8 + x^4 + x^3 +
+// x + 1: the planes move up one, and plane 7 is added into planes 0, 1, 3
+// and 4.
+fn times_two(a: List<Secret<U32>>) -> List<Secret<U32>> {
+    [a.at(7), a.at(0) ^ a.at(7), a.at(1), a.at(2) ^ a.at(7), a.at(3) ^ a.at(7), a.at(4), a.at(5), a.at(6)]
+}
+
+// SubBytes (FIPS 197, section 5.1.1): the inverse in GF(2^8), then the
+// affine map with the constant 0x63.
+fn sub_bytes(state: List<Secret<U32>>) -> List<Secret<U32>> {
+    let inv = inverse(state)
+    var out: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        var plane = inv.at(j) ^ inv.at((j + 4) % 8) ^ inv.at((j + 5) % 8) ^ inv.at((j + 6) % 8) ^ inv.at((j + 7) % 8)
+        // The constant 0x63 has bits 0, 1, 5 and 6 set.
+        if j == 0 || j == 1 || j == 5 || j == 6 {
+            plane = plane ^ 65535
+        }
+        out.push(plane)
+    }
+    out
+}
+
+// The inverse of every byte in GF(2^8), 0 for 0: the byte to the power 254
+// by squarings and multiplications.
+fn inverse(x: List<Secret<U32>>) -> List<Secret<U32>> {
+    let x3 = gf_mul(gf_mul(x, x), x)
+    let x7 = gf_mul(gf_mul(x3, x3), x)
+    let x15 = gf_mul(gf_mul(x7, x7), x)
+    let x31 = gf_mul(gf_mul(x15, x15), x)
+    let x63 = gf_mul(gf_mul(x31, x31), x)
+    let x127 = gf_mul(gf_mul(x63, x63), x)
+    gf_mul(x127, x127)
+}
+
+// `a` times `b` in GF(2^8), every lane at once: the 15 partial products
+// are ANDs and XORs, and the planes above 7 are reduced by x^8 = x^4 + x^3
+// + x + 1.
+fn gf_mul(a: List<Secret<U32>>, b: List<Secret<U32>>) -> List<Secret<U32>> {
+    var product: List<Secret<U32>> = List.new()
+    for k in 0..15 {
+        var plane: Secret<U32> = Secret.new(0)
+        for i in 0..8 {
+            if k >= i && k - i < 8 {
+                plane = plane ^ (a.at(i) & b.at(k - i))
+            }
+        }
+        product.push(plane)
+    }
+    // x^8 to x^14 modulo the polynomial, as bytes: bit `j` says that plane
+    // `j` takes the plane above.
+    let folded: List<U32> = [27, 54, 108, 216, 171, 77, 154]
+    var out: List<Secret<U32>> = List.new()
+    for j in 0..8 {
+        var plane = product.at(j)
+        for k in 0..7 {
+            if ((folded.at(k) >> j.to_u32()) & 1) == 1 {
+                plane = plane ^ product.at(8 + k)
+            }
+        }
+        out.push(plane)
+    }
+    out
+}
+
+// The bytes of `data`, as trusted `Bytes`: built from the integers read
+// out of it, which are trusted. The copy goes only into the secret
+// computations above, so the data cannot shape anything structural.
+fn copied(data: Untrusted<Bytes>) -> Bytes {
+    var out = Bytes.new()
+    for i in 0..data.len() {
+        out.push(data.at(i))
+    }
+    out
+}

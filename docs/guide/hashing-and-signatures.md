@@ -6,7 +6,7 @@ Oska's `std` has four modules for the cryptography a program needs to check what
 
 This code is hand-written, in Oska, and has not been audited by anyone outside the project. [ADR 0012](../adr/0012-tls-git-and-crypto-are-written-in-oska.md) accepts that on purpose: the primitives are Oska source, with no Rust implementation behind them, so one body of code runs on the interpreter and in every native executable. Its assurance is what the project can show:
 
-- Each module is held by published test vectors, run as Oska tests on both backends on every supported platform: FIPS 180-4 and NIST CAVP for `std.sha2`, RFC 4231 and Wycheproof for `std.hmac`, RFC 8032 and Wycheproof for `std.ed25519`, and signatures made by `ssh-keygen` for `std.sshsig`, including the published releases' own `SHA256SUMS.sig`.
+- Each module is held by published test vectors, run as Oska tests on both backends on every supported platform: FIPS 180-4 and NIST CAVP for `std.sha2`, RFC 4231 and Wycheproof for `std.hmac`, RFC 8032 and Wycheproof for `std.ed25519`, the RFCs and Wycheproof for the key exchange and encryption modules below, and signatures made by `ssh-keygen` for `std.sshsig`, including the published releases' own `SHA256SUMS.sig`.
 - The checker treats the modules as user code. They contain no `expose()` and no `.assume_trusted()`, so `oskac audit` lists no audit site inside them, and every function is a pure function.
 - The secret forms (`sha256_secret` and `hmac.sha256`) are written over secret integers, so the checker refuses a secret-dependent branch or memory address and the native backend checks the code it emits. That is the whole of the timing story: nothing measures time, and secret memory is not zeroed. See [secrets](secrets.md).
 
@@ -219,9 +219,66 @@ fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
 
 The release signature of the Oska toolchain itself is made in the namespace `oska-release` with the key published as `oska-release.pub`, and its fingerprint is in the [install guide](install.md). Do not take the key out of the same download as the file it signs.
 
+## Key exchange and encryption
+
+Five more modules are the primitives a TLS 1.3 client builds on. They have no signing or random source of their own, and `std.tls` is not here yet.
+
+- `std.x25519`: `x25519.public_key(scalar)` and `x25519.scalarmult(scalar, peer)` are RFC 7748's X25519, on a `Secret<Bytes>` scalar of 32 bytes and, for `scalarmult`, a peer's 32 bytes. Both give `Option<Secret<Bytes>>`, `None` unless the lengths are 32. A peer's point of small order gives 32 zero bytes, which a protocol that refuses it compares for with `constant_time_eq`.
+- `std.hkdf`: `hkdf.extract(salt, ikm)` and `hkdf.expand(prk, info, length)` are RFC 5869's HKDF with HMAC-SHA-256, on secrets. `expand` gives `None` for a length over 8160 bytes.
+- `std.sha384`: `sha384.sha384(data)` and `sha384.Sha384`, like `sha2`'s, for 48-byte digests of public data.
+- `std.chacha20poly1305` and `std.aes128gcm`: `seal(key, nonce, aad, plaintext)` and `open(key, nonce, aad, sealed)`, with a 12-byte nonce and a 32-byte (ChaCha20-Poly1305) or 16-byte (AES-128-GCM) key. `seal` gives the ciphertext followed by the 16-byte tag. `open` checks the tag in constant time before it decrypts, and gives `None` for a message that was changed. The AES is bitsliced, with no table indexed by a secret.
+
+Everything computed from a key stays a `Secret<Bytes>`, so a program that puts a public key or a ciphertext on the wire calls `expose()` once, and that call is its audit site. The nonce and the additional data are public. Never seal two messages under one key and nonce.
+
+```oska
+use std.x25519
+use std.hkdf
+use std.chacha20poly1305
+
+fn hex(text: String) -> Bytes {
+    Bytes.from_hex(text).unwrap_or(Bytes.new())
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let none = Secret.new(Bytes.new())
+    let alice = Secret.new(hex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"))
+    let bob_public = hex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+    let shared = x25519.scalarmult(alice, bob_public).unwrap_or(none)
+    let agreed = shared.expose().to_hex()
+    io.println("shared: {agreed}")?
+    let prk = hkdf.extract(Secret.new(Bytes.new()), shared)
+    let key = hkdf.expand(prk, "demo".to_bytes(), 32).unwrap_or(none)
+    let nonce = Bytes.zeroed(12)
+    let message = Secret.new("attack at dawn".to_bytes())
+    let sealed = chacha20poly1305.seal(key, nonce, "header".to_bytes(), message).unwrap_or(none).expose()
+    let size = sealed.len()
+    io.println("sealed: {size} bytes")?
+    match chacha20poly1305.open(key, nonce, "header".to_bytes(), sealed) {
+        Some(plain) => io.println(if plain.constant_time_eq("attack at dawn".to_bytes()) { "opened" } else { "wrong" })?
+        None => io.println("refused")?
+    }
+    var forged = sealed
+    forged.set(0, forged.at(0) ^ 1)
+    match chacha20poly1305.open(key, nonce, "header".to_bytes(), forged) {
+        Some(_) => io.println("forgery accepted")
+        None => io.println("forgery refused")
+    }
+}
+```
+
+```console cmd=run
+shared: 4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742
+sealed: 30 bytes
+opened
+forgery refused
+```
+
+Their vectors are RFC 7748, RFC 5869, FIPS 180-4, RFC 8439 and the GCM specification's test cases, and Wycheproof's vectors for X25519, HKDF-SHA-256, ChaCha20-Poly1305 and AES-GCM, on both backends. As for the modules above, the code is unaudited. The native backend checks that the machine code of the secret operations has no branch or memory address that depends on a secret, as [secrets](secrets.md) describes.
+
 ## What to remember
 
 - Hash with `sha2`, authenticate with `hmac`, verify with `ed25519` and `sshsig`. Use the secret forms for secret data and `verify_sha256` for tags.
 - The code is hand-written and unaudited, and held by published test vectors on every platform. Weigh it as [ADR 0012](../adr/0012-tls-git-and-crypto-are-written-in-oska.md) does.
 - The key and the namespace you trust are policy: trusted text, and an audit site where a program vouches for text it read.
-- The API of each module is in the API reference on the site, and `oskac doc std.sha2` (or `std.hmac`, `std.ed25519`, `std.sshsig`) prints it.
+- Key exchange and encryption are `x25519`, `hkdf`, `chacha20poly1305` and `aes128gcm`, on secrets, and `sha384` for public data.
+- The API of each module is in the API reference on the site, and `oskac doc std.sha2` (or `std.hmac`, `std.ed25519`, `std.sshsig`, `std.x25519`, `std.hkdf`, `std.sha384`, `std.chacha20poly1305`, `std.aes128gcm`) prints it.

@@ -749,4 +749,157 @@ fn main(io: Stdout) {
             }
         }
     }
+    /// `std.x25519` (#241), Oska source linked into the program, builds for
+    /// every target, and on aarch64 and x86_64 its machine code is
+    /// branch-free and addresses no memory by a secret: the ladder with its
+    /// masked swap, the field arithmetic and the encoding of the result.
+    #[test]
+    fn the_machine_code_of_std_x25519_is_branch_free() {
+        let src = r#"use std.x25519
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let key = env.secret("KEY").to_bytes()
+    let peer = match args.get(1) {
+        Some(text) => Bytes.from_hex(text).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }
+    let same = match x25519.scalarmult(key, peer) {
+        Some(shared) => shared.constant_time_eq(peer)
+        None => false
+    }
+    let _ = io.println(if same { "same" } else { "different" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.x25519.scalarmult",
+                "pkg.std.x25519.cswap",
+                "pkg.std.x25519.mul",
+                "pkg.std.x25519.carry",
+                "pkg.std.x25519.field_to_bytes",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
+
+    /// `std.hkdf` (#241): the HMAC over secret messages, and the loop that
+    /// chains its blocks.
+    #[test]
+    fn the_machine_code_of_std_hkdf_is_branch_free() {
+        let src = r#"use std.hkdf
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let key = env.secret("KEY").to_bytes()
+    let prk = hkdf.extract(key, key)
+    let same = match hkdf.expand(prk, "info".to_bytes(), 42) {
+        Some(okm) => okm.constant_time_eq(Bytes.zeroed(42))
+        None => false
+    }
+    let _ = io.println(if same { "same" } else { "different" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.hkdf.padded",
+                "pkg.std.hkdf.expand",
+                "pkg.std.sha2.compress256_secret",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
+
+    /// `std.chacha20poly1305` (#241): the rounds of ChaCha20 over secret
+    /// words, Poly1305's limbs and its final mask, and the tag comparison.
+    #[test]
+    fn the_machine_code_of_std_chacha20poly1305_is_branch_free() {
+        let src = r#"use std.chacha20poly1305
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let key = env.secret("KEY").to_bytes()
+    let given = match args.get(1) {
+        Some(text) => Bytes.from_hex(text).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }
+    let nonce = Bytes.zeroed(12)
+    let sealed = match chacha20poly1305.seal(key, nonce, "aad".to_bytes(), Secret.new("message".to_bytes())) {
+        Some(out) => out
+        None => Secret.new(Bytes.new())
+    }
+    let opens = match chacha20poly1305.open(key, nonce, "aad".to_bytes(), given) {
+        Some(_) => true
+        None => false
+    }
+    let _ = io.println(if opens && sealed.len() > 0 { "opens" } else { "refused" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.chacha20poly1305.block",
+                "pkg.std.chacha20poly1305.quarter",
+                "pkg.std.chacha20poly1305.poly1305",
+                "pkg.std.chacha20poly1305.xor_stream",
+                "std.rt.equal_constant",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
+
+    /// `std.aes128gcm` (#241): the bitsliced S-box and rounds, the key
+    /// schedule, GHASH's masked multiplication, and the tag comparison.
+    #[test]
+    fn the_machine_code_of_std_aes128gcm_is_branch_free() {
+        let src = r#"use std.aes128gcm
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let key = env.secret("KEY").to_bytes()
+    let given = match args.get(1) {
+        Some(text) => Bytes.from_hex(text).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }
+    let nonce = Bytes.zeroed(12)
+    let sealed = match aes128gcm.seal(key, nonce, "aad".to_bytes(), Secret.new("message".to_bytes())) {
+        Some(out) => out
+        None => Secret.new(Bytes.new())
+    }
+    let opens = match aes128gcm.open(key, nonce, "aad".to_bytes(), given) {
+        Some(_) => true
+        None => false
+    }
+    let _ = io.println(if opens && sealed.len() > 0 { "opens" } else { "refused" })
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.aes128gcm.gf_mul",
+                "pkg.std.aes128gcm.sub_bytes",
+                "pkg.std.aes128gcm.shift_rows",
+                "pkg.std.aes128gcm.mix_columns",
+                "pkg.std.aes128gcm.next_key",
+                "pkg.std.aes128gcm.ghash",
+                "pkg.std.aes128gcm.word_mask",
+                "std.rt.equal_constant",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
 }

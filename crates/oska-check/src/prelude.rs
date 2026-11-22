@@ -90,6 +90,36 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.x25519",
+        source: include_str!("std/x25519.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.hkdf",
+        source: include_str!("std/hkdf.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.sha384",
+        source: include_str!("std/sha384.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.chacha20poly1305",
+        source: include_str!("std/chacha20poly1305.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.aes128gcm",
+        source: include_str!("std/aes128gcm.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.json",
         source: include_str!("std/json.osk"),
         sink_literal: None,
