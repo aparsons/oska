@@ -4,12 +4,15 @@
 //! `intrinsics.rs`, whose `lookup` searches every module's table. A list is a
 //! reference-counted vector (ADR 0001): reading one shares it.
 
+use std::cell::OnceCell;
+use std::rc::Rc;
+
 use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Mutating, Plain};
-use crate::intrinsics::Table;
+use crate::intrinsics::{Args, Table};
 use crate::memory;
 use crate::panics::{codes, Panic};
 use crate::value::Value;
@@ -22,7 +25,7 @@ pub const INTRINSICS: Table = &[
     ("List.len", Plain(list_len)),
     ("List.new", Plain(list_new)),
     ("String.byte_len", Plain(string_byte_len)),
-    ("String.chars", Plain(string_chars)),
+    ("String.chars", HigherOrder(string_chars)),
     ("String.contains", Plain(string_contains)),
     ("String.ends_with", Plain(string_ends_with)),
     ("String.join", Plain(string_join)),
@@ -41,14 +44,14 @@ pub const INTRINSICS: Table = &[
 ];
 
 /// `List.new()`: an empty list.
-fn list_new(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn list_new(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
     memory::list(Vec::new(), span)
 }
 
 /// `List.push(var self, item)`: `item` added at the end. A list that is
 /// shared is copied first. Under `--max-memory` its growth is charged
 /// first.
-fn list_push(list: &mut Value, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn list_push(list: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let Value::List(items) = list else {
         unreachable!("the checker guarantees a list, found {list:?}");
     };
@@ -57,13 +60,13 @@ fn list_push(list: &mut Value, mut args: Vec<Value>, span: Span) -> Result<Value
 }
 
 /// `List.len(self)` and `List.count(self)`: the number of items.
-fn list_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn list_len(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(args[0].as_list().len() as i128))
 }
 
 /// `List.get(self, index)`: the item at `index`, or `None` when there is
 /// none.
-fn list_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn list_get(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let item = usize::try_from(args[1].as_int())
         .ok()
         .and_then(|i| args[0].as_list().get(i));
@@ -72,7 +75,7 @@ fn list_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic>
 
 /// `List.at(self, index)`: the item at `index`. Out of bounds, it panics
 /// with `P0002`.
-fn list_at(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn list_at(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let items = args[0].as_list();
     let index = args[1].as_int();
     usize::try_from(index)
@@ -92,11 +95,7 @@ fn list_at(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Pani
 }
 
 /// `List.map(self, f)`: `f` called on each item, in order.
-fn list_map(
-    interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
-    span: Span,
-) -> Result<Value, Panic> {
+fn list_map(interp: &mut Interpreter<'_, '_>, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let items = args[0].as_list();
     memory::list_of_len(items.len(), span, || {
         items
@@ -107,25 +106,25 @@ fn list_map(
 }
 
 /// `String.len(self)`: the number of characters (Unicode code points).
-fn string_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_len(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(args[0].as_str().chars().count() as i128))
 }
 
 /// `String.byte_len(self)`: the number of bytes in its UTF-8 encoding.
-fn string_byte_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_byte_len(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(args[0].as_str().len() as i128))
 }
 
 /// `String.parse_int(self)`: the decimal `Int` the whole text spells, or
 /// `None` when it spells none, or one out of `Int`'s range.
-fn string_parse_int(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_parse_int(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let parsed = args[0].as_str().parse::<i64>().ok();
     Ok(Value::option(parsed.map(|n| Value::int(i128::from(n)))))
 }
 
 /// `String.trim(self)`: without leading and trailing whitespace.
-fn string_trim(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    memory::text(args[0].as_str().trim(), span)
+fn string_trim(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    memory::text_within(&args[0], args[0].as_str().trim(), span)
 }
 
 /// `String.to_lowercase(self)`: each character's own Unicode lower-case
@@ -133,7 +132,7 @@ fn string_trim(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, 
 /// `σ`, never the final `ς` that `str::to_lowercase` picks at the end of a
 /// word: that rule needs the `Cased` and `Case_Ignorable` tables, and the
 /// native runtime does not carry them.
-fn string_to_lowercase(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_to_lowercase(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let lowered: String = args[0]
         .as_str()
         .chars()
@@ -144,7 +143,7 @@ fn string_to_lowercase(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result
 
 /// `String.split(self, separator)`: the pieces between occurrences of
 /// `separator`, empty ones included.
-fn string_split(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_split(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let pieces = || args[0].as_str().split(args[1].as_str());
     let count = if memory::metered() {
         pieces().count()
@@ -157,12 +156,12 @@ fn string_split(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value,
 }
 
 /// `String.contains(self, needle)`: whether `needle` occurs in the text.
-fn string_contains(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_contains(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].as_str().contains(args[1].as_str())))
 }
 
 /// `String.lines(self)`: the lines, without their line endings.
-fn string_lines(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_lines(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let lines = || args[0].as_str().lines();
     let count = if memory::metered() {
         lines().count()
@@ -175,35 +174,57 @@ fn string_lines(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value,
 }
 
 /// `String.starts_with(self, prefix)`.
-fn string_starts_with(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_starts_with(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].as_str().starts_with(args[1].as_str())))
 }
 
 /// `String.ends_with(self, suffix)`.
-fn string_ends_with(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_ends_with(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].as_str().ends_with(args[1].as_str())))
 }
 
 /// `String.replace(self, from, to)`: every occurrence of `from`, left to
 /// right and without overlap, replaced by `to`.
-fn string_replace(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_replace(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let (text, from, to) = (args[0].as_str(), args[1].as_str(), args[2].as_str());
     // An empty `from` matches between every two characters; replacing it
     // would only inflate the text, so it replaces nothing.
     if from.is_empty() {
         return Ok(args[0].clone());
     }
-    let found = if memory::metered() {
-        text.matches(from).count()
-    } else {
-        0
-    };
-    let len = (text.len() - found * from.len()).saturating_add(found.saturating_mul(to.len()));
-    memory::text_of_len(len, span, || text.replace(from, to))
+    if memory::metered() {
+        // Charged at the replaced text's length before it is built.
+        let found = text.matches(from).count();
+        let len = (text.len() - found * from.len()).saturating_add(found.saturating_mul(to.len()));
+        return memory::text_of_len(len, span, || text.replace(from, to));
+    }
+    let mut matches = text.match_indices(from).peekable();
+    // Without a match the text is shared, not copied (#572).
+    if matches.peek().is_none() {
+        return Ok(args[0].clone());
+    }
+    if from.len() == to.len() {
+        let replaced = replaced_in_place(text, matches.map(|(at, _)| at), to);
+        return memory::text(&replaced, span);
+    }
+    memory::text(&text.replace(from, to), span)
+}
+
+/// `text` with the match at each of `starts` replaced by `to`, which is
+/// as long as what it replaces: the text copied once, then each match
+/// overwritten where it is ([`String::replace_range`] of the same
+/// length moves nothing after it), rather than copied piece by piece as
+/// [`str::replace`] does, two short copies for each match (#572).
+fn replaced_in_place(text: &str, starts: impl Iterator<Item = usize>, to: &str) -> String {
+    let mut replaced = text.to_string();
+    for at in starts {
+        replaced.replace_range(at..at + to.len(), to);
+    }
+    replaced
 }
 
 /// `String.join(self, parts)`: `parts` with `self` between each two.
-fn string_join(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_join(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let parts: Vec<&str> = args[1].as_list().iter().map(Value::as_str).collect();
     let separator = args[0].as_str();
     let len = parts.iter().map(|part| part.len()).sum::<usize>()
@@ -212,24 +233,63 @@ fn string_join(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, 
 }
 
 /// `String.chars(self)`: each character as a text of its own.
-fn string_chars(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+///
+/// An ASCII character's text is the interpreter's shared one
+/// ([`AsciiTexts`]), so a long text costs no allocation and no copy per
+/// character. Under `--max-memory` each character is made and charged as
+/// a text of its own, as before, so the meter sees it freed when the
+/// list lets go of it.
+fn string_chars(
+    interp: &mut Interpreter<'_, '_>,
+    args: &mut Args,
+    span: Span,
+) -> Result<Value, Panic> {
     let text = args[0].as_str();
-    let count = if memory::metered() {
-        text.chars().count()
-    } else {
-        0
-    };
-    memory::list_of_len(count, span, || {
-        text.chars()
-            .map(|c| memory::text(c.encode_utf8(&mut [0; 4]), span))
-            .collect()
+    if memory::metered() {
+        return memory::list_of_len(text.chars().count(), span, || {
+            text.chars()
+                .map(|c| memory::text(c.encode_utf8(&mut [0; 4]), span))
+                .collect()
+        });
+    }
+    let ascii = &interp.ascii_texts;
+    memory::list_of_len(0, span, || {
+        // Made at its length, not grown one character at a time.
+        let mut chars = Vec::with_capacity(text.chars().count());
+        chars.extend(text.chars().map(|c| {
+            ascii
+                .get(c)
+                .unwrap_or_else(|| Value::str(c.encode_utf8(&mut [0; 4])))
+        }));
+        Ok(chars)
     })
+}
+
+/// The texts of the 128 ASCII characters, one interpreter's, made the
+/// first time `String.chars` needs them. A character taken from a text
+/// shares its text from here (#501).
+#[derive(Default)]
+pub(crate) struct AsciiTexts(OnceCell<Box<[Rc<str>]>>);
+
+impl AsciiTexts {
+    /// `c`'s shared text, if `c` is ASCII.
+    fn get(&self, c: char) -> Option<Value> {
+        if !c.is_ascii() {
+            return None;
+        }
+        let texts = self.0.get_or_init(|| {
+            (0..=127u8)
+                .map(|byte| Rc::from(char::from(byte).encode_utf8(&mut [0; 4]) as &str))
+                .collect()
+        });
+        Some(Value::Str(Rc::clone(&texts[c as usize])))
+    }
 }
 
 /// `String.slice(self, start, end)`: the characters from `start` up to,
 /// but excluding, `end`. Indices out of bounds, or `start` past `end`,
 /// panic with `P0035`.
-fn string_slice(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_slice(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = args[0].as_str();
     let (start, end) = (args[1].as_int(), args[2].as_int());
     let length = text.chars().count();
@@ -247,7 +307,7 @@ fn string_slice(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value,
     // The byte offset of character `n`, or the end for the one past the
     // last.
     let offset = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
-    memory::text(&text[offset(start)..offset(end)], span)
+    memory::text_within(&args[0], &text[offset(start)..offset(end)], span)
 }
 
 /// The longest text `String.repeat` builds, in bytes.
@@ -256,7 +316,7 @@ const MAX_REPEATED_BYTES: usize = 256 * 1024 * 1024;
 /// `String.repeat(self, times)`: the text `times` times over. A negative
 /// count panics with `P0036`, a result over [`MAX_REPEATED_BYTES`] with
 /// `P0037`.
-fn string_repeat(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn string_repeat(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = args[0].as_str();
     let times = args[1].as_int();
     if times < 0 {
@@ -289,4 +349,37 @@ fn string_repeat(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value
     memory::text_of_len(text.len() * times as usize, span, || {
         text.repeat(times as usize)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::AsciiTexts;
+    use crate::value::Value;
+
+    fn text(value: Option<Value>) -> Option<Rc<str>> {
+        match value {
+            Some(Value::Str(text)) => Some(text),
+            other => panic!("expected a text, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_ascii_character_is_one_shared_text_each_time() {
+        let ascii = AsciiTexts::default();
+        let first = text(ascii.get('a')).expect("'a' is ASCII");
+        let second = text(ascii.get('a')).expect("'a' is ASCII");
+        assert_eq!(&*first, "a");
+        assert!(Rc::ptr_eq(&first, &second), "both are the one shared text");
+        assert_eq!(text(ascii.get('\u{7f}')).as_deref(), Some("\u{7f}"));
+        assert_eq!(text(ascii.get('\0')).as_deref(), Some("\0"));
+    }
+
+    #[test]
+    fn a_character_past_ascii_has_no_shared_text() {
+        let ascii = AsciiTexts::default();
+        assert!(ascii.get('\u{80}').is_none());
+        assert!(ascii.get('é').is_none());
+    }
 }

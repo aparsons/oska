@@ -91,8 +91,8 @@ use std::collections::{BTreeMap, HashMap};
 use oska_check::builtins;
 use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
-    secrets, trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program,
-    Stmt, Type,
+    secrets, trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, IntrinsicName,
+    Part, Program, Stmt, Type,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Frame, Span, MAX_FRAMES};
@@ -2526,7 +2526,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     .collect();
                 (Callee::Function(user), type_args)
             }
-            None => (Callee::Intrinsic(format!("{tag}.to_string")), Vec::new()),
+            None => (Callee::intrinsic(format!("{tag}.to_string")), Vec::new()),
         };
         self.call(&callee, &type_args, vec![value], &Type::String, span)
     }
@@ -3464,7 +3464,7 @@ fn secret_bytes_read(kind: ExprKind) -> ExprKind {
     {
         if let Some(method) = name.strip_prefix("Bytes.") {
             if matches!(intrinsics::prelude(name), Some(Prelude::ByteRead { .. })) {
-                *name = format!("{}{method}", intrinsics::SECRET_BYTES);
+                *name = IntrinsicName::new(format!("{}{method}", intrinsics::SECRET_BYTES));
             }
         }
     }

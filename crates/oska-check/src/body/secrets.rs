@@ -88,7 +88,10 @@ impl Body<'_, '_, '_> {
         if args.iter().any(|a| self.holds_secret_in(a, seen)) {
             return true;
         }
-        let (generics, shapes) = match (self.items.structs.get(name), self.items.enums.get(name)) {
+        let (generics, shapes) = match (
+            self.items.structs.get(name.as_str()),
+            self.items.enums.get(name.as_str()),
+        ) {
             (Some(info), _) => (&info.generics, vec![&info.fields]),
             (None, Some(info)) => (
                 &info.generics,

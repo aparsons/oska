@@ -34,7 +34,7 @@ impl Lowering<'_> {
                         });
                         Expr {
                             kind: ExprKind::Call {
-                                callee: Callee::Intrinsic(format!("{name}.{method}")),
+                                callee: Callee::intrinsic(format!("{name}.{method}")),
                                 type_args: Vec::new(),
                                 args: vec![lhs, rhs],
                             },

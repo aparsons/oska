@@ -266,7 +266,7 @@ impl Body<'_, '_, '_> {
             // The receiver's type may be known only once the arguments
             // are checked, so the runtime finds the impl by its tag.
             callable.target =
-                self.trait_callee(&Ty::Param(ty::SELF.to_string()), trait_name, &name.name);
+                self.trait_callee(&Ty::Param(ty::SELF.into()), trait_name, &name.name);
         }
         // `Self` is a type argument here, so the result follows its trust.
         self.follow_type_arg(&mut callable, self_ty.clone());
@@ -434,7 +434,7 @@ impl Body<'_, '_, '_> {
                 .bounds
                 .iter()
                 .map(|b| {
-                    let ty = Ty::Param(b.param.clone()).substitute(&subst);
+                    let ty = Ty::Param(b.param.as_str().into()).substitute(&subst);
                     let bound = Bound {
                         args: b.args.iter().map(|a| a.substitute(&subst)).collect(),
                         ..b.clone()
@@ -527,7 +527,7 @@ impl Body<'_, '_, '_> {
                 let qualified = format!("{type_name}.{}", name.name);
                 let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
                 Some(if intrinsic {
-                    Callee::Intrinsic(qualified)
+                    Callee::intrinsic(qualified)
                 } else {
                     Callee::Function(qualified)
                 })
@@ -665,7 +665,7 @@ impl Body<'_, '_, '_> {
     /// which only its bounds provide. When they don't (`E0260`) and one
     /// trait has the method, the fix adds that trait as a bound.
     pub(super) fn bound_method(&mut self, param: &str, name: &Ident) -> Option<FnSig> {
-        let self_ty = Ty::Param(param.to_string());
+        let self_ty = Ty::Param(param.into());
         let mut found: Vec<FnSig> = Vec::new();
         for bound in self.lower.bounds.iter().filter(|b| b.param == param) {
             let Some(info) = self.items.traits.get(&bound.trait_name) else {
@@ -786,9 +786,12 @@ impl Body<'_, '_, '_> {
                     .join_into(ty, joined, &self.items.untrusted_holders);
             }
         }
-        let what = format!("calling {}", callable.description);
-        for (ty, bound) in &callable.obligations {
-            self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
+        if !callable.obligations.is_empty() {
+            // Made only for a call with bounds to check (#572).
+            let what = format!("calling {}", callable.description);
+            for (ty, bound) in &callable.obligations {
+                self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
+            }
         }
         callable.ret
     }
@@ -867,7 +870,7 @@ pub(super) enum MemberUse<'e> {
 /// body-less prelude function, otherwise the function itself.
 pub(super) fn target(sig: &FnSig, name: String) -> Callee {
     if sig.intrinsic {
-        Callee::Intrinsic(name)
+        Callee::intrinsic(name)
     } else {
         Callee::Function(name)
     }

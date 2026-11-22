@@ -14,7 +14,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics::Intrinsic::Plain;
-use crate::intrinsics::Table;
+use crate::intrinsics::{Args, Table};
 use crate::ops::mask;
 use crate::panics::{codes, Panic};
 use crate::value::Value;
@@ -58,24 +58,26 @@ pub const INTRINSICS: Table = &[
     ("U8.wrapping_sub", Plain(wrapping_sub)),
 ];
 
-fn wrapping_add(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn wrapping_add(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(wrapping(args, |a, b| a.wrapping_add(b)))
 }
 
-fn wrapping_sub(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn wrapping_sub(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(wrapping(args, |a, b| a.wrapping_sub(b)))
 }
 
-fn wrapping_mul(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn wrapping_mul(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(wrapping(args, |a, b| a.wrapping_mul(b)))
 }
 
 /// `op` on the receiver and the argument, `args`, as `u128`s, whose
 /// operations wrap modulo 2 to 128, a multiple of every width here, so
 /// the low bits are the result.
-fn wrapping(args: Vec<Value>, op: fn(u128, u128) -> u128) -> Value {
-    let [a, b]: [Value; 2] = args.try_into().expect("a receiver and an argument");
-    let Value::Int(a, int) = a else {
+fn wrapping(args: &[Value], op: fn(u128, u128) -> u128) -> Value {
+    let [a, b] = args else {
+        unreachable!("a receiver and an argument");
+    };
+    let Value::Int(a, int) = *a else {
         unreachable!("the checker allows wrapping arithmetic on integers only");
     };
     // Both are unsigned, so non-negative.
@@ -83,29 +85,29 @@ fn wrapping(args: Vec<Value>, op: fn(u128, u128) -> u128) -> Value {
     Value::Int(exact as i128 & mask(int), int)
 }
 
-fn to_int(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn to_int(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     convert(args, IntType::Int, span)
 }
 
-fn to_u8(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn to_u8(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     convert(args, IntType::U8, span)
 }
 
-fn to_u16(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn to_u16(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     convert(args, IntType::U16, span)
 }
 
-fn to_u32(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn to_u32(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     convert(args, IntType::U32, span)
 }
 
-fn to_u64(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn to_u64(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     convert(args, IntType::U64, span)
 }
 
 /// The receiver, `args`, as an integer of type `to`: `P0001` when it does
 /// not fit.
-fn convert(args: Vec<Value>, to: IntType, span: Span) -> Result<Value, Panic> {
+fn convert(args: &[Value], to: IntType, span: Span) -> Result<Value, Panic> {
     let n = args[0].as_int();
     if (to.min()..=to.max()).contains(&n) {
         return Ok(Value::Int(n, to));
@@ -123,19 +125,19 @@ fn convert(args: Vec<Value>, to: IntType, span: Span) -> Result<Value, Panic> {
     ))
 }
 
-fn wrapping_to_u8(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn wrapping_to_u8(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(wrapping_to(args, IntType::U8))
 }
 
-fn wrapping_to_u16(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn wrapping_to_u16(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(wrapping_to(args, IntType::U16))
 }
 
-fn wrapping_to_u32(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn wrapping_to_u32(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(wrapping_to(args, IntType::U32))
 }
 
 /// The low bits of the receiver, `args`, as an integer of type `to`.
-fn wrapping_to(args: Vec<Value>, to: IntType) -> Value {
+fn wrapping_to(args: &[Value], to: IntType) -> Value {
     Value::Int(args[0].as_int() & mask(to), to)
 }
