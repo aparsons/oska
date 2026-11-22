@@ -132,7 +132,7 @@ fn a_missing_pdf_fails_the_link_check_unless_the_pdf_step_was_skipped() {
     let mut stray = skipped.clone();
     stray
         .get_mut("design.html")
-        .unwrap()
+        .expect("design.html")
         .push_str("<a href=\"/nowhere.pdf\">x</a>\n<a href=\"/gone.html\">y</a>\n");
     let outcome = check_links(&stray, &[]);
     assert_eq!(outcome.exit_code, 1, "{outcome:#?}");
