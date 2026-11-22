@@ -79,6 +79,12 @@ pub static STD_MODULES: &[StdModule] = &[
         sink_literal: None,
     },
     StdModule {
+        path: "std.hmac",
+        source: include_str!("std/hmac.osk"),
+        kind: StdKind::Source,
+        sink_literal: None,
+    },
+    StdModule {
         path: "std.ed25519",
         source: include_str!("std/ed25519.osk"),
         kind: StdKind::Source,

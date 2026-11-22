@@ -1,0 +1,101 @@
+// `std.hmac` against RFC 4231's HMAC-SHA-256 test cases 1 to 7, on both
+// backends (the native test corpus runs every test-bearing fixture). Case 5
+// is a 128-bit tag, checked by slicing the secret tag. Then keys at the
+// block boundary and `verify_sha256` refusing every one-bit change of a
+// tag and every tag of the wrong length. Wycheproof's vectors are in
+// `hmac_wycheproof.osk`.
+
+use std.hmac
+
+fn hex(text: String) -> Bytes {
+    Bytes.from_hex(text).unwrap_or(Bytes.new())
+}
+
+fn key(text: String) -> Secret<Bytes> {
+    Secret.new(hex(text))
+}
+
+fn tag(key_hex: String, message: Bytes) -> String {
+    hmac.sha256(key(key_hex), message).expose().to_hex()
+}
+
+test "RFC 4231 test case 1" {
+    t.assert_eq(tag("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "Hi There".to_bytes()), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
+    t.assert(hmac.verify_sha256(key("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), "Hi There".to_bytes(), hex("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")))
+}
+
+test "RFC 4231 test case 2" {
+    t.assert_eq(tag("4a656665", "what do ya want for nothing?".to_bytes()), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    t.assert(hmac.verify_sha256(key("4a656665"), "what do ya want for nothing?".to_bytes(), hex("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")))
+}
+
+test "RFC 4231 test case 3" {
+    t.assert_eq(tag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", hex("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")), "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe")
+    t.assert(hmac.verify_sha256(key("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), hex("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"), hex("773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe")))
+}
+
+test "RFC 4231 test case 4" {
+    t.assert_eq(tag("0102030405060708090a0b0c0d0e0f10111213141516171819", hex("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")), "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b")
+    t.assert(hmac.verify_sha256(key("0102030405060708090a0b0c0d0e0f10111213141516171819"), hex("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"), hex("82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b")))
+}
+
+test "RFC 4231 test case 5" {
+    let truncated = hmac.sha256(key("0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"), "Test With Truncation".to_bytes()).slice(0, 16)
+    t.assert(truncated.constant_time_eq(hex("a3b6167473100ee06e0c796c2955552b")))
+    t.assert(!truncated.constant_time_eq(hex("a3b6167473100ee06e0c796c2955552a")))
+    // A truncated tag is the wrong length for `verify_sha256`.
+    t.assert(!hmac.verify_sha256(key("0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"), "Test With Truncation".to_bytes(), hex("a3b6167473100ee06e0c796c2955552b")))
+}
+
+test "RFC 4231 test case 6" {
+    t.assert_eq(tag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Test Using Larger Than Block-Size Key - Hash Key First".to_bytes()), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")
+    t.assert(hmac.verify_sha256(key("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "Test Using Larger Than Block-Size Key - Hash Key First".to_bytes(), hex("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")))
+}
+
+test "RFC 4231 test case 7" {
+    t.assert_eq(tag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.".to_bytes()), "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2")
+    t.assert(hmac.verify_sha256(key("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.".to_bytes(), hex("9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2")))
+}
+
+// Keys of 0, 63, 64 and 65 bytes (65 is hashed first, 64 is not), and an
+// empty message, against digests recorded from Python's `hmac` module.
+test "keys either side of the block size" {
+    t.assert_eq(tag("", "message".to_bytes()), "eb08c1f56d5ddee07f7bdf80468083da06b64cf4fac64fe3a90883df5feacae4")
+    t.assert_eq(tag("05", "message".to_bytes()), "6079b3c0f6984130872f5c4fdfc00ae3dcfc301756b8fb0d76bb73099293dad5")
+    t.assert_eq(tag("05121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98", "message".to_bytes()), "98084ff3f946d2fdac59e7ee74df9ca5d005cd3ccf5b132d5820c5b14ff06d1c")
+    t.assert_eq(tag("05121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b", "message".to_bytes()), "aa7f802680e1a40d4d60dbf5c253a0d65547c102baae29a5c2fe4333fff1ca07")
+    t.assert_eq(tag("05121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b38", "message".to_bytes()), "c3342c12bf8be36f4ba983bc80965522d4f8c5db21690db629a8cc2a270f09ac")
+    t.assert_eq(tag("05121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845", "message".to_bytes()), "3d43c601cee7504d59dfaf8f029cca497bc8f6ed9ca7c300ff792cbdc7e7ea3a")
+    t.assert_eq(tag("05121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845525f6c798693a0adbac7d4e1eefb0815222f3c495663707d8a97a4b1becbd8e5f2ff0c", "message".to_bytes()), "6bebe05313c9b3f158c2c30300a258f32964ec1e020b8dab4c2a75c5603e906c")
+    t.assert_eq(tag("6b6579", Bytes.new()), "5d5d139563c95b5967b9bd9a8c9b233a9dedb45072794cd232dc1b74832607d0")
+}
+
+// RFC 4231 case 2's tag with each of its 256 bits flipped in turn.
+test "verify_sha256 refuses a one-bit change at every position" {
+    let k = key("4a656665")
+    let message = "what do ya want for nothing?".to_bytes()
+    let good = hex("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    t.assert(hmac.verify_sha256(k, message, good))
+    for i in 0..32 {
+        for b in 0..8 {
+            var bad = good
+            bad.set(i, good.at(i) ^ (1.to_u8() << b.to_u8()))
+            t.assert(!hmac.verify_sha256(k, message, bad))
+        }
+    }
+}
+
+test "verify_sha256 refuses a tag of the wrong length" {
+    let k = key("4a656665")
+    let message = "what do ya want for nothing?".to_bytes()
+    let good = hex("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    t.assert(!hmac.verify_sha256(k, message, Bytes.new()))
+    t.assert(!hmac.verify_sha256(k, message, good.slice(0, 16)))
+    t.assert(!hmac.verify_sha256(k, message, good.slice(0, 31)))
+    var longer = good
+    longer.push(0)
+    t.assert(!hmac.verify_sha256(k, message, longer))
+    var twice = good
+    twice.append(good)
+    t.assert(!hmac.verify_sha256(k, message, twice))
+}

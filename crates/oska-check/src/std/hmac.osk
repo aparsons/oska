@@ -1,0 +1,79 @@
+// `std.hmac`: HMAC-SHA-256 (RFC 2104), which authenticates a message
+// with a secret key. `hmac.sha256(key, message)` gives the tag, and
+// `hmac.verify_sha256(key, message, tag)` checks a tag received. A module
+// sees them only after `use std.hmac`.
+//
+// The key, the tag and everything computed from the key are secret:
+// held in secret integers and `Secret<Bytes>`, so no branch or memory
+// address depends on them. The lengths of the key and the message are
+// public, and so is the message itself. A tag leaves as a
+// `Secret<Bytes>`, which the caller exposes in its own code if it needs
+// it in the clear, or as `verify_sha256`'s public `Bool`.
+//
+// Every function here is a pure function, and the module has no audit
+// site: no `expose()` and no `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by RFC 4231's test cases 1 to 7 and Wycheproof's HMAC-SHA-256
+// vectors, on the interpreter and natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+
+use std.sha2
+
+// The HMAC-SHA-256 tag of `message` under `key`, as a secret: 32 bytes,
+// computed in constant time. A key of any length works: one longer than
+// 64 bytes is hashed first, as RFC 2104 says. The lengths of the key and
+// the message are public.
+pub fn sha256(key: Secret<Bytes>, message: Untrusted<Bytes>) -> Secret<Bytes> {
+    let block = key_block(key)
+    var inner = sha2.Sha256Secret.new()
+    inner.update(padded(block, 54))
+    inner.update(Secret.new(copied(message)))
+    var outer = sha2.Sha256Secret.new()
+    outer.update(padded(block, 92))
+    outer.update(inner.finish())
+    outer.finish()
+}
+
+// Whether `tag` is the HMAC-SHA-256 tag of `message` under `key`. The
+// comparison takes the same time wherever the tags differ, so it leaks
+// nothing but the answer. A tag that is not 32 bytes long is `false`.
+pub fn verify_sha256(key: Secret<Bytes>, message: Untrusted<Bytes>, tag: Untrusted<Bytes>) -> Bool {
+    if tag.len() != 32 {
+        return false
+    }
+    sha256(key, message).constant_time_eq(tag)
+}
+
+// `key` as one 64-byte block (RFC 2104, section 2): hashed first when it
+// is longer than a block, then padded with zeros. Its length is public.
+fn key_block(key: Secret<Bytes>) -> Secret<Bytes> {
+    var block = if key.len() > 64 { sha2.sha256_secret(key) } else { key }
+    block.append(Secret.new(Bytes.zeroed(64 - block.len())))
+    block
+}
+
+// The 64-byte `block` with every byte XORed with `pad`: 54 (`0x36`) for
+// the inner pad and 92 (`0x5c`) for the outer.
+fn padded(block: Secret<Bytes>, pad: U8) -> Secret<Bytes> {
+    var out = Secret.new(Bytes.new())
+    for i in 0..block.len() {
+        out.push(block.at(i) ^ pad)
+    }
+    out
+}
+
+// The bytes of `message`, as the trusted `Bytes` the secret hasher
+// takes: built from the integers read out of it, which are trusted, as
+// `sha2.sha256`'s digest is. The copy goes only into the inner hash, so
+// the message cannot shape anything structural.
+fn copied(message: Untrusted<Bytes>) -> Bytes {
+    var out = Bytes.new()
+    for i in 0..message.len() {
+        out.push(message.at(i))
+    }
+    out
+}
