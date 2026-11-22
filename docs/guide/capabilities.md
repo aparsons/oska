@@ -12,7 +12,7 @@ Oska has no **ambient authority**. Reading a file, opening a connection, reading
 | `Clock` | The time: `now_millis()` | Yes |
 | `Random` | Pseudo-random numbers: `next_int()`, and secure bytes for keys: `secure_bytes(n)` | Yes |
 | `Budget` | Spending model tokens and calls. Unlimited in `main`; attenuates to a smaller `Budget` with `limit(tokens, calls)`. See [Budgets](#budgets). | Yes |
-| `Net` | The network, but only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`). | Interpreter only: `E0390` natively |
+| `Net` | The network, but only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`). | Every host; native on Linux, macOS and Windows |
 | `Sched` | Channels and `select` | No: `E0370` |
 | `Spawn` | Starting OS processes | No: `E0370` |
 
@@ -376,7 +376,7 @@ fn main(spawn: Spawn) -> Result<(), IoError> {
 main.osk:1:46: error[E0370]: `oskac run` cannot grant `Spawn` yet: the capability has no runtime (bytes 45..59)
 ```
 
-`Net` has a runtime, on the interpreter only. A program that connects goes through a host capability, and it runs with `oskac run --interpret`; `oskac run` refuses it with `E0390` until the native backend has networking:
+`Net` has a runtime, on both backends. A program that connects goes through a host capability. Natively the host is an IP address or `localhost`; any other name fails with `host not found` until the Oska name resolver arrives, so run such a program with `oskac run --interpret`:
 
 ```oska fragment
 fn main(io: Stdout, net: Net) -> Result<(), IoError> {

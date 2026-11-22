@@ -32,11 +32,11 @@ A **No** names the code `oskac` refuses the program with, before any of it runs.
 | `std.mcp`: `serve` and `handle`, an MCP server over standard input and output | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.sql` | Yes | No (`E0371`) | No (`E0371`) | None yet: checks only |
 | `std.proc` and `Spawn` | Yes | No (`E0371`) | No (`E0371`) | None yet: checks only |
-| `Net`, `NetConnect` and `NetListen` | Yes | Yes | No (`E0390`) | Every host, on the interpreter |
+| `Net`, `NetConnect` and `NetListen` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows, with `localhost` and IP addresses as hosts |
 
 `std.sql` and `std.proc` check but do not run. Their signatures are complete, so `oskac check` enforces their rules today: untrusted text cannot reach a query or a command. A program that uses them is refused by `oskac run`, `oskac test` and `oskac build`. Plan around them: keep that code behind a function you can test without it, or wait for a release that runs it.
 
-The network runs on the interpreter only. `oskac run --interpret` connects through a host capability (`net.restrict_to(host, port).connect()`) and listens on the loopback address only; plain `test` blocks reach no network, and `t.net` fails every connect with one stable error. The native backend refuses a program that uses it with `E0390` until it has networking of its own.
+The network runs on both backends. A program connects through a host capability (`net.restrict_to(host, port).connect()`) and listens on the loopback address only; plain `test` blocks reach no network, and `t.net` fails every connect with one stable error. Both backends word every failure the same. Natively a host is an IPv4 or IPv6 address or `localhost`; any other name fails with `host not found` until the Oska name resolver arrives, so run a program that looks a name up with `--interpret`. `t.net_attempts()` runs on the interpreter only.
 
 Within a feature that runs, a few constructs do not yet: the interpreter refuses them with `E0380`, and the native backend refuses them with `E0390`, an error on every platform, which `--interpret` works around. The [runtime notes](../runtime.md#native-builds) list what the native backend compiles, and [troubleshooting](troubleshooting.md) lists the known gaps.
 

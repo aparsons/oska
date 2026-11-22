@@ -4,9 +4,9 @@
 //! gives the test server's listener, and the test host's `t.net` refuses
 //! every connection in a plain test.
 //!
-//! These run the interpreter only: the native backend has no networking
-//! yet, and refuses these programs (`E0390`), which the parity gate
-//! reports. The real-network tests use only the loopback address.
+//! These run the interpreter; the native backend's are in
+//! `crates/oskac/tests/native_sockets.rs`. The real-network tests use only
+//! the loopback address.
 
 use std::net::TcpListener;
 
