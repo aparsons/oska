@@ -3,15 +3,20 @@
 //!
 //! To add one: write a function with the signature of one of the
 //! [`Intrinsic`] kinds and add it, wrapped in its kind, to its module's
-//! table ([`INTRINSICS`] here). [`lookup`] searches every table. A
+//! table ([`INTRINSICS`] here), and a new module's table to `TABLES`.
+//! [`lookup`] finds an intrinsic by name in an index of every table,
+//! made once; [`resolved`] finds a call site's once and keeps it there. A
 //! method's receiver is its first argument.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use oska_check::builtins;
 use oska_check::limits;
+use oska_check::program::IntrinsicName;
 use oska_syntax::Span;
 
 use crate::bytes;
@@ -35,16 +40,40 @@ use Intrinsic::{HigherOrder, Plain};
 /// A body-less prelude function's runtime implementation. Each gets the
 /// arguments, the receiver first for a method, and the call's span, for
 /// panics, and what else its kind needs.
+/// An intrinsic call's arguments, the receiver first for a method. The
+/// interpreter passes them in a buffer it reuses, so a call allocates no
+/// `Vec` of its own (#505): an intrinsic takes what it keeps out of it
+/// (`swap_remove`, `pop`, `std::mem::take` of an item), and what it
+/// leaves is dropped when the call returns, as it was when the intrinsic
+/// owned its arguments.
+pub struct Args(pub(crate) Vec<Value>);
+
+impl std::ops::Deref for Args {
+    type Target = Vec<Value>;
+
+    fn deref(&self) -> &Vec<Value> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Args {
+    fn deref_mut(&mut self) -> &mut Vec<Value> {
+        &mut self.0
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Intrinsic {
     /// One that needs only the host.
-    Plain(fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>),
+    Plain(fn(&mut dyn Host, &mut Args, Span) -> Result<Value, Panic>),
     /// A mutating method (`var self`), such as `List.push`: it changes
     /// its receiver in place, given the call's other arguments.
-    Mutating(fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>),
+    Mutating(fn(&mut Value, &mut Args, Span) -> Result<Value, Panic>),
     /// One that calls back into the program, such as `List.map`, which
-    /// calls its closure: it gets the interpreter instead of the host.
-    HigherOrder(fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>),
+    /// calls its closure, or uses the interpreter's state, such as
+    /// `String.chars`'s shared texts: it gets the interpreter instead of
+    /// the host.
+    HigherOrder(fn(&mut Interpreter<'_, '_>, &mut Args, Span) -> Result<Value, Panic>),
 }
 
 /// A table of intrinsics, by the qualified name the checked program calls
@@ -115,26 +144,110 @@ pub const INTRINSICS: Table = &[
 ///
 /// A `std` module's function is called by its own name (`text`), or by
 /// its module-qualified name (`html.text`) when the program declares the
-/// same name itself; both find the same intrinsic.
+/// same name itself; both find the same intrinsic. A qualified name finds
+/// only its own module's functions: `sql.text` finds nothing.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
-    let unqualified = builtins::std_modules()
-        .filter_map(|path| path.rsplit('.').next())
-        .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'));
-    [
-        INTRINSICS,
-        int_methods::INTRINSICS,
-        data::INTRINSICS,
-        bytes::INTRINSICS,
-        secrets::INTRINSICS,
-        tasks::INTRINSICS,
-        traits::INTRINSICS,
-        testing::INTRINSICS,
-        html::INTRINSICS,
-    ]
-    .into_iter()
-    .flatten()
-    .find(|(n, _)| *n == name || Some(*n) == unqualified)
-    .map(|(_, intrinsic)| *intrinsic)
+    let index = index();
+    index.by_name.get(name).map(|&at| index.all[at as usize])
+}
+
+/// The intrinsic a call site names, looked up on the site's first call
+/// and kept in its [`IntrinsicName`], so a call site that runs many times
+/// looks its name up once (#502).
+pub fn resolved(name: &IntrinsicName) -> Intrinsic {
+    index().all[resolved_at(name) as usize]
+}
+
+/// Where the intrinsic the call site `name` names is in the [`Index`],
+/// looked up on the first call and kept in `name`.
+fn resolved_at(name: &IntrinsicName) -> u32 {
+    name.resolve_with(|name| {
+        *index()
+            .by_name
+            .get(name)
+            .expect("`crate::run` refuses a call to a missing intrinsic")
+    })
+}
+
+/// The prelude `Display` implementations an interpolation hole can show
+/// in place, without calling them ([`display_in_place`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InPlace {
+    /// `Display for Int`: the integer in decimal.
+    Int,
+    /// `Display for String`: the text itself.
+    Str,
+}
+
+/// Which of the [`InPlace`] implementations the call site `name` names,
+/// if one does: resolved and kept in `name` as [`resolved`] resolves it,
+/// so the site is resolved whether or not it is ever called (#572).
+pub(crate) fn display_in_place(name: &IntrinsicName) -> Option<InPlace> {
+    static PLACES: OnceLock<[Option<u32>; 2]> = OnceLock::new();
+    let index = index();
+    let [int, text] = *PLACES.get_or_init(|| {
+        [
+            index.by_name.get("Int.to_string").copied(),
+            index.by_name.get("String.to_string").copied(),
+        ]
+    });
+    let at = resolved_at(name);
+    if Some(at) == int {
+        Some(InPlace::Int)
+    } else if Some(at) == text {
+        Some(InPlace::Str)
+    } else {
+        None
+    }
+}
+
+/// Every module's table, in the order [`lookup`] prefers them, with the
+/// `std` module whose functions it holds, for a `std` module's table.
+const TABLES: [(Option<&str>, Table); 9] = [
+    (None, INTRINSICS),
+    (None, int_methods::INTRINSICS),
+    (None, data::INTRINSICS),
+    (None, bytes::INTRINSICS),
+    (None, secrets::INTRINSICS),
+    (None, tasks::INTRINSICS),
+    (None, traits::INTRINSICS),
+    (None, testing::INTRINSICS),
+    (Some("std.html"), html::INTRINSICS),
+];
+
+/// Every intrinsic, and where each is in it by every name a call site
+/// can name it by.
+struct Index {
+    all: Vec<Intrinsic>,
+    by_name: HashMap<String, u32>,
+}
+
+/// The [`Index`], made once. Where two tables share a name, the first
+/// table's intrinsic has it. A `std` module's function also has its
+/// module-qualified name, `html.text` for `text`.
+fn index() -> &'static Index {
+    static INDEX: OnceLock<Index> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut index = Index {
+            all: Vec::new(),
+            by_name: HashMap::new(),
+        };
+        for (module, table) in TABLES {
+            let module = module.map(|path| path.rsplit('.').next().unwrap_or(path));
+            for &(name, intrinsic) in table {
+                let at = u32::try_from(index.all.len()).expect("fewer than 2^32 intrinsics");
+                index.all.push(intrinsic);
+                index.by_name.entry(name.to_string()).or_insert(at);
+                if let Some(module) = module {
+                    index
+                        .by_name
+                        .entry(format!("{module}.{name}"))
+                        .or_insert(at);
+                }
+            }
+        }
+        index
+    })
 }
 
 /// Whether the intrinsic named `name` has a runtime implementation.
@@ -210,10 +323,10 @@ fn bytes_arg(args: &[Value], index: usize) -> &[u8] {
 /// `Stdout.println(self, line)`: the line and a newline.
 fn stdout_println(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
-    let line = format!("{}\n", text(&args, 1));
+    let line = format!("{}\n", text(args, 1));
     let written = interp.write_output(Stream::Stdout, &line, span)?;
     io_unit(written, span)
 }
@@ -221,10 +334,10 @@ fn stdout_println(
 /// `Stderr.println(self, line)`: the line and a newline.
 fn stderr_println(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
-    let line = format!("{}\n", text(&args, 1));
+    let line = format!("{}\n", text(args, 1));
     let written = interp.write_output(Stream::Stderr, &line, span)?;
     io_unit(written, span)
 }
@@ -233,7 +346,7 @@ fn stderr_println(
 /// Under `--timeout` the wait ends at the deadline (`P0039`).
 fn stdin_read_line(
     interp: &mut Interpreter<'_, '_>,
-    _: Vec<Value>,
+    _: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
     match interp.read_line(span)? {
@@ -247,7 +360,7 @@ fn stdin_read_line(
 
 /// `dbg(value)`: print `value` to stderr for debugging, and return it. A
 /// `Secret` prints as `<redacted>`, wherever it is.
-fn dbg(interp: &mut Interpreter<'_, '_>, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn dbg(interp: &mut Interpreter<'_, '_>, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let value = args.swap_remove(0);
     let mut line = String::from("[dbg] ");
     debug(&value, &mut line);
@@ -357,7 +470,7 @@ fn debug_text(text: &str, out: &mut String) {
 
 /// `Args.get(self, index)`: the argument at `index`, the program path at
 /// 0, or `None` past the end.
-fn args_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn args_get(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let Value::Args(all) = &args[0] else {
         unreachable!("the checker guarantees `Args`, found {:?}", args[0]);
     };
@@ -368,8 +481,8 @@ fn args_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic>
 }
 
 /// `Env.get(self, name)`: the variable, or `None` when it is not set.
-fn env_get(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let value = host.env_var(text(&args, 1));
+fn env_get(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let value = host.env_var(text(args, 1));
     let value = value.map(|v| memory::text(&v, span)).transpose()?;
     Ok(Value::option(value))
 }
@@ -383,10 +496,10 @@ fn env_get(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, P
 /// `--max-output` it quotes no more of it than the limit has left.
 fn env_secret(
     interp: &mut Interpreter<'_, '_>,
-    args: Vec<Value>,
+    args: &mut Args,
     span: Span,
 ) -> Result<Value, Panic> {
-    let name = text(&args, 1);
+    let name = text(args, 1);
     match interp.host().env_var(name) {
         Some(value) => memory::wrap(builtins::SECRET, memory::text(&value, span)?, span),
         None => {
@@ -406,12 +519,12 @@ fn env_secret(
 // ---- Secrets -----------------------------------------------------------
 
 /// `Secret.expose(self)`: the wrapped value.
-fn secret_expose(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn secret_expose(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args[0].fields()[0].clone())
 }
 
 /// `Secret.constant_time_eq(self, other)`, on secret text or bytes.
-fn secret_constant_time_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn secret_constant_time_eq(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let secret = &args[0].fields()[0];
     Ok(Value::Bool(constant_time_eq(
         contents(secret),
@@ -422,7 +535,7 @@ fn secret_constant_time_eq(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Resul
 /// `Secret.constant_time_eq_secret(self, other)`, on secret text or bytes.
 fn secret_constant_time_eq_secret(
     _: &mut dyn Host,
-    args: Vec<Value>,
+    args: &mut Args,
     _: Span,
 ) -> Result<Value, Panic> {
     let (a, b) = (&args[0].fields()[0], &args[1].fields()[0]);
@@ -450,12 +563,12 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // ---- Clock and randomness ----------------------------------------------
 
 /// `Clock.now_millis(self)`.
-fn clock_now_millis(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn clock_now_millis(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(host.now_millis()))
 }
 
 /// `Random.next_int(self)`: from 0 up to, but excluding, 2^63.
-fn random_next_int(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn random_next_int(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::int(i128::from(host.next_random() >> 1)))
 }
 
@@ -472,7 +585,7 @@ fn fs_cap(value: &Value) -> &FsCap {
 }
 
 /// `Path.new(raw)` and `Path.from(raw)`.
-fn path_new(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn path_new(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     memory::wrap(builtins::PATH, args.swap_remove(0), span)
 }
 
@@ -480,15 +593,15 @@ fn path_new(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value,
 /// directory capability with the same access, confined to `dir`, which
 /// the host opens now and holds. `dir` is trusted text, any path whose
 /// last component is not a symlink.
-fn fs_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(restricted(host, fs_cap(&args[0]), text(&args, 1)))
+fn fs_restrict_to(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(restricted(host, fs_cap(&args[0]), text(args, 1)))
 }
 
 /// `restrict_to(self, dir)` on `Dir`, `DirRead`, and `DirWrite`: the same
 /// capability narrowed to `dir`, a `Path` that may come from untrusted
 /// text. It is walked beneath the current root like any path read there
 /// (`confine.rs`), so a narrowing never widens.
-fn dir_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn dir_restrict_to(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(restricted(
         host,
         fs_cap(&args[0]),
@@ -519,15 +632,15 @@ fn restricted(host: &mut dyn Host, fs: &FsCap, dir: &str) -> Value {
 /// `restrict_to_file(self, file)` on `FsRead` and `FsWrite`: the file
 /// capability with the same access for the one file at `file`, trusted
 /// text. The host opens its parent now and holds it, with the file's name.
-fn fs_restrict_to_file(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(restricted_file(host, fs_cap(&args[0]), text(&args, 1)))
+fn fs_restrict_to_file(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(restricted_file(host, fs_cap(&args[0]), text(args, 1)))
 }
 
 /// `restrict_to_file(self, file)` on `DirRead` and `DirWrite`: the file
 /// capability for the file at `file`, a `Path` that may come from
 /// untrusted text. It is walked beneath the current root like any path
 /// read there (`confine.rs`), so a file never lies outside it.
-fn dir_restrict_to_file(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn dir_restrict_to_file(host: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(restricted_file(
         host,
         fs_cap(&args[0]),
@@ -573,12 +686,12 @@ fn attenuated_root(fs: &FsCap, opened: io::Result<RootHandle>, at: &str) -> Root
 }
 
 /// `read_only(self)` on `Fs` and `Dir`.
-fn fs_read_only(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_read_only(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(with_access(&args[0], Access::Read))
 }
 
 /// `write_only(self)` on `Fs` and `Dir`.
-fn fs_write_only(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_write_only(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(with_access(&args[0], Access::Write))
 }
 
@@ -633,14 +746,14 @@ fn root_for(fs: &FsCap, intent: Intent) -> io::Result<&RootHandle> {
 
 /// `DirRead.read_to_string(self, path)`: the path is walked beneath the
 /// root's handle (`confine.rs`).
-fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    io_text(fs_read(host, &args), span)
+fn fs_read_to_string(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    io_text(fs_read(host, args), span)
 }
 
 /// `DirRead.read_bytes(self, path)`: read as `read_to_string` reads, but
 /// the bytes as they are.
-fn fs_read_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    io_bytes(fs_read(host, &args), span)
+fn fs_read_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    io_bytes(fs_read(host, args), span)
 }
 
 /// The bytes of the file a `DirRead` (`args[0]`) reaches at the path
@@ -662,7 +775,7 @@ fn fs_read(host: &mut dyn Host, args: &[Value]) -> io::Result<Vec<u8>> {
 /// `DirRead.list_dir(self, path)`: the names of the entries of the
 /// directory, sorted. The path is walked beneath the root's handle, and
 /// `.` lists the root.
-fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn fs_list_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
@@ -682,13 +795,13 @@ fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Valu
 
 /// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
 /// and is walked beneath the root's handle.
-fn fs_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    io_unit(fs_put(host, &args, text(&args, 2).as_bytes()), span)
+fn fs_write(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    io_unit(fs_put(host, args, text(args, 2).as_bytes()), span)
 }
 
 /// `DirWrite.write_bytes(self, path, contents)`: `write` with bytes.
-fn fs_write_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    io_unit(fs_put(host, &args, bytes_arg(&args, 2)), span)
+fn fs_write_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    io_unit(fs_put(host, args, bytes_arg(args, 2)), span)
 }
 
 /// Write `contents` to the file a `DirWrite` (`args[0]`) reaches at the
@@ -703,7 +816,7 @@ fn fs_put(host: &mut dyn Host, args: &[Value], contents: &[u8]) -> io::Result<()
 
 /// `DirWrite.create_dir(self, path)`: confined like a write, so `path`
 /// ends in a plain name, and is walked beneath the root's handle.
-fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn fs_create_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
@@ -714,28 +827,28 @@ fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Va
 
 /// `FileRead.read_to_string(self)`: the file's text, opened by its name
 /// beneath the parent directory's handle (`confine.rs`).
-fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn file_read_to_string(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
     io_text(result, span)
 }
 
 /// `FileRead.read_bytes(self)`: the file's bytes, as they are.
-fn file_read_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn file_read_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
     io_bytes(result, span)
 }
 
 /// `FileWrite.write(self, contents)`: creates the file, or replaces what
 /// it holds, opened by its name beneath the parent directory's handle.
-fn file_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let contents = text(&args, 1).as_bytes();
+fn file_write(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let contents = text(args, 1).as_bytes();
     let result = file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], contents));
     io_unit(result, span)
 }
 
 /// `FileWrite.write_bytes(self, contents)`: `write` with bytes.
-fn file_write_bytes(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let contents = bytes_arg(&args, 1);
+fn file_write_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let contents = bytes_arg(args, 1);
     let result = file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], contents));
     io_unit(result, span)
 }
@@ -759,23 +872,23 @@ fn file_root(value: &Value) -> io::Result<&RootHandle> {
 // ---- Option and Result -------------------------------------------------
 
 /// `Option.is_some(self)`.
-fn option_is_some(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn option_is_some(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].is_variant(builtins::SOME)))
 }
 
 /// `Result.is_ok(self)`.
-fn result_is_ok(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn result_is_ok(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0].is_variant(builtins::OK)))
 }
 
 /// `Option.unwrap_or(self, default)`.
-fn option_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn option_unwrap_or(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(unwrap_or(args, builtins::SOME))
 }
 
 /// `Option.ok_or(self, err)`: `Ok` of the value, or `Err(err)` when
 /// there is none.
-fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn option_ok_or(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let err = args.swap_remove(1);
     Ok(match args[0].is_variant(builtins::SOME) {
         true => Value::ok(args[0].fields()[0].clone()),
@@ -784,13 +897,13 @@ fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value
 }
 
 /// `Result.unwrap_or(self, default)`.
-fn result_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn result_unwrap_or(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(unwrap_or(args, builtins::OK))
 }
 
 /// The field of `args[0]` when it is the variant `present`, else
 /// `args[1]`, the default.
-fn unwrap_or(mut args: Vec<Value>, present: &str) -> Value {
+fn unwrap_or(args: &mut Args, present: &str) -> Value {
     let default = args.swap_remove(1);
     let value = args.swap_remove(0);
     if value.is_variant(present) {
@@ -802,7 +915,7 @@ fn unwrap_or(mut args: Vec<Value>, present: &str) -> Value {
 
 /// `todo()`: a placeholder for code not yet written, which panics when
 /// reached.
-fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn todo(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
     Err(Panic::new(
         codes::TODO,
         "reached `todo()`: this code is not written yet",
@@ -812,35 +925,37 @@ fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
 
 /// `U8.rotl(self, n)`, and `U32`'s and `U64`'s: `P0008` for an amount
 /// out of range (`ops::rotate`).
-fn rotl(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn rotl(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     rotate(args, true, span)
 }
 
 /// `U8.rotr(self, n)`, and `U32`'s and `U64`'s.
-fn rotr(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn rotr(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     rotate(args, false, span)
 }
 
 /// A rotation's receiver and amount, `args`, rotated left or not.
-fn rotate(args: Vec<Value>, left: bool, span: Span) -> Result<Value, Panic> {
-    let [x, n]: [Value; 2] = args.try_into().expect("a rotation's receiver and amount");
+fn rotate(args: &mut Args, left: bool, span: Span) -> Result<Value, Panic> {
+    let (Some(n), Some(x)) = (args.pop(), args.pop()) else {
+        unreachable!("a rotation's receiver and amount");
+    };
     ops::rotate(x, n, left, span)
 }
 
 /// `Int.to_string(self)`: the integer in decimal.
-fn int_to_string(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+fn int_to_string(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     memory::text(&args[0].as_int().to_string(), span)
 }
 
 /// `Untrusted<String>.assume_trusted(self)`: the text itself. Trust is a
 /// property the checker tracks; at runtime untrusted text is a plain
 /// string.
-fn string_assume_trusted(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_assume_trusted(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args.swap_remove(0))
 }
 
 /// `String.to_string(self)`: the text itself.
-fn string_to_string(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn string_to_string(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(args.swap_remove(0))
 }
 
@@ -982,6 +1097,45 @@ mod tests {
         }
     }
 
+    /// The index gives a `std` module's function its qualified name
+    /// (`html.text`) too, so no intrinsic's own name may look like one,
+    /// and every module `TABLES` names must be a real `std` module.
+    #[test]
+    fn no_intrinsic_is_named_with_a_std_modules_prefix() {
+        for (module, _) in super::TABLES {
+            if let Some(module) = module {
+                assert!(
+                    builtins::std_modules().any(|m| m == module),
+                    "`{module}` is not a std module"
+                );
+            }
+        }
+        let modules: Vec<&str> = builtins::std_modules()
+            .filter_map(|path| path.rsplit('.').next())
+            .collect();
+        assert!(modules.contains(&"html"), "{modules:?}");
+        for (name, _) in super::TABLES.iter().flat_map(|(_, table)| table.iter()) {
+            for module in &modules {
+                assert!(
+                    !name.starts_with(&format!("{module}.")),
+                    "`{name}` starts with the std module name `{module}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_qualified_std_name_finds_the_same_intrinsic_as_its_own_name() {
+        assert!(matches!(lookup("text"), Some(Intrinsic::Plain(_))));
+        assert!(matches!(lookup("html.text"), Some(Intrinsic::Plain(_))));
+        assert!(
+            lookup("sql.text").is_none(),
+            "`text` is std.html's, not std.sql's"
+        );
+        assert!(lookup("html.no_such_function").is_none());
+        assert!(lookup("nohtml.text").is_none());
+    }
+
     fn owner(name: &str) -> &str {
         name.split('.').next().unwrap_or("")
     }
@@ -1088,7 +1242,7 @@ mod access_tests {
 
     fn call(name: &str, args: Vec<Expr>) -> Expr {
         at(ExprKind::Call {
-            callee: Callee::Intrinsic(name.to_string()),
+            callee: Callee::intrinsic(name),
             type_args: Vec::new(),
             args,
         })

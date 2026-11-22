@@ -17,6 +17,7 @@
 //! `Untrusted<String>` is a plain [`Value::Str`] here.
 
 use crate::host::RootHandle;
+use crate::memory;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -277,8 +278,8 @@ impl Value {
 
     pub fn variant(ty: &str, variant: &str, fields: Vec<Value>) -> Value {
         Value::Variant {
-            ty: Rc::from(ty),
-            variant: Rc::from(variant),
+            ty: memory::shared_name(ty),
+            variant: memory::shared_name(variant),
             fields: Rc::new(fields),
         }
     }
@@ -287,7 +288,7 @@ impl Value {
     /// read and write as fields do.
     pub fn range(start: Value, end: Value) -> Value {
         Value::Struct {
-            ty: Rc::from(builtins::RANGE),
+            ty: memory::shared_name(builtins::RANGE),
             fields: Rc::new(vec![start, end]),
         }
     }
@@ -297,7 +298,7 @@ impl Value {
         match &ctor.variant {
             Some(variant) => Value::variant(&ctor.ty, variant, fields),
             None => Value::Struct {
-                ty: Rc::from(ctor.ty.as_str()),
+                ty: memory::shared_name(&ctor.ty),
                 fields: Rc::new(fields),
             },
         }

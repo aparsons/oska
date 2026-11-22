@@ -358,7 +358,7 @@ impl Body<'_, '_, '_> {
         }
         let subst: Vec<(String, Ty)> = imp.generics.iter().cloned().zip(args).collect();
         for b in &imp.bounds {
-            let param = Ty::Param(b.param.clone()).substitute(&subst);
+            let param = Ty::Param(b.param.as_str().into()).substitute(&subst);
             let inner = Bound {
                 args: b.args.iter().map(|a| a.substitute(&subst)).collect(),
                 ..b.clone()

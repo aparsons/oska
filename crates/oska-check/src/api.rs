@@ -341,9 +341,9 @@ impl Reach {
 fn type_reach(decls: &Decls, name: &str, params: &[GenericParam]) -> Reach {
     let args = params
         .iter()
-        .map(|g| Ty::Param(g.name.name.clone()))
+        .map(|g| Ty::Param(g.name.name.as_str().into()))
         .collect();
-    let ty = Ty::Named(name.to_string(), args, Trust::Trusted);
+    let ty = Ty::Named(name.into(), args, Trust::Trusted);
     let capabilities = match decls.get(name).map(|d| &d.kind) {
         Some(DeclKind::Capability) => vec![name.to_string()],
         _ => authority::capabilities_of(&ty, decls),

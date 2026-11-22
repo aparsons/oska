@@ -109,7 +109,7 @@ impl Body<'_, '_> {
                 let type_args = impl_type_args(function, &ty, own);
                 (Callee::Function(name), type_args)
             }
-            None => (Callee::Intrinsic(format!("{tag}.{method}")), Vec::new()),
+            None => (Callee::intrinsic(format!("{tag}.{method}")), Vec::new()),
         })
     }
 

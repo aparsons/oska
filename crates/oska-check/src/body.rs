@@ -148,7 +148,7 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 // Inside its own trait, `Self` implements the trait.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param(ty::SELF.to_string()))
+                    .with_self(Ty::Param(ty::SELF.into()))
                     .with_key(ty::SELF, GenericKey(t.name.span))
                     .with_bound(Bound {
                         param: ty::SELF.to_string(),
@@ -156,7 +156,7 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                         args: t
                             .generics
                             .iter()
-                            .map(|g| Ty::Param(g.name.name.clone()))
+                            .map(|g| Ty::Param(g.name.name.as_str().into()))
                             .collect(),
                     });
                 for method in &t.methods {
@@ -614,7 +614,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 method: method.to_string(),
             }),
             Ty::Named(head, _, _) if in_prelude(head) && in_prelude(trait_name) => {
-                Some(Callee::Intrinsic(format!("{head}.{method}")))
+                Some(Callee::intrinsic(format!("{head}.{method}")))
             }
             Ty::Named(head, _, _) => Some(Callee::Function(program::trait_method(
                 head, trait_name, method,
@@ -1275,14 +1275,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 return Ty::Error;
             }
             Ty::Named(type_name, args, _) => {
-                if let Some(info) = self.items.structs.get(type_name) {
+                if let Some(info) = self.items.structs.get(type_name.as_str()) {
                     if let Some(field_ty) = info.fields.field(&name.name) {
                         if let Some(index) = info.fields.index(&name.name) {
                             self.out
                                 .resolutions
                                 .insert(name.span, Resolution::Field(index));
                             if self.discarded_field != Some(name.span) {
-                                self.out.field_reads.insert((type_name.clone(), index));
+                                self.out.field_reads.insert((type_name.to_string(), index));
                             }
                             if !self.field_visible(type_name, index, &name.name, name.span) {
                                 return Ty::Error;
@@ -1713,7 +1713,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         depth: usize,
     ) -> Option<(&'c ImplInfo, Vec<Ty>)> {
         self.items.impls.iter().find_map(|imp| {
-            if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
+            if imp.trait_name != trait_name
+                || imp.trait_args.len() != args.len()
+                || !same_head(ty, &imp.target)
+            {
                 return None;
             }
             let mut attempt = infer.clone();
@@ -1732,7 +1735,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
             let holds = matches
                 && imp.bounds.iter().all(|b| {
-                    let param = Ty::Param(b.param.clone()).substitute(&subst);
+                    let param = Ty::Param(b.param.as_str().into()).substitute(&subst);
                     let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
                     self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
                 });
@@ -2195,5 +2198,16 @@ fn is_int_literal(expr: &Expr) -> bool {
             operand,
         } => matches!(operand.kind, ExprKind::Int(_)),
         _ => false,
+    }
+}
+
+/// Whether `ty` could unify with an impl's `target`: false only when both
+/// are named types whose names or argument counts differ, which unifying
+/// rejects whatever else it has solved. [`Body::impl_in`] skips such an
+/// impl before it clones the inference state to try it (#572).
+fn same_head(ty: &Ty, target: &Ty) -> bool {
+    match (ty, target) {
+        (Ty::Named(n1, a1, _), Ty::Named(n2, a2, _)) => n1 == n2 && a1.len() == a2.len(),
+        _ => true,
     }
 }

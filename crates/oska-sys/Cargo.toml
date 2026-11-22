@@ -1,6 +1,6 @@
 [package]
 name = "oska-sys"
-description = "Confined filesystem access beneath a directory handle, for the Oska runtime"
+description = "Confined filesystem access beneath a directory handle, and the musl build's allocator, for the Oska runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

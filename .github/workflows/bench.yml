@@ -5,6 +5,9 @@ name: Native benchmark
 # come from here, as the maintainer's Pi has no such machine beside it. It also runs
 # on a pull request that changes the script or this file, so a change to
 # either shows its figures before it merges. Never a required check: runner timings vary.
+# On Linux the same job also benchmarks the musl build and times `oskac build`
+# of the site with both builds, so each musl/glibc ratio comes from one
+# machine (docs/research/2026-11-musl-oskac-performance.md).
 
 on:
   workflow_dispatch:
@@ -24,7 +27,7 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     # A release build and six workloads, five runs each on both backends: a
-    # few minutes.
+    # few minutes. On Linux twice, with the musl build too.
     timeout-minutes: 30
     defaults:
       run:
@@ -35,3 +38,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: lscpu | grep -E '^(Model name|CPU\(s\)):' || sysctl -n machdep.cpu.brand_string hw.ncpu || echo "$PROCESSOR_IDENTIFIER, $NUMBER_OF_PROCESSORS CPUs" || true
       - run: scripts/bench-native.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      - if: runner.os == 'Linux'
+        run: rustup target add "$(uname -m)-unknown-linux-musl"
+      - if: runner.os == 'Linux'
+        name: bench the musl build
+        run: OSKA_BENCH_TARGET="$(uname -m)-unknown-linux-musl" scripts/bench-native.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      # `oskac build` of the site, best CPU time (user plus system) of 5 runs,
+      # with each build. The bench steps above built both and wrote the
+      # site's generated inputs.
+      - if: runner.os == 'Linux'
+        name: time oskac build of the site with both builds
+        run: |
+          TIMEFORMAT='%3U %3S'
+          out="$(mktemp -d)"
+          {
+            echo
+            echo "| oskac build site/build.osk | Best CPU time of 5 |"
+            echo "| --- | ---: |"
+            for b in target/release/oskac "target/$(uname -m)-unknown-linux-musl/release/oskac"; do
+              "$b" build site/build.osk -o "$out/site" >/dev/null
+              best=""
+              for _ in 1 2 3 4 5; do
+                ms=$({ time "$b" build site/build.osk -o "$out/site" >/dev/null 2>&1; } 2>&1 | awk '{ printf "%d", ($1 + $2) * 1000 }')
+                if [ -z "$best" ] || [ "$ms" -lt "$best" ]; then best=$ms; fi
+              done
+              echo "| $b | $best ms |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
