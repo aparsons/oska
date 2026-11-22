@@ -2,7 +2,7 @@
 
 **An AI-first, secure-by-default programming language.**
 
-**Install, docs and guides:** [oskalang.dev](https://oskalang.dev)
+**Install, docs and guides:** [oskalang.dev](https://oskalang.dev), and the [install guide](docs/guide/install.md) for the one-line installer.
 
 > Status: pre-alpha. Nothing here is stable; the language design is being worked out in [`docs/design.md`](docs/design.md), with key decisions recorded in [`docs/adr/`](docs/adr/).
 
@@ -62,15 +62,19 @@ Run `oskac check`, `oskac run` and `oskac test` in the package directory. Items 
 | `crates/oska-syntax` | Lexer (and, soon, parser and AST) |
 | `crates/oska-check` | Type checker and authority report (`oskac check`) |
 | `crates/oska-run` | Interpreter (`oskac run --interpret`, and `oskac run` on hosts with no native backend) and its test runner |
-| `crates/oska-native` | Native backend: Linux and macOS executables for aarch64 and x86_64 (`oskac build`, and `oskac run` and `oskac test` on those hosts), with the runtime `std.rt` in Oska |
+| `crates/oska-native` | Native backend for Linux and macOS (aarch64 and x86_64) and Windows (x86_64): `oskac build`, and `oskac run` and `oskac test` on those hosts, with the runtime `std.rt` in Oska |
 | `crates/oska-sys` | The only crate with `unsafe`: the interpreter's confined filesystem calls |
 | `crates/oska-eval` | The evaluation harness for AI agents writing Oska; never released |
 | `eval/` | The harness's task set ([how a task is written](eval/README.md)) |
 | `examples/` | Example `.osk` programs and a multi-module package |
+| `.claude-plugin/`, `plugins/oska/` | The Claude Code plugin marketplace entry and the `oska` skill ([the plugin](docs/guide/agent-guide.md#the-claude-code-plugin)) |
+| `site/` | The source of oskalang.dev, built by an Oska program, including the API reference at `/api/` |
+| `formal/` | Lean and TLA+ models of key properties |
 | `docs/guide/` | Task guides: [quickstart](docs/guide/quickstart.md), [language tour](docs/guide/language-tour.md), [CLI reference](docs/guide/cli-reference.md), [agent guide](docs/guide/agent-guide.md), and more |
 | `docs/design.md` | Language design notes |
 | `docs/adr/` | Architecture decision records |
 | `docs/research/` | Background research |
+| `CHANGELOG.md` | Every release's notes, newest first |
 | `GLOSSARY.md` | Oska's domain vocabulary |
 
 ## Building
