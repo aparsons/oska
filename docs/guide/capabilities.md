@@ -266,6 +266,37 @@ fn main(io: Stdout) -> Result<(), IoError> {
 
 A method's receiver counts towards its authority, so a method on a `cap struct` is never pure. A generic container is capability-bearing when it holds a capability, so `List<Stdout>` needs no `cap`. A **capability-bearing type** is any type that is a capability or contains one, directly or through type arguments.
 
+## Approvals
+
+A tool that deletes a file or sends a message can require a person's yes. An `Approval` is that yes, for one action, and only an `Approver` makes one: its fields are private and it has no other constructor, so a function that takes an `Approval` cannot be called until a person has said yes. `Approval` and `Approver` live in the prelude, not in `std.llm`: approval is not specific to models, and any program that acts on someone's behalf can use it.
+
+`Approver.terminal(stdin, stderr)` asks the person at the terminal. It writes the question to standard error, never to standard output, which a pipeline or an MCP server may own, so a function that takes an `Approver` has `Stdin` and `Stderr` in its authority. `approver.confirm(summary, details)` shows the trusted summary and then each untrusted detail, such as an argument a model chose, as `dbg` shows text: in double quotes, with control, bidirectional and other invisible characters as escapes such as `\n` and `\u{202e}`, so neither can disguise itself. It returns `Some(Approval)` only when the answer is `y` or `yes`.
+
+A terminal approver trusts whoever writes to its standard input. When that is a pipe, a script or another program, the "yes" need not come from a person, so build one only when a person is at the terminal, and never over the standard input of an MCP server, which the client writes.
+
+An approval is single use. The tool it is given to calls `approval.consume(summary, details)`, which succeeds once. A second use, of the approval or of any copy of it, is refused with `ApprovalError.Used`, and an approval given for a different summary or different details with `ApprovalError.Mismatch`, which leaves it unused. `matches(summary, details)` says whether `consume` would succeed, without using it, so it is false once the approval is used; a tool that acts calls `consume`. `summary()` and `details()` say what was approved.
+
+```oska tests
+fn delete(approval: Approval, path: Untrusted<String>) -> Result<(), ApprovalError> {
+    approval.consume("delete a file", [path])?
+    Ok(())
+}
+
+test "one yes covers one action" {
+    t.answer_approval(true)
+    match t.approver.confirm("delete a file", ["notes.txt"]) {
+        Some(approval) => {
+            t.assert(delete(approval, "notes.txt").is_ok())
+            t.assert(!delete(approval, "notes.txt").is_ok())
+        }
+        None => t.fail("the script said yes")
+    }
+    t.assert_eq(t.approvals_asked().at(0).details, ["notes.txt"])
+}
+```
+
+In a test, `t.approver` answers from the test's script instead of a terminal: see [Testing](testing.md).
+
 ## Closures: `fn` and `cap fn`
 
 A function type `fn(T) -> U` accepts only pure closures. A closure that captures a capability has the type `cap fn`, and passing it where a plain `fn` is expected is `E0270`.

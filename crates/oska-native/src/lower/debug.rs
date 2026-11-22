@@ -40,6 +40,7 @@ impl Body<'_, '_> {
             Type::String => self.call_runtime("debug_string", vec![value], span),
             Type::Named { name, .. } if name == builtins::SECRET => Ok(self.text("<redacted>")),
             Type::Named { name, .. } if name == layout::TASK => Ok(self.text("<task>")),
+            Type::Named { name, .. } if name == builtins::APPROVAL => Ok(self.text("<approval>")),
             Type::Named { name, .. } if name == layout::SCOPE => Ok(self.text("<scope>")),
             Type::Named { name, .. } if name == builtins::RESERVATION => {
                 Ok(self.text("<reservation>"))

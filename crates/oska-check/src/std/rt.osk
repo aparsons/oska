@@ -522,9 +522,11 @@ fn broken_pipe(result: Int) -> Bool {
 //   49      on Windows, the console area, or 0 (see "The Windows console");
 //   50      the call stack ("The call stack");
 //   51      the root budget's counters, made on first use ("Budgets");
-//   52      under `--max-steps` only, the steps left (`oska-native`'s
+//   52      in a test, `t.approver`'s answers still to give, 53 the
+//           questions it was asked ("Approvals");
+//   54      under `--max-steps` only, the steps left (`oska-native`'s
 //           `STEPS_WORD`);
-//   53      under `--max-memory` only, the report of its panic
+//   55      under `--max-memory` only, the report of its panic
 //           ("Memory limit").
 //
 // Every object the allocator gives out is preceded by a header word: its
@@ -3551,6 +3553,11 @@ fn windows_errors() -> String {
 // `\r\n`), the last line even when it has none, or `None` at end of input.
 // Standard output is written first, so a prompt shows before the wait.
 pub fn stdin_read_line(io: Stdin) -> Result<Option<String>, IoError> {
+    read_stdin_line()
+}
+
+// The next line of standard input, as `Stdin.read_line` gives it.
+fn read_stdin_line() -> Result<Option<String>, IoError> {
     let _ = flush_stdout()
     if rt_mem_load64(global(16)) == 0 {
         rt_mem_store64(global(16), map(0, 65536, 3, private_anonymous()))
@@ -6081,6 +6088,8 @@ pub fn test_begin(host: Int, prefix: String) {
     rt_mem_store64(global(36), rt_mem_list(none))
     rt_mem_store64(global(37), rt_mem_list(none))
     rt_mem_store64(global(38), rt_mem_list(none))
+    put_word_text(52, "")
+    rt_mem_store64(global(53), rt_mem_list(none))
     if host == 1 {
         // `FAKE_SEED`, 0x05EE_D0F0_5CA0.
         rt_mem_store64(global(20), 6523265768608)
@@ -6118,6 +6127,197 @@ fn test_record(line: String) {
 // `TestContext.printed`: every line printed so far.
 pub fn test_printed(t: TestContext) -> List<String> {
     word_list(35)
+}
+
+// ---- Approvals -------------------------------------------------------------
+//
+// An `Approval` is the object `Grant`, `[count][summary][details][used]`,
+// the prelude's three private fields: only `approver_confirm` makes one,
+// and only `approval_consume` writes `used`, in place, so every copy of it
+// sees it used, as every copy of the interpreter's has the same number
+// (`oska-run`'s `approval.rs`). An `Approver` holds two stateless
+// capabilities, so it is `Asker`, `[count][0][0]`, and the runtime decides
+// who answers: in a program, the person at the terminal; in a test
+// executable, where the only approver is `t.approver`, the test's script,
+// in word 52 (the answers still to give, `y` or `n` each), and word 53
+// records the questions it was asked.
+
+struct Grant {
+    summary: String,
+    details: List<String>,
+    used: Int,
+}
+
+struct Asker {
+    stdin: Int,
+    stderr: Int,
+}
+
+// `Approver.terminal`.
+pub fn approver_terminal(stdin: Int, stderr: Int) -> Asker {
+    Asker(stdin: stdin, stderr: stderr)
+}
+
+// `Approver.confirm`'s question for `summary` and `details`, each line
+// with its line break, as the interpreter's `prompt` writes it.
+pub fn approval_prompt(summary: String, details: List<String>) -> String {
+    let heading = debug_string(summary)
+    var text = "approval needed: {heading}\n"
+    for detail in details {
+        let shown = debug_string(detail)
+        text = "{text}  {shown}\n"
+    }
+    "{text}approve? [y/N]\n"
+}
+
+// `Approver.confirm`: `question` is `approval_prompt`'s, which the
+// generated code counted under `--max-output`. An approval only on a yes.
+pub fn approver_confirm(approver: Int, summary: String, details: List<String>, question: String) -> Option<Grant> {
+    if !approval_answer(summary, details, question) {
+        return None
+    }
+    Some(Grant(summary: summary, details: details, used: 0))
+}
+
+// Ask `question`, for `summary` and `details`: whether the answer is a
+// yes.
+fn approval_answer(summary: String, details: List<String>, question: String) -> Bool {
+    if testing() {
+        // Each question as its summary, how many details it has, and the
+        // details (`test_approvals_asked`).
+        var asked = take_word_list(53)
+        asked.push(summary)
+        asked.push(int_text(details.len(), false))
+        for detail in details {
+            asked.push(detail)
+        }
+        put_word_list(53, asked)
+        let answers = take_word_text(52)
+        if answers == "" {
+            put_word_text(52, answers)
+            return false
+        }
+        put_word_text(52, answers.slice(1, answers.len()))
+        return answers.starts_with("y")
+    }
+    for line in question.lines() {
+        if print_error_line(line) < 0 {
+            return false
+        }
+    }
+    match read_stdin_line() {
+        Ok(Some(answer)) => {
+            let word = answer.trim().to_lowercase()
+            word == "y" || word == "yes"
+        }
+        Ok(None) => false
+        Err(_) => false
+    }
+}
+
+// The approval at `approval`'s summary and details, borrowed.
+fn approval_for(approval: Int, summary: String, details: List<String>) -> Bool {
+    let approved = rt_mem_load64(rt_mem_add(approval, 8))
+    let listed = rt_mem_load64(rt_mem_add(approval, 16))
+    // The references `rt_mem_as_text` and `rt_mem_as_list` hand out are
+    // released after the use.
+    retain(approved)
+    retain(listed)
+    let text = rt_mem_as_text(approved)
+    let list = rt_mem_as_list(listed)
+    if text != summary || list.len() != details.len() {
+        return false
+    }
+    var i = 0
+    while i < list.len() {
+        if list.at(i) != details.at(i) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+// `Approval.matches`.
+pub fn approval_matches(approval: Int, summary: String, details: List<String>) -> Bool {
+    rt_mem_load64(rt_mem_add(approval, 24)) == 0 && approval_for(approval, summary, details)
+}
+
+// `Approval.consume`: `Ok` once, marking it used in place.
+pub fn approval_consume(approval: Int, summary: String, details: List<String>) -> Result<(), ApprovalError> {
+    if rt_mem_load64(rt_mem_add(approval, 24)) != 0 {
+        return Err(ApprovalError.Used)
+    }
+    if !approval_for(approval, summary, details) {
+        return Err(ApprovalError.Mismatch)
+    }
+    rt_mem_store64(rt_mem_add(approval, 24), 1)
+    Ok(())
+}
+
+// `ApprovalError.to_string`, as the interpreter's.
+pub fn approval_error_to_string(e: ApprovalError) -> String {
+    match e {
+        ApprovalError.Used => "approval already used: one approval covers one action"
+        ApprovalError.Mismatch => "approval does not match: it was given for a different action"
+    }
+}
+
+// `TestContext.answer_approval`: `t.approver`'s next answer. In a
+// program, which can build a `TestContext` by hand but whose approvers
+// all ask the terminal, it does nothing, as on the interpreter.
+pub fn test_answer_approval(t: TestContext, yes: Bool) {
+    if !testing() {
+        return
+    }
+    let answers = take_word_text(52)
+    var next = "n"
+    if yes {
+        next = "y"
+    }
+    put_word_text(52, "{answers}{next}")
+}
+
+// What `TestContext.approvals_asked` gives: `ApprovalRequest`'s layout.
+struct Asked {
+    summary: String,
+    details: List<String>,
+}
+
+// `TestContext.approvals_asked`: every question `t.approver` was asked.
+pub fn test_approvals_asked(t: TestContext) -> List<Asked> {
+    var requests: List<Asked> = []
+    if !testing() {
+        return requests
+    }
+    let asked = word_list(53)
+    var at = 0
+    while at < asked.len() {
+        let summary = asked.at(at)
+        let count = asked.at(at + 1).parse_int().unwrap_or(0)
+        var details: List<String> = []
+        var k = 0
+        while k < count {
+            details.push(asked.at(at + 2 + k))
+            k = k + 1
+        }
+        requests.push(Asked(summary: summary, details: details))
+        at = at + 2 + count
+    }
+    requests
+}
+
+// The text in the runtime's word `index`, whose reference passes to the
+// caller, who gives a text back with `put_word_text`.
+fn take_word_text(index: Int) -> String {
+    rt_mem_as_text(rt_mem_load64(global(index)))
+}
+
+// Keep `text` in the runtime's word `index`.
+fn put_word_text(index: Int, text: String) {
+    let object = rt_mem_text(text)
+    retain(object)
+    rt_mem_store64(global(index), object)
 }
 
 // `TestContext.assert_snapshot`: the value's `dbg` text, `value`, goes to
@@ -7257,7 +7457,7 @@ pub fn on_exception(pointers: Int) -> Int {
 // `alloc`, `try_alloc` and `free`, in the generated code and in `std.rt`
 // alike, calls `counted_alloc`, `counted_try_alloc` or `counted_free` in
 // its place; theirs alone are not redirected. Word 39 holds the bytes the
-// program may still allocate, and word 53 the report of the panic
+// program may still allocate, and word 55 the report of the panic
 // (`P0040`), or 0 before `memory_limit_start`. Once counting has
 // started, each block is counted, header included, before it is
 // allocated, and marked as counted (256 added to its header word, which
@@ -7283,7 +7483,7 @@ fn limit_reached() -> Int {
 // (`P0040`). Before this, nothing is checked.
 pub fn memory_limit_start(limit: Int, report: String) {
     rt_mem_store64(global(39), limit)
-    rt_mem_store64(global(53), rt_mem_text(report))
+    rt_mem_store64(global(55), rt_mem_text(report))
 }
 
 // The bytes of the block `alloc` gives an object of `size` bytes, header
@@ -7317,7 +7517,7 @@ fn spend_memory(bytes: Int) {
     let left = rt_mem_sub(rt_mem_load64(global(39)), bytes)
     if left < 0 {
         rt_mem_store64(global(39), limit_reached())
-        let _ = write_text(report_fd(), rt_mem_as_text(rt_mem_load64(global(53))))
+        let _ = write_text(report_fd(), rt_mem_as_text(rt_mem_load64(global(55))))
         panic_end_alone()
     }
     rt_mem_store64(global(39), left)
@@ -7332,7 +7532,7 @@ fn mark_counted(object: Int) {
 // Whether counting has started (`memory_limit_start`): until then a
 // block is neither counted nor marked.
 fn counting() -> Bool {
-    rt_mem_load64(global(53)) != 0
+    rt_mem_load64(global(55)) != 0
 }
 
 pub fn counted_alloc(size: Int) -> Int {
