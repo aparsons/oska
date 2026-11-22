@@ -292,7 +292,7 @@ fn untrusted_text_is_rejected_as_the_restricted_directory_of_a_read_capability()
 fn untrusted_text_is_accepted_as_a_request_body() {
     assert_ok(
         "fn f(net: NetConnect, body: Untrusted<String>) -> Result<(), IoError> {\n    \
-         let conn = net.connect(\"api.example.com\", 443)?\n    conn.send(body)\n}",
+         let conn = net.restrict_to(\"api.example.com\", 443).connect()?\n    conn.send(body)\n}",
     );
 }
 
@@ -300,7 +300,7 @@ fn untrusted_text_is_accepted_as_a_request_body() {
 fn untrusted_text_is_rejected_as_the_host() {
     assert_errors(
         "fn f(net: NetConnect, host: Untrusted<String>) -> Result<Connection, IoError> {\n    \
-         net.connect(host, 443)\n}",
+         net.restrict_to(host, 443).connect()\n}",
         &[("E0300", "host")],
     );
 }
@@ -310,5 +310,42 @@ fn a_response_is_untrusted() {
     assert_errors(
         "fn f(conn: Connection) -> Result<String, IoError> {\n    conn.receive()\n}",
         &[("E0300", "conn.receive()")],
+    );
+}
+
+// ---- Host capabilities (ADR 0023) ------------------------------------------------------
+
+#[test]
+fn untrusted_text_is_rejected_as_a_host_on_net_too() {
+    assert_errors(
+        "fn f(net: Net, host: Untrusted<String>) -> HostConnect {\n    \
+         net.restrict_to(host, 443)\n}",
+        &[("E0300", "host")],
+    );
+}
+
+#[test]
+fn a_trust_assertion_makes_a_validated_host_acceptable() {
+    assert_ok(
+        "fn f(net: NetConnect, host: Untrusted<String>) -> HostConnect {\n    \
+         net.restrict_to(host.assume_trusted(), 443)\n}",
+    );
+}
+
+#[test]
+fn net_connect_has_no_connect_of_its_own() {
+    assert_errors(
+        "fn f(net: NetConnect) -> Result<Connection, IoError> {\n    \
+         net.connect(\"example.com\", 443)\n}",
+        &[("E0228", "connect")],
+    );
+}
+
+#[test]
+fn a_connection_to_a_host_capability_takes_no_destination() {
+    assert_errors(
+        "fn f(host: HostConnect) -> Result<Connection, IoError> {\n    \
+         host.connect(\"other.example\", 443)\n}",
+        &[("E0224", "host.connect(\"other.example\", 443)")],
     );
 }

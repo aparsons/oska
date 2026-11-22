@@ -111,7 +111,7 @@ A **sink** is an API where data leaves the program or changes how it behaves: SQ
 | `std.proc` | `run`'s arguments | The program name |
 | `std.html` | `text(...)`, which is escaped | `TrustedHtml.new` |
 | Paths | `Path.from` | The directory given to `restrict_to` on `Fs`, `FsRead`, or `FsWrite`, and the file given to `restrict_to_file` |
-| Network | `Connection.send`'s body | `NetConnect.connect`'s host |
+| Network | `Connection.send`'s body | The host given to `restrict_to` on `Net` or `NetConnect` |
 | Output | `Stdout.println`, `Stderr.println` | |
 
 A **sink literal** such as `sql"SELECT ..."` provides text for a structural position. It can never interpolate, so there is no way to build a query from pieces. The tag must name an imported module, so `sql"..."` needs `use std.sql`.

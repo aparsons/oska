@@ -1,0 +1,6 @@
+$ oskac run net.osk
+exit: 2
+--- stdout
+--- stderr
+net.osk:1:19: error[E0390]: `oskac build` cannot compile a `main` given `Net` yet (bytes 18..20)
+--- written

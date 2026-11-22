@@ -32,16 +32,26 @@ const PRELUDE: &str = include_str!("../../oska-check/src/prelude.osk");
 /// `std.html`'s source.
 const STD_HTML: &str = include_str!("../../oska-check/src/std/html.osk");
 
-/// The types whose methods no backend implements, with why. A program
-/// given one is refused before it runs, by the interpreter (`E0370`) and
-/// the native backend alike. `std.sql` and `std.proc` have no runtime on
+/// Why the network has no native implementation yet.
+const NATIVE_NETWORK: &str = "networking runs on the interpreter first (spec #228); the native \
+backend refuses it (`E0390`) until its own ticket";
+
+/// The types, or `Type.method` names, that no backend implements, with
+/// why. A program given a type that has no runtime is refused before it
+/// runs, by the interpreter (`E0370`) and the native backend alike. The
+/// network (ADR 0023) runs on the interpreter first: the native backend
+/// refuses it (`E0390`), which the parity gate reports, until its own
+/// ticket of spec #228. `std.sql` and `std.proc` have no runtime on
 /// either backend either: a program importing one is refused (`E0371`),
 /// so their body-less functions are not scanned at all.
 const EXEMPT: &[(&str, &str)] = &[
-    ("Net", "networking has no runtime yet"),
-    ("NetConnect", "networking has no runtime yet"),
-    ("NetListen", "networking has no runtime yet"),
-    ("Connection", "networking has no runtime yet"),
+    ("Net", NATIVE_NETWORK),
+    ("NetConnect", NATIVE_NETWORK),
+    ("NetListen", NATIVE_NETWORK),
+    ("HostConnect", NATIVE_NETWORK),
+    ("LoopbackListen", NATIVE_NETWORK),
+    ("Connection", NATIVE_NETWORK),
+    ("TestContext.net_attempts", NATIVE_NETWORK),
     ("Spawn", "process spawning has no runtime yet"),
     ("Sched", "scheduling has no runtime yet"),
 ];
@@ -1908,7 +1918,9 @@ fn required() -> Vec<String> {
     }
     names.retain(|name| {
         let owner = name.split('.').next().unwrap_or("");
-        !EXEMPT.iter().any(|(e, _)| *e == owner)
+        !EXEMPT
+            .iter()
+            .any(|(e, _)| *e == owner || *e == name.as_str())
     });
     names
 }

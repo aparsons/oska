@@ -516,9 +516,28 @@ mod tests {
                     root: Root::Nowhere(Rc::from("no root")),
                     access,
                 }),
+                Kind::Host => Capability::Host(super::HostCap {
+                    host: Rc::from("example.com"),
+                    port: 443,
+                    stream: None,
+                }),
+                Kind::Loopback => {
+                    Capability::Loopback(super::LoopbackCap(Err(Rc::from("no listener"))))
+                }
                 _ => Capability::granted(name).expect("granted"),
             };
             assert_eq!(capability.type_name(), *name);
+        }
+    }
+
+    #[test]
+    fn a_host_or_loopback_capability_is_never_granted_but_net_is() {
+        for name in ["HostConnect", "LoopbackListen"] {
+            assert!(Capability::implemented(name));
+            assert_eq!(Capability::granted(name), None);
+        }
+        for name in ["Net", "NetConnect", "NetListen"] {
+            assert!(Capability::granted(name).is_some(), "{name}");
         }
     }
 

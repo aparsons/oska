@@ -214,7 +214,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 | --- | --- |
 | `Stdin`, `Stdout`, `Stderr` | Standard streams |
 | `Fs` | Filesystem, only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). |
-| `Net` | Network. Attenuates to `NetConnect` or `NetListen`. |
+| `Net` | Network, only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`, one host and port) with `restrict_to(host, port)`; `NetListen` attenuates to a loopback listener (`LoopbackListen`) with `restrict_to_loopback(port)` ([ADR 0023](adr/0023-network-access-goes-through-host-narrowed-capabilities.md)). |
 | `Env` | Environment variables. These can hold secrets. |
 | `Budget` | Spending model tokens and calls, counted by the runtime. Attenuates to a smaller `Budget` with `limit(tokens, calls)`. |
 | `Clock`, `Random` | Nondeterministic inputs |
@@ -286,7 +286,7 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
 | Process (`std.proc`) | Arguments: `run("git", ["log", branch])` | The program name | A shell string. Running a shell is a separate, explicitly named capability. |
 | HTML (`std.html`) | Text, which is escaped for its context | `TrustedHtml` | Writing untyped strings into markup |
 | Paths | `Path.from` (see below) | The root passed to `restrict_to` or `restrict_to_file` on `Fs`, `FsRead`, or `FsWrite` | `..` traversal outside a directory capability |
-| Network | Request bodies | The host passed to `NetConnect` | |
+| Network | Request bodies | The host passed to `restrict_to` on `Net` or `NetConnect` | |
 | Output | `Stdout.println` and `Stderr` | | |
 
 - **Sink modules.**

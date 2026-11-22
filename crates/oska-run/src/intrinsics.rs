@@ -983,7 +983,7 @@ mod tests {
 
     /// The types whose methods have no runtime: the built-in capabilities
     /// the runtime does not implement, and the prelude's structs that hold
-    /// one, such as `Connection`. A program that holds one is refused
+    /// one. A program that holds one is refused
     /// before it starts (`E0370`), so none of their methods is ever
     /// called. Everything else in the prelude needs an intrinsic.
     fn no_runtime() -> Vec<String> {
@@ -1204,15 +1204,19 @@ mod tests {
     fn the_exempt_types_are_the_ones_with_no_runtime_and_have_no_intrinsics() {
         let names = bodiless_prelude_functions();
         let exempt = no_runtime();
-        for expected in [
+        for expected in ["Spawn", "Sched"] {
+            assert!(exempt.iter().any(|e| e == expected), "{exempt:?}");
+        }
+        // The network has a runtime (ADR 0023).
+        for run in [
             "Net",
             "NetConnect",
             "NetListen",
-            "Spawn",
-            "Sched",
+            "HostConnect",
+            "LoopbackListen",
             "Connection",
         ] {
-            assert!(exempt.iter().any(|e| e == expected), "{exempt:?}");
+            assert!(!exempt.iter().any(|e| e == run), "{exempt:?}");
         }
         for granted in ["Stdout", "Fs", "FsRead", "TestContext", "Args"] {
             assert!(!exempt.iter().any(|e| e == granted), "{exempt:?}");

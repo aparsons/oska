@@ -23,6 +23,8 @@ pub(crate) const METHODS: &[(&str, bool)] = &[
     ("restrict_to_loopback", true),
     ("read_only", false),
     ("write_only", false),
+    ("connect_only", false),
+    ("listen_only", false),
     ("limit", false),
 ];
 
@@ -46,9 +48,13 @@ impl Body<'_, '_, '_> {
             return;
         }
         let root = if takes_root {
-            match args.first().and_then(|arg| self.root_text(&arg.value)) {
-                Some(text) => AttenuationRoot::Literal(text),
-                None => AttenuationRoot::Computed,
+            match self.network_root(method, args) {
+                Some(Some(text)) => AttenuationRoot::Literal(text),
+                Some(None) => AttenuationRoot::Computed,
+                None => match args.first().and_then(|arg| self.root_text(&arg.value)) {
+                    Some(text) => AttenuationRoot::Literal(text),
+                    None => AttenuationRoot::Computed,
+                },
             }
         } else {
             AttenuationRoot::Absent
@@ -63,6 +69,33 @@ impl Body<'_, '_, '_> {
             location: None,
         };
         self.out.attenuations.push(attenuation);
+    }
+
+    /// The root of a network narrowing, which names a port as well as a
+    /// host (ADR 0023): `host:port` for `restrict_to(host, port)`, with an
+    /// IPv6 literal in brackets, and `loopback:port` for
+    /// `restrict_to_loopback(port)`. `None` when the call is not one;
+    /// `Some(None)` when the host or the port is not known before the
+    /// program runs.
+    fn network_root(&self, method: &str, args: &[Arg]) -> Option<Option<String>> {
+        let port = |expr: &Expr| match &expr.kind {
+            ExprKind::Int(digits) => Some(digits.replace('_', "")),
+            _ => None,
+        };
+        match (method, args) {
+            ("restrict_to_loopback", [port_arg]) => {
+                Some(port(&port_arg.value).map(|port| format!("loopback:{port}")))
+            }
+            ("restrict_to", [host, port_arg]) => Some(
+                self.root_text(&host.value).zip(port(&port_arg.value)).map(
+                    |(host, port)| match host.contains(':') {
+                        true => format!("[{host}]:{port}"),
+                        false => format!("{host}:{port}"),
+                    },
+                ),
+            ),
+            _ => None,
+        }
     }
 
     fn is_builtin_capability(&self, name: &str) -> bool {
