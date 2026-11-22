@@ -102,7 +102,8 @@ pub struct Program {
     /// Every implementation of `std.mcp`'s `Toolset`, with the built-in
     /// capabilities each of its tools reaches, as the authority report
     /// computes them. An MCP server derives each tool's annotations from
-    /// them.
+    /// them: the checker writes each implementation's `reached` method
+    /// from this list, and `std.mcp`'s `serve` calls it.
     pub toolsets: Vec<Toolset>,
 }
 
@@ -118,6 +119,10 @@ pub struct Toolset {
     /// The capabilities the whole toolset reaches.
     pub whole: Vec<String>,
 }
+
+/// What [`Toolset::capabilities`] lists for a tool that reaches a
+/// capability held by a type parameter, which could be any.
+pub const UNKNOWN_KIND: &str = "?";
 
 impl Toolset {
     /// The capabilities the tool `name` reaches: its own when the report

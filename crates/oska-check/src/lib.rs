@@ -939,6 +939,7 @@ fn check_source(
     let functions = authority::report(module, &decls, &items, &modules);
     let program = program.map(|mut program| {
         program.toolsets = toolsets(&functions);
+        fill_reached(&mut program);
         program
     });
     // An intrinsic name is also an unknown name; E0209 says it better.
@@ -977,7 +978,7 @@ fn toolsets(functions: &[FunctionAuthority]) -> Vec<program::Toolset> {
                 toolset
                     .tools
                     .iter()
-                    .filter_map(|t| Some((t.name.clone()?, t.authority.clone())))
+                    .filter_map(|t| Some((t.name.clone()?, kinds(&t.authority, &t.via))))
                     .collect()
             } else {
                 Vec::new()
@@ -985,8 +986,86 @@ fn toolsets(functions: &[FunctionAuthority]) -> Vec<program::Toolset> {
             Some(program::Toolset {
                 implementation: toolset.implementation.clone(),
                 tools,
-                whole: function.authority.clone(),
+                whole: kinds(&function.authority, &function.via),
             })
         })
         .collect()
+}
+
+/// The capability kinds of something that reaches `authority`, through
+/// `via`: a capability held by a type parameter could be any, so one that
+/// reaches a bounded type parameter also reaches [`program::UNKNOWN_KIND`].
+fn kinds(authority: &[String], via: &[Via]) -> Vec<String> {
+    let mut kinds = authority.to_vec();
+    if via.iter().any(|v| !v.generics.is_empty()) {
+        kinds.push(program::UNKNOWN_KIND.to_string());
+    }
+    kinds
+}
+
+/// Give each implementation of `Toolset` its `reached` method: the
+/// capability kinds of the tool it is asked about, as the report
+/// computes them. `std.mcp`'s `serve` calls it to derive a tool's
+/// annotations, so a program cannot claim them: the body is replaced
+/// whatever the program wrote.
+fn fill_reached(program: &mut program::Program) {
+    for carried in program.toolsets.clone() {
+        let stem = &carried.implementation;
+        let Some(key) = [
+            format!("<{stem} as pkg.std.mcp.Toolset>.reached"),
+            format!("<{stem} as std.mcp.Toolset>.reached"),
+        ]
+        .into_iter()
+        .find(|key| program.functions.contains_key(key)) else {
+            continue;
+        };
+        let reached = program.functions.get_mut(&key).expect("found above");
+        let span = reached.body.span;
+        let list = program::Type::Named {
+            name: "List".to_string(),
+            args: vec![program::Type::String],
+        };
+        let expr = |kind, ty: &program::Type| program::Expr {
+            kind,
+            ty: ty.clone(),
+            span,
+        };
+        let names = |kinds: &[String]| {
+            let items = kinds
+                .iter()
+                .map(|k| expr(program::ExprKind::Str(k.clone()), &program::Type::String))
+                .collect();
+            expr(
+                program::ExprKind::Block {
+                    stmts: Vec::new(),
+                    value: Some(Box::new(expr(program::ExprKind::List(items), &list))),
+                },
+                &list,
+            )
+        };
+        // `if name == "a" { [...] } else if name == "b" { [...] } else { whole }`
+        let mut body = names(&carried.whole);
+        for (tool, kinds) in carried.tools.iter().rev() {
+            let name = expr(program::ExprKind::Local(0), &program::Type::String);
+            let literal = expr(program::ExprKind::Str(tool.clone()), &program::Type::String);
+            let cond = expr(
+                program::ExprKind::Binary {
+                    op: oska_syntax::ast::BinaryOp::Eq,
+                    lhs: Box::new(name),
+                    rhs: Box::new(literal),
+                    int: None,
+                },
+                &program::Type::Bool,
+            );
+            body = expr(
+                program::ExprKind::If {
+                    cond: Box::new(cond),
+                    then_branch: Box::new(names(kinds)),
+                    else_branch: Some(Box::new(body)),
+                },
+                &list,
+            );
+        }
+        reached.body = body;
+    }
 }

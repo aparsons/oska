@@ -1,0 +1,42 @@
+fn Toolset.reached: generic Self (self)
+pub fn ToolSpec.new: pure
+pub fn ToolSpec.with_title: pure
+pub fn ToolSpec.name: pure
+pub fn ToolSpec.title: pure
+pub fn ToolSpec.description: pure
+pub fn ToolSpec.input: pure
+pub fn ToolResult.text: pure
+pub fn ToolResult.json: pure
+pub fn ToolResult.error: pure
+pub fn ToolResult.content: pure
+pub fn ToolResult.structured: pure
+pub fn ToolResult.is_error: pure
+pub fn ServerInfo.new: pure
+pub fn ServerInfo.with_instructions: pure
+fn <McpError as Display>.to_string: pure
+pub fn Session.new: generic T (tools)
+pub fn Session.is_legacy: pure
+pub fn validate: generic T (tools)
+fn check_specs: pure
+pub fn serve: Stdin (stdin), Stdout (stdout), generic T (tools)
+pub fn handle: generic T (tools)
+fn request: generic T (tools)
+fn initialize: pure
+fn discover: pure
+fn modern: pure
+fn server_info: pure
+fn Fault.line: pure
+fn meta_fault: pure
+fn tool_list: generic T (tools)
+fn call_tool: generic T (tools)
+fn run: generic T (tools)
+fn result_value: pure
+fn annotations: pure
+fn reads_only: pure
+fn writes: pure
+fn reaches_network: pure
+fn member: pure
+fn result_line: pure
+fn error_line: pure
+fn valid_name: pure
+fn is_object_schema: pure

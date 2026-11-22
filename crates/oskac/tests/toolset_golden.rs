@@ -26,11 +26,14 @@ use common::portable::literal_path;
 /// same way on every platform, with `format` if given: its stdout, and
 /// whether it succeeded.
 fn check(name: &str, format: Option<&str>) -> (String, bool) {
+    check_path(&format!("crates/oskac/tests/fixtures/{name}"), format)
+}
+
+/// `oskac check` on the file `path`, relative to the repository's root.
+fn check_path(path: &str, format: Option<&str>) -> (String, bool) {
     let root = literal_path(Path::new(env!("CARGO_MANIFEST_DIR")), &["..", ".."]);
     let mut command = Command::new(env!("CARGO_BIN_EXE_oskac"));
-    command
-        .args(["check", &format!("crates/oskac/tests/fixtures/{name}")])
-        .current_dir(&root);
+    command.args(["check", path]).current_dir(&root);
     if let Some(format) = format {
         command.arg(format);
     }
@@ -82,4 +85,37 @@ fn a_toolset_whose_specs_are_not_literal_says_its_names_are_not_checked() {
     let (stdout, ok) = check("toolset_unchecked.osk", None);
     assert!(ok, "the fixture should check cleanly: {stdout}");
     assert_golden(&stdout, "check_toolset_unchecked.txt");
+}
+
+#[test]
+fn the_example_mcp_server_lists_each_tools_authority() {
+    let (stdout, ok) = check_path("examples/notes_server.osk", None);
+    assert!(ok, "the example should check cleanly: {stdout}");
+    assert_golden(&stdout, "check_notes_server.txt");
+    let (stdout, ok) = check_path("examples/notes_server.osk", Some("--format=json"));
+    assert!(ok, "the example should check cleanly: {stdout}");
+    assert_golden(&stdout, "check_notes_server.json");
+}
+
+#[test]
+fn a_toolset_with_a_tool_for_each_kind_of_authority_flags_the_protocol_stream() {
+    let (stdout, ok) = check("mcp_hints.osk", None);
+    assert!(ok, "the fixture should check cleanly: {stdout}");
+    assert_golden(&stdout, "check_mcp_hints.txt");
+}
+
+/// The server loop and `handle` are generic over the toolset: the report
+/// never calls them pure, and gives `serve` only the streams it is given.
+/// Checking `std.mcp`'s own source shows each of its functions.
+#[test]
+fn serve_and_handle_are_reported_generic_over_the_toolset() {
+    let (stdout, ok) = check_path("crates/oska-check/src/std/mcp.osk", None);
+    assert!(ok, "std.mcp should check cleanly: {stdout}");
+    assert_golden(&stdout, "check_std_mcp.txt");
+    for line in [
+        "pub fn serve: Stdin (stdin), Stdout (stdout), generic T (tools)\n",
+        "pub fn handle: generic T (tools)\n",
+    ] {
+        assert!(stdout.contains(line), "{line}");
+    }
 }

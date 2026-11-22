@@ -74,6 +74,22 @@ _Avoid_: function, command, action (for this concept)
 A value that describes a set of tools and runs them: a `cap struct` holding only the narrowed capabilities its tools need, implementing `std.mcp`'s `Toolset` trait.
 _Avoid_: server, tool registry (for the value itself)
 
+**MCP server**:
+An Oska program that calls `std.mcp`'s `serve` with a toolset: it speaks MCP over standard input and output, one JSON-RPC message per line, and returns when standard input closes. It serves two protocol eras, the modern one (2026-07-28, each request carrying its own `_meta`) and the legacy one (2025-11-25, which starts with `initialize`).
+_Avoid_: agent (the client is the agent), plugin
+
+**Derived annotation**:
+A tool's `readOnlyHint`, `destructiveHint` or `openWorldHint`, which `serve` computes from the capabilities the checker found the tool reaches. A program has no way to set one by hand, so a hint is never more permissive than the tool's authority.
+_Avoid_: hint (alone), claimed annotation (a derived one is never claimed)
+
+**Protocol era**:
+One of the two versions of the MCP wire protocol that `serve` speaks. The modern era (2026-07-28) is stateless: every request carries its protocol version and client capabilities in `_meta`. The legacy era (2025-11-25) starts with `initialize` and has `ping`. `initialize` chooses the legacy era for the rest of the session.
+_Avoid_: mode, version (alone)
+
+**Session**:
+What `std.mcp`'s `handle` remembers between messages: the server's info, the tools as listed when the session began, and whether the client chose the legacy era. It is a value that `handle` takes and returns, not a connection.
+_Avoid_: connection, client state
+
 **Per-tool authority**:
 The authority report's entry for one tool of a toolset: the capabilities the code that runs that tool can reach, computed from its arm of the `match` on the tool's name, not the union of the whole toolset.
 _Avoid_: tool permissions, tool annotations (for this concept)

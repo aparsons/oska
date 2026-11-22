@@ -29,6 +29,7 @@ A **No** names the code `oskac` refuses the program with, before any of it runs.
 | `std.html` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.json` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.mcp`: `Toolset`, `ToolSpec` and `ToolResult` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
+| `std.mcp`: `serve` and `handle`, an MCP server over standard input and output | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.sql` | Yes | No (`E0371`) | No (`E0371`) | None yet: checks only |
 | `std.proc` and `Spawn` | Yes | No (`E0371`) | No (`E0371`) | None yet: checks only |
 | `Net`, `NetConnect` and `NetListen` | Yes | No (`E0370`) | No (`E0390`) | None yet: checks only |
