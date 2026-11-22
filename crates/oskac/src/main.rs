@@ -22,6 +22,7 @@ macro_rules! outln {
 mod authority_gate;
 mod build;
 mod cache;
+mod crash;
 mod doc;
 mod explain;
 mod fence;
@@ -334,6 +335,7 @@ fn value_unless_repeated(previous: &Option<String>, value: &str) -> Option<Strin
 }
 
 fn main() -> ExitCode {
+    crash::install();
     let line = CommandLine::parse(std::env::args().skip(1).collect());
     let flags = line.flags;
     let positional: Vec<&str> = line.positional.iter().map(String::as_str).collect();

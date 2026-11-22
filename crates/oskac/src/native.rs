@@ -431,6 +431,9 @@ impl Executable {
             path: dir.join(format!("program{}", std::env::consts::EXE_SUFFIX)),
             dir,
         };
+        // A crash of `oskac` removes both, as `Drop` does (see `crash`).
+        crate::crash::track(&exe.path);
+        crate::crash::track(&exe.dir);
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -455,6 +458,8 @@ impl Drop for Executable {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
         let _ = std::fs::remove_dir(&self.dir);
+        crate::crash::untrack(&self.path);
+        crate::crash::untrack(&self.dir);
     }
 }
 
