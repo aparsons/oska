@@ -667,6 +667,19 @@ Spec #612 asks whether keeping large allocations in the process, instead of mapp
 - **The compile is a small case.** The `oskac build` of the site takes about 0.04 s on both builds here, with 598 `mmap` calls under musl against 16 under glibc. It will not move the ratio much. (The build ran with the build cache warm, so it is not the cold 79 to 108 ms of earlier sections.)
 - **What the allocator change should do:** if the large-block reuse works, the musl `mmap` and `munmap` counts and the minor faults of the interpreted site build fall toward glibc's, and the system CPU with them. Ticket #615 checks that, and reverts the change if the site build gains under 5%.
 
+## 14. Sizing `String.join` once does not remove copies (2026-11-22, ticket #616, not merged)
+
+Ticket #616 of spec #612 asked `String.join` to size its result once and copy each part once, expecting fewer `memcpy` calls on the interpreted site build. The change was built (the interpreter's `string_join` reserves the total length and pushes each part) and its tests passed, including that a join-heavy program stops at the same place under `--max-memory`. It was measured with the counting build of section 11 (musl, `cargo build --release`, same tree, the change applied to it):
+
+| Interpreted site build | `memcpy` calls | of which 1 byte |
+| --- | ---: | ---: |
+| before | 7,494,215 | 5,260,480 |
+| after | 7,675,294 | 5,453,169 |
+
+The count went up by 2.4%, not down. Two reasons, both in the code: the standard library's `join` already sizes its result once, so there was nothing to save there; and for a short separator it copies the separator with an unrolled, inlined path and no `memcpy` call, while `push_str` of the separator calls `memcpy` each time. Each part is one `memcpy` either way. The one-character parts come from `String.chars` in the Oska program being joined, so the only way to make fewer calls is to avoid copying a short piece, which spec #521 rules out.
+
+The ticket's criterion (the count falls) is not met, so the change is not merged. The branch `ticket/616-join-sizing` stays local in the session. The one-byte copies are left for ticket #581 (the `memcpy` override), which is the change that makes each of them cheap.
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
