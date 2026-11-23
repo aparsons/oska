@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Bytes`, the prelude's packed buffer of bytes (ticket #222): each
 //! method's signature, the mutating methods' need for a `var`, the
 //! private representation, and that no program of Oska Core can reach a

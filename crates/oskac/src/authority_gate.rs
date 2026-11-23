@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The authority gate: what a program's authority report is compared
 //! with, or written to, before `oskac` lets it pass
 //! (`oska_check::authority_diff` owns the comparison).

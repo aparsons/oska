@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The core IR export (ADR 0018): a checked program in Oska Core as the
 //! versioned form the Lean reference reads, and the refusal of any other
 //! program, naming its first construct outside Oska Core.

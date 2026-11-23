@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Release-only rules: `dbg(...)` and `todo()` are errors under
 //! `--release`, and [`CODES`] lists every code the release check alone
 //! reports, unused authority's (`unused_authority.rs`) included.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What generic code assumes of its type parameters, checked at every
 //! instantiation (`E0274`).
 //!

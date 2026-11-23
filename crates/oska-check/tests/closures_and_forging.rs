@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Capturing closures and capability forging (#40): authority cannot hide
 //! inside a closure, and built-in capabilities cannot be constructed.
 

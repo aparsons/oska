@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Snapshot assertions (spec #367, ticket #373): `t.assert_snapshot(value)`
 //! compares the value, rendered as `dbg` renders it, with a file under
 //! `snapshots/<test-file>/<test-name>.snap`, and `oskac test --update`

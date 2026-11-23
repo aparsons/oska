@@ -7,7 +7,7 @@ exit: 3
     {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
   ],
   "audit": [
-    {"function":"vouch","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_grant/assume_trusted/program.osk","span":{"start":297,"end":318}}
+    {"function":"vouch","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_grant/assume_trusted/program.osk","span":{"start":336,"end":357}}
   ],
   "attenuations": [],
   "authority_diff": {

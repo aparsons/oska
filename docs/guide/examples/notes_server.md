@@ -5,6 +5,7 @@ A program that is an MCP server for any MCP client, in `examples/notes_server.os
 `mcp.serve(stdin, stdout, info, tools)` reads one JSON-RPC message per line from standard input and writes one reply per line to standard output, until standard input closes. It speaks both protocol eras, 2026-07-28 (every request carries its own metadata, and `server/discover` says what the server is) and 2025-11-25 (the `initialize` handshake), and it checks the tools before it reads anything: a duplicate name, a name outside ASCII letters, digits, `_` and `-` (1 to 128 characters), or a schema that is not an object is an `mcp.McpError`.
 
 ```oska file=notes_server.osk
+// SPDX-License-Identifier: Apache-2.0
 // An MCP server in Oska: three tools over standard input and output, for
 // any MCP client (Claude Code, an IDE, `npx @modelcontextprotocol/inspector`).
 //
@@ -155,15 +156,15 @@ fn list: DirRead (notes)
 fn read: DirRead (notes)
 fn save: DirWrite (drafts)
 fn main: Fs (fs), Stdin (stdin), Stdout (stdout)
-  notes_server.osk:87:16: Fs -> FsRead: read_only (bytes 3282..3296)
-  notes_server.osk:87:16: FsRead -> DirRead: restrict_to "notes" (bytes 3282..3317)
-  notes_server.osk:88:17: Fs -> FsWrite: write_only (bytes 3335..3350)
-  notes_server.osk:88:17: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3335..3372)
+  notes_server.osk:88:16: Fs -> FsRead: read_only (bytes 3321..3335)
+  notes_server.osk:88:16: FsRead -> DirRead: restrict_to "notes" (bytes 3321..3356)
+  notes_server.osk:89:17: Fs -> FsWrite: write_only (bytes 3374..3389)
+  notes_server.osk:89:17: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3374..3411)
 fn server: Fs (fs)
-  notes_server.osk:99:18: Fs -> FsRead: read_only (bytes 3863..3877)
-  notes_server.osk:99:18: FsRead -> DirRead: restrict_to "notes" (bytes 3863..3898)
-  notes_server.osk:99:63: Fs -> FsWrite: write_only (bytes 3908..3923)
-  notes_server.osk:99:63: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3908..3945)
+  notes_server.osk:100:18: Fs -> FsRead: read_only (bytes 3902..3916)
+  notes_server.osk:100:18: FsRead -> DirRead: restrict_to "notes" (bytes 3902..3937)
+  notes_server.osk:100:63: Fs -> FsWrite: write_only (bytes 3947..3962)
+  notes_server.osk:100:63: FsWrite -> DirWrite: restrict_to "drafts" (bytes 3947..3984)
 fn reply: DirRead, DirWrite (tools)
 ```
 

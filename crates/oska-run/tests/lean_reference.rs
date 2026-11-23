@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Lean reference (ADR 0018, #425): every runtime test program that is
 //! in Oska Core runs on the interpreter and on the Lean reference, which
 //! runs its core IR with Oska Core's executable semantics

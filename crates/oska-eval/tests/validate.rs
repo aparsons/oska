@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval validate`: checks a task set offline. Each case is a task set
 //! under `tests/fixtures/validate/`; the report is compared with
 //! `tests/golden/validate_<case>.json`. Refresh the golden files with

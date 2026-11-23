@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval`: the evaluation harness for AI agents writing Oska. It is
 //! run by the maintainer, locally, and is never released or installed.
 //!

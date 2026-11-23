@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! SHA-256 (FIPS 180-4), for the build cache's keys and its entries'
 //! integrity check (`cache.rs`). Written here because the workspace
 //! takes no crates from outside the repo, and without `unsafe` (ADR 0009).

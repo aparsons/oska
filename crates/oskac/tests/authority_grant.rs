@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The authority grant (#451): `oskac check --grant=<file>` and `oskac run
 //! --grant=<file>` compare a program's authority with the most an
 //! embedder allows it, by the authority baseline's rules and format, and

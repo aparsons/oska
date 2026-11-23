@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Trust assertions and the audit array (#53): a validator turns untrusted
 //! text into trusted text with `.assume_trusted()`, and every such call is
 //! an audit site in the report.

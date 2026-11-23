@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `std.html` runtime: escaped text, trusted markup, and rendering.
 
 mod common;

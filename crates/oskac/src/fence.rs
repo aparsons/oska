@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The fenced code blocks of the catalog docs (`docs/checker.md`,
 //! `docs/runtime.md`), as `oskac explain` and the catalog tests read them.
 //! A block opens with ```` ``` ```` or `~~~` and closes only with a line

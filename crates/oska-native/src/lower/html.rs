@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.html`: `text`, `TrustedHtml.new` and `Html.concat`.
 //!
 //! An `Html` and a `TrustedHtml` are each a struct of one `String`, so an

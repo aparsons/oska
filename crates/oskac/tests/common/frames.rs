@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A panic's frames in a human report.
 
 use oska_syntax::Frames;

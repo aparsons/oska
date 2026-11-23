@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # block-dangerous-git.sh: a Claude Code PreToolUse hook for the Bash tool.
 #
 # Claude Code sends the hook event as JSON on stdin. The command is in

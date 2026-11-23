@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Module-level constants (#83, spec #184), run on both backends through
 //! the differential harness: a constant used in functions, methods,
 //! interpolations, other constants, and a test gives the same value

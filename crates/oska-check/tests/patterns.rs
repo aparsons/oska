@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `match` and patterns (#38): patterns are checked against the
 //! scrutinee, uppercase names are variants (ADR 0005), and every `match`
 //! is exhaustive with no unreachable arms.

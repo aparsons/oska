@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Intrinsics for the methods of secret integers, `Secret<Bool>` and
 //! `Secret<Bytes>` (#224).
 //!

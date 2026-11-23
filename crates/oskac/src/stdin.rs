@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A bare `-` as the path: `oskac check -` and `oskac run -` read one
 //! module from standard input, as an embedder pipes a snippet, and report
 //! it as the same bytes in a file named `<stdin>`. A program run from

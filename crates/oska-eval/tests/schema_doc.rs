@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The result formats documented in `eval/README.md` (its "Results"
 //! section) name exactly the fields the harness writes: the first table
 //! the run record's, the second the batch summary's. The written files are

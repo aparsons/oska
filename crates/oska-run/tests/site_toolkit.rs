@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the site generator needs from Oska (#74): `DirWrite.create_dir`
 //! and `String.to_lowercase`.
 //!

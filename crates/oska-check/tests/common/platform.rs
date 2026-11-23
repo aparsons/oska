@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reading `std.rt`'s platform tables (#158, #168): each is a function
 //! that gives one `Platform(...)` of constants.
 

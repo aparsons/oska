@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A method called qualified by its type, `Type.method(receiver, ...)`,
 //! or taken as a function value, `Type.method`, goes through the same
 //! checks as `receiver.method(...)` (review fix F2 of #93): it is listed

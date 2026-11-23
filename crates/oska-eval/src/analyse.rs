@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `analyse`: how an agent worked, read from a recorded transcript. The
 //! transcript becomes neutral events (see [`crate::transcript`]); this
 //! module turns the events into:

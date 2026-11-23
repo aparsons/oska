@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The authority baseline and its diff (#196): `oskac check
 //! --update-baseline=<file>` writes a program's authority as a stable,
 //! span-free file, and `oskac check --baseline=<file>` compares the

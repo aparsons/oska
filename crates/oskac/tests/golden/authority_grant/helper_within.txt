@@ -2,8 +2,8 @@ exit: 0
 --- stdout
 fn notes: DirRead (dir)
 fn main: Fs (fs), Stdout (io)
-  crates/oskac/tests/fixtures/authority_diff/helper_within/after.osk:9:22: Fs -> Dir: restrict_to "notes" (bytes 314..337)
-  crates/oskac/tests/fixtures/authority_diff/helper_within/after.osk:9:22: Dir -> DirRead: read_only (bytes 314..349)
+  crates/oskac/tests/fixtures/authority_diff/helper_within/after.osk:10:22: Fs -> Dir: restrict_to "notes" (bytes 353..376)
+  crates/oskac/tests/fixtures/authority_diff/helper_within/after.osk:10:22: Dir -> DirRead: read_only (bytes 353..388)
 grant: <grant>
   added fn notes: DirRead
 --- stderr

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Confined filesystem access for the Oska runtime, and the musl build's
 //! allocator: the one crate in the workspace allowed to use `unsafe`
 //! (ADR 0009).

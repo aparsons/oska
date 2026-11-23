@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! [`Dir`] on Windows: `NtCreateFile` relative to a directory handle, one
 //! component at a time, never following a reparse point.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `pub(pkg)`: an item visible to every module of its package, but not
 //! part of the package's API (spec #115). And parsing one module of a
 //! text that joins several, with spans in the whole text.

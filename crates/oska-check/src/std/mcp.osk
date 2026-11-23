@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.mcp`: tools that an agent can call. `use std.mcp`, then implement
 // `mcp.Toolset` for a `cap struct` whose fields are the narrowed
 // capabilities the tools need, and nothing else.

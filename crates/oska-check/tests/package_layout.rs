@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The layout rules of a package (spec #115, ticket #117): the manifest
 //! is read and its errors are reported with its path, module and
 //! directory names are snake_case, `main` is only in `src/main.osk`, and

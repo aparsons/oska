@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for guard.sh: each case builds a small workspace, a crate `app`
 # and an `oska-sys` that uses `unsafe`, adds one way around the rule, and
 # expects the guard to refuse it with the right reason. The cases include

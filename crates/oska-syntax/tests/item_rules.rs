@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Rules that reject forms the grammar would otherwise accept: holes in
 //! string patterns and test names, misplaced `pub`, and `#[integration]`
 //! on anything but a test. Each test asserts the code and exact span.

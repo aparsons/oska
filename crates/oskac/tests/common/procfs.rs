@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A running native program, seen through Linux's `/proc`: the
 //! descriptors it holds and the flags they were opened with, and the
 //! processes another one started.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Unused authority in `cap struct` fields (ticket #369, ADR 0016): the
 //! release check rejects a capability-bearing field of a `cap struct` that
 //! no code in the program reads, with `E0297`. Any read counts: a field

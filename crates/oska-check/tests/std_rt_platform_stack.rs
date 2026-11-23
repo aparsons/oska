@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `stack_t` in `std.rt`'s platform tables (#361, #403): macOS's layout
 //! (Linux's is checked in `std_rt_platform_linux.rs`), and the rule every
 //! table keeps: `handle_faults` writes `ss_sp` at 0 and the two words the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wording of an `IoError` (ADR 0014): one Oska table keyed by the
 //! kind of failure, with no operating-system error number.
 

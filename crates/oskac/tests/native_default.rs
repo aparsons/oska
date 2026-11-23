@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native by default (spec #125, ticket #141; x86_64, #165; macOS, #172
 //! and #173): on aarch64 and x86_64 Linux and macOS, `oskac run` and
 //! `oskac test` compile the program natively for the host into a private

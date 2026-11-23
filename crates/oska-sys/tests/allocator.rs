@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The musl build's allocator (spec #521, ticket #523): `oska-sys`'s
 //! [`SizeClassAlloc`], which serves requests of up to 1 KiB from size
 //! classes it keeps for the life of the process, and hands larger or

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Approval` and `Approver`: a person's yes to one consequential action
 //! (#252).
 //!

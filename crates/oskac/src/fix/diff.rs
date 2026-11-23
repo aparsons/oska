@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A unified diff of a file's text before and after `oskac fix`, as
 //! `oskac fix --dry-run` prints it, with three lines of context and the
 //! file's path in both headers, so `patch -p0` applies it.

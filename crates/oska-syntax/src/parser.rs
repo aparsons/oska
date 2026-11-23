@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Recursive-descent parser for Oska modules, expressions, statements, and
 //! types.
 //!

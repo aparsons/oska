@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Windows names beneath a directory or file capability (review fix F5 of
 //! #93). On Windows, a reserved device name such as `CON` or `nul.txt`
 //! is one Windows' path functions may take for a device, and a `:` in a

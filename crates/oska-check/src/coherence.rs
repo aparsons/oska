@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Value-level declarations that must be unique, and where methods may be
 //! declared:
 //!

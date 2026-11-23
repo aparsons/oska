@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The harness's JSON: [`read`] wraps the toolchain's shared reader,
 //! `oska_syntax::parse_json_at`, to say where an error is as a line and
 //! column, and [`pretty`] prints a [`JsonValue`] indented, for the reports

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval report`: the Markdown page of results, rendered from the
 //! committed batches. The fixture batches are under
 //! `tests/fixtures/results/`; the page is compared with

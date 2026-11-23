@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The built-in pseudo-random generator behind `Random`: SplitMix64. It is
 //! fast, small, and passes the usual statistical tests, which is all a
 //! program's `Random` promises. It is not cryptographically secure.

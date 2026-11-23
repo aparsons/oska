@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Trust on bytes (#223): bytes from outside the program are
 //! `Untrusted<Bytes>`, under the trust rules text has (ADR 0006).
 //! Untrusted bytes never flow into a trusted `Bytes` slot (`E0300`), every

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Transcripts: an adapter per agent CLI that turns a recorded transcript
 //! into neutral [`Event`]s, so the analysis never sees an agent's own
 //! format. v1 has one adapter, [`claude_stream_json`], for Claude Code's

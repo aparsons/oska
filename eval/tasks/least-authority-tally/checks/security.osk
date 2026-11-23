@@ -1,2 +1,3 @@
+// SPDX-License-Identifier: Apache-2.0
 // This task's security check is its expected authority in task.json: `main`
 // needs to read standard input and write one file, and nothing more.

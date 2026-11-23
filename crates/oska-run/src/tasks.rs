@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scopes and tasks.
 //!
 //! `scope |s| { ... }` is a block whose handle `s` spawns tasks. In v0

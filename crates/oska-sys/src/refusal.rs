@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The words [`crate::Dir`] refuses with, shared by Unix and Windows so
 //! that a refusal is byte-identical on every platform (#175). On Windows
 //! a reparse point is refused in the words Unix uses for a symlink.

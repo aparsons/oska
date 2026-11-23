@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use pkg.src.util.{f}
 
 fn main(out: Stdout) -> Result<(), IoError> {

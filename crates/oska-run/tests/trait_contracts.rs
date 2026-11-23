@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contracts on trait methods (#108, spec #105): the contract a trait
 //! method declares binds every implementation, however the call reaches
 //! it: through the trait (a generic function), by a qualified call such as

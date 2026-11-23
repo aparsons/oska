@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `{self.field}` in a string (#85, spec #184): `self` is the first segment
 //! of an interpolation path inside a method, resolved like the receiver
 //! anywhere else, with trust tracking unchanged.

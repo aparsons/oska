@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Tallying lines of input.
 
 // How many of `lines` have text in them. A line of only spaces has none.

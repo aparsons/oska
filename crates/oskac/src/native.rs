@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native by default: on aarch64 and x86_64 Linux and macOS and on
 //! x86_64 Windows (#179), `oskac run` and `oskac test` compile the checked
 //! program for the host with the native backend (`oska-native`) and run

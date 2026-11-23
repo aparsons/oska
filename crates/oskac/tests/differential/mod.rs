@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Seam 1 of the native backend (spec #125): the **differential
 //! harness**.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval prepare` and `oska-eval grade`: a task becomes a fresh
 //! workspace, an agent's changes are simulated by laying fixture files over
 //! it, and the grade comes from `oskac`'s own outputs. Each case's report is

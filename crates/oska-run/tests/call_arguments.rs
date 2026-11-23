@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How the interpreter passes a call's arguments (ticket #505, spec
 //! #521): each call evaluates its arguments into one `Vec`, which becomes
 //! the callee's frame. The behaviour must not change: every kind of call

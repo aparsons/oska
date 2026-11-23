@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac release`: build a source file or package for every supported
 //! platform into one directory, write a `SHA256SUMS` naming the release,
 //! and sign it with the developer's SSH key (spec #155, ticket #180).

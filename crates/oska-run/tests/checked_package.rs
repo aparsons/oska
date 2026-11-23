@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A checked package runs through `run_program` and `test_program`, the
 //! entries `oskac run` and `oskac test` use on a package (#117).
 

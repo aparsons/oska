@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A call site's intrinsic name keeps what a backend resolved it to
 //! (#502), so the interpreter looks each call site's intrinsic up once.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Checking function bodies: local, bidirectional type inference.
 //!
 //! Each body gets a fresh [`Body`] with its own inference context, so

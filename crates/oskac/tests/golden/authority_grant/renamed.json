@@ -8,8 +8,8 @@ exit: 0
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/renamed/after.osk","span":{"start":391,"end":414},"source":"Fs","result":"Dir","root":"notes"},
-    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/renamed/after.osk","span":{"start":391,"end":426},"source":"Dir","result":"DirRead","root":null}
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/renamed/after.osk","span":{"start":430,"end":453},"source":"Fs","result":"Dir","root":"notes"},
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/renamed/after.osk","span":{"start":430,"end":465},"source":"Dir","result":"DirRead","root":null}
   ],
   "authority_diff": {
     "grant": "<grant>",

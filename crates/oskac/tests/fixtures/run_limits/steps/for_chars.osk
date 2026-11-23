@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Steps: 3. `for` over `.chars()` goes back once for each character
 // whose body ends without `break`; `chars` itself runs in the runtime.
 //

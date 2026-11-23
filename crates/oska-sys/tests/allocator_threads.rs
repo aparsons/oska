@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The musl build's allocator when threads come and go (ticket #523,
 //! security review S1): `oskac test` runs each test block on a thread of
 //! its own, so a program with many test blocks starts and ends many

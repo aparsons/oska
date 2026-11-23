@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Reads Rust's channel-rust-stable.toml on stdin and prints the stable
 # version, the `version` of `[pkg.rustc]` without its commit and date:
 #

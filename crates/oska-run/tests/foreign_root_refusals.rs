@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A root a [`FakeHost`] opened, given to a [`RealHost`] (#359). It holds
 //! no OS handle, so the real host refuses every walk beneath it. On
 //! Windows the names are checked first (`checked_names` in `host.rs`), so

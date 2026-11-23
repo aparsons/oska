@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The constant-time guarantee of native executables (#225, ADR 0012):
 //! no conditional branch, and no memory address, depends on a secret.
 //!

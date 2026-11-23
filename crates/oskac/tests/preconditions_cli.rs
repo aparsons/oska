@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac run` on a broken precondition (#106, spec #105): `P0006` is an
 //! ordinary panic, reported in the JSON shape of every panic, with exit
 //! code 101, and `--release` evaluates contracts too.

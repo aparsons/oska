@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Attenuations in the authority report (#98, ADR 0008): every call of a
 //! prelude attenuation method (`restrict_to`, `restrict_to_file`,
 //! `read_only`, `write_only`) is listed with the function it is in, the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The agent corpus (#189): what an AI agent loads from oskalang.dev, in
 //! tiers.
 //!

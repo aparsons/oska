@@ -2,7 +2,7 @@ exit: 3
 --- stdout
 fn vouch: pure
 fn main: Stdout (io)
-crates/oskac/tests/fixtures/authority_grant/assume_trusted/program.osk:7:5: audit: assume_trusted (bytes 297..318)
+crates/oskac/tests/fixtures/authority_grant/assume_trusted/program.osk:8:5: audit: assume_trusted (bytes 336..357)
 grant: <grant>
   new audit site fn vouch: assume_trusted +1
   added fn vouch: pure

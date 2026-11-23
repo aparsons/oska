@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Installs the pinned ShellCheck (scripts/shellcheck/version) into DIR, for CI
 # jobs: runners ship different ShellCheck releases, which report different
 # findings. Linux x86_64 and aarch64 only; the tarball's SHA-256 is pinned here.

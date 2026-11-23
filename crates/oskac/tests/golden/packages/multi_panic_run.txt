@@ -2,6 +2,6 @@ $ oskac run crates/oskac/tests/fixtures/packages/multi_panic
 exit: 101
 --- stdout
 --- stderr
-crates/oskac/tests/fixtures/packages/multi_panic/src/util/text.osk:3:17: error[P0004]: division by zero: `100 / 0` (bytes 77..87)
-    at shout (crates/oskac/tests/fixtures/packages/multi_panic/src/util/text.osk:3:17)
-    at main (crates/oskac/tests/fixtures/packages/multi_panic/src/main.osk:5:16)
+crates/oskac/tests/fixtures/packages/multi_panic/src/util/text.osk:4:17: error[P0004]: division by zero: `100 / 0` (bytes 116..126)
+    at shout (crates/oskac/tests/fixtures/packages/multi_panic/src/util/text.osk:4:17)
+    at main (crates/oskac/tests/fixtures/packages/multi_panic/src/main.osk:6:16)

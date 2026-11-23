@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The bitwise and shift operators and the rotations of `U8`, `U32` and
 //! `U64`.
 //!

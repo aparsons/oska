@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac hook`: the commands an AI agent's hooks call, so the check on
 //! every edit runs inside `oskac` and works the same on every platform,
 //! with no shell script and no regular expression (spec #185).

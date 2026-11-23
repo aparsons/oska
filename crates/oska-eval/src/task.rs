@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The task set: loads tasks and owns the task format.
 //!
 //! A task is a directory named by its id, holding:

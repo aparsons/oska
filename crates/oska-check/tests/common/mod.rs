@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers shared by the `check_module` integration tests.
 //!
 //! Every test checks a small Oska snippet against the embedded prelude and

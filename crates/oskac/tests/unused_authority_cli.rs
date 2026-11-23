@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Unused authority on the command line (ticket #368, ADR 0016): `oskac
 //! check --release` rejects a capability-bearing parameter that its
 //! function never uses, with `E0296`, in human and JSON output; a plain

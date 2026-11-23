@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Builds the Oska verifier (verify.osk) for a public key other than the
 # release key: build-verifier.sh OSKAC PUBKEY_FILE OUT.
 #

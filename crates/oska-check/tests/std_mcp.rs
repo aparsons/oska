@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.mcp`'s `Toolset` (#249): the authority report gives each tool of
 //! an implementation its own entry, computed from the literal arms of
 //! `call`, and the checked program carries each tool's capabilities. The

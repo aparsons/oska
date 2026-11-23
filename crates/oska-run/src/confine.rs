@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Filesystem confinement: how a directory or file capability keeps every path inside
 //! its root.
 //!

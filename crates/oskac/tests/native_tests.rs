@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native `test` blocks and the test host (ticket #139), run on both
 //! backends: `oskac test --interpret` and `oskac test`, native by default
 //! on aarch64 Linux (#141) and x86_64 Linux (#165), must print the same

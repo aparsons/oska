@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The heap `oskac` allocates from (spec #521, ticket #523).
 //!
 //! The musl build uses `oska-sys`'s [`oska_sys::SizeClassAlloc`] as its

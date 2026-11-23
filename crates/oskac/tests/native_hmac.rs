@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.hmac` (#232) as programs run: Oska source that uses `std.sha2`,
 //! linked into the program and run as Oska by both backends, with no
 //! `E0371`. Its test vectors are test-bearing fixtures

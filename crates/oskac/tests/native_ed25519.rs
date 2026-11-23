@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.ed25519` (#233) as programs run: Oska source linked into the
 //! program, with `std.sha2`, which it imports, and run as Oska by both
 //! backends. RFC 8032's vectors and the edge cases are a test-bearing

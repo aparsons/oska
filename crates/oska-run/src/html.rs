@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `std.html` runtime: escaped text and trusted markup.
 //!
 //! An `Html` and a `TrustedHtml` are each a struct holding one string,

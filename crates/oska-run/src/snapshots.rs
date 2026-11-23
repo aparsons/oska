@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Snapshot assertions: `t.assert_snapshot(value)`.
 //!
 //! A test does not read or write a snapshot: it has only stand-in

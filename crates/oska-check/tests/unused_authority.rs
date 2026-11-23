@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Unused authority (ticket #368, ADR 0016): the release check rejects a
 //! capability-bearing parameter that its function never uses, directly or
 //! by passing it on. An ordinary check says nothing.
