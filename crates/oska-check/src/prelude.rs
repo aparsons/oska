@@ -157,6 +157,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.http",
+        source: include_str!("std/http.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.json",
         source: include_str!("std/json.osk"),
         sink_literal: None,
