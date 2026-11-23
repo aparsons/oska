@@ -706,6 +706,49 @@ PR #620 (ticket #614) holds freed requests of 1 KiB to 1 MiB for reuse on the mu
 - **The stop rule does not apply.** The musl site build time falls from 3,498 ms (section 11) to 2,842 ms, 19%, well over 5%. The two benchmark runs are on different days and the glibc time also moved (2,815 ms to 2,534 ms), so the musl to glibc ratio is the better figure: 1.24x to 1.12x. The change stays.
 - **Where the gap stands.** The site build is 1.12x, just over the 1.10x threshold of spec #521. `text` is the only row far above it (1.85x), as in section 11, where the `memcpy` override fixed it. The user CPU gap on the site build (0.16 s) is now the larger part. Ticket #617 re-measures once more and decides the fate of #581.
 
+## 16. Final re-measure and the verdict on #581 (2026-11-23, spec #612, ticket #617)
+
+Spec #612 had two changes: the large-block allocator (#614, merged) and the `String.join` sizing (#616, closed as not planned, section 14). This is the last measurement, with the allocator in and without the `String.join` change.
+
+- **Tree and profile:** code of `9833ae0` (main after PR #620; later commits add only a header line and notes). The `dist` profile for the ratios, which are the figures of section 15 (same run, no code change since). The `memcpy` counts come from the counting build of section 11 (`cargo build --release --target x86_64-unknown-linux-musl`, the scratch `mem*` functions with a counter added, not repo code), built on the same tree. Machine: the same x86_64 KVM container as section 13 (Intel Xeon @ 2.10GHz, 4 CPUs), noise about ±10%.
+
+| Workload | musl / glibc (section 15) | At or under 1.10x? |
+| --- | ---: | --- |
+| loop | 1.00x | yes |
+| text | 1.85x | **no** |
+| bulk-text | 0.85x | yes |
+| lists | 0.98x | yes |
+| recursion | 0.99x | yes |
+| site | 1.12x | **no** |
+
+`memcpy` calls on the interpreted site build, by size of the copy (the counting build's buckets):
+
+| Size | Calls | Share |
+| --- | ---: | ---: |
+| 0 bytes | 137,881 | 1.7% |
+| 1 byte | 5,742,499 | 70.1% |
+| 2 bytes | 126,881 | 1.5% |
+| 3 to 4 bytes | 253,220 | 3.1% |
+| 5 to 8 bytes | 370,556 | 4.5% |
+| 9 to 16 bytes | 250,614 | 3.1% |
+| 17 to 32 bytes | 239,209 | 2.9% |
+| 33 to 64 bytes | 195,339 | 2.4% |
+| 65 to 128 bytes | 140,920 | 1.7% |
+| 129 to 256 bytes | 321,870 | 3.9% |
+| 257 to 512 bytes | 190,458 | 2.3% |
+| 513 to 1,024 bytes | 102,307 | 1.2% |
+| 1,025 to 2,048 bytes | 57,326 | 0.7% |
+| over 2,048 bytes | 61,989 | 0.8% |
+| **Total** | **8,191,069** | |
+
+The total is 9% above section 11 (7,494,215) because the site it builds has grown since then (more pages), not because of the allocator. The one-byte share is the same, 70%.
+
+**Verdict.** Not every row is at or under 1.10x: `text` (1.85x) and the site build (1.12x) are not.
+
+- **#581 stays open and gated.** In section 11 the scratch override of the `mem*` functions took `text` from 1.92x to 1.08x and the site build from 1.24x to 1.19x, a gain of 0.05x on the site build. The allocator took the site build from 1.24x to 1.12x, so the override would be the next step for `text`, and it might bring the site build to about 1.07x if its gain carries over. That last figure is an estimate from one earlier measurement, not a measurement on this tree. It needs an ADR 0009 amendment and a human merge, so the decision is Adam's.
+- **What to measure next on the site build:** the user CPU gap (0.16 s of 2.70 s against 2.54 s) is now larger than the system CPU gap (0.05 s). The two places to look are the 5.7 million one-byte `memcpy` calls and the 47 million `memcmp` calls of section 11, and the extra minor faults (38,483 against 9,045), which the held-block cap of 8 MiB and the 16-block limit per bucket may still leave on the table.
+- **#521's threshold** is not met: the site build is 1.12x. The decision to keep both builds (ADR 0022) does not depend on it.
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
