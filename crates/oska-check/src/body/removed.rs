@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The path-taking methods that `Fs`, `FsRead` and `FsWrite` no longer
 //! have (ADR 0008). A call of one gets a dedicated diagnostic that
 //! explains attenuation and shows the shape of the fix, in place of the

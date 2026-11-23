@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # The live driver of the evaluation harness: runs a batch of tasks through
 # an AI agent CLI (Claude Code, `claude -p`) and records the results. Each
 # run costs money, so only the maintainer runs this, by hand, on their own

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.ecdsa` (#242) as programs run: Oska source linked into the program
 //! and run as Oska by both backends. RFC 6979's vectors and the edge cases
 //! are a test-bearing fixture (`fixtures/ecdsa_vectors.osk`), which the

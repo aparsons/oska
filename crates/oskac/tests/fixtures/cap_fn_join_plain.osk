@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The joined list is a `List<cap fn() -> Int>`, so it cannot be passed
 // where a `List<fn() -> Int>` is expected: `E0270`.
 

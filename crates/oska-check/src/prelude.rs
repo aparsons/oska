@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The embedded prelude: Oska source, parsed once in prelude mode.
 
 use std::sync::OnceLock;

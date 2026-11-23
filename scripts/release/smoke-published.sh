@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Check that the published one-line install works end to end.
 #
 #   scripts/release/smoke-published.sh <site-url> [<expected-version>]

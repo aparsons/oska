@@ -3,6 +3,7 @@
 A program that passes narrower and narrower authority down, in `examples/capabilities.osk`. It counts the lines of a file named on the command line.
 
 ```oska file=capabilities.osk
+// SPDX-License-Identifier: Apache-2.0
 // Capabilities are ordinary values. `count_lines` can read files under the
 // path it is given and nothing else: no network, no writes, no env access.
 
@@ -62,7 +63,7 @@ fn AppError.usage: pure
 fn <AppError as From<IoError>>.from: pure
 fn <AppError as Display>.to_string: pure
 fn main: Stdout (io), FsRead (fs)
-  capabilities.osk:44:17: FsRead -> DirRead: restrict_to "." (bytes 1342..1361)
+  capabilities.osk:45:17: FsRead -> DirRead: restrict_to "." (bytes 1381..1400)
 ```
 
 Read the report as a reviewer would:
@@ -88,7 +89,7 @@ oskac run examples/capabilities.osk -- some-file.txt
 Everything after `--` belongs to the program. `args.get(0)` is the program's own path, so the first argument is `args.get(1)`. Run on its own source from its own directory:
 
 ```console cmd=run -- capabilities.osk
-lines: 49
+lines: 50
 ```
 
 With no argument the program reports its usage error and exits with 1:

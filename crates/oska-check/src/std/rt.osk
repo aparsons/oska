@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.rt`: the toolchain's own runtime module (ADR 0013). It is compiled
 // into every native program and is the only source that may name a
 // system-call or memory intrinsic. No user code can import it (`E0209`).

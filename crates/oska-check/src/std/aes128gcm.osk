@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.aes128gcm`: AES-128-GCM authenticated encryption (NIST SP 800-38D),
 // the cipher TLS 1.3 requires of every implementation
 // (`TLS_AES_128_GCM_SHA256`). A module sees it only after

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Bytes through the filesystem capabilities (#223): `read_bytes` on
 //! `DirRead` and `FileRead` gives a file's bytes as they are, UTF-8 or
 //! not, and `write_bytes` on `DirWrite` and `FileWrite` writes exactly the

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Which Rust tests read docs/, derived from their source, so a test that
 # starts reading docs/ joins the set with no list to update. check.sh runs
 # just these when docs/ is the only cargo input a branch changes.

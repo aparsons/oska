@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the formal step (scripts/formal/run.sh) that need neither Lean nor
 # TLC: without the tools it skips (exit 3) outside CI and fails in CI; an
 # unfinished proof or a model with no .cfg fails before any tool is looked

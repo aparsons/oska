@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Secrets in the checked program (#224).
 //!
 //! A `Secret<T>` is the prelude struct `Secret { value: T }` at run time,

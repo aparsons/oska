@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Checks that the committed std.x509_roots module is what generate.py makes from
 # the pinned NSS release: fetches certdata.txt and nssckbi.h at the release tag
 # the module names, checks the SHA-256 in its header, regenerates the module and

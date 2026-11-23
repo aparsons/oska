@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.sha2` against FIPS 180-4's examples and digests recorded from
 // coreutils' `sha256sum`, `sha384sum` and `sha512sum`, on both backends (the native
 // test corpus runs every test-bearing fixture). The message of length `n`

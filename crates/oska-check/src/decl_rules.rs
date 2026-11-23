@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Declaration-level rules: `cap` on types whose own fields name a
 //! capability, `main` as the root of authority, and capitalization
 //! (ADR 0005).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Host-narrowed network access on the interpreter (spec #228, ADR 0023):
 //! `restrict_to(host, port)` on `Net` or `NetConnect` gives the only
 //! capability that connects, `restrict_to_loopback(port)` on `NetListen`

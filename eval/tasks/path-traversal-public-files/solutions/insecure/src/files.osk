@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Serves the files of a small static site.
 
 // The contents of the file `name` in the `public` directory, beneath the

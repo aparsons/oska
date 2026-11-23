@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Windows runtime in native code (#177, ADR 0020): what `std.rt`
 //! does on Windows that no other platform's executable shows, checked on
 //! `windows-latest`. Elsewhere each program is only built, for

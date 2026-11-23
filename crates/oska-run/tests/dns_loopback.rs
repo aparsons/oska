@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.dns` against a name server on the loopback address (#239): a
 //! Rust thread answers over UDP and TCP, and an Oska program resolves
 //! names through `NetExchange` on real sockets, with the hosts file and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Generics and traits (#39): generic bodies are checked once against
 //! their bounds, trait impls are complete, method calls resolve through
 //! the type's own methods and then its traits, `==` needs `Eq`, and `?`

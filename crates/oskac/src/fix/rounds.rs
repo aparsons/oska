@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The rounds of `oskac fix`, in memory: check, apply the first fix that
 //! may be applied, check again, and repeat, until no such fix is left, a
 //! fix leaves its own diagnostic in place, or the cap on rounds is

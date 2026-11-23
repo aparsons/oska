@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # The formal step of scripts/check.sh (ADRs 0018, 0019): builds the Lean
 # project in formal/lean and runs TLC on every TLA+ model in formal/tla.
 #

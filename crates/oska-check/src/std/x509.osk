@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.x509`: X.509 certificates for TLS clients (RFC 5280, RFC 9525). It
 // parses a DER certificate, builds a path from a server's certificate to a
 // trusted root, validates it, and checks the host name. A module sees it

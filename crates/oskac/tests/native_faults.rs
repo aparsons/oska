@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What a native program's buffered stdout does when the program cannot
 //! end normally (ticket #143): a failed flush at exit is the program's
 //! `IoError`, as the interpreter's unbuffered write is, and a fault

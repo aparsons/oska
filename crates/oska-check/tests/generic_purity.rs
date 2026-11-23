@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Review fixes for spec #105: no checked program performs an effect inside
 //! a contract, and no capability or `Scope` reaches a plain `fn` or an
 //! unscoped closure through a type parameter.

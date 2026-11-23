@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Three tests for `duration_ms`: one that does almost nothing, one that
 // loops long enough to take at least a millisecond on either backend, and
 // an `#[integration]` test, skipped without `--integration`.

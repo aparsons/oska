@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.hkdf` against RFC 5869's test cases 1 to 3 (appendix A, SHA-256),
 // on both backends (the native test corpus runs every test-bearing
 // fixture), then outputs of other lengths, recorded from OpenSSL's HKDF

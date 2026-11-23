@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.json` (#248), run on both backends through the differential
 //! harness: round trips of every kind of value, canonical output, every
 //! escape, malformed and hostile input (truncation, bad escapes and

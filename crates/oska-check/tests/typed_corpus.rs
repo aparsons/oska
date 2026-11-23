@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Every program in the repository's corpus lowers to a fully typed
 //! checked program (#126): the examples, the code samples of the docs,
 //! the CLI fixtures and the site generator. No expression or slot is left

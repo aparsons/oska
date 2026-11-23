@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.x509` over every real root of Mozilla's store (the roots trusted for TLS server
 // authentication): each parses, is in `TrustConfig.default()`, is a CA, and gives the
 // verdict on its own signature that the Python `cryptography` package gave when this

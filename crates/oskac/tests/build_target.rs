@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac build --target` (spec #153, ticket #157): the target platform
 //! an executable is built for, named as release assets name `oskac`
 //! builds, on every host.

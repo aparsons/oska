@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The **authority baseline** and the **authority diff**: what `oskac
 //! check --update-baseline` writes and `oskac check --baseline` compares,
 //! and the one comparison every tool uses to tell whether a change widened

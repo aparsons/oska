@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.dns` (#239) as programs run: the message, address and file
 //! parsers are pure Oska, linked into the program and run by both
 //! backends with the same output. The recorded messages and hostile

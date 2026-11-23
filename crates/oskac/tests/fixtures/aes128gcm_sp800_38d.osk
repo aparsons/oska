@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.aes128gcm` against the test cases of the GCM specification (the
 // "Galois/Counter Mode of Operation" submission that SP 800-38D
 // standardizes), cases 1 to 4, which use a 96-bit nonce, on both backends

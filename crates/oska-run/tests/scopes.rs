@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scopes and tasks at runtime (#65): spawned tasks run one at a time, in
 //! spawn order, `join` returns each task's result, and the same program
 //! gives the same result on every run.

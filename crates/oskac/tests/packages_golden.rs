@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Seam 2 for packages (spec #115, ticket #117): `oskac check`, `run` and
 //! `test` over fixture packages on disk, with golden output.
 //!

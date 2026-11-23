@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.hmac` (#232): HMAC-SHA-256 in Oska, linked into a program that
 //! imports it and checked under the rules for user code. It uses
 //! `std.sha2`'s public API only. Its tag is a secret: comparing it with

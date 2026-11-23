@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Pin the installers to a release signing key.
 #
 #   scripts/install/pin.sh <public-key> <out-dir> [--require-index]

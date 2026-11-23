@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.p256` (#242), a `std` module of Oska source over secret integers
 //! that imports another (`std.ecdsa`, for its public-key check): a program
 //! that imports it has both linked in and checked under the rules for user

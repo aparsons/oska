@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How the native backend implements body-less functions: the prelude's
 //! intrinsics, which user code calls, and `std.rt`'s system-call and
 //! memory intrinsics, which only the runtime calls.

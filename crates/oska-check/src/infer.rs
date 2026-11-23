@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Unification: the inference context for one function body.
 //!
 //! Inference variables are created with [`Infer::fresh`] and solved by

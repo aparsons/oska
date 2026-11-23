@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.hkdf` against every vector of Wycheproof's `hkdf_sha256_test.json`
 // (C2SP/wycheproof at commit 65ca494727a52944c204441c860b039e6786b99b,
 // `testvectors_v1/`), converted once into Oska, on both backends. A

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `report`: the Markdown page of results, rendered from the committed
 //! batches. The site publishes it as its Evaluation page
 //! (`docs/evaluation.md`), and a test holds that page to what this renders

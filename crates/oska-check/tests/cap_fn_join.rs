@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `cap fn` join (#45, #109): a plain `fn` and a `cap fn` meeting in
 //! one position join to `cap fn`, in the positions where trusted and
 //! untrusted text join to untrusted: list elements, `if` and `match`

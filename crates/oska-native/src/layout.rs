@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How values are represented natively.
 //!
 //! Every value is one 64-bit word ([`crate::ir`]):

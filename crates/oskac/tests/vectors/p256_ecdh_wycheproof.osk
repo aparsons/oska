@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.p256` against Wycheproof's P-256 ECDH vectors,
 // `testvectors_v1/ecdh_secp256r1_ecpoint_test.json` of C2SP/wycheproof at
 // commit 65ca494727a52944c204441c860b039e6786b99b,

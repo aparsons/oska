@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Stop event: when the agent tries to finish, run the release check
 //! and then the tests on each target, and block it while any fails.
 //!

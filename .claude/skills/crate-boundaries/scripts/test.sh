@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for check-graph.sh, the crate-graph check of the crate-boundaries
 # skill (installed in Oska as scripts/crate-graph/check.sh).
 #

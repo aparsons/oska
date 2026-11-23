@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The key-exchange and symmetric primitives of TLS 1.3 (#241): `std.x25519`,
 //! `std.hkdf`, `std.chacha20poly1305` and `std.aes128gcm`.
 //! Each is Oska source linked into a program that imports it and checked

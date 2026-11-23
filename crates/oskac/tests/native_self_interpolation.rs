@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `{self.field}` in a string (#85, spec #184), run on both backends
 //! through the differential harness: the interpreter and a native
 //! executable print the same text.

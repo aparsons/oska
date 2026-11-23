@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac test`: running a file's `test` blocks.
 //!
 //! [`test`] checks the file, refuses it as [`crate::run`] would, and then

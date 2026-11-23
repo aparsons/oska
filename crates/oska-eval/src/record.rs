@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `record`: one run's record. It joins the run's grade and analysis with
 //! what produced them (the task, attempt and variant, the model, the agent
 //! CLI and its version, the `oskac` version and commit, and the task set's

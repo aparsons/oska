@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The manifest reader's strictness (review of spec #115): a bare CR,
 //! a loose `\u` escape, a byte-order mark and text that is not UTF-8 are
 //! each one clear error with a location, and locating errors stays linear

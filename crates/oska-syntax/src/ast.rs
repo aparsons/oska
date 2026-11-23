@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Syntax tree for Oska source. Every node carries the [`Span`] of source
 //! text it was parsed from, so diagnostics and machine-applicable fixes can
 //! point at exact byte ranges.

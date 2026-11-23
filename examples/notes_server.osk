@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // An MCP server in Oska: three tools over standard input and output, for
 // any MCP client (Claude Code, an IDE, `npx @modelcontextprotocol/inspector`).
 //

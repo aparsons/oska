@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Lowering: the checked program, and `std.rt`'s, to the backend's code
 //! ([`crate::ir`]).
 //!

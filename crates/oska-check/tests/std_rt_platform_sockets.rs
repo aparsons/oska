@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The socket values in `std.rt`'s platform tables (ticket #238 of spec
 //! #228): macOS's and Windows' (Linux's are checked in
 //! `std_rt_platform_linux.rs`), so a wrong entry fails here and not only

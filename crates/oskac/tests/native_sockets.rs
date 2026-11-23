@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native network sockets (ticket #238 of spec #228, ADR 0023): a native
 //! program connects and listens exactly as an interpreted one does.
 //!

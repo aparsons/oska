@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.dns` on recorded DNS messages, on both backends (the native test
 // corpus runs every test-bearing fixture). The messages are real wire
 // format built to RFC 1035: answers with compressed names, `CNAME` chains,

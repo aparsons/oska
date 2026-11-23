@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native process capabilities (ticket #136), run on both backends
 //! through the differential harness (seam 1): `Stdout`, `Stderr`,
 //! `Stdin`, `Args`, `Env` and `Env.secret`, `Clock`, `Random`, `dbg` and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.x509` (#243), a `std` module of Oska source that imports others
 //! (`std.sha2`, `std.ecdsa`, `std.rsa`, `std.ed25519` and the generated
 //! `std.x509_roots`): a program that imports it has them linked in and

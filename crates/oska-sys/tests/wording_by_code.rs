@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wording of an `IoError` is keyed by each operating system's raw
 //! error code (the `errno` on Linux and macOS, the Win32 code on
 //! Windows), not by `io::ErrorKind`, whose mapping from a code changes

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! TCP connections for the Oska runtime, with one wording of every
 //! failure on every platform (ADR 0014).
 //!

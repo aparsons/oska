@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for scripts/docs-tests/list.sh: the Rust tests that read docs/, and
 # the docs/ files compiled into a crate. Most cases run the real list.sh on a
 # scratch tree of small crates; the last ones run it on this repository, and

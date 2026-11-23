@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Put signed releases into a built site.
 #
 #   scripts/release/stage-site.sh <releases-dir> <site-dir> <public-key>
@@ -27,7 +28,8 @@
 #     release fields win). Its signing_key_fingerprint is the SHA256
 #     fingerprint of <public-key>, as `ssh-keygen -l` prints it, which the
 #     install guide and SECURITY.md also print. Its `binaries` lists each
-#     binary in SHA256SUMS, not oskac-image-digest, which is no binary.
+#     binary in SHA256SUMS, not oskac-image-digest or oskac.intoto.jsonl,
+#     which are no binaries.
 #
 # URLs in latest.json start with $OSKA_SITE_URL (default
 # https://oskalang.dev), so tests can stage a site served elsewhere.
@@ -228,7 +230,7 @@ release_json=$(
       signing_namespace: "oska-release",
       installers: {sh: "\($base)/install.sh", ps1: "\($base)/install.ps1"},
       binaries: ([inputs
-        | select(. != "oskac-image-digest")
+        | select(. != "oskac-image-digest" and . != "oskac.intoto.jsonl")
         | {key: (ltrimstr("oskac-") | rtrimstr(".exe")), value: "\($url)/\(.)"}]
         | from_entries)
     }'

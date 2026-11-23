@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Oska's own wording for an `IoError`, the same on every platform and
 //! both backends (ADR 0014).
 //!

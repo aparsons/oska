@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.dns` (#239): the stub resolver in Oska, linked into a program that
 //! imports it and checked under the rules for user code. Its names and
 //! addresses are structural: an untrusted host name cannot reach `resolve`

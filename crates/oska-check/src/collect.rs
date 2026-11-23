@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Collecting declarations: the table of type and trait names in scope,
 //! built from the prelude and then the user module.
 

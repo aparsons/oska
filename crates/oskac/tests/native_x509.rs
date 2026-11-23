@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.x509` (#243) as programs run: Oska source linked into the program,
 //! with the `std` modules it imports, and run as Oska by both backends.
 //! The crafted chains are in two test files made by

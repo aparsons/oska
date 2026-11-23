@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.rsa`: verifying RSA signatures (RFC 8017), PKCS#1 v1.5 (section
 // 8.2) and PSS (section 8.1), the two schemes web certificates and TLS
 // use. A module sees it only after `use std.rsa`. There is no signing, no

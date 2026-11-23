@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.chacha20poly1305` against RFC 8439's AEAD test vectors (section
 // 2.8.2 and appendix A.5), on both backends (the native test corpus runs
 // every test-bearing fixture), then messages of every length around the

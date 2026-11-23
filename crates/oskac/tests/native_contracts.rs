@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native contracts (ticket #134): `requires` and `ensures` evaluated on
 //! every call as the interpreter evaluates them, run on both backends
 //! through the differential harness (seam 1). The programs are the

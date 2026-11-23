@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.rsa` (#242), a `std` module of Oska source that imports another
 //! (`std.sha2`): a program that imports it has both linked in and checked
 //! under the rules for user code. A key loads from untrusted bytes with no

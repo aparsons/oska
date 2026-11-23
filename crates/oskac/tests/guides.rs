@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Conformance of the task guides in `docs/guide` (spec #70, ticket #73).
 //!
 //! Every fenced block in a guide is checked against the real toolchain, so

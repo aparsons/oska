@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.sha2` against NIST CAVP's SHA-256 and SHA-512 byte-oriented test
 // vectors (CAVS 11.0, `shabytetestvectors.zip`), on both backends. Every
 // vector of `SHA256ShortMsg.rsp` and `SHA512ShortMsg.rsp`, and the first 16

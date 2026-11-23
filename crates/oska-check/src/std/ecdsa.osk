@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.ecdsa`: verifying ECDSA signatures (FIPS 186-5, section 6.4.2) on
 // the curves web certificates use, P-256 (secp256r1) and P-384
 // (secp384r1). A module sees it only after `use std.ecdsa`. There is no

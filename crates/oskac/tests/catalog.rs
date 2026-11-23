@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The error-code catalog (spec #70, ticket #76).
 //!
 //! Every diagnostic code the toolchain can report is documented in

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A toolset with one tool for each kind of authority, for the tests of
 // the annotations `mcp.serve` derives (#250). The network and process
 // capabilities have no runtime yet, so the toolset holds them as options

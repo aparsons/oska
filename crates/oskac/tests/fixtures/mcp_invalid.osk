@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A server whose tools are broken the way the first argument says, for
 // the start-up failures of `mcp.serve` (#250): it must return an
 // `McpError` before it reads anything, which the program shows by

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Function values: closures, named functions and methods used as values
 //! (`cap fn` values among them: the type erases the difference), calls of
 //! them, and `List.map`.

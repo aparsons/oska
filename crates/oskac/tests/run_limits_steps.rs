@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The step limit (spec #446, ticket #452): `oskac run --max-steps=<n>`
 //! stops a program after `n` steps (ADR 0021) with `P0038` and exit code
 //! 101. Native code stops at the same step (`run_limits_steps_native.rs`,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Preconditions enforced at runtime (#106, spec #105): a function's
 //! `requires` clauses are evaluated on every call, in every build, and a
 //! false one stops the program with `P0006`, "precondition violated",

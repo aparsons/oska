@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Capabilities and confinement (#64): `main` gets the capabilities it
 //! declares, attenuation narrows them for real, and a directory
 //! capability never reaches outside its root.

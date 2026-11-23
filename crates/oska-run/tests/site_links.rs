@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Every link the site publishes goes somewhere (#186).
 //!
 //! The site generator, `site/build.osk`, resolves each relative link in a

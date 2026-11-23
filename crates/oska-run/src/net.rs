@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The network intrinsics: attenuating `Net`, `NetConnect` and `NetListen`
 //! to a host capability or a loopback listener, and what those and a
 //! `Connection` do (ADR 0023).

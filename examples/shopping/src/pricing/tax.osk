@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A nested module: `src/pricing/tax.osk` is `pkg.pricing.tax`.
 
 pub(pkg) fn with_tax(cents: Int) -> Int {

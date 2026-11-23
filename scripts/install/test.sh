@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the sh installer. Run from anywhere, on Linux or macOS:
 #
 #   scripts/install/test.sh [<pattern>]

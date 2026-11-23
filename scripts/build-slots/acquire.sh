@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # shellcheck shell=bash
 # Takes one of OSKA_BUILD_SLOTS machine-wide build slots. check.sh sources
 # this file (`. scripts/build-slots/acquire.sh`) right before its build and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reading a directory, random bytes, exit and signal setup are
 //! operating-system-neutral intrinsics of `std.rt` (#168), so each
 //! operating system's table can give its own call behind them.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The values every Linux table of `std.rt` holds whatever the processor
 //! (#168, #366): the open flags but `O_DIRECTORY` and `O_NOFOLLOW`,
 //! `AT_FDCWD`, `F_DUPFD_CLOEXEC`, `TCGETS` and `struct termios`, `mmap`'s

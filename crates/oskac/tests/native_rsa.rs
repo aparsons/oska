@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.rsa` (#242) as programs run: Oska source linked into the program,
 //! with `std.sha2`, which it imports, and run as Oska by both backends. The
 //! edge cases are a test-bearing fixture (`fixtures/rsa_vectors.osk`),

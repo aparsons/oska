@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The build cache: a per-user, content-addressed store of the results of
 //! checking and compiling whole programs, so `oskac check`, `run`, `test`
 //! and `build` reuse a result whose inputs are unchanged (spec #279).

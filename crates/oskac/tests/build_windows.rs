@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac build --target windows-x86_64` (spec #155, ticket #176): a
 //! PE32+ console executable that the Windows loader loads, importing only
 //! from `kernel32.dll`, `ntdll.dll`, `bcryptprimitives.dll`, `iphlpapi.dll` and `ws2_32.dll`

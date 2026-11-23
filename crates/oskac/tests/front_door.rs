@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The pages a newcomer meets first (#188): the home page, the install
 //! guide, the guide index, the README, and "What works today".
 //!

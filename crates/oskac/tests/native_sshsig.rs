@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.sshsig` (#234) as programs run: Oska source linked into the
 //! program, with `std.sha2` and `std.ed25519`, which it imports, and run
 //! as Oska by both backends. The signatures are fixtures made by

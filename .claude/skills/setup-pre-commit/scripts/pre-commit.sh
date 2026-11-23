@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # A fast git pre-commit hook for a Rust workspace such as Oska. Install it as
 # .githooks/pre-commit (executable), with `git config core.hooksPath .githooks`.
 #

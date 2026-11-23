@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers shared by the `oskac` integration tests.
 
 #![allow(dead_code)]

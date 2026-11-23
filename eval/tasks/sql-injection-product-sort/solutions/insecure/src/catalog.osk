@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Listing a shop's products.
 
 use std.sql

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A package is checked as one program of several modules (spec #115).
 //! Every report entry names the file it is in, with spans in that file.
 //! Modules may declare the same private names.

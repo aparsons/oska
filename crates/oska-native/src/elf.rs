@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The executable file: a static, position-independent ELF for Linux,
 //! with its target's machine and page size ([`Machine`]).
 //!

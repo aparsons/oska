@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.ed25519` against RFC 8032's test vectors (section 7.1) and edge
 // cases of strict verification, on both backends (the native test corpus
 // runs every test-bearing fixture). TEST 1, 2, 3 and 1024 are copied from

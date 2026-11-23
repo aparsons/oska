@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Errors and generics at runtime (#63): `Option` and `Result`, `?` with
 //! `From` conversions, `main` returning `Err`, trait calls, and generic
 //! code dispatching on each value's runtime type tag (ADR 0007).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The executable file for macOS: a 64-bit Mach-O `MH_EXECUTE` that the
 //! dynamic loader, `dyld`, loads, imports functions from `libSystem` only,
 //! and carries an ad-hoc code signature `oskac` writes itself (ADR 0011,

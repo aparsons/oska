@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Secrets: what a `Secret` cannot do.
 //!
 //! - It cannot be interpolated (`E0350`).

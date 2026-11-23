@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Check that a Linux oskac build runs where the install guide says it runs.
 #
 #   scripts/release/check-linux-build.sh gnu <binary>

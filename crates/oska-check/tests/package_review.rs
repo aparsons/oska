@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Fixes from the review of spec #115 (packages), at seam 1: packages
 //! checked in memory. Each test is an attack or a case the review found.
 

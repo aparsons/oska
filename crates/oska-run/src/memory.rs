@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The memory run limit on the interpreter (`--max-memory`, spec #446):
 //! the bytes of the values a program makes, net of those it lets go of,
 //! with a panic (`P0040`) before a value that would take them past the

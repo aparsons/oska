@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the pass stamp: the real .githooks/pre-push and the real
 # stamp.sh, driven by real `git push`es from scratch clones to a scratch bare
 # remote. Each scratch clone has a fake scripts/check.sh that records that it

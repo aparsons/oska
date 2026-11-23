@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the release notes, scripts/release/notes.sh. Run from anywhere:
 #
 #   scripts/release/notes-test.sh

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Evaluating the checked program.
 //!
 //! The interpreter walks [`oska_check::program`] trees and never resolves

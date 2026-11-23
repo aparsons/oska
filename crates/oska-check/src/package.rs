@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The package-level entry point: [`check_package`] checks every module
 //! of a [`Package`] and returns one [`CheckReport`], with every
 //! diagnostic, audit site and attenuation naming the file it is in.

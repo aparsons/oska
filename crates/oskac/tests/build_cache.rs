@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The build cache (spec #279): `oskac check`, `run`, `test` and `build`
 //! reuse a result whose inputs are unchanged, and a reused result is
 //! indistinguishable from a fresh one.

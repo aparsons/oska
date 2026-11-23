@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Every check a change must pass, in one command. CI's ci.yml runs this
 # script, and .githooks/pre-push runs it before every push, so a green run
 # here means a green CI test job.
@@ -491,6 +492,12 @@ if step "only official actions and rust-toolchain, pinned to a commit" --no-slot
   fi
 fi
 
+if step "SPDX headers and NOTICE" --no-slot --fast-when 'scripts/spdx-guard/*'; then
+  # Every tracked .rs, .osk and .sh file starts with an SPDX-License-Identifier
+  # header, and the tree has a NOTICE file (Apache 2.0 section 4).
+  scripts/spdx-guard/guard.sh
+fi
+
 if step "every workflow job has a timeout" --no-slot; then
   # GitHub lets a job run 360 minutes unless it says otherwise. The guard fails
   # a job with no `timeout-minutes`, a non-literal value, or one above 60.
@@ -620,6 +627,10 @@ fi
 
 if step "intrinsic guard tests" --fast-when 'scripts/intrinsic-guard/*'; then
   bash scripts/intrinsic-guard/test.sh
+fi
+
+if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*'; then
+  bash scripts/spdx-guard/test.sh
 fi
 
 if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json; then

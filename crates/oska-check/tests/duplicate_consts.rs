@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A module constant's name is declared once (#83, spec #184): a second
 //! constant, function or type of the same name is `E0202` at the second,
 //! never a silent overwrite of the first.

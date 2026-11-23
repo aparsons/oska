@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Unused authority in `cap struct` fields on the command line (ticket
 //! #369, ADR 0016): `oskac check --release` rejects a capability-bearing
 //! field that no code reads, with `E0297`, in human and JSON output; a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! End-to-end tests of `oskac run`: the example programs print what they
 //! should, and a program with checker diagnostics is refused.
 

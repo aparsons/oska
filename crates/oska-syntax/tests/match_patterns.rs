@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `match` expressions and the v0 pattern set, through `parse_module`.
 
 mod common;

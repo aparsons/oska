@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What a browser would make of a page the site generator wrote: the
 //! check that nothing in it could run, and a reader for its start tags.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Traits and `?`.
 //!
 //! # Trait calls

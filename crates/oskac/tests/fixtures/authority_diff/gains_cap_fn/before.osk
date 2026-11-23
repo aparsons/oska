@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `report` already writes to stdout.
 
 fn report(io: Stdout) -> Result<(), IoError> {

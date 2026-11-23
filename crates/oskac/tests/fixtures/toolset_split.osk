@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A toolset whose `call` is a `match` on the tool's name with literal
 // arms, for the golden tests of per-tool authority (#249). Each tool
 // reaches only the fields its arm uses; `forget` has a spec but no arm,

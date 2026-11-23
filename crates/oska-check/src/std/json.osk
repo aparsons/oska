@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.json`: read and write JSON (RFC 8259). `use std.json`, then write
 // `json.parse(...)`, `json.encode(...)` and `json.Schema.object(...)`.
 //

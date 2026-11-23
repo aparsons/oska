@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.chacha20poly1305` against every vector of Wycheproof's `chacha20_poly1305_test.json`
 // (C2SP/wycheproof at commit 65ca494727a52944c204441c860b039e6786b99b,
 // `testvectors_v1/`) with a 256-bit key, 128-bit tags and the 96-bit

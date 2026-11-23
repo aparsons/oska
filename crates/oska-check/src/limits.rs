@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! **Run limits** (spec #446): the bounds an embedder puts on one `oskac
 //! run`, which stop the program with a panic of its own and exit code
 //! 101 when it reaches one.

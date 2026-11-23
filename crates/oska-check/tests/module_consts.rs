@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Module-level constants (#83, spec #184): a `const NAME: T = expr` is in
 //! scope in every function, method and test of its module, with its
 //! declared type, and its initializer is checked against that type like a

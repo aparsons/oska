@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests scripts/x509-roots/generate.py against a cut of certdata.txt: the
 # output is the golden file, is the same on a second run, keeps only the roots
 # trusted for server authentication, and the committed std.x509_roots module

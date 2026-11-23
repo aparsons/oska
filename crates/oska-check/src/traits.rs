@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Checking `impl Trait for Type`: every required method is provided
 //! (`E0261`), each method has the trait's signature with `Self` and the
 //! trait's arguments replaced (`E0262`), and no method is one the trait

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Random.secure_bytes(n)` (#240): `n` secret bytes. On the test host they
 //! are fixed, the generator's words little-endian from `FAKE_SEED`, so a
 //! recorded handshake replays byte for byte, and the interpreter and the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The security policy and the release key's fingerprint (spec #183,
 //! ticket #187).
 //!

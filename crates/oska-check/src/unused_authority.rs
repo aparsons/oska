@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! **Unused authority** (ADR 0016): under `--release`, a
 //! capability-bearing parameter that its function never uses (`E0296`),
 //! or a capability-bearing field of a `cap struct` that no code in the

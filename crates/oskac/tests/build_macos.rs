@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac build --target macos-aarch64` (spec #154, ticket #169) and
 //! `--target macos-x86_64` (#173): macOS executables, a Mach-O that `dyld` loads, importing only
 //! from `libSystem`, with an ad-hoc code signature `oskac` writes itself.

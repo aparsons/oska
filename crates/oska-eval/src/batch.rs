@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A batch config, and `plan`: the runs a batch will make and what they
 //! may cost, worked out before anything runs.
 //!

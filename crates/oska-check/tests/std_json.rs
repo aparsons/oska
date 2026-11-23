@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.json` (#248): a `std` module written in Oska, checked with each
 //! program that imports it. A parsed string is untrusted, so it is refused
 //! in every structural position and accepted in data positions; the

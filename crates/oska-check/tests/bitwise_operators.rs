@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Bitwise operators, shifts and rotations (ticket #220): `& | ^ ~ << >>`
 //! and `rotl`/`rotr` on `U8`, `U32` and `U64` only, `E0223` on any other
 //! type with a message naming the three, and `E0108`, with its machine

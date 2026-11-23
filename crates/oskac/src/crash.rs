@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What `oskac` does when it has a bug: a Rust panic inside `oskac` itself,
 //! never a panic of a program it runs (`P0038` and the other `P00xx` stops
 //! are reported by `oskac` and do not come here).

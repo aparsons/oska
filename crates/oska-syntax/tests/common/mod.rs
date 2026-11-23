@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers shared by the `parse_module` integration tests.
 //!
 //! Tests parse a small snippet and compare its JSON export against JSON

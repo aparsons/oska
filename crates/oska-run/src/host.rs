@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The [`Host`]: the interpreter's only way to reach the OS.
 //!
 //! Every intrinsic that touches the outside world goes through it, so a

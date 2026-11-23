@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the evaluation driver, scripts/eval-batch/run.sh. Run from
 # anywhere:
 #

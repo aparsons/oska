@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests expected.py (filter logic) and check.sh (against a stubbed gh).
 
 set -euo pipefail

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.ecdsa` on both backends: RFC 6979's deterministic ECDSA examples (appendix
 // A.2.5, P-256 with SHA-256, and A.2.6, P-384 with SHA-384, the message
 // "sample"), and edge cases that change one of them: a digest cut or short

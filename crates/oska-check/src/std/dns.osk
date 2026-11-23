@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.dns`: a stub DNS resolver, written in Oska so that every platform
 // resolves names the same way (spec #228, ADR 0012). A module sees it only
 // after `use std.dns`.

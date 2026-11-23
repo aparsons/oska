@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Expression checking (#36): function bodies are type-checked with local,
 //! bidirectional inference.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Attack programs (spec #115, #119), in the style of spec #105's review:
 //! each uses a module boundary to try to hide authority, trust, a secret,
 //! or a closure's capabilities, or to reach what another module keeps

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The memory run limit (spec #446, ticket #453): `oskac run
 //! --max-memory=<bytes>` stops a program before its values take more than
 //! that many bytes, net of those it let go of, with `P0040` and exit code

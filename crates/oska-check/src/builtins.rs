@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the checker knows about the prelude's built-in types and traits,
 //! for backends: the one source of which types are capabilities, which
 //! `std` modules exist, what a `TestContext` holds, and the names of the

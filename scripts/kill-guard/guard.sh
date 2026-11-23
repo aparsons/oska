@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Claude Code PreToolUse hook (registered in .claude/settings.json) that
 # refuses Bash commands which kill by pattern, name or session. Agents share

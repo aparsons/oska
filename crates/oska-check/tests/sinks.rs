@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sink modules and structural positions (#54): `use std.x` binds the
 //! module, reached through qualified paths such as `sql.Db`; the sink
 //! modules `std.sql`, `std.proc`, and `std.html`; and the structural
