@@ -49,7 +49,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("TestContext.net_attempts", NATIVE_NET_ATTEMPTS),
     (
         "HostConnect.exchange_datagram",
-        "interpreter-first: the native backend refuses it with E0390 (ADR 0024)",
+        "interpreter-first: the native backend refuses it with E0390 (ADR 0026)",
     ),
     ("Spawn", "process spawning has no runtime yet"),
     ("Sched", "scheduling has no runtime yet"),

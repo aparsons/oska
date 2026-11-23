@@ -3414,7 +3414,7 @@ fn borrows_arguments(name: &str) -> bool {
 /// Each of these keeps its state, if it has any (the arguments, the
 /// environment, the input buffer, the generator, the root budget), in the
 /// runtime's globals. `Net`, `NetConnect` and `NetListen` have no state:
-/// they only attenuate (ADR 0023), and what they give, a host capability or
+/// they only attenuate (ADR 0025), and what they give, a host capability or
 /// a loopback listener, is an object.
 fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(

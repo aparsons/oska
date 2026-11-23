@@ -1239,7 +1239,7 @@ mod tests {
         for expected in ["Spawn", "Sched"] {
             assert!(exempt.iter().any(|e| e == expected), "{exempt:?}");
         }
-        // The network has a runtime (ADR 0023).
+        // The network has a runtime (ADR 0025).
         for run in [
             "Net",
             "NetConnect",

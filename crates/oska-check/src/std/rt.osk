@@ -4101,7 +4101,7 @@ pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
 // ---- Name servers ----------------------------------------------------------
 
 // `NetConnect.system_name_servers`: the DNS servers Windows lists, in
-// order, as IPv4 literals, from `GetNetworkParams` (ADR 0024). Every other
+// order, as IPv4 literals, from `GetNetworkParams` (ADR 0026). Every other
 // platform keeps them in `resolv.conf`, which `std.dns` reads itself, so
 // they have none to give; and the test host lists none.
 pub fn net_system_name_servers(net: NetConnect) -> Result<List<String>, IoError> {
@@ -6263,7 +6263,7 @@ fn raw_text_of(contents: Bytes) -> String {
 
 // ---- Sockets ---------------------------------------------------------------
 //
-// The network capabilities (ADR 0023), connecting and listening as the
+// The network capabilities (ADR 0025), connecting and listening as the
 // interpreter does (`oska-run/src/net.rs`, `oska-sys/src/net.rs`), with the
 // same messages on every platform:
 //

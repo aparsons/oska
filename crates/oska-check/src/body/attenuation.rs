@@ -73,7 +73,7 @@ impl Body<'_, '_, '_> {
     }
 
     /// The root of a network narrowing, which names a port as well as a
-    /// host (ADR 0023): `host:port` for `restrict_to(host, port)`, with an
+    /// host (ADR 0025): `host:port` for `restrict_to(host, port)`, with an
     /// IPv6 literal in brackets, and `loopback:port` for
     /// `restrict_to_loopback(port)`. `None` when the call is not one;
     /// `Some(None)` when the host or the port is not known before the

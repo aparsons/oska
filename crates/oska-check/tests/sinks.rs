@@ -314,7 +314,7 @@ fn a_response_is_untrusted() {
     );
 }
 
-// ---- Host capabilities (ADR 0023) ------------------------------------------------------
+// ---- Host capabilities (ADR 0025) ------------------------------------------------------
 
 #[test]
 fn untrusted_text_is_rejected_as_a_host_on_net_too() {
