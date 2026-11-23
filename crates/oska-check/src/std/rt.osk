@@ -3998,6 +3998,11 @@ pub fn clock_now_millis(clock: Clock) -> Int {
     if faking() {
         return 0
     }
+    real_now_millis()
+}
+
+// The realtime clock, in milliseconds, faked or not.
+fn real_now_millis() -> Int {
     if on_windows() {
         return win_now_millis()
     }
@@ -6277,11 +6282,13 @@ fn raw_text_of(contents: Bytes) -> String {
 //   struct, a `Sock` whose handle is the open socket, as the interpreter's
 //   `Connection` holds its `HostCap` with the stream in it.
 // - Every socket is non-blocking. A call that would block waits with `poll`
-//   instead, for at most 10 seconds to connect and 30 to send, receive or
-//   accept, and fails with `timed out`.
-// - Name resolution is not here yet: the Oska stub resolver is a later
-//   ticket of spec #228. A host is an IPv4 or IPv6 literal, or `localhost`
-//   (::1, then 127.0.0.1); any other well-formed name is `host not found`.
+//   instead, for at most 10 seconds to connect to one address and 30 in all
+//   over the addresses of one `connect`, and 60 of silence to send, receive
+//   or accept, and fails with `timed out`.
+// - Name resolution is not here yet: `std.dns` is not wired into `connect`
+//   (tracked in a follow-up issue). A host is an IPv4 or IPv6 literal, or
+//   `localhost` (::1, then 127.0.0.1); any other well-formed name is
+//   `host not found`.
 // - A failure's words are `net_wording`'s, from the error's kind, never the
 //   system's own text.
 //
@@ -6289,10 +6296,34 @@ fn raw_text_of(contents: Bytes) -> String {
 // words, read and written at their offsets, so that no local is released
 // without `sock_drop` closing its socket.
 
-// How long to wait to connect, and to send, receive or accept, in
-// milliseconds: `CONNECT_TIMEOUT` and `READ_TIMEOUT` of `oska-sys`.
+// How long to wait to connect to one address, to connect over all the
+// addresses of one `connect`, and to send, receive or accept, in
+// milliseconds: `CONNECT_TIMEOUT`, `CONNECT_TOTAL_TIMEOUT` and `READ_TIMEOUT`
+// of `oska-sys`. A test in `oska-sys` holds these equal.
 fn connect_wait() -> Int {
     10000
+}
+
+fn connect_total_wait() -> Int {
+    30000
+}
+
+// The milliseconds the next address may take after `spent` of the total:
+// `connect_wait`, cut down to what is left of `connect_total_wait`, or 0
+// when none is left.
+fn connect_budget(spent: Int) -> Int {
+    var used = spent
+    if used < 0 {
+        used = 0
+    }
+    let left = connect_total_wait() - used
+    if left <= 0 {
+        return 0
+    }
+    if left < connect_wait() {
+        return left
+    }
+    connect_wait()
 }
 
 fn read_wait() -> Int {
@@ -6785,9 +6816,9 @@ fn socket_error(fd: Int) -> Int {
 // ---- Connecting
 
 // A socket connected to the IPv4 or IPv6 address at `ip`, at `port`,
-// waiting at most `connect_wait` for it to answer: its descriptor, or minus
-// the error.
-fn connect_to(v6: Bool, ip: Int, port: Int) -> Int {
+// waiting at most `wait` milliseconds for it to answer: its descriptor, or
+// minus the error.
+fn connect_to(v6: Bool, ip: Int, port: Int, wait: Int) -> Int {
     let platform = rt_mem_platform()
     let fd = socket_open(v6)
     if fd < 0 {
@@ -6803,7 +6834,7 @@ fn connect_to(v6: Bool, ip: Int, port: Int) -> Int {
         close_socket(fd)
         return result
     }
-    let ready = wait_ready(fd, platform.poll_out, connect_wait())
+    let ready = wait_ready(fd, platform.poll_out, wait)
     if ready < 0 {
         close_socket(fd)
         return ready
@@ -6845,16 +6876,22 @@ fn net_connect(host: String, port: Int) -> Result<Int, String> {
         return Err("invalid host {name}: it is not a DNS name or an IP address")
     }
     var fd = 0
+    let started = real_now_millis()
     if kind != 0 {
-        fd = connect_to(kind == 16, ip, port)
+        fd = connect_to(kind == 16, ip, port, connect_budget(0))
     } else if is_localhost(host) {
         rt_mem_store8(rt_mem_add(ip, 15), 1)
-        fd = connect_to(true, ip, port)
+        fd = connect_to(true, ip, port, connect_budget(0))
         if fd < 0 {
-            rt_mem_store8(rt_mem_add(ip, 15), 0)
-            rt_mem_store8(ip, 127)
-            rt_mem_store8(rt_mem_add(ip, 3), 1)
-            fd = connect_to(false, ip, port)
+            let budget = connect_budget(real_now_millis() - started)
+            if budget == 0 {
+                fd = 0 - rt_mem_platform().e_timed_out
+            } else {
+                rt_mem_store8(rt_mem_add(ip, 15), 0)
+                rt_mem_store8(ip, 127)
+                rt_mem_store8(rt_mem_add(ip, 3), 1)
+                fd = connect_to(false, ip, port, budget)
+            }
         }
     } else {
         free(object)

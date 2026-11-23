@@ -26,6 +26,9 @@ use std::time::{Duration, Instant};
 /// How long `connect` waits for each address to answer.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long `connect` takes in all, over every address it tries.
+pub const CONNECT_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// How long a read, or an `accept`, waits for the other side.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -70,17 +73,11 @@ impl NetStream {
                 .map(Iterator::collect)
                 .map_err(|_| failed("host not found"))?,
         };
-        let mut last = None;
-        for candidate in candidates {
-            match TcpStream::connect_timeout(&candidate, CONNECT_TIMEOUT) {
-                Ok(socket) => return NetStream::new(socket),
-                Err(err) => last = Some(err),
-            }
+        match connect_any(&candidates, CONNECT_TIMEOUT, CONNECT_TOTAL_TIMEOUT) {
+            Ok(socket) => NetStream::new(socket),
+            Err(Some(err)) => Err(failed(describe(&err))),
+            Err(None) => Err(failed("host not found")),
         }
-        Err(match last {
-            Some(err) => failed(describe(&err)),
-            None => failed("host not found"),
-        })
     }
 
     fn new(socket: TcpStream) -> io::Result<NetStream> {
@@ -187,6 +184,35 @@ pub fn exchange_datagram(host: &str, port: i128, message: &[u8]) -> io::Result<V
             return Ok(buffer);
         }
     }
+}
+
+/// The time one more address may take: `per_address`, cut down to what is
+/// left of `total` after `spent`, or `None` when none is left.
+fn attempt_budget(spent: Duration, per_address: Duration, total: Duration) -> Option<Duration> {
+    let left = total.checked_sub(spent).filter(|left| !left.is_zero())?;
+    Some(per_address.min(left))
+}
+
+/// Connect to the first of `candidates` that answers, each for at most
+/// `per_address`, and all of them for at most `total`. The error is the last
+/// failure, `timed out` once the total is spent, or `None` for no address.
+fn connect_any(
+    candidates: &[SocketAddr],
+    per_address: Duration,
+    total: Duration,
+) -> Result<TcpStream, Option<io::Error>> {
+    let started = Instant::now();
+    let mut last = None;
+    for candidate in candidates {
+        let Some(budget) = attempt_budget(started.elapsed(), per_address, total) else {
+            return Err(Some(io::Error::from(io::ErrorKind::TimedOut)));
+        };
+        match TcpStream::connect_timeout(candidate, budget) {
+            Ok(socket) => return Ok(socket),
+            Err(err) => last = Some(err),
+        }
+    }
+    Err(last)
 }
 
 /// A listening socket on the loopback address, `127.0.0.1` or `::1`, never
@@ -468,6 +494,55 @@ mod tests {
                 format!("port {bad} is out of range: use 1 to 65535")
             );
         }
+    }
+
+    #[test]
+    fn every_address_gets_ten_seconds_and_all_of_them_thirty() {
+        let second = Duration::from_secs;
+        assert_eq!(CONNECT_TIMEOUT, second(10));
+        assert_eq!(CONNECT_TOTAL_TIMEOUT, second(30));
+        let budget = |spent| attempt_budget(second(spent), CONNECT_TIMEOUT, CONNECT_TOTAL_TIMEOUT);
+        assert_eq!(budget(0), Some(second(10)));
+        assert_eq!(budget(25), Some(second(5)));
+        assert_eq!(budget(30), None);
+        assert_eq!(budget(31), None);
+    }
+
+    /// The value a runtime function of `rt.osk` returns, when its body is one
+    /// integer.
+    fn runtime_constant(name: &str) -> u128 {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../oska-check/src/std/rt.osk");
+        let source = std::fs::read_to_string(path).expect("rt.osk");
+        let head = format!("fn {name}() -> Int {{\n    ");
+        let at = source.find(&head).expect("the function") + head.len();
+        let digits: String = source[at..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse().expect("an integer")
+    }
+
+    #[test]
+    fn the_native_runtime_waits_as_long_as_the_interpreter() {
+        assert_eq!(
+            runtime_constant("connect_wait"),
+            CONNECT_TIMEOUT.as_millis()
+        );
+        assert_eq!(
+            runtime_constant("connect_total_wait"),
+            CONNECT_TOTAL_TIMEOUT.as_millis()
+        );
+        assert_eq!(runtime_constant("read_wait"), READ_TIMEOUT.as_millis());
+    }
+
+    #[test]
+    fn a_spent_total_stops_the_next_address_with_timed_out() {
+        let listener = NetListener::bind_loopback(0).expect("listen");
+        let port = listener.port().expect("port");
+        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let err = connect_any(&[address], CONNECT_TIMEOUT, Duration::ZERO).expect_err("no time");
+        assert_eq!(err.map(|e| describe(&e)), Some("timed out"));
+        assert!(connect_any(&[address], CONNECT_TIMEOUT, CONNECT_TOTAL_TIMEOUT).is_ok());
     }
 
     #[test]

@@ -46,11 +46,11 @@ A connection waits at most 10 seconds for each address and 30 seconds in all, an
 
 Everything a connection reads is untrusted. `receive()` gives `Untrusted<String>` and fails on invalid UTF-8. `receive_bytes()` gives `Untrusted<Bytes>`: what is there, up to 64 KiB, and an empty `Bytes` at the end of the stream. `send(text)` and `send_bytes(bytes)` write. `host()` gives the name the capability was confined to, and `close()` closes the connection.
 
-The interpreter looks a name up with `std.dns`. The native backend reads a literal address and `localhost` today, and any other name fails with `host not found` (see [what works today](what-works-today.md)).
+The interpreter looks a name up with the operating system's resolver. The native backend resolves only an IP address and `localhost`, and any other name fails with `host not found` (see [what works today](what-works-today.md)). `std.dns` is a module a program can call itself, but `connect()` does not use it yet; that is tracked in a follow-up issue. `HostConnect.exchange_datagram` and `NetConnect.system_name_servers`, the two methods `std.dns` uses, run on the interpreter only for now.
 
 ## Listening, for a local test server
 
-`net.listen_only()` gives a `NetListen`, and `restrict_to_loopback(port)` on it gives a `LoopbackListen`. It accepts connections from this machine only (`127.0.0.1` and `::1`). Port 0 picks a free port, and `port()` says which. Nothing in Oska can listen on a public address yet.
+`net.listen_only()` gives a `NetListen`, and `restrict_to_loopback(port)` on it gives a `LoopbackListen`. It accepts connections from this machine only: it listens on `127.0.0.1`, or on `::1` where that address is not available, not on both at once. Port 0 picks a free port, and `port()` says which. Nothing in Oska can listen on a public address yet.
 
 ```oska
 fn serve_once(listen: LoopbackListen) -> Result<(), IoError> {
@@ -79,7 +79,7 @@ fn main: Stdout (io), Net (net)
 
 ## Testing
 
-In a plain `test`, `t.net` is a stand-in `Net`. It refuses every connect and listen with one stable `IoError`, and `t.net_attempts()` lists the host and port that code tried to reach, so a test can check where code goes without a network. Under `--integration`, `t.net` is the real network. See [testing](testing.md).
+In a plain `test`, `t.net` is a stand-in `Net`. It refuses every connect and listen with one stable `IoError`, and `t.net_attempts()` lists the host and port that code tried to reach (the design text for this feature called it `net_requests`; the name in the code, and so in your programs, is `net_attempts`), so a test can check where code goes without a network. Under `--integration`, `t.net` is the real network. See [testing](testing.md).
 
 ## Authority
 
