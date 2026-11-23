@@ -1,7 +1,7 @@
 exit: 3
 --- stdout
 fn fetch: NetConnect (net)
-  crates/oskac/tests/fixtures/authority_diff/helper_new_kind/after.osk:6:5: NetConnect -> HostConnect: restrict_to "example.com:443" (bytes 240..275)
+  crates/oskac/tests/fixtures/authority_diff/helper_new_kind/after.osk:7:5: NetConnect -> HostConnect: restrict_to "example.com:443" (bytes 279..314)
 fn main: Stdout (io)
 baseline: <baseline>
   added fn fetch: NetConnect (new to the program: NetConnect)

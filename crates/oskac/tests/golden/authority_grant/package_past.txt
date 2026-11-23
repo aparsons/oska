@@ -1,7 +1,7 @@
 exit: 3
 --- stdout
 fn pkg.main.fetch: NetConnect (net)
-  crates/oskac/tests/fixtures/authority_grant/package_past/src/main.osk:5:5: NetConnect -> HostConnect: restrict_to "example.com:443" (bytes 157..192)
+  crates/oskac/tests/fixtures/authority_grant/package_past/src/main.osk:6:5: NetConnect -> HostConnect: restrict_to "example.com:443" (bytes 196..231)
 fn pkg.main.main: Stdout (io)
 grant: <grant>
   added fn pkg.main.fetch: NetConnect (new to the program: NetConnect)

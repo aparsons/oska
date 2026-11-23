@@ -8,7 +8,7 @@ exit: 3
   ],
   "audit": [],
   "attenuations": [
-    {"function":"pkg.main.fetch","method":"restrict_to","path":"src/main.osk","span":{"start":157,"end":192},"source":"NetConnect","result":"HostConnect","root":"example.com:443"}
+    {"function":"pkg.main.fetch","method":"restrict_to","path":"src/main.osk","span":{"start":196,"end":231},"source":"NetConnect","result":"HostConnect","root":"example.com:443"}
   ],
   "authority_diff": {
     "grant": "<grant>",

@@ -8,7 +8,7 @@ exit: 3
   ],
   "audit": [],
   "attenuations": [
-    {"function":"fetch","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_grant/main_only_helper_new_kind/program.osk","span":{"start":263,"end":298},"source":"NetConnect","result":"HostConnect","root":"example.com:443"}
+    {"function":"fetch","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_grant/main_only_helper_new_kind/program.osk","span":{"start":302,"end":337},"source":"NetConnect","result":"HostConnect","root":"example.com:443"}
   ],
   "authority_diff": {
     "grant": "<grant>",
