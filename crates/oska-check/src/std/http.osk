@@ -69,6 +69,8 @@ pub const MAX_FIELDS: Int = 100
 const MAX_LINE: Int = 1024
 const MAX_INTERIM: Int = 16
 
+// Why `http.get` failed: the TLS connection, a response that is not
+// accepted, a limit, or a request that was refused.
 pub enum HttpError {
     // The TLS connection failed, or the stream ended without `close_notify`.
     Tls(tls.TlsError),
