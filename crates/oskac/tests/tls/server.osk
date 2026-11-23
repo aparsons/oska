@@ -4,7 +4,7 @@
 // port on a line of its own, and serves the connections it is told to, each
 // with the scenario it is told (a way to behave, or to misbehave on purpose).
 //
-//     server.osk -- <pki directory> <scenario> <connections>
+//     server.osk -- <chain file> <key file> <scenario> <connections>
 //
 // It is the server role of the protocol, written for the tests only: both
 // suites (the client's choice by default), both groups, HelloRetryRequest and
@@ -998,30 +998,20 @@ fn serve(connection: Connection, scenario: String, chain: List<Bytes>, key: Byte
 }
 
 fn main(io: Stdout, log: Stderr, net: Net, fs: FsRead, random: Random, args: Args) -> Result<(), IoError> {
-    let dir = args.get(1).unwrap_or(".").assume_trusted()
-    let scenario = args.get(2).unwrap_or("good").assume_trusted()
-    let count = args.get(3).unwrap_or("1").assume_trusted().parse_int().unwrap_or(1)
-    let chain_name = if scenario == "wrong_host" {
-        "chain_wrong_host.hex"
-    } else if scenario == "expired" {
-        "chain_expired.hex"
-    } else if scenario == "unknown_issuer" {
-        "chain_unknown.hex"
-    } else if scenario == "no_intermediate" {
-        "chain_no_intermediate.hex"
-    } else {
-        "chain_good.hex"
-    }
-    let chain = read_lines(fs, "{dir}/{chain_name}")?
-    let key = read_lines(fs, "{dir}/leaf.key.hex")?.at(0)
+    let chain_file = args.get(1).unwrap_or("").assume_trusted()
+    let key_file = args.get(2).unwrap_or("").assume_trusted()
+    let scenario = args.get(3).unwrap_or("good").assume_trusted()
+    let count = args.get(4).unwrap_or("1").assume_trusted().parse_int().unwrap_or(1)
     if scenario == "sign" {
         // The RFC 6979 signing check: print the signature of the digest in
-        // the second argument under the scalar in the first.
-        let digest = Bytes.from_hex(args.get(4).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
-        let d = Bytes.from_hex(args.get(5).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
+        // the fifth argument under the scalar in the sixth.
+        let digest = Bytes.from_hex(args.get(5).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
+        let d = Bytes.from_hex(args.get(6).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
         io.println(ecdsa_sign(d, digest).to_hex())?
         return Ok(())
     }
+    let chain = read_lines(fs, chain_file)?
+    let key = read_lines(fs, key_file)?.at(0)
     let listener = net.listen_only().restrict_to_loopback(0)
     let port = listener.port()
     io.println("{port}")?

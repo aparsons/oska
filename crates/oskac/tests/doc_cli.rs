@@ -279,7 +279,8 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
             "std.hkdf",
             "std.x25519",
             "std.chacha20poly1305",
-            "std.aes128gcm"
+            "std.aes128gcm",
+            "std.tls"
         ]
     );
     assert!(items.iter().all(|i| !field(i, "name").starts_with("rt_")));

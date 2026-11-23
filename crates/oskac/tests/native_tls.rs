@@ -57,8 +57,21 @@ const CLIENT: &str = include_str!("tls/client.osk");
 const REPLAY: &str = include_str!("tls/replay.osk");
 const ROOT: &str = include_str!("tls/pki/root.hex");
 
-fn pki_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tls/pki")
+fn pki(file: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/tls/pki")
+        .join(file)
+}
+
+/// The certificate chain file the server sends for a scenario.
+fn chain_for(scenario: &str) -> PathBuf {
+    pki(match scenario {
+        "wrong_host" => "chain_wrong_host.hex",
+        "expired" => "chain_expired.hex",
+        "unknown_issuer" => "chain_unknown.hex",
+        "no_intermediate" => "chain_no_intermediate.hex",
+        _ => "chain_good.hex",
+    })
 }
 
 fn recording(name: &str) -> String {
@@ -86,7 +99,8 @@ impl Server {
     /// and read the port it prints.
     fn start(scenario: &str, connections: usize) -> Server {
         let mut child = Command::new(server_exe())
-            .arg(pki_dir())
+            .arg(chain_for(scenario))
+            .arg(pki("leaf.key.hex"))
             .arg(scenario)
             .arg(connections.to_string())
             .stdin(Stdio::null())
@@ -437,7 +451,8 @@ fn every_scenario_of_the_loopback_server_behaves_as_it_should() {
 fn the_server_signs_with_the_nonce_of_rfc_6979() {
     // RFC 6979, appendix A.2.5: P-256 with SHA-256, the message "sample".
     let output = Command::new(server_exe())
-        .arg(pki_dir())
+        .arg(chain_for("good"))
+        .arg(pki("leaf.key.hex"))
         .args([
             "sign",
             "1",
