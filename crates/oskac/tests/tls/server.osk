@@ -348,6 +348,12 @@ cap struct Session {
     padding: Int,
     // The description of the first alert received, or -1.
     alert: Int,
+    // What is to be sent: it goes out in one write before the server
+    // reads, as a real server's flight does, so a client that ends the
+    // connection on the first failure has read it all (closing with unread
+    // data resets the connection on some systems, and the alert it sent
+    // would be lost).
+    out: Bytes,
 }
 
 fn key_length(suite: Int) -> Int {
@@ -395,8 +401,18 @@ impl Session {
         self.read_on = true
     }
 
-    fn put(self, bytes: Bytes) -> Result<(), IoError> {
-        self.connection.send_bytes(bytes)
+    fn put(var self, bytes: Bytes) -> Result<(), IoError> {
+        self.out.append(bytes)
+        Ok(())
+    }
+
+    fn flush(var self) -> Result<(), IoError> {
+        if self.out.len() > 0 {
+            let bytes = self.out
+            self.out = Bytes.new()
+            self.connection.send_bytes(bytes)?
+        }
+        Ok(())
     }
 
     // A record of `kind`, protected when the write keys are on.
@@ -428,6 +444,7 @@ impl Session {
     }
 
     fn fill(var self) -> Result<(), IoError> {
+        self.flush()?
         let chunk = self.connection.receive_bytes()?
         if chunk.len() == 0 {
             return Err(IoError(message: "the client closed"))
@@ -945,7 +962,9 @@ impl Session {
             big.push(3)
             big.push(3)
             big.push_u16_be(16641)
-            big.append(Bytes.zeroed(16641))
+            // The client refuses on the header: no more is sent, so it has
+            // read everything when it closes.
+            big.append(Bytes.zeroed(8))
             self.put(big)?
             return Ok(())
         }
@@ -989,10 +1008,19 @@ fn serve(connection: Connection, scenario: String, chain: List<Bytes>, key: Byte
         write_sequence: 0,
         padding: 0,
         alert: -1,
+        out: Bytes.new(),
     )
     match s.run(chain, key, random) {
         Ok(_) => {}
         Err(_) => {}
+    }
+    if scenario == "truncate" {
+        // End the stream with no close_notify, now.
+        match s.flush() {
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        connection.close()
     }
     s.alert_seen()
 }

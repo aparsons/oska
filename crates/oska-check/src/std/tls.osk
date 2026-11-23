@@ -694,6 +694,7 @@ pub struct Engine {
     out: Bytes,
     events: List<Event>,
     failure: Option<TlsError>,
+    close_sent: Bool,
 }
 
 impl Engine {
@@ -775,6 +776,7 @@ impl Engine {
             out: Bytes.new(),
             events: [],
             failure: failure,
+            close_sent: false,
         )
     }
 
@@ -869,11 +871,13 @@ impl Engine {
         self.drain()
     }
 
-    // `close_notify`, which ends what this side sends. The engine accepts no
-    // more data afterwards.
+    // `close_notify`, which ends what this side sends: once, when the
+    // connection is open, and also when the server has closed it first (RFC
+    // 8446, section 6.1). The engine accepts no more data afterwards.
     pub fn close(var self) -> Step {
-        if self.state == STATE_CONNECTED {
+        if (self.state == STATE_CONNECTED || self.state == STATE_CLOSED) && self.write_on && !self.close_sent {
             self.send_alert(1, 0)
+            self.close_sent = true
             self.state = STATE_CLOSED
         }
         self.drain()
@@ -1644,19 +1648,19 @@ impl TlsStream {
         Ok(Bytes.new())
     }
 
-    // Send `close_notify` and close the connection. Every later use fails.
+    // Send `close_notify` (unless the connection failed) and close the
+    // connection, also after the server's own `close_notify`, which it
+    // answers. Every later use fails.
     pub fn close(var self) {
-        if !self.closed {
-            let step = self.engine.close()
-            if step.output.len() > 0 {
-                match self.connection.send_bytes(step.output) {
-                    Ok(_) => {}
-                    Err(_) => {}
-                }
+        let step = self.engine.close()
+        if step.output.len() > 0 {
+            match self.connection.send_bytes(step.output) {
+                Ok(_) => {}
+                Err(_) => {}
             }
-            self.connection.close()
-            self.closed = true
         }
+        self.connection.close()
+        self.closed = true
     }
 
     // The application protocol the server chose, one of those offered.
