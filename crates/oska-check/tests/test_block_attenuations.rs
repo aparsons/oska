@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Attenuations inside a `test` block (#150): the authority report names
 //! the test as `test "<name>"`, in the human report's heading and in the
 //! JSON `function` field, so a reviewer can tell which test narrows what.

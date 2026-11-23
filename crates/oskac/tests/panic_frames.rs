@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Panic call stacks (ticket #370, spec #367): a panic's diagnostic
 //! carries `frames`, the calls that led to it, innermost first, on the
 //! interpreter and the native backend alike. The differential harness

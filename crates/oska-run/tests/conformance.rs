@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Conformance (#67): the prelude's body-less `String` and trust methods
 //! run, and the examples agree with the runtime.
 

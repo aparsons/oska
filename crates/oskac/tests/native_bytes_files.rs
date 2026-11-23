@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Bytes through the confined file capabilities (#223), run on both
 //! backends through the differential harness, on every platform that
 //! runs native executables: `read_bytes` gives a file that is not UTF-8

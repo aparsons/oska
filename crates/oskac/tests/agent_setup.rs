@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The agent-setup prompt (spec #70, ticket #80): the prompt a person pastes
 //! into a coding agent, the `AGENTS.md` and `CLAUDE.md` templates, and the
 //! opt-in Claude Code hook, all in `site/agent-setup/`.

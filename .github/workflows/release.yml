@@ -16,7 +16,10 @@
 #      version's CHANGELOG.md section and a footer (scripts/release/notes.sh),
 #      and fails if the version has none. smoke-image then runs both musl
 #      builds in alpine and in that image, on x86_64 and aarch64;
-#   3. signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
+#   3. attests the binaries with GitHub's build-provenance action (the
+#      attest job, tags only), lists that bundle, oskac.intoto.jsonl, in
+#      SHA256SUMS, and attests SHA256SUMS too, in SHA256SUMS.intoto.jsonl,
+#      which verify.sh allows by name; then signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
 #      (`ssh-keygen -Y sign -n oska-release`) and verifies the result against
 #      site/oska-release.pub; then, with the same key, signs the next
 #      release index (scripts/release/sign-index.sh, namespace oska-index):
@@ -317,8 +320,59 @@ jobs:
 
   # The only job that reads the signing key. The `release` environment
   # limits it to v* tags once configured (see the top of this file).
-  sign:
+  # Build provenance (spec #295). On a tag only: a pull request's dry run
+  # attests nothing, since a throwaway build is no release. This job alone
+  # holds id-token and attestations write. It attests the binaries and the
+  # image digest, lists that bundle in SHA256SUMS (add-bundle.sh), then
+  # attests SHA256SUMS itself. SHA256SUMS cannot list its own attestation,
+  # so that second bundle is published unlisted and verify.sh allows it by
+  # name. Both run before sign, so the signature covers the first bundle.
+  attest:
     needs: [assemble, smoke-image]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ needs.assemble.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-${{ needs.assemble.outputs.tag }}
+          path: release
+      - name: Attest the binaries
+        id: binaries
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/${{ needs.assemble.outputs.tag }}/oskac-*
+      - name: List the bundle in SHA256SUMS
+        env:
+          BUNDLE: ${{ steps.binaries.outputs.bundle-path }}
+        run: scripts/release/add-bundle.sh "release/$TAG" "$BUNDLE"
+      - name: Attest SHA256SUMS
+        id: sums
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/${{ needs.assemble.outputs.tag }}/SHA256SUMS
+      - name: Publish the attestation of SHA256SUMS beside it
+        env:
+          BUNDLE: ${{ steps.sums.outputs.bundle-path }}
+        run: cp "$BUNDLE" "release/$TAG/SHA256SUMS.intoto.jsonl"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: attested-${{ needs.assemble.outputs.tag }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    needs: [assemble, smoke-image, attest]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -331,7 +385,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: unsigned-${{ needs.assemble.outputs.tag }}
+          name: attested-${{ needs.assemble.outputs.tag }}
           path: release
       - name: Sign with the release key
         env:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How the authority report writes a test's name (#150, spec #184): as an
 //! Oska string, so a name with quotes, escapes or text outside ASCII reads
 //! as it was written, and JSON-safe in the JSON report. A test with no

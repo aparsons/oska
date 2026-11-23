@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `parse_module` tests for full function headers: generic parameters with
 //! bounds, `self` and `var self` receivers, and contract clauses.
 

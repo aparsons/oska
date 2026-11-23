@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Verify a signed release directory.
 #
 #   scripts/release/verify.sh <release-dir> <public-key>
@@ -11,7 +12,11 @@
 #      tag's directory is refused, and every other line is a SHA-256 digest
 #      and a file name;
 #   3. every file SHA256SUMS lists is present with that digest;
-#   4. the directory holds nothing else;
+#   4. the directory holds nothing else, except SHA256SUMS.intoto.jsonl, the
+#      provenance attestation of SHA256SUMS itself, which the list cannot
+#      name (its digest would change the list) and which is allowed by name;
+#      any other attestation bundle (oskac.intoto.jsonl) is listed like a
+#      binary;
 #   5. oskac-image-digest, if the release has one (releases before the
 #      container image do not), is exactly one line `sha256:<64 hex>`: the
 #      digest of the image index users pull by, and the one the release
@@ -54,7 +59,7 @@ fi
   die "a file in $dir does not match SHA256SUMS"
 
 listed=$(tail -n +2 "$dir/SHA256SUMS" | awk '{print $2}' | LC_ALL=C sort)
-present=$(find "$dir" -mindepth 1 -maxdepth 1 ! -name SHA256SUMS ! -name SHA256SUMS.sig \
+present=$(find "$dir" -mindepth 1 -maxdepth 1 ! -name SHA256SUMS ! -name SHA256SUMS.sig ! -name SHA256SUMS.intoto.jsonl \
   -printf '%P\n' | LC_ALL=C sort)
 [ "$listed" = "$present" ] ||
   die "$dir holds files that SHA256SUMS does not list"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Fetches the avatar image a member links from their profile. Avatars are
 // served by `images.example.com` and `cdn.example.com`.
 

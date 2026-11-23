@@ -3,6 +3,7 @@
 The smallest Oska program, in `examples/hello.osk`. It prints a greeting.
 
 ```oska file=hello.osk
+// SPDX-License-Identifier: Apache-2.0
 // The smallest Oska program.
 // `main` receives only the capabilities it declares, so this program
 // can write to stdout and nothing else.

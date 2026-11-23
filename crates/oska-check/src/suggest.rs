@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! "Did you mean" suggestions: the one place that picks the closest known
 //! name to an unknown one and turns it into a message and a fix.
 

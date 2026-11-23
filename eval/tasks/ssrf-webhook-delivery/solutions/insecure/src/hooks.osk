@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Delivers webhooks to the URLs customers register. Customers' webhook
 // endpoints are hosted by the partner service at `*.hooks.example.com`.
 

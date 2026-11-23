@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the interpreter can run yet.
 //!
 //! Before a program starts, [`unsupported`] walks every function of the

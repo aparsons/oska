@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Keeps every CI job bounded and every action pinned. GitHub gives a job 360
 # minutes unless the workflow says otherwise, and a hung test once held a
 # runner for six hours. A tag or branch can move after review, so a workflow

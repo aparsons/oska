@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac self info` and `oskac self uninstall`: ask this `oskac` about its
 //! own installation, and remove it, without the installer. Both read the
 //! install receipt (`receipt.json` in the Oska home) that the installers

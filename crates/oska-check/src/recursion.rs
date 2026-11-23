@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Recursive types: a struct or enum must have a base case, a finite
 //! value to build. Recursion through `Option`, `List`, or an enum with a
 //! non-recursive variant needs no indirection.

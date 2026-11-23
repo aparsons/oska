@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Keeps the system-call and memory intrinsics inside `std.rt` (ADR 0013), the
 # way scripts/unsafe-guard keeps `unsafe` inside oska-sys. The checker rejects
 # them elsewhere with E0209; this scan holds even if the checker has a hole.

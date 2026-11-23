@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Sign a release directory's SHA256SUMS with an SSH key.
 #
 #   scripts/release/sign.sh <release-dir> <private-key> <public-key>

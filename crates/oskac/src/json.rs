@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The crate's JSON: one writer for every JSON string `oskac` prints
 //! ([`quote`], [`quote_option`]), and a strict reader for the install
 //! receipt. The crate has no dependencies, so it brings its own. The

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac build`: check a source file or package and compile it with the
 //! native backend (`oska-native`) to an executable for a target
 //! platform, whatever the host.

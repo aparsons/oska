@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac check` on secret integers (#224).
 //! `tests/fixtures/secrets/allowed.osk` uses every form a secret allows
 //! (`Secret.new`, the wrapping and bitwise operators with a secret or a

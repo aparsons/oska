@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Installs the formal step's pinned tools (scripts/formal/pins.sh) into DIR:
 # Lean, with its lake, as DIR/lean/bin, and TLC as DIR/tla2tools.jar. Linux
 # x86_64 and aarch64 only; every download is checked against its pinned

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska.toml`: the package manifest, read by our own parser for a strict
 //! subset of TOML (ADR 0010).
 //!

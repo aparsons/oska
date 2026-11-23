@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Interpreter for the Oska programming language.
 //!
 //! [`run`] checks a source file, refuses it if the checker reports any

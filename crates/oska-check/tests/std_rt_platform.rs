@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What `std.rt` reads that differs between target platforms is in one
 //! table per platform, which the constant intrinsic `rt_mem_platform()`
 //! gives (#158). Between Linux processors that is the open flags and the

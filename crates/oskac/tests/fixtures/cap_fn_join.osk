@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A plain `fn` and a `cap fn` in one list join to `List<cap fn() -> Int>`,
 // so the list needs no annotation. Calling its elements needs `cap fn`.
 

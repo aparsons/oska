@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The parity gate (spec #155, ticket #181; ADR 0014): every supported
 //! platform is native, so a program the native backend cannot compile yet
 //! (`E0390`) is an error for `oskac run` and `oskac test`, with the same

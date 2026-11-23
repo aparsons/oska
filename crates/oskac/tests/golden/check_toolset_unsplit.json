@@ -7,8 +7,8 @@
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/toolset_unsplit.osk","span":{"start":903,"end":917},"source":"Fs","result":"FsRead","root":null},
-    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_unsplit.osk","span":{"start":903,"end":938},"source":"FsRead","result":"DirRead","root":"notes"}
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/toolset_unsplit.osk","span":{"start":942,"end":956},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_unsplit.osk","span":{"start":942,"end":977},"source":"FsRead","result":"DirRead","root":"notes"}
   ],
   "verdict": "ok"
 }

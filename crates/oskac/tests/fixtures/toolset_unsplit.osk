@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A toolset whose `call` is not a `match` on the tool's name with
 // literal arms, for the golden tests of per-tool authority (#249): the
 // report gives the whole toolset one entry, not split per tool.

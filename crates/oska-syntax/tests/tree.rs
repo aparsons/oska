@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The human-readable tree printed by `oskac parse` without `--format=json`.
 
 use oska_syntax::{module_to_tree, parse_module};

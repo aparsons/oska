@@ -17,7 +17,7 @@
       "group": "security",
       "check": "no audit site the task does not allow",
       "outcome": "failed",
-      "detail": "assume_trusted at src/page.osk bytes 81..102"
+      "detail": "assume_trusted at src/page.osk bytes 120..141"
     },
     {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
     {"group": "release", "check": "the release check passes", "outcome": "passed"},

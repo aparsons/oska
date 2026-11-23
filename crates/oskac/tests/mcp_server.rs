@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.mcp`'s `serve` (#250), through a fake MCP peer: each transcript in
 //! `fixtures/mcp/` is the lines a client writes (`> `) and the exact lines
 //! the server must answer (`< `), in order, with `# ` comments. The peer

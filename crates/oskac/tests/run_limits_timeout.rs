@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The time limit (spec #446, ticket #455): `oskac run --timeout=<ms>`
 //! stops a program after that many milliseconds of wall-clock time, also
 //! while it waits for input, with `P0039` and exit code 101, on the

@@ -2,7 +2,7 @@ exit: 1
 --- stdout
 {
   "diagnostics": [
-    {"code":"E0221","message":"unknown name `missing`","path":"crates/oskac/tests/fixtures/check_verdict/diagnostics.osk","span":{"start":60,"end":67},"line":2,"column":16,"end_line":2,"end_column":23,"severity":"error","url":"https://oskalang.dev/codes/E0221","related":[],"suggestions":[]}
+    {"code":"E0221","message":"unknown name `missing`","path":"crates/oskac/tests/fixtures/check_verdict/diagnostics.osk","span":{"start":99,"end":106},"line":3,"column":16,"end_line":3,"end_column":23,"severity":"error","url":"https://oskalang.dev/codes/E0221","related":[],"suggestions":[]}
   ],
   "functions": [
     {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}

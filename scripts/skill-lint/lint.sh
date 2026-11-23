@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Checks the agent skills under .claude/skills/ against the mechanical rules
 # of docs/agents/skills.md. The judgement rules (plain language, clean room)
 # are for review.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The site generator, `site/build.osk`, run through the interpreter on a
 //! [`FakeHost`].
 //!
@@ -1387,7 +1388,7 @@ fn the_real_docs_build_every_agent_output_with_no_dead_link() {
         for destination in text.split("](/").skip(1) {
             let url = destination.split(')').next().unwrap_or("");
             assert!(
-                site.contains_key(&site_path(url)),
+                site.contains_key(&site_path(url)) || pdf_of_a_page(&site, &site_path(url)),
                 "{name} links to /{url}, which is not published"
             );
         }
@@ -1728,6 +1729,13 @@ fn real_site() -> BTreeMap<String, String> {
     site
 }
 
+/// A compliance page's PDF, which the Pages workflow prints and a local
+/// build does not: it is published when its page is.
+fn pdf_of_a_page(site: &BTreeMap<String, String>, path: &str) -> bool {
+    path.strip_suffix(".pdf")
+        .is_some_and(|stem| site.contains_key(&format!("{stem}.html")))
+}
+
 /// Files `stage-site.sh` publishes after the generator has run.
 const STAGED: &[&str] = &["install.sh", "install.ps1", "oska-release.pub"];
 
@@ -1762,7 +1770,8 @@ fn resolve(site: &BTreeMap<String, String>, from: &str, target: &str) -> Option<
             format!("{path}/index.html")
         };
     }
-    let published = site.contains_key(&path) || STAGED.contains(&path.as_str());
+    let published =
+        site.contains_key(&path) || STAGED.contains(&path.as_str()) || pdf_of_a_page(site, &path);
     published.then_some(path)
 }
 
@@ -2153,6 +2162,9 @@ fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
     // The site, as built, passes the link checker.
     let tracked = tracked_files();
     let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
+    // No Chrome here, so the PDFs are not made (see `real_site_staged`).
+    let mut site = site;
+    site.insert("pdf-skipped".to_string(), "\n".to_string());
     let outcome = check_links(&site, &tracked);
     assert_eq!(outcome.exit_code, 0, "{}", outcome.stderr);
 }
@@ -2169,6 +2181,9 @@ fn real_site_staged() -> &'static BTreeMap<String, String> {
         for staged in STAGED {
             site.insert(staged.to_string(), "staged\n".to_string());
         }
+        // No Chrome here: the PDFs of the compliance section are not made,
+        // and the checker accepts that only with this file.
+        site.insert("pdf-skipped".to_string(), "\n".to_string());
         site
     })
 }

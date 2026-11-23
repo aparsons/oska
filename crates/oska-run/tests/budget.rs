@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `Budget` capability (#251): authority to spend model tokens and
 //! calls, whose counters live in the runtime. `main` receives an unlimited
 //! one, `limit` narrows it, a reservation it cannot cover is refused with

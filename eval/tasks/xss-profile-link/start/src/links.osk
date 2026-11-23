@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Links between the pages of a forum.
 
 use std.html

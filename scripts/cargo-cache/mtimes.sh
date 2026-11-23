@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Makes a `target` directory restored from a CI cache usable by cargo,
 # without ever letting it use a stale build.
 #

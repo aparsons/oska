@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Conformance: every Oska sample in the design notes, and every example
 //! program, parses as a module. The design notes are embedded at compile time
 //! and the examples directory is scanned at run time, so editing either side

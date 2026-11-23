@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac hook claude --event=post-edit` (spec #185, ticket #194): after
 //! Claude Code edits a `.osk` file or an `oska.toml`, check what it
 //! belongs to and hand back only the diagnostics, compactly.

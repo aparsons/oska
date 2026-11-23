@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contracts and test bodies (#41): `requires` and `ensures` clauses are
 //! type-checked and may call only pure functions; `test` bodies are
 //! checked with the built-in `t`.

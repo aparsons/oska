@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Machine-applicable fixes attached to diagnostics. Each test checks the
 //! diagnostic's code and span, then applies the fix's edits to the source
 //! and checks the result.

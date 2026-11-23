@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac new <name>`: lay out a package (spec #367, Q9), so that no agent
 //! writes `oska.toml` and `src/` from memory. It writes the directory
 //! `<name>` with `oska.toml`, `src/main.osk` (or `src/lib.osk` for a

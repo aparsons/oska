@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for lint.sh. Each case builds a small skills folder in a private
 # temporary directory, runs the lint on it, and checks the exit status and,
 # for a failure, the message. The last case lints the repo's real skills.

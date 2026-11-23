@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Steps: 6. A `continue` in a `while` loop goes back to the condition: a
 // back-edge, as the end of the body is.
 //

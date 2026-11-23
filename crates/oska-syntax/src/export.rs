@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The JSON export of the syntax tree, as documented in `docs/ast.md`.
 //!
 //! The envelope is `{ast_version, file, items}`. Every node is an object

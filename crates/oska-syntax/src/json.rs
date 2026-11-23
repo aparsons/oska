@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A JSON reader, the one the toolchain shares: `oskac hook claude` reads
 //! its input with it, so there is no regular expression over JSON and no
 //! outside crate. It follows RFC 8259 and is strict: it refuses what is

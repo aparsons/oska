@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The human-readable report of `oskac check` shows what the JSON report
 //! does: diagnostics, each function's authority, and the audit sites.
 

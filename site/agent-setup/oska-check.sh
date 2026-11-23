@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # An opt-in Claude Code hook (a PostToolUse hook): after Claude Code edits
 # a `.osk` file or an `oska.toml`, check it and hand the diagnostics back
 # to Claude Code. A module of a package is checked with its package: the

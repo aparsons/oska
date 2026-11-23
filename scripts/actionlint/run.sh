@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Validates GitHub workflow files the way GitHub reads them. A workflow that
 # GitHub cannot parse produces no jobs and no checks, so the PR looks green
 # with the workflow silently missing (PR #329, an unquoted ": " in an input

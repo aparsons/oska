@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Name resolution for the type and trait names in signatures and
 //! declarations. Names in function bodies are resolved by `body.rs`.
 

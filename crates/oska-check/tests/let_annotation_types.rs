@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An unknown type in a `let` annotation (#84, spec #184) is reported
 //! `E0200` at the annotation, with a closest-name fix, from the same
 //! resolution as an unknown type in a signature.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Check the security.txt a deployed site serves.
 #
 #   scripts/release/check-security-txt.sh <site-url>

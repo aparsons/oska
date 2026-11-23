@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `parse_module` tests for `struct` and `enum` declarations, asserted
 //! through the JSON export.
 

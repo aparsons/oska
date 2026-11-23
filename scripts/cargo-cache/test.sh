@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for mtimes.sh, with real cargo builds of a one-crate project in a
 # scratch git repository. A CI cache restore is played by copying a
 # `target` directory, times kept, into a fresh clone. The script must let

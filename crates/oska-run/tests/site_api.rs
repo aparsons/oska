@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The API reference on the site (#294).
 //!
 //! The Pages workflow writes what `oskac doc --format=json` prints to

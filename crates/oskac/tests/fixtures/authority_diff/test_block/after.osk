@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A test narrows its stand-in filesystem and vouches for text: both are
 // reported, and neither fails the gate, since a test's stand-in
 // capabilities are not the program's authority.

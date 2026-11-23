@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Checked against a baseline in which two functions are named `show`: the
 // diff refuses to guess which is which.
 

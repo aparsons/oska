@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.proc`: start other programs. It checks but has no runtime yet:
 // `oskac run` refuses a program that imports it (`E0371`).
 //

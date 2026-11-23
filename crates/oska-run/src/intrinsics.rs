@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Runtime implementations of body-less prelude functions, keyed by the
 //! qualified name the checked program calls them by (`Stdout.println`).
 //!

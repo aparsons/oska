@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Fixes from the review of spec #115 (packages), at seam 2: `oskac`
 //! over fixture packages on disk, with golden output under
 //! `tests/golden/packages/review/`. Each case also asserts the line that
@@ -74,7 +75,7 @@ fn only_src_main_osk_is_the_entry_and_src_inside_src_is_a_module() {
 
     let entry = fixture("nested_src_main");
     let out = golden("nested_src_main_check", "", &["check", &entry]);
-    assert_has(&out, "src/src/main.osk:1:4: error[E0412]");
+    assert_has(&out, "src/src/main.osk:2:4: error[E0412]");
     let out = golden("nested_src_main_run", "", &["run", &entry]);
     assert_has(&out, "error[E0414]");
 }

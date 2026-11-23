@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the events share: a target with the name it is shown by, its
 //! check, and how a diagnostic is printed, as a line or as JSON.
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # The pass stamp: a record that a full run of scripts/check.sh passed on a
 # tree, so the pre-push hook does not repeat a check that just passed.
 #

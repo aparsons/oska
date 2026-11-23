@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wording of system errors in `std.rt` (spec #154, tickets #167
 //! and #171): each platform table's part of `system_errors` is
 //! `oska-sys`'s table for its operating system, worded by its kinds, for

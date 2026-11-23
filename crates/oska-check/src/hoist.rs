@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The fix of `E0102` (spec #367, Q12): an interpolation hole that holds
 //! an expression, such as `"next is {n + 1}"`, is repaired by hoisting the
 //! expression into `let <fresh name> = <expression>` on its own line just

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! x86_64 instruction encoding: each instruction form the code generator
 //! emits, as the Intel 64 and IA-32 Architectures Software Developer's
 //! Manual, Volume 2, encodes it. Every form operates on 64-bit registers

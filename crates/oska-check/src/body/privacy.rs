@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Privacy below the item, across a package's modules: a struct's field
 //! without `pub`, an inherent method without `pub(pkg)` or `pub`, and a
 //! private trait's methods are for the module that declares them.

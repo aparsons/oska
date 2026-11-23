@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Race-free confinement on every OS (#175): a directory or file
 //! capability walks its paths one component at a time beneath handles it
 //! holds, never following a symlink or, on Windows, any other reparse

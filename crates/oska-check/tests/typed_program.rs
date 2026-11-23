@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The checked program is typed (#126): every expression and slot
 //! carries the type the checker inferred, and every call of a generic
 //! records its type arguments, so a backend can lay out values and

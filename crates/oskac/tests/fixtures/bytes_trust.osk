@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Bytes read through a capability are `Untrusted<Bytes>`, and stay
 // untrusted through a slice. `remember` takes trusted `Bytes`, so passing
 // them is `E0300`.

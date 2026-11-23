@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Evaluation page (#216): `docs/evaluation.md`, which the evaluation
 //! harness renders from the committed results (`oska-eval report`; its
 //! own tests hold the page to the results), is published like any other

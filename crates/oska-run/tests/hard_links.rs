@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Hard links beneath a directory or file capability (review fix F4 of
 //! #93). A hard link is the same file under a second name, so one
 //! planted beneath a root, such as in an upload directory, would expose

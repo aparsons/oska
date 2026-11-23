@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The grant lists only `main`, with `Stdout`. The snippet adds a helper
 // that reaches `NetConnect`, a kind no grant entry covers: the program
 // goes past its grant although `main` did not widen.

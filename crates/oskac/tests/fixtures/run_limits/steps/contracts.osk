@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Steps: 6. A call in a `requires` or `ensures` clause is a step, as any
 // call: the clauses are evaluated, they are not a call themselves.
 //

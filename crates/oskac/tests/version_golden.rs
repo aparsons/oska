@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! End-to-end tests of `oskac --version` (spec #70, ticket #82): plain text
 //! by default and a JSON object with `--format=json`, which the agent guide
 //! and the agent-setup prompt rely on.

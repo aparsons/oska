@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Bitwise and shift operators (ticket #220): `& | ^ ~ << >>`, their
 //! precedence, `E0108` where one meets a different binary operator
 //! without parentheses, `>>` still closing nested generic arguments, and

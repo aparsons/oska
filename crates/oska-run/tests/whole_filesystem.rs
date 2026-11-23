@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The whole filesystem, as ADR 0008 spells it (#99): `Fs`, `FsRead` and
 //! `FsWrite` grant no file access, so a program that really needs to read
 //! anywhere writes `restrict_to("/")` and works through the directory

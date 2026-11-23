@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Intrinsics for the prelude's own trait impls, such as `Eq for Int` or
 //! `Display for IoError`, named `Type.method` like any prelude method.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Makes thumbnails of uploaded images with ImageMagick's `convert`.
 
 use std.proc

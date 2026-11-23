@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Panics: how a bug stops a program.
 //!
 //! A panic carries a stable `P`-code, a message, and the span of the

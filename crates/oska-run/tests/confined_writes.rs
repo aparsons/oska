@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Race-free confined writes, `create_dir` and `list_dir` (#95): through a
 //! directory capability, each walks its path one component at a time
 //! beneath a handle for the root, never following a symlink, as reads do

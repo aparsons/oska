@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! End-to-end tests of `oskac explain` (spec #70, ticket #76): the entry of
 //! a code in text and in JSON, an unknown code that suggests the closest
 //! one, and a command line with no code.

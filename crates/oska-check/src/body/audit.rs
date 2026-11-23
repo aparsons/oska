@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Audit sites: calls a reviewer must see, listed in the report's `audit`
 //! array.
 //!

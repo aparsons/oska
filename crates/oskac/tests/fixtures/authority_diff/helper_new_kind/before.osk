@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The program writes to stdout and nothing else.
 
 fn main(io: Stdout) -> Result<(), IoError> {

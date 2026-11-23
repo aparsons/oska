@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The whole corpus is differential (spec #125, #140): every program in
 //! the repository runs the same as a native executable as on the
 //! interpreter (`differential::assert_same`): the examples, every complete

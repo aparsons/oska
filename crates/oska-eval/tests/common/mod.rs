@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers shared by the harness's CLI tests. Each test runs the
 //! `oska-eval` binary on files and checks what it prints and its exit code.
 

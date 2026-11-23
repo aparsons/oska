@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the hook tests share: scratch directories, Claude Code's hook
 //! input, and running `oskac hook claude` the way Claude Code runs it.
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Seam 3 of spec #153: build every corpus program for every target platform
 # with a backend, and print one line per build, the SHA-256 of the
 # executable or the exit code that refused it:

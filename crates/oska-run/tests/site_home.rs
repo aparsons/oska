@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The home page and the navigation (#188).
 //!
 //! The home page is its own page, `docs/index.md`, written for people and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Fix application: a fix's edits applied to the text of one file, with
 //! the rules the agent guide states for tools that apply fixes
 //! themselves. `oskac fix` applies fixes with it, and the checker builds

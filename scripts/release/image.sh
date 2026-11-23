@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Build the `oskac` container image as reproducible OCI bytes (ADR 0022).
 #
 #   SOURCE_DATE_EPOCH=<seconds> scripts/release/image.sh \

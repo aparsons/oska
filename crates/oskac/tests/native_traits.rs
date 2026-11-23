@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native traits and `?` (ticket #133), run on both backends through the
 //! differential harness (seam 1): user traits with default and
 //! overridden methods, calls through trait bounds in generic code, the

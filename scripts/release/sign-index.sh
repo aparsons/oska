@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Sign the next release index.
 #
 #   scripts/release/sign-index.sh [--tag <tag>] [--previous-key <public-key>] \

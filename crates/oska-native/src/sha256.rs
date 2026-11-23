@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! SHA-256 (FIPS 180-4), for the hashes a macOS executable's code
 //! signature holds (`macho.rs`). The backend takes no dependency for it:
 //! it is small, and its output must be the same on every host.

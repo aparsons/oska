@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for guard.sh: each case builds a scratch tree with workflow files under
 # .github/workflows and expects the guard to pass it, or to refuse it with a
 # message naming the file and the job.

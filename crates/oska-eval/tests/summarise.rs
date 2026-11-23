@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval summarise`: a batch's run records aggregated into its
 //! summary, with func@k and func-sec@k by the unbiased estimator. The
 //! batches are hand-written run records under `tests/fixtures/results/`,

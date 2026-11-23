@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The backend's own code, between the checked program and machine code.
 //!
 //! A [`Module`] is a list of functions over **temporaries**: numbered

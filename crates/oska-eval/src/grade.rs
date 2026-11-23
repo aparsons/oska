@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Grading: what a workspace's package does, judged only through `oskac`'s
 //! own outputs, the ones an agent sees.
 //!

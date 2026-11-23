@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A module of the package, imported by `main` as `receipt`.
 
 pub(pkg) fn line(label: String, cents: Int) -> String {

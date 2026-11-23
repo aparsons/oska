@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Intrinsics resolved once (#502): the interpreter finds each body-less
 //! prelude function without scanning every table on each call, and still
 //! reaches the same implementation by every name a program can call it by.

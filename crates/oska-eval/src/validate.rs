@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `validate`: checks every task in a task set, offline, so a broken task
 //! is caught before it costs a paid run.
 //!
