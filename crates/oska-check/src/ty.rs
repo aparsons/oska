@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The checker's type representation, used while checking bodies.
 //!
 //! Signatures are lowered from syntax into [`Ty`] once (see `items.rs`);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Prelude mode: `parse_prelude` accepts body-less `fn` items and the
 //! `#[capability]` attribute, which only the embedded prelude may use.
 //! `parse_module` keeps rejecting both with its existing errors.

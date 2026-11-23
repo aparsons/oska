@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `E0217` names a directory or file capability declared bare by `main`,
 //! such as `main(d: DirRead)`. One inside another type, such as
 //! `Option<DirRead>`, is not matched by it, and gets the general `E0211`

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The JSON export of function bodies: every statement and expression node.
 
 mod common;

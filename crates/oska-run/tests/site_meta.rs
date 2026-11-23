@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Site head and polish (#190): the meta and Open Graph tags every page
 //! carries, the favicon, the skip link, the not-found page, the
 //! stylesheet's contrast and focus rules, and what the Pages smoke check

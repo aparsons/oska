@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Constants that depend on themselves (#278). A constant lowers to a
 //! function of no parameters that each use calls (#83), so a constant
 //! whose initializer names itself, directly or through other constants,

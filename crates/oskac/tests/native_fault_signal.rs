@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A native program killed by a signal (spec #153, runtime parity):
 //! `oskac run` reports a signal that only a fault raises as the native
 //! backend's fault, `E0392`, on aarch64 and x86_64 Linux and on Apple

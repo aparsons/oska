@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers shared by the `oska-run` integration tests.
 //!
 //! Every test runs a small Oska program through [`oska_run::run`] on a

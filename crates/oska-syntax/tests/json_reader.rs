@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The toolchain's shared JSON reader: what `oskac hook claude` reads its
 //! input with. It tells well-formed JSON from malformed, and it decodes
 //! every escape, so a path with an escaped quote comes out as written.

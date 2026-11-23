@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A diagnostic's location: the file it is in, and the line and column
 //! its span starts at, as `path:line:col`.
 

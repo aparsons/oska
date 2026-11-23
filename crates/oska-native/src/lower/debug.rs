@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `dbg`: the text of a value as the interpreter shows it (`1`, `"a"`,
 //! `Point(1, 2)`, `Shape.Circle(3)`, `Option.Some(4)`, `<redacted>` for a
 //! `Secret`). Text, `Int`s and `Bool`s come from `std.rt`; a struct or an

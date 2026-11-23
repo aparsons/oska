@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `Budget` capability (#251) in the checker: `main` may declare it, a
 //! function that takes one has it in its authority, `limit` is an
 //! attenuation in the report, and neither a budget nor a reservation can

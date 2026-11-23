@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Trust on text (#50): text from outside the program is untrusted, and
 //! untrusted text never flows into a trusted `String` slot (`E0300`).
 

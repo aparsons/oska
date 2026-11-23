@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers shared by the run-limits tests (every `run_limits*.rs` test
 //! file): running `oskac` in a scratch directory, and golden files under
 //! `tests/golden/run_limits/`.
@@ -84,10 +85,11 @@ pub fn step_fixtures() -> Vec<(String, String)> {
     fixtures
 }
 
-/// The steps a fixture says it takes, on its first line: `// Steps: N.`
+/// The steps a fixture says it takes, on its first line after the SPDX
+/// header: `// Steps: N.`
 pub fn steps_written_in(name: &str, src: &str) -> u64 {
     src.lines()
-        .next()
+        .nth(1)
         .and_then(|line| line.strip_prefix("// Steps: "))
         .and_then(|rest| rest.split('.').next())
         .and_then(|n| n.parse().ok())

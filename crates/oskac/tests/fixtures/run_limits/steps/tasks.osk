@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Steps: 4. A spawned task is a closure the runtime calls: a step, and
 // the calls it makes are too. A `scope` block is not a call.
 //

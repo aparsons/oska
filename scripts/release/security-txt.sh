@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Write the site's security.txt (RFC 9116).
 #
 #   scripts/release/security-txt.sh <site-dir>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! No `machine` fix widens authority (spec #185): "A fix that would change
 //! authority is never given the `machine` applicability."
 //!

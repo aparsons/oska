@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.sshsig` (#234), a `std` module of Oska source that imports two
 //! others (`std.sha2` and `std.ed25519`): a program that imports it has
 //! all three linked in and checked under the rules for user code. The key

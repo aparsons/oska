@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac check` on methods called qualified by their type (review fix F2
 //! of #93). `tests/fixtures/qualified_calls.osk` attenuates and asserts
 //! trust through `Type.method(receiver, ...)` and through `Type.method`

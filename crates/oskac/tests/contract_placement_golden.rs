@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac check` on contracts in the wrong place (#108).
 //! `tests/fixtures/contract_placement.osk` has a contract on a trait impl's
 //! method (`E0218`), one on `main` (`E0219`), and a `?` inside a condition

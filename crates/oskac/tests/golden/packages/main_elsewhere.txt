@@ -4,4 +4,4 @@ exit: 1
 fn pkg.main.main: pure
 fn pkg.tools.main: pure
 --- stderr
-crates/oskac/tests/fixtures/packages/main_elsewhere/src/tools.osk:1:4: error[E0412]: `main` is only allowed in `src/main.osk`, not in `src/tools.osk` (bytes 3..7)
+crates/oskac/tests/fixtures/packages/main_elsewhere/src/tools.osk:2:4: error[E0412]: `main` is only allowed in `src/main.osk`, not in `src/tools.osk` (bytes 42..46)

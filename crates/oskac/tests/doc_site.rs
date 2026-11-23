@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The whole real API reference on the site (#294): the site generator,
 //! `site/build.osk`, fed what `oskac doc --format=json` prints, as the
 //! Pages workflow feeds it. `oska-run`'s site tests feed it fixtures and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The one end-to-end test of `oskac parse`: the JSON export of
 //! `examples/capabilities.osk` must match the checked-in golden file, and
 //! must satisfy the schema invariants in `docs/ast.md`.

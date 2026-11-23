@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The handles a native program's file capabilities hold (spec #153,
 //! user story 13): on aarch64 and x86_64 Linux alike, every one is
 //! close-on-exec, a directory, and opened without following a symlink

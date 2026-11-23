@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pattern usefulness: the standard algorithm behind exhaustiveness and
 //! unreachable-arm checking.
 //!

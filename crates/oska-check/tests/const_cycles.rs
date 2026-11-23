@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A module constant that refers to itself, directly or through other
 //! constants, is a checker error at its initializer (#278, spec #184):
 //! each constant lowers to a function its uses call (#83), so a cycle

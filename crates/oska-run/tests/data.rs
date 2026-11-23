@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Data at runtime (#62): structs, enums, `match`, `List`, closures,
 //! strings, and mutating methods under value semantics (ADR 0001).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Methods called qualified by their type, `Type.method(receiver, ...)`,
 // and taken as function values, for the golden tests of the report: each
 // is listed like the same call written `receiver.method(...)`.

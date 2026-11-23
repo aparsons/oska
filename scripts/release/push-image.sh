@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Push a signed release's oskac container image to the registry (ADR 0022).
 #
 #   scripts/release/push-image.sh digest|tags <release-dir> <public-key> <image-layout> <repository>

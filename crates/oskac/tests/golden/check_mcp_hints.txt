@@ -8,7 +8,7 @@ fn <Hints as std.mcp.Toolset>.call: DirRead, DirWrite, NetConnect, Spawn, Stdout
   tool "shout": Stdout (self.out); writes to the protocol stream (Stdout)
   default arm: pure
 fn main: Fs (fs), Stdin (stdin), Stdout (stdout)
-  crates/oskac/tests/fixtures/mcp_hints.osk:61:16: Fs -> FsRead: read_only (bytes 2136..2150)
-  crates/oskac/tests/fixtures/mcp_hints.osk:61:16: FsRead -> DirRead: restrict_to "notes" (bytes 2136..2171)
-  crates/oskac/tests/fixtures/mcp_hints.osk:62:17: Fs -> FsWrite: write_only (bytes 2189..2204)
-  crates/oskac/tests/fixtures/mcp_hints.osk:62:17: FsWrite -> DirWrite: restrict_to "drafts" (bytes 2189..2226)
+  crates/oskac/tests/fixtures/mcp_hints.osk:62:16: Fs -> FsRead: read_only (bytes 2175..2189)
+  crates/oskac/tests/fixtures/mcp_hints.osk:62:16: FsRead -> DirRead: restrict_to "notes" (bytes 2175..2210)
+  crates/oskac/tests/fixtures/mcp_hints.osk:63:17: Fs -> FsWrite: write_only (bytes 2228..2243)
+  crates/oskac/tests/fixtures/mcp_hints.osk:63:17: FsWrite -> DirWrite: restrict_to "drafts" (bytes 2228..2265)

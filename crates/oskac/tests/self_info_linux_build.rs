@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac self info` names the Linux build of the running `oskac`, the
 //! glibc build (`gnu`) or the musl build (`musl`), from the target it was
 //! compiled for (spec #461, ticket #464, ADR 0022). On macOS and Windows

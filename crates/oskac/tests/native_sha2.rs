@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.sha2` (#231) as programs run: the first `std` module of Oska
 //! source, linked into the program and run as Oska by both backends, with
 //! no `E0371`. Its test vectors are test-bearing fixtures

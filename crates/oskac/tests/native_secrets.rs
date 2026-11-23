@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Secret integers (ticket #224), run on both backends through the
 //! differential harness: wrapping `+ - *` on `Secret<U8>`, `Secret<U32>`
 //! and `Secret<U64>` at the edges, with a secret or a public operand;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A package within its grant, which names its functions by module.
 
 fn main(io: Stdout) -> Result<(), IoError> {

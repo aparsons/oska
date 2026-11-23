@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Keeps one open "Bump Rust to X.Y.Z" issue for the latest stable Rust when
 # the pin in rust-toolchain.toml is older. Uses only `gh` (with GH_TOKEN).
 #

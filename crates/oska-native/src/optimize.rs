@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Clean-ups of a lowered function, before register allocation: the
 //! lowering is simple and leaves copies and constants that cost an
 //! instruction and a register each. Each pass keeps the code's meaning

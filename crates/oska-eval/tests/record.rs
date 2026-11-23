@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval record`: a run's grade and analysis joined, with what
 //! produced them, into one run record. The grades and analyses are fixtures
 //! under `tests/fixtures/record/`; each record is compared with

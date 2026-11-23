@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Operators on built-in values.
 //!
 //! Integers of every type are held as `i128`, which holds all of them, and

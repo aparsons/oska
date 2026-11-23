@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Steps: 6. Closures written in Oska are steps wherever they are called,
 // also from the runtime's `List.map`, which is not.
 //

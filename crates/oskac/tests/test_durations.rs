@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Per-test durations in `oskac test --format=json` (spec #367, ticket
 //! #372): each test object carries `duration_ms`, an integer, measured the
 //! same way natively and with `--interpret`, so an agent can see which

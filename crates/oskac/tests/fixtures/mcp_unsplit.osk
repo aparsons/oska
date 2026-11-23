@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A toolset whose `call` is not a `match` on the tool's name, so the
 // checker cannot tell the tools apart and gives every one the whole
 // toolset's authority, and a toolset generic over a source, whose type

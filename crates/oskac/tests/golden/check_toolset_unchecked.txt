@@ -4,5 +4,5 @@ fn <Notes as std.mcp.Toolset>.call: DirRead (self)
   default arm: pure
   note: `specs` is not a list of `mcp.ToolSpec.new` calls with literal names, so its names are not checked against the arms
 fn main: Fs (fs)
-  crates/oskac/tests/fixtures/toolset_unchecked.osk:34:30: Fs -> FsRead: read_only (bytes 1030..1044)
-  crates/oskac/tests/fixtures/toolset_unchecked.osk:34:30: FsRead -> DirRead: restrict_to "notes" (bytes 1030..1065)
+  crates/oskac/tests/fixtures/toolset_unchecked.osk:35:30: Fs -> FsRead: read_only (bytes 1069..1083)
+  crates/oskac/tests/fixtures/toolset_unchecked.osk:35:30: FsRead -> DirRead: restrict_to "notes" (bytes 1069..1104)

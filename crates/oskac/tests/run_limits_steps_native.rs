@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The step limit natively (spec #446, ticket #454): `oskac run
 //! --max-steps=<n>` builds the program with a step counter, which stops
 //! it at the same step as the interpreter (ADR 0021), with the same

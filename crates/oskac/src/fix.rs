@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac fix [path] [--dry-run] [--placeholders] [--release]
 //! [--format=json]`: apply the fixes that are safe to apply automatically
 //! to a source file or a package, one at a time with a check after each

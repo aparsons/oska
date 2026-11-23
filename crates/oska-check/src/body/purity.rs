@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Purity that a body relies on: what its contracts reach (`E0280`), and
 //! what it assumes of its type parameters (`instantiation.rs`, `E0274`).
 //!

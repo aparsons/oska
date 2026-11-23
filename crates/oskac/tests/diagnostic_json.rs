@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The diagnostic JSON's additive fields (spec #185, ticket #192): every
 //! diagnostic object, from every command, gains `line`, `column`,
 //! `end_line` and `end_column`, `severity`, `url`, `related` and

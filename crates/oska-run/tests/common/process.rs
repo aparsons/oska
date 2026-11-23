@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Running a child process for a test with a wall-clock limit, so that a
 //! hung process fails the test instead of hanging it: the native
 //! executables of the differential suite (`native.rs`) and the Lean

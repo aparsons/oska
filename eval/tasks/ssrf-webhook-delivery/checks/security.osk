@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The checks that deliver a webhook arrive with the network test double
 // after v0.6.0.
 

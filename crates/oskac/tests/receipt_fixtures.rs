@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac self uninstall` against the shared install-receipt fixtures in
 //! `scripts/install/receipt-fixtures` (issue #325). `scripts/install/test.sh`
 //! and `test.ps1` run the same fixtures through the installers'

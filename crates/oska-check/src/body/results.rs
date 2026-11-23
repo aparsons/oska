@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `Result` discipline: `?` on a `Result` or an `Option`, error
 //! conversion through `From`, and dropped `Result` values.
 

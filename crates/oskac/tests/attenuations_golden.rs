@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The attenuations in `oskac check`'s authority report (#98): the human
 //! report lists them under their function, and the JSON report has them
 //! in a top-level `attenuations` array. The fixture

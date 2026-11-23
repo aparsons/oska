@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Secrets and Oska Core (#224): secrets are outside Oska Core, so the
 //! core IR export refuses every program that uses one, and the Lean model
 //! is unchanged. The new refusals (`E0353` to `E0356`) only reject

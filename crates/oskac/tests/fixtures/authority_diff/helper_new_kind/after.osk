@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A new helper takes `NetConnect`, a kind no function in the baseline
 // had: the program as a whole reaches more, so the gate fails although
 // no existing function widened.

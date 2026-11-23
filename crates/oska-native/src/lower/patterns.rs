@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `match`: each arm's pattern tested against the scrutinee, then bound.
 //!
 //! An arm is lowered in two passes over its pattern. The test

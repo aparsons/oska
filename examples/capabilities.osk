@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Capabilities are ordinary values. `count_lines` can read files under the
 // path it is given and nothing else: no network, no writes, no env access.
 

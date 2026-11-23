@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Wrapping arithmetic and integer conversions (ticket #221), run on both
 //! backends through the differential harness: `wrapping_add`,
 //! `wrapping_sub` and `wrapping_mul` on `U8`, `U32` and `U64`, and

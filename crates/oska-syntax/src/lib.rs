@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Lexer, parser, and syntax tree for the Oska programming language.
 //!
 //! Diagnostics carry a stable error code and a byte span so tools (and AI

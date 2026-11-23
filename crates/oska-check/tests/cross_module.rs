@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Modules of a package use each other (spec #115, #118): `use pkg.a.b`
 //! binds `b`, a brace group imports names, items are private unless
 //! `pub(pkg)` or `pub`, and the checked program spans every module.

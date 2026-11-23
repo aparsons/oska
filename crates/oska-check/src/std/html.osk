@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.html`: build HTML so that untrusted text cannot inject markup.
 // `use std.html`, then write `html.text(...)` and the like.
 //

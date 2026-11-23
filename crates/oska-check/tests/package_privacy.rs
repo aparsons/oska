@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Privacy below the item (spec #115, #119): a field without `pub`, a
 //! method without `pub(pkg)` or `pub`, and a trait that is private to its
 //! module cannot be used from another module of the package, even when no

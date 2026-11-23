@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # shellcheck disable=SC2016  # single quotes hold command text on purpose: it must not expand here
 # Tests for block-dangerous-git.sh, the git-guardrails PreToolUse hook.
 #

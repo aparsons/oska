@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The fix of `E0102` (ticket #374, spec #367): an expression in an
 //! interpolation hole is hoisted into `let <fresh name> = <expression>` on
 //! its own line before the statement, and the name goes in the hole. The

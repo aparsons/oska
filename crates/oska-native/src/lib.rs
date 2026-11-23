@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The native backend: a checked program to a static executable for a
 //! target platform ([`Target`]), with no assembler, linker or C library
 //! (ADR 0011). `linux-aarch64` and `linux-x86_64` have backends so far.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac test` on Linux and macOS: a program's `test` blocks
 //! run as native code for the host (`--interpret` selects the
 //! interpreter; see `native.rs`).

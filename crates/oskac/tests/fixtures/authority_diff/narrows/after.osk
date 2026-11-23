@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `notes` takes only the directory it reads, as the guide advises:
 // `Fs` narrowed to `DirRead`, which passes the gate.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Intrinsics for data: the body-less methods of `List` and `String`.
 //!
 //! They are listed apart from the capability intrinsics in

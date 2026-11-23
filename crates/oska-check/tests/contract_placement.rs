@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Where a contract may live (#108): a trait method carries the contract
 //! its implementations are held to, so a method of `impl Trait for Type`
 //! declares none of its own (`E0218`); nothing calls `main`, so it

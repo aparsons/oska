@@ -79,6 +79,11 @@ jobs:
       # /.well-known/security.txt (RFC 9116), expiring a year from this
       # deploy. The generator has no clock, so it is written here.
       - run: scripts/release/security-txt.sh _site
+      # Each built compliance page, printed to a PDF beside it with the
+      # runner's Chrome, which fetches nothing from the network (the script
+      # serves the site from 127.0.0.1 and resolves no other host). It runs
+      # before the link check, so a page that links a PDF not made fails it.
+      - run: scripts/site/make-pdfs.sh _site
       # Every link the site publishes must go somewhere: a page and anchor
       # on the site, or a file the repository tracks on GitHub. The checker
       # holds GitHub links against the list of tracked files.

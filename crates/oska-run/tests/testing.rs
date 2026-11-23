@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska_run::test`: running a file's `test` blocks, each against fresh
 //! deterministic stand-ins, and reporting each one (ticket #66).
 

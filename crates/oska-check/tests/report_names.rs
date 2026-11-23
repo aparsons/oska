@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Every function in the authority report has its own name (#123): a
 //! method of `impl Trait for Type` is named `<Type as Trait>.method`, as
 //! the checked program names it, so it never shares a name with an

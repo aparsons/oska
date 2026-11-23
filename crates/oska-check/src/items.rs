@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The value-level view of the prelude and the module: function
 //! signatures, struct and enum shapes, traits, impls, and methods, with
 //! every written type lowered to a [`Ty`].

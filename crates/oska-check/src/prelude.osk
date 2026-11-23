@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The prelude: what every module sees without `use`. It has the built-in
 // capabilities, `Option`, `Result`, `List` and the methods of `String`,
 // the types tests and structured concurrency use, and the core traits.

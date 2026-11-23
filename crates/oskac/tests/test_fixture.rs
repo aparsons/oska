@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! End-to-end test of `oskac test` on a fixture file: the per-test lines,
 //! the summary, the JSON report, and the exit code.
 

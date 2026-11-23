@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for latest.sh and sync-issue.sh. sync-issue.sh runs against a fake
 # `gh` that serves a list of open issues and logs the calls that change any.
 #

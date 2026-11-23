@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Interactive setup wizard. Made from the wizard skill template.
 #
 # Run it from the repository root, in a terminal:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! #149: a function that can perform effects through a type parameter is
 //! not reported pure. A parameter whose type is, or holds, a bounded type
 //! parameter is authority-carrying: the type argument may be capability-

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac new` (spec #367, ticket #375): lay out a package, with the
 //! agent-setup files, that passes the release check and its tests as
 //! written. Each test runs `oskac new` in its own scratch directory, then

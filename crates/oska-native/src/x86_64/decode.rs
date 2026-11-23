@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Enough of an x86_64 decoder to read back what `encode.rs` writes, for
 //! the constant-time tests (`constant_time.rs`): each instruction's length,
 //! whether it is a conditional jump, and the base register of a memory

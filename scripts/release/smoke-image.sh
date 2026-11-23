@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Smoke-test a musl build of oskac on an empty root, as the release run does
 # on each Linux processor before anything is published (ADR 0022):
 #

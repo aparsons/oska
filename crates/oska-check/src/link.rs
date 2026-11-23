@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Linking a package's modules into the one module the checker checks.
 //!
 //! The modules' texts are joined end to end into one text, and each is

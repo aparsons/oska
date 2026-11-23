@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! String literals made once (#500, spec #521): the interpreter makes the
 //! text of each string literal once and shares it each time the literal is
 //! evaluated, instead of copying it into a new text every time. A run under

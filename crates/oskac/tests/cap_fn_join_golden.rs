@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac check` on the `cap fn` join (#109).
 //! `tests/fixtures/cap_fn_join.osk` puts a plain `fn` and a capturing
 //! closure in one unannotated list and checks cleanly.

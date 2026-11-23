@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scrubbed files: no fixture of the harness or the driver, and no
 //! committed result, holds a real home path. Recorded transcripts and
 //! results are scrubbed before they are committed. No test calls a model.

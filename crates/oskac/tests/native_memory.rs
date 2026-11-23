@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native memory and panics (ticket #160), on whichever of aarch64 and
 //! x86_64 Linux and macOS the tests run (#170, #173): where
 //! `main`'s stack is and what guards it (read from `/proc`, so on Linux

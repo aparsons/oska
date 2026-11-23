@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The musl build's allocator (spec #521, ticket #523; ADR 0009).
 //!
 //! musl's allocator, mallocng, takes a lock on every `malloc` once a

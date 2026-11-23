@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Lowering a checked module into the **checked program**.
 //!
 //! Checking bodies records what each name and call resolved to in

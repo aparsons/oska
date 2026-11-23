@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The one end-to-end test of `oskac check`: the JSON report for
 //! `examples/capabilities.osk` must match the checked-in golden file. The
 //! example is clean, so the report is its authority alone.

@@ -1,7 +1,7 @@
 exit: 3
 --- stdout
 fn shout: pure
-crates/oskac/tests/fixtures/authority_diff/audit_added/after.osk:5:5: audit: assume_trusted (bytes 169..190)
+crates/oskac/tests/fixtures/authority_diff/audit_added/after.osk:6:5: audit: assume_trusted (bytes 208..229)
 baseline: <baseline>
   new audit site fn shout: assume_trusted +1
 --- stderr

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `total` takes `Stdout`: it is no longer pure, which fails the gate even
 // though `main` already had `Stdout`.
 

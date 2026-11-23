@@ -1,4 +1,4 @@
 exit: 1
 --- stdout
 --- stderr
-{"code":"E0221","message":"unknown name `missing`","path":"crates/oskac/tests/fixtures/authority_grant/diagnostics/program.osk","span":{"start":170,"end":177},"line":5,"column":16,"end_line":5,"end_column":23,"severity":"error","url":"https://oskalang.dev/codes/E0221","related":[],"suggestions":[]}
+{"code":"E0221","message":"unknown name `missing`","path":"crates/oskac/tests/fixtures/authority_grant/diagnostics/program.osk","span":{"start":209,"end":216},"line":6,"column":16,"end_line":6,"end_column":23,"severity":"error","url":"https://oskalang.dev/codes/E0221","related":[],"suggestions":[]}
