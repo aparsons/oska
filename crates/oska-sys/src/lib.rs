@@ -12,6 +12,9 @@
 //! `NtQueryDirectoryFile` and `RtlNtStatusToDosError`, which every
 //! Windows process has loaded. It adds no dependency.
 //!
+//! It also offers [`NetStream`] and [`NetListener`], TCP connections to one
+//! host and port and a loopback listener, worded the same on every platform.
+//!
 //! It offers one safe type, [`Dir`], and on Unix the function `effective_uid`. A
 //! [`Dir`] is a handle for a directory, beneath
 //! which paths are opened one component at a time without following a
@@ -42,6 +45,7 @@
 //!   only the compiler's `#[global_allocator]` glue calls.
 
 mod heap;
+mod net;
 mod refusal;
 #[cfg(unix)]
 mod unix;
@@ -55,10 +59,15 @@ pub use wording::{
 };
 
 pub use heap::SizeClassAlloc;
+pub use net::{exchange_datagram, NetListener, NetStream};
 #[cfg(unix)]
-pub use unix::{effective_uid, Dir};
+pub use unix::system_name_servers;
+#[cfg(unix)]
+pub use unix::{effective_uid, fill_random, Dir};
 #[cfg(windows)]
-pub use windows::Dir;
+pub use windows::system_name_servers;
+#[cfg(windows)]
+pub use windows::{fill_random, Dir};
 
 #[cfg(not(any(unix, windows)))]
 compile_error!("oska-sys confines file access only on Unix and Windows");

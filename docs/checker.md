@@ -101,9 +101,14 @@ A `std.*` module is a file `crates/oska-check/src/std/<name>.osk`, registered in
 | `std.sql` | `SqlLiteral`, `Db` (`query`), `connect`, `Row` (`get`), `SqlError` | `sql"..."` has type `SqlLiteral` |
 | `std.proc` | `run`, `Output` (`status`, `stdout`), `ProcError` | None |
 | `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
-| `std.sha2` | `sha256`, `sha512`, `sha256_secret`, `Sha256`, `Sha512`, `Sha256Secret` (each `new`, `update`, `finish`) | None |
+| `std.sha2` | `sha256`, `sha384`, `sha512`, `sha256_secret`, `Sha256`, `Sha512`, `Sha256Secret` (each `new`, `update`, `finish`) | None |
+| `std.dns` | `resolve`, `Exchange` (`query_id`, `datagram`, `stream`), `NetExchange` (`new`, `on_port`), `Config` (`new`), `load_config`, `build_query`, `parse_response`, `Answer`, `DnsError`, `parse_ip`, `Ip`, `parse_hosts`, `lookup_hosts`, `HostsEntry`, `parse_resolv_conf`, `ResolvConf`, `candidates`, `valid_name`, and the constants `TYPE_A`, `TYPE_AAAA` and `MAX_CONFIG_BYTES` | None |
 | `std.hmac` | `sha256`, `verify_sha256` | None |
 | `std.ed25519` | `PublicKey` (`from_bytes`, `to_bytes`), `verify` | None |
+| `std.ecdsa` | `Curve` (`P256`, `P384`), `PublicKey` (`from_bytes`, `to_bytes`), `verify`, `verify_der` | None |
+| `std.rsa` | `HashAlgorithm` (`Sha256`, `Sha384`, `Sha512`), `PublicKey` (`from_components`, `bits`), `verify_pkcs1`, `verify_pss` | None |
+| `std.p256` | `public_key`, `shared_secret` | None |
+| `std.x509` | `Certificate` (`parse`, `to_der`, `subject`, `issuer`, `serial`, `not_before`, `not_after`, `signed_by`, `is_ca`, `dns_names`, `public_key`, `matches_host`), `TrustConfig` (`default`, `with_roots`, `only_roots`, `with_root_der`, `with_root_pem`, `with_root_distrusting_after`, `contains`, `len`), `parse_der`, `parse_pem`, `PublicKey`, `X509Error`, `verify_chain`, `verify_server`; the pinned roots are in the hidden module `std.x509_roots` | None |
 | `std.sshsig` | `PublicKey` (`parse`, `comment`, `fingerprint`, `ed25519`), `Signature` (`parse`, `public_key`, `namespace`, `hash_algorithm`), `verify`, `SshsigError` | None |
 | `std.mcp` | `Toolset` (`specs`, `call`, and `reached`, which the toolchain fills in), `ToolSpec` (`new`, `with_title`, `name`, `title`, `description`, `input`), `ToolResult` (`text`, `json`, `error`, `content`, `structured`, `is_error`), `ServerInfo` (`new`, `with_instructions`), `McpError`, `Session` (`new`, `is_legacy`), `Step`, `validate`, `serve`, `handle`, and the constants `MAX_LINE`, `MODERN_VERSION` and `LEGACY_VERSION` | None |
 | `std.json` | `Value`, `Member`, `Number` (`from_int`, `parse`, `to_int`, `text`), `Error`, `Violation`, `DecodeError`, `parse`, `encode`, `decode`, `Schema` (`string`, `integer`, `number`, `boolean`, `one_of`, `list`, `object`, `describe`, `to_value`, `validate`), `Field` (`required`, `optional`), and the constants `MAX_LENGTH` and `MAX_DEPTH` | None |
@@ -124,9 +129,9 @@ Each sink separates a **data position**, declared `Untrusted<String>`, from a **
 | `std.proc` | `run`'s `args: List<Untrusted<String>>` | `run`'s `program`; `run` also needs `Spawn` |
 | `std.html` | `text`'s argument, which is escaped | `TrustedHtml.new`'s `markup` |
 | Paths | `Path.from`, also as the `dir` of a directory capability's `restrict_to` | `restrict_to`'s `dir` and `restrict_to_file`'s `file` on `Fs`, `FsRead`, and `FsWrite` |
-| Network | `Connection.send`'s `body` | `NetConnect.connect`'s `host` |
+| Network | `Connection.send`'s `body` | `restrict_to`'s `host` on `Net` and `NetConnect` |
 
-Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Html.render`, and `Connection.receive`. `Db` and `Connection` are capability-bearing (`Db` holds a `NetConnect`), and every sink type except the error types has private fields, so code outside the module can't construct one (`E0271`).
+Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Html.render`, and `Connection.receive`. `Db` and `Connection` are capability-bearing (`Db` holds a `NetConnect`, `Connection` a `HostConnect`), and every sink type except the error types has private fields, so code outside the module can't construct one (`E0271`).
 
 ## Syntax diagnostic codes
 

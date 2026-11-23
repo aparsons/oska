@@ -206,8 +206,11 @@ impl FileWrite {
     pub fn write_bytes(self, contents: Untrusted<Bytes>) -> Result<(), IoError>
 }
 
-// Network access, as `main` declares it. It has no runtime yet: a
-// program that is given it checks, but `oskac run` refuses it (`E0370`).
+// Network access, as `main` declares it. `Net`, `NetConnect` and
+// `NetListen` grant no connection themselves: like `Fs`, they only
+// attenuate (ADR 0023). A program narrows `NetConnect` to one host and port
+// with `restrict_to`, which gives a `HostConnect`, and only that can
+// connect. Every narrowing is listed in the authority report.
 #[capability]
 pub struct Net { handle: Int }
 
@@ -216,37 +219,106 @@ impl Net {
     pub fn connect_only(self) -> NetConnect
     // The capability to accept connections, and nothing else.
     pub fn listen_only(self) -> NetListen
+    // `connect_only().restrict_to(host, port)`.
+    pub fn restrict_to(self, host: String, port: Int) -> HostConnect
 }
 
-// The capability to open network connections. No runtime yet, like `Net`.
+// The capability to open network connections, as `main` declares it. It
+// opens none itself: narrow it with `restrict_to`.
 #[capability]
 pub struct NetConnect { handle: Int }
 
 impl NetConnect {
-    // Connect to `host`. The host decides where the program connects, so
-    // it is structural: untrusted text can't redirect it (SSRF).
-    pub fn connect(self, host: String, port: Int) -> Result<Connection, IoError>
+    // The host capability for `host` at `port`. `host` is a DNS name, an
+    // IPv4 literal or an IPv6 literal. It decides where the program
+    // connects, so it is structural: untrusted text can't redirect it
+    // (SSRF) without a trust assertion, which `oskac audit` lists. A host
+    // that is none of those, or a port outside 1 to 65535, is not refused
+    // here: `connect` fails with an `IoError` that says why.
+    pub fn restrict_to(self, host: String, port: Int) -> HostConnect
+    // The DNS servers the operating system is configured with, in order,
+    // as IPv4 address literals, for `std.dns`. Windows keeps them in its
+    // network parameters (`GetNetworkParams`); every other platform
+    // keeps them in `resolv.conf`, which `std.dns` reads itself, so this
+    // gives an empty list there. It reaches nobody: it reads this
+    // machine's settings.
+    pub fn system_name_servers(self) -> Result<List<String>, IoError>
+}
+
+// A host capability: it reaches one host at one port and nothing else, so
+// `connect` takes no destination. Name resolution happens inside
+// `connect`, which tries each address the name resolves to in turn. A
+// connect or read that gets no answer fails after a documented default
+// (10 seconds to connect, 30 to read). Failures read the same on every
+// platform: `host not found`, `connection refused`, `timed out`,
+// `network unreachable`, `host unreachable` and `connection reset`.
+#[capability]
+pub struct HostConnect { handle: Int }
+
+impl HostConnect {
+    // Open a connection to the host and port this capability is confined to.
+    pub fn connect(self) -> Result<Connection, IoError>
+    // The host this capability is confined to, as it was given.
+    pub fn name(self) -> String
+    // The port this capability is confined to.
+    pub fn port(self) -> Int
+    // Send `message` as one UDP datagram to the host and port this
+    // capability is confined to, and wait for one datagram back, at most
+    // 5 seconds: for `std.dns`. The host must be an IPv4 or IPv6 literal:
+    // a name is not resolved here. A datagram from anywhere else is
+    // ignored, and so is one whose first two bytes (a DNS transaction id)
+    // are not the message's own. What comes back is from outside the program, so it is
+    // untrusted.
+    pub fn exchange_datagram(self, message: Bytes) -> Result<Untrusted<Bytes>, IoError>
 }
 
 // An open connection to one host. It carries the authority to talk to
-// that host, so it is capability-bearing, and it can't be forged.
-pub cap struct Connection { net: NetConnect }
+// that host, so it is capability-bearing, and it can't be forged. It is
+// closed when its last reference goes, or by `close`.
+pub cap struct Connection { host: HostConnect }
 
 impl Connection {
     // A request body is data: it may be untrusted.
     pub fn send(self, body: Untrusted<String>) -> Result<(), IoError>
-    // What the host sent back: text from outside the program.
+    // What the host sent back: text from outside the program. It is empty
+    // at the end of the stream, and an `IoError` when the bytes that
+    // arrived are not UTF-8.
     pub fn receive(self) -> Result<Untrusted<String>, IoError>
     // `send` and `receive` with bytes.
     pub fn send_bytes(self, body: Untrusted<Bytes>) -> Result<(), IoError>
-    // What the host sent back, as bytes from outside the program.
+    // What the host sent back, as bytes from outside the program: an
+    // empty `Bytes` at the end of the stream.
     pub fn receive_bytes(self) -> Result<Untrusted<Bytes>, IoError>
+    // The host this connection was opened to, which its capability named.
+    pub fn host(self) -> String
+    // End the connection. Every later use fails.
+    pub fn close(self)
 }
 
-// The capability to accept network connections. It has no methods yet,
-// and no runtime, like `Net`.
+// The capability to accept network connections, as `main` declares it. It
+// accepts none itself: narrow it with `restrict_to_loopback`.
 #[capability]
 pub struct NetListen { handle: Int }
+
+impl NetListen {
+    // The listener on this machine's loopback address (`127.0.0.1`, else
+    // `::1`) at `port`, 0 to 65535: 0 chooses a free port, which `port`
+    // reports. Nothing off the machine can reach it. A port that cannot be
+    // listened on is not refused here: `accept` fails with an `IoError`.
+    pub fn restrict_to_loopback(self, port: Int) -> LoopbackListen
+}
+
+// A loopback listener, for a local test server. It accepts connections
+// from this machine only, and has no wider form in this milestone.
+#[capability]
+pub struct LoopbackListen { handle: Int }
+
+impl LoopbackListen {
+    // Wait for the next connection, at most 30 seconds.
+    pub fn accept(self) -> Result<Connection, IoError>
+    // The port it listens on, once it listens; or 0 when it could not.
+    pub fn port(self) -> Int
+}
 
 // The process environment: its variables and its secrets.
 #[capability]
@@ -434,6 +506,11 @@ pub struct Random { handle: Int }
 impl Random {
     // A pseudo-random integer from 0 up to, but excluding, 2^63.
     pub fn next_int(self) -> Int
+
+    // `n` bytes for keys and nonces, from the operating system's secure
+    // random source. A test's `t.random` gives the same bytes on every run.
+    // A negative `n` panics (`P0042`), as `Bytes.zeroed` does.
+    pub fn secure_bytes(self, n: Int) -> Secret<Bytes>
 }
 
 // Authority to spend model tokens and calls, which `std.llm` takes. Its
@@ -601,6 +678,10 @@ impl Display for ApprovalError {
 // capabilities are real, its budget has the same limits, and its
 // `approver` still answers from the script. A failed assertion fails
 // the test.
+//
+// `t.net` is a stand-in `Net` in a plain test: every connection and every
+// listen fails with the same `IoError`, and `net_attempts` lists where code
+// tried to go. Under `--integration` it is the real network.
 pub cap struct TestContext {
     pub fs: Fs,
     pub clock: Clock,
@@ -608,6 +689,7 @@ pub cap struct TestContext {
     pub stdout: Stdout,
     pub budget: Budget,
     pub approver: Approver,
+    pub net: Net,
 }
 
 impl TestContext {
@@ -635,6 +717,10 @@ impl TestContext {
     // Every question `t.approver` has been asked so far, in order: its
     // summary and details, as the code that asked gave them.
     pub fn approvals_asked(self) -> List<ApprovalRequest>
+    // Every connection `t.net` has been asked to open or listener it has
+    // been asked to make so far, in order, as `host:port` (a listener as
+    // `loopback:port`), whether or not the host allowed it.
+    pub fn net_attempts(self) -> List<String>
 }
 
 // ---- Core types --------------------------------------------------------

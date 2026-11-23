@@ -72,6 +72,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.dns",
+        source: include_str!("std/dns.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.hmac",
         source: include_str!("std/hmac.osk"),
         sink_literal: None,
@@ -80,6 +86,36 @@ pub static STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "std.ed25519",
         source: include_str!("std/ed25519.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.ecdsa",
+        source: include_str!("std/ecdsa.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.p256",
+        source: include_str!("std/p256.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.rsa",
+        source: include_str!("std/rsa.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.x509",
+        source: include_str!("std/x509.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.x509_roots",
+        source: include_str!("std/x509_roots.osk"),
         sink_literal: None,
         written_in_oska: true,
     },
@@ -98,12 +134,6 @@ pub static STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "std.hkdf",
         source: include_str!("std/hkdf.osk"),
-        sink_literal: None,
-        written_in_oska: true,
-    },
-    StdModule {
-        path: "std.sha384",
-        source: include_str!("std/sha384.osk"),
         sink_literal: None,
         written_in_oska: true,
     },

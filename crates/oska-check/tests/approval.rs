@@ -106,9 +106,9 @@ fn main() {}
 #[test]
 fn a_test_context_cannot_be_given_a_forged_approver() {
     assert_errors(
-        "fn main(io: Stdout, stdin: Stdin, stderr: Stderr, fs: Fs, clock: Clock, random: Random, budget: Budget) {
+        "fn main(io: Stdout, stdin: Stdin, stderr: Stderr, fs: Fs, clock: Clock, random: Random, budget: Budget, net: Net) {
     let approver = Approver(stdin: stdin, stderr: stderr)
-    let _ = TestContext(fs: fs, clock: clock, random: random, stdout: io, budget: budget, approver: approver)
+    let _ = TestContext(fs: fs, clock: clock, random: random, stdout: io, budget: budget, approver: approver, net: net)
 }
 ",
         &[("E0271", "Approver")],

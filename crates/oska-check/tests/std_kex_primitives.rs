@@ -1,5 +1,5 @@
 //! The key-exchange and symmetric primitives of TLS 1.3 (#241): `std.x25519`,
-//! `std.hkdf`, `std.sha384`, `std.chacha20poly1305` and `std.aes128gcm`.
+//! `std.hkdf`, `std.chacha20poly1305` and `std.aes128gcm`.
 //! Each is Oska source linked into a program that imports it and checked
 //! under the rules for user code. A secret leaves one as a `Secret<Bytes>`,
 //! which `==`, a branch or printing refuse with the secret codes and which
@@ -12,18 +12,13 @@ mod common;
 use common::{assert_errors, assert_ok, check};
 
 /// Each module's path, the name it is called by, and its source.
-const MODULES: [(&str, &str, &str); 5] = [
+const MODULES: [(&str, &str, &str); 4] = [
     (
         "std.x25519",
         "x25519",
         include_str!("../src/std/x25519.osk"),
     ),
     ("std.hkdf", "hkdf", include_str!("../src/std/hkdf.osk")),
-    (
-        "std.sha384",
-        "sha384",
-        include_str!("../src/std/sha384.osk"),
-    ),
     (
         "std.chacha20poly1305",
         "chacha20poly1305",
@@ -40,7 +35,6 @@ const MODULES: [(&str, &str, &str); 5] = [
 /// environment and a message from the command line.
 const EVERY_FUNCTION: &str = r#"use std.x25519
 use std.hkdf
-use std.sha384
 use std.chacha20poly1305
 use std.aes128gcm
 
@@ -54,15 +48,11 @@ fn main(io: Stdout, env: Env, args: Args) {
     let shared = x25519.scalarmult(secret, peer)
     let prk = hkdf.extract(secret, secret)
     let okm = hkdf.expand(prk, peer, 42)
-    let digest = sha384.sha384(peer)
-    var hasher = sha384.Sha384.new()
-    hasher.update(peer)
-    let same = hasher.finish() == digest
     let chacha = chacha20poly1305.seal(secret, peer, peer, secret)
     let chacha_open = chacha20poly1305.open(secret, peer, peer, peer)
     let aes = aes128gcm.seal(secret, peer, peer, secret)
     let aes_open = aes128gcm.open(secret, peer, peer, peer)
-    let _ = io.println(if same && public.is_some() && shared.is_some() && okm.is_some() { "ok" } else { "no" })
+    let _ = io.println(if public.is_some() && shared.is_some() && okm.is_some() { "ok" } else { "no" })
     let _ = io.println(if chacha.is_some() && chacha_open.is_some() && aes.is_some() && aes_open.is_some() { "ok" } else { "no" })
 }
 "#;
@@ -81,11 +71,9 @@ fn a_program_calling_every_function_checks_and_lowers() {
 fn a_brace_group_imports_items_by_name() {
     assert_ok(
         "use std.hkdf.{extract, expand}\n\
-         use std.sha384.{sha384, Sha384}\n\
          fn derive(salt: Secret<Bytes>, ikm: Secret<Bytes>) -> Option<Secret<Bytes>> {\n    \
              expand(extract(salt, ikm), Bytes.new(), 32)\n}\n\
-         fn digest(data: Untrusted<Bytes>) -> Bytes {\n    \
-             var h = Sha384.new()\n    h.update(data)\n    h.finish()\n}",
+         ",
     );
 }
 
@@ -103,7 +91,6 @@ fn without_its_use_each_module_is_unknown() {
 fn the_helpers_of_each_module_are_private() {
     assert_errors("use std.x25519.{mul}", &[("E0360", "mul")]);
     assert_errors("use std.hkdf.{mac}", &[("E0360", "mac")]);
-    assert_errors("use std.sha384.{compress512}", &[("E0360", "compress512")]);
     assert_errors(
         "use std.chacha20poly1305.{poly1305}",
         &[("E0360", "poly1305")],
@@ -206,14 +193,7 @@ fn exposing_a_result_is_the_callers_audit_site() {
 }
 
 #[test]
-fn a_digest_is_trusted_bytes_and_a_verdict_is_a_public_option() {
-    // SHA-384 hashes public data into trusted `Bytes`, which is compared
-    // with `==` and used as a structural value without an assertion.
-    assert_ok(
-        "use std.sha384\n\
-         fn same(a: Untrusted<Bytes>, b: Untrusted<Bytes>) -> Bool {\n    \
-             sha384.sha384(a) == sha384.sha384(b)\n}",
-    );
+fn a_verdict_is_a_public_option() {
     // `open` decides on a public verdict, which a branch may use.
     assert_ok(
         "use std.aes128gcm\n\
@@ -272,7 +252,6 @@ fn each_module_names_the_pure_functions_it_offers() {
     let offered = [
         ("std.x25519", vec!["public_key", "scalarmult"]),
         ("std.hkdf", vec!["extract", "expand"]),
-        ("std.sha384", vec!["sha384"]),
         ("std.chacha20poly1305", vec!["seal", "open"]),
         ("std.aes128gcm", vec!["seal", "open"]),
     ];

@@ -1,8 +1,8 @@
 //! The key-exchange and symmetric primitives of TLS 1.3 (#241) as programs
-//! run: `std.x25519`, `std.hkdf`, `std.sha384`, `std.chacha20poly1305` and
+//! run: `std.x25519`, `std.hkdf`, `std.chacha20poly1305` and
 //! `std.aes128gcm`, Oska source linked into the program and run as Oska by
 //! both backends, with no `E0371`. Their test vectors are test-bearing
-//! fixtures (`fixtures/x25519_*.osk`, `hkdf_*.osk`, `sha384_fips.osk`,
+//! fixtures (`fixtures/x25519_*.osk`, `hkdf_*.osk`,
 //! `chacha20poly1305_*.osk` and `aes128gcm_*.osk`), which the native test
 //! corpus runs on both backends; this file runs whole programs through the
 //! differential harness, from a single file and from a package's module,
@@ -42,7 +42,7 @@ const SHARED: &str = "dfd3aa8a3164bcfe2fde3bc45d792c442bd95c080b28974fc59f8d70a6
 /// returns the message and refuses a changed one.
 const EVERY_FUNCTION: &str = r#"use std.x25519
 use std.hkdf
-use std.sha384
+use std.sha2
 use std.chacha20poly1305
 use std.aes128gcm
 
@@ -77,11 +77,7 @@ fn main(io: Stdout, env: Env, input: Stdin) -> Result<(), IoError> {
         Some(okm) => io.println(okm.expose().to_hex())?
         None => io.println("no output")?
     }
-    io.println(sha384.sha384(message).to_hex())?
-    var hasher = sha384.Sha384.new()
-    hasher.update(message.slice(0, 5))
-    hasher.update(message.slice(5, message.len()))
-    io.println(if hasher.finish() == sha384.sha384(message) { "pieces match" } else { "pieces differ" })?
+    io.println(sha2.sha384(message).to_hex())?
     let nonce = hex("000102030405060708090a0b")
     let aad = "header".to_bytes()
     match chacha20poly1305.seal(key, nonce, aad, Secret.new("attack at dawn".to_bytes())) {
@@ -124,7 +120,7 @@ fn every_function_gives_the_same_answers_on_both_backends() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "{PUBLIC}\n{SHARED}\n{OKM}\n{SHA384}\npieces match\n{CHACHA}\nround trip\nrefused\n{AES}\nround trip\nrefused\n"
+            "{PUBLIC}\n{SHARED}\n{OKM}\n{SHA384}\n{CHACHA}\nround trip\nrefused\n{AES}\nround trip\nrefused\n"
         ),
         "{outcome:#?}"
     );
@@ -229,21 +225,14 @@ fn main(io: Stdout, env: Env, args: Args) -> Result<(), IoError> {
     assert!(builds[0] == builds[1], "two builds differ: {names:?}");
 }
 
-/// FIPS 180-4's third example for SHA-384: one million `a`, fed a thousand
-/// bytes at a time. It runs natively only: the interpreter takes over a
-/// minute on it, and the same code runs on both backends in every other
-/// vector.
+/// FIPS 180-4's third example for SHA-384: one million `a`. It runs natively
+/// only: the interpreter takes over a minute on it.
 #[test]
 fn one_million_a_natively() {
-    let src = r#"use std.sha384
+    let src = r#"use std.sha2
 
 fn main(io: Stdout) -> Result<(), IoError> {
-    let block = "a".repeat(1000).to_bytes()
-    var h = sha384.Sha384.new()
-    for _ in 0..1000 {
-        h.update(block)
-    }
-    io.println(h.finish().to_hex())
+    io.println(sha2.sha384("a".repeat(1000000).to_bytes()).to_hex())
 }
 "#;
     let dir = Scratch::new("oska-sha384", "million");

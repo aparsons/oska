@@ -214,7 +214,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 | --- | --- |
 | `Stdin`, `Stdout`, `Stderr` | Standard streams |
 | `Fs` | Filesystem, only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). |
-| `Net` | Network. Attenuates to `NetConnect` or `NetListen`. |
+| `Net` | Network, only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`, one host and port) with `restrict_to(host, port)`; `NetListen` attenuates to a loopback listener (`LoopbackListen`) with `restrict_to_loopback(port)` ([ADR 0023](adr/0023-network-access-goes-through-host-narrowed-capabilities.md)). |
 | `Env` | Environment variables. These can hold secrets. |
 | `Budget` | Spending model tokens and calls, counted by the runtime. Attenuates to a smaller `Budget` with `limit(tokens, calls)`. |
 | `Clock`, `Random` | Nondeterministic inputs |
@@ -286,7 +286,7 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
 | Process (`std.proc`) | Arguments: `run("git", ["log", branch])` | The program name | A shell string. Running a shell is a separate, explicitly named capability. |
 | HTML (`std.html`) | Text, which is escaped for its context | `TrustedHtml` | Writing untyped strings into markup |
 | Paths | `Path.from` (see below) | The root passed to `restrict_to` or `restrict_to_file` on `Fs`, `FsRead`, or `FsWrite` | `..` traversal outside a directory capability |
-| Network | Request bodies | The host passed to `NetConnect` | |
+| Network | Request bodies | The host passed to `restrict_to` on `Net` or `NetConnect` | |
 | Output | `Stdout.println` and `Stderr` | | |
 
 - **Sink modules.**
@@ -528,7 +528,7 @@ Once escape hatches exist, the following policy applies:
   2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
   3. Native backends for x86_64 Linux, macOS and Windows (v0.4.0 to v0.6.0), which turn the parity gate on.
   4. `Bytes`, the bitwise and wrapping operations, and secret integers (#209), the first language work under the parity gate.
-  5. The first crypto in Oska, after `Bytes` and before TLS: `std.sha2`, `std.hmac`, `std.ed25519` and `std.sshsig`, enough to verify a release's SSH signature (#227; see [the guide](guide/hashing-and-signatures.md)).
+  5. The first crypto in Oska, after `Bytes` and before TLS: `std.sha2`, `std.hmac`, `std.ed25519` and `std.sshsig`, enough to verify a release's SSH signature (#227; `std.ecdsa`, `std.rsa` and `std.p256` follow for TLS, #242, and `std.x509` for certificates, #243; see [the guide](guide/hashing-and-signatures.md)).
   6. The `NetConnect` runtime and a TLS 1.3 client, with the rest of the crypto it needs, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
   7. git fetch, minimal version selection, the lockfile, and authority approval (#12).
 - **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).

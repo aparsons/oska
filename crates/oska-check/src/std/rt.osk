@@ -122,6 +122,41 @@ pub fn rt_sys_stack_guarantee(size: Int) -> Int
 pub fn rt_sys_system_time(time: Int) -> Int
 // `ProcessPrng(buf, length)`: fills all `length` bytes.
 pub fn rt_sys_process_prng(buf: Int, length: Int) -> Int
+// `GetNetworkParams(info, size)` of `iphlpapi.dll`: writes a `FIXED_INFO`
+// with the system's DNS servers to `info`, whose size in bytes is the
+// `ULONG` at `size`. The result is the Win32 error code itself: 0, or 111
+// when `info` is too small, with the size needed written to `size` (ADR
+// 0024).
+pub fn rt_sys_get_network_params(info: Int, size: Int) -> Int
+
+// Sockets (spec #228, ADR 0013). `rt_sys_socket(domain, type, protocol)`,
+// `connect(fd, address, length)`, `bind`, `listen(fd, backlog)`,
+// `accept(fd, 0, 0)` (a descriptor on every platform) and
+// `getsockname(fd, address, lengthptr)`, `getsockopt` and `setsockopt`
+// with `(fd, level, name, value, length)`, `send` and `recv` with
+// `(fd, buf, count)` (no flags: on Linux `send` never raises `SIGPIPE`),
+// and `poll(entries, count, timeout)`: Linux's `ppoll`, whose timeout is
+// the address of a `struct timespec`, and everywhere else a count of
+// milliseconds (see `poll_timespec`). Each gives the operating system's
+// result, or minus its error.
+pub fn rt_sys_socket(domain: Int, kind: Int, protocol: Int) -> Int
+pub fn rt_sys_connect(fd: Int, address: Int, length: Int) -> Int
+pub fn rt_sys_bind(fd: Int, address: Int, length: Int) -> Int
+pub fn rt_sys_listen(fd: Int, backlog: Int) -> Int
+pub fn rt_sys_accept(fd: Int, address: Int, length: Int) -> Int
+pub fn rt_sys_getsockname(fd: Int, address: Int, length: Int) -> Int
+pub fn rt_sys_getsockopt(fd: Int, level: Int, name: Int, value: Int, length: Int) -> Int
+pub fn rt_sys_setsockopt(fd: Int, level: Int, name: Int, value: Int, length: Int) -> Int
+pub fn rt_sys_send(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_recv(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_poll(entries: Int, count: Int, timeout: Int) -> Int
+
+// Windows' own socket calls, `ws2_32.dll`'s (ADR 0020): `WSAStartup`, which
+// every program that uses sockets calls first (as often as it likes),
+// `closesocket` and `ioctlsocket`, which sets a socket's non-blocking mode.
+pub fn rt_sys_wsa_startup(version: Int, data: Int) -> Int
+pub fn rt_sys_close_socket(fd: Int) -> Int
+pub fn rt_sys_ioctl_socket(fd: Int, command: Int, argument: Int) -> Int
 
 // ---- Memory and words ------------------------------------------------------
 
@@ -180,6 +215,8 @@ pub fn rt_mem_as_text(object: Int) -> String
 // its one field).
 pub fn rt_mem_secret(secret: Secret<String>) -> Int
 pub fn rt_mem_as_secret(object: Int) -> Secret<String>
+// The `Secret<Bytes>` whose object is at `object`.
+pub fn rt_mem_as_secret_bytes(object: Int) -> Secret<Bytes>
 pub fn rt_mem_as_io_error(object: Int) -> IoError
 pub fn rt_mem_path(path: Path) -> Int
 pub fn rt_mem_as_path(object: Int) -> Path
@@ -290,6 +327,33 @@ struct Platform {
     e_intr: Int,
     e_pipe: Int,
     e_pipe_alt: Int,
+    // Sockets: `AF_INET6`, and `SOL_SOCKET` with its options `SO_ERROR` and
+    // `SO_REUSEADDR` (0: it is not set, as on Windows).
+    af_inet6: Int,
+    sol_socket: Int,
+    so_error: Int,
+    so_reuseaddr: Int,
+    // `poll`'s `POLLIN` and `POLLOUT` (Windows' `POLLRDNORM` and
+    // `POLLWRNORM`), whether its timeout is the address of a `struct
+    // timespec` rather than milliseconds, and whether a `struct sockaddr`
+    // starts with its length in one byte (macOS), its family then being one
+    // byte too.
+    poll_in: Int,
+    poll_out: Int,
+    poll_timespec: Bool,
+    sockaddr_length_byte: Bool,
+    // The errors of a socket call that say it would block, that a
+    // non-blocking `connect` has begun, and the kinds `net_wording` words:
+    // refused, reset, aborted, timed out, and a network or host that cannot
+    // be reached.
+    e_would_block: Int,
+    e_in_progress: Int,
+    e_refused: Int,
+    e_reset: Int,
+    e_aborted: Int,
+    e_timed_out: Int,
+    e_net_unreach: Int,
+    e_host_unreach: Int,
 }
 
 // `linux-aarch64`: arm64's open flags and `struct stat`, and what every
@@ -330,6 +394,22 @@ fn linux_aarch64() -> Platform {
         e_intr: 4,
         e_pipe: 32,
         e_pipe_alt: 0,
+        af_inet6: 10,
+        sol_socket: 1,
+        so_error: 4,
+        so_reuseaddr: 2,
+        poll_in: 1,
+        poll_out: 4,
+        poll_timespec: true,
+        sockaddr_length_byte: false,
+        e_would_block: 11,
+        e_in_progress: 115,
+        e_refused: 111,
+        e_reset: 104,
+        e_aborted: 103,
+        e_timed_out: 110,
+        e_net_unreach: 101,
+        e_host_unreach: 113,
     )
 }
 
@@ -372,6 +452,22 @@ fn linux_x86_64() -> Platform {
         e_intr: 4,
         e_pipe: 32,
         e_pipe_alt: 0,
+        af_inet6: 10,
+        sol_socket: 1,
+        so_error: 4,
+        so_reuseaddr: 2,
+        poll_in: 1,
+        poll_out: 4,
+        poll_timespec: true,
+        sockaddr_length_byte: false,
+        e_would_block: 11,
+        e_in_progress: 115,
+        e_refused: 111,
+        e_reset: 104,
+        e_aborted: 103,
+        e_timed_out: 110,
+        e_net_unreach: 101,
+        e_host_unreach: 113,
     )
 }
 
@@ -419,6 +515,22 @@ fn macos() -> Platform {
         e_intr: 4,
         e_pipe: 32,
         e_pipe_alt: 0,
+        af_inet6: 30,
+        sol_socket: 65535,
+        so_error: 4103,
+        so_reuseaddr: 4,
+        poll_in: 1,
+        poll_out: 4,
+        poll_timespec: false,
+        sockaddr_length_byte: true,
+        e_would_block: 35,
+        e_in_progress: 36,
+        e_refused: 61,
+        e_reset: 54,
+        e_aborted: 53,
+        e_timed_out: 60,
+        e_net_unreach: 51,
+        e_host_unreach: 65,
     )
 }
 
@@ -464,6 +576,22 @@ fn windows_x86_64() -> Platform {
         e_intr: 0,
         e_pipe: 232,
         e_pipe_alt: 109,
+        af_inet6: 23,
+        sol_socket: 65535,
+        so_error: 4103,
+        so_reuseaddr: 0,
+        poll_in: 256,
+        poll_out: 16,
+        poll_timespec: false,
+        sockaddr_length_byte: false,
+        e_would_block: 10035,
+        e_in_progress: 10035,
+        e_refused: 10061,
+        e_reset: 10054,
+        e_aborted: 10053,
+        e_timed_out: 10060,
+        e_net_unreach: 10051,
+        e_host_unreach: 10065,
     )
 }
 
@@ -3880,11 +4008,10 @@ pub fn clock_now_millis(clock: Clock) -> Int {
     seconds * 1000 + nanos / 1000000
 }
 
-// `Random.next_int`: SplitMix64, as the interpreter's, seeded on first use
-// from the operating system's random source (from the clock if that
-// fails). From 0 up to, but
-// excluding, 2^63.
-pub fn random_next_int(random: Random) -> Int {
+// The next 64 bits of the generator: SplitMix64, as the interpreter's,
+// seeded on first use from the operating system's random source (from the
+// clock if that fails).
+fn random_next_word() -> Int {
     if rt_mem_load64(global(21)) == 0 {
         let object = alloc(24)
         var got = 0
@@ -3908,7 +4035,119 @@ pub fn random_next_int(random: Random) -> Int {
     var z = state
     z = rt_mem_mul(rt_mem_xor(z, rt_mem_shr(z, 30)), -4658895280553007687)
     z = rt_mem_mul(rt_mem_xor(z, rt_mem_shr(z, 27)), -7723592293110705685)
-    rt_mem_shr(rt_mem_xor(z, rt_mem_shr(z, 31)), 1)
+    rt_mem_xor(z, rt_mem_shr(z, 31))
+}
+
+// `Random.next_int`: from 0 up to, but excluding, 2^63.
+pub fn random_next_int(random: Random) -> Int {
+    rt_mem_shr(random_next_word(), 1)
+}
+
+// `Random.secure_bytes`: `length` bytes of the operating system's secure
+// random source, in a `Secret<Bytes>`; on the test host the generator's
+// words, little-endian, as the interpreter's. The word 0 says a negative
+// length and -1 one past `max_bytes`. No secure source ends the program:
+// there is no guessable fallback.
+pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
+    if length < 0 {
+        return rt_mem_as_secret_bytes(0)
+    }
+    if length > max_bytes() {
+        return rt_mem_as_secret_bytes(-1)
+    }
+    let bytes = bytes_zeroed(length)
+    let data = bytes_data(rt_mem_bytes(bytes))
+    if faking() {
+        var word = 0
+        var i = 0
+        while i < length {
+            let shift = rt_mem_shl(rt_mem_and(i, 7), 3)
+            if shift == 0 {
+                word = random_next_word()
+            }
+            rt_mem_store8(rt_mem_add(data, i), rt_mem_and(rt_mem_shr(word, shift), 255))
+            i = i + 1
+        }
+    } else {
+        var done = 0
+        while done < length {
+            var chunk = length - done
+            if chunk > 256 {
+                chunk = 256
+            }
+            var got = 0
+            if on_windows() {
+                got = rt_sys_process_prng(rt_mem_add(data, done), chunk)
+            } else {
+                got = rt_sys_random(rt_mem_add(data, done), chunk)
+            }
+            // `ProcessPrng` always returns TRUE and fills every byte (the
+            // backend's `Fails::Never`), so Windows has no result to check.
+            if got < 0 && !on_windows() {
+                let _ = write_text(report_fd(), "the operating system has no secure random source\n")
+                exit(101)
+            }
+            done = done + chunk
+        }
+    }
+    let object = alloc(16)
+    let held = rt_mem_bytes(bytes)
+    retain(held)
+    rt_mem_store64(rt_mem_add(object, 8), held)
+    rt_mem_as_secret_bytes(object)
+}
+
+// ---- Name servers ----------------------------------------------------------
+
+// `NetConnect.system_name_servers`: the DNS servers Windows lists, in
+// order, as IPv4 literals, from `GetNetworkParams` (ADR 0024). Every other
+// platform keeps them in `resolv.conf`, which `std.dns` reads itself, so
+// they have none to give; and the test host lists none.
+pub fn net_system_name_servers(net: NetConnect) -> Result<List<String>, IoError> {
+    var servers: List<String> = []
+    if !on_windows() || faking() {
+        return Ok(servers)
+    }
+    let cell = alloc(8)
+    rt_mem_store64(cell, 0)
+    // A first call with no buffer says how big the buffer must be.
+    let first = rt_sys_get_network_params(0, cell)
+    let size = rt_mem_load32(cell)
+    if first != 111 || size < 320 || size > 65536 {
+        return Err(io_error_text("the system's DNS servers cannot be read"))
+    }
+    let info = alloc(size + 8)
+    let second = rt_sys_get_network_params(info, cell)
+    if second != 0 {
+        return Err(io_error_text("the system's DNS servers cannot be read"))
+    }
+    // `FIXED_INFO`: `HostName[132]`, `DomainName[132]`, `CurrentDnsServer`
+    // (a pointer, at 264), and at 272 `DnsServerList`, an
+    // `IP_ADDR_STRING`: `Next` (a pointer), `IpAddress[16]` (a C string),
+    // `IpMask[16]` and `Context`, 48 bytes. The list's other nodes follow
+    // the structure in the same buffer. A link that leaves the buffer ends
+    // the list, as it does in the interpreter.
+    var node = rt_mem_add(info, 272)
+    var seen = 0
+    while seen < 16 {
+        let address = rt_mem_add(node, 8)
+        var length = 0
+        while length < 16 && rt_mem_load8(rt_mem_add(address, length)) != 0 {
+            length = length + 1
+        }
+        if length > 0 {
+            servers.push(text_from(address, length))
+        }
+        let next = rt_mem_load64(node)
+        let offset = rt_mem_sub(next, info)
+        if next == 0 || offset < 0 || offset > size - 48 {
+            seen = 16
+        } else {
+            node = next
+            seen = seen + 1
+        }
+    }
+    Ok(servers)
 }
 
 // ---- Budgets ---------------------------------------------------------------
@@ -6019,6 +6258,903 @@ pub fn file_write_bytes(root: Root, contents: Bytes) -> Result<(), IoError> {
 fn raw_text_of(contents: Bytes) -> String {
     let object = rt_mem_bytes(contents)
     text_from(bytes_data(object), bytes_length(object))
+}
+
+// ---- Sockets ---------------------------------------------------------------
+//
+// The network capabilities (ADR 0023), connecting and listening as the
+// interpreter does (`oska-run/src/net.rs`, `oska-sys/src/net.rs`), with the
+// same messages on every platform:
+//
+// - A `HostConnect` and a `LoopbackListen` are a `Sock`, `[count][handle]
+//   [host][port][why]`: the handle of the socket, or -1 when there is none
+//   (a `HostConnect` holds none, and a closed connection's is -1); the host
+//   (a text object) and port; and `why`, the text of why a listener could
+//   not listen, which every `accept` on it then fails with, or "". The
+//   backend releases one with `sock_drop`, which closes the socket. A
+//   `Connection` is `[count][sock]`: the one field `host` of the prelude's
+//   struct, a `Sock` whose handle is the open socket, as the interpreter's
+//   `Connection` holds its `HostCap` with the stream in it.
+// - Every socket is non-blocking. A call that would block waits with `poll`
+//   instead, for at most 10 seconds to connect and 30 to send, receive or
+//   accept, and fails with `timed out`.
+// - Name resolution is not here yet: the Oska stub resolver is a later
+//   ticket of spec #228. A host is an IPv4 or IPv6 literal, or `localhost`
+//   (::1, then 127.0.0.1); any other well-formed name is `host not found`.
+// - A failure's words are `net_wording`'s, from the error's kind, never the
+//   system's own text.
+//
+// No function holds a `Sock` or a `Connection` as a typed value: they are
+// words, read and written at their offsets, so that no local is released
+// without `sock_drop` closing its socket.
+
+// How long to wait to connect, and to send, receive or accept, in
+// milliseconds: `CONNECT_TIMEOUT` and `READ_TIMEOUT` of `oska-sys`.
+fn connect_wait() -> Int {
+    10000
+}
+
+fn read_wait() -> Int {
+    30000
+}
+
+// The most bytes one `receive` returns: 64 KiB, as the interpreter's.
+fn receive_chunk() -> Int {
+    65536
+}
+
+// The message of an operation a plain test refuses: the interpreter's
+// `no_network`, the same on every platform.
+fn no_network() -> String {
+    "network access is not available here: a plain test is offline"
+}
+
+// ---- Sock objects
+
+// A new `Sock`: its address, whose count is 1.
+fn sock_new(handle: Int, host: String, port: Int, why: String) -> Int {
+    let object = alloc(40)
+    let host_object = rt_mem_text(host)
+    retain(host_object)
+    let why_object = rt_mem_text(why)
+    retain(why_object)
+    rt_mem_store64(rt_mem_add(object, 8), handle)
+    rt_mem_store64(rt_mem_add(object, 16), host_object)
+    rt_mem_store64(rt_mem_add(object, 24), port)
+    rt_mem_store64(rt_mem_add(object, 32), why_object)
+    object
+}
+
+fn sock_handle(sock: Int) -> Int {
+    rt_mem_load64(rt_mem_add(sock, 8))
+}
+
+fn sock_port(sock: Int) -> Int {
+    rt_mem_load64(rt_mem_add(sock, 24))
+}
+
+// A new reference to the text at word `at` of `sock`.
+fn sock_text(sock: Int, at: Int) -> String {
+    let object = rt_mem_load64(rt_mem_add(sock, at))
+    retain(object)
+    rt_mem_as_text(object)
+}
+
+// A new `Connection` holding `sock`, whose reference passes to it: its
+// address.
+fn link_new(sock: Int) -> Int {
+    let object = alloc(16)
+    rt_mem_store64(rt_mem_add(object, 8), sock)
+    object
+}
+
+// Release the `HostConnect` or `LoopbackListen` at `object`, whose last
+// reference is gone: its socket is closed, and the object is freed. The
+// two texts it held are released as this function ends, by the locals that
+// take over the references.
+pub fn sock_drop(object: Int) {
+    let handle = sock_handle(object)
+    if handle >= 0 {
+        close_socket(handle)
+    }
+    let host = rt_mem_as_text(rt_mem_load64(rt_mem_add(object, 16)))
+    let why = rt_mem_as_text(rt_mem_load64(rt_mem_add(object, 32)))
+    free(object)
+}
+
+// Close the socket `fd`: never retried, as `close`.
+fn close_socket(fd: Int) {
+    if on_windows() {
+        let _ = rt_sys_close_socket(fd)
+        return
+    }
+    let _ = rt_sys_close(fd)
+}
+
+// ---- Wording
+
+// Oska's wording for the kind of failure the socket error `code` (an
+// `errno`, or Windows' Winsock error) is, as `oska-sys`'s `describe` words
+// it: the same on every platform.
+fn net_wording(code: Int) -> String {
+    let platform = rt_mem_platform()
+    if code == platform.e_refused {
+        return "connection refused"
+    }
+    if code == platform.e_reset || code == platform.e_aborted || code == platform.e_pipe {
+        return "connection reset"
+    }
+    if platform.e_pipe_alt != 0 && code == platform.e_pipe_alt {
+        return "connection reset"
+    }
+    if code == platform.e_timed_out || code == platform.e_would_block {
+        return "timed out"
+    }
+    if code == platform.e_net_unreach {
+        return "network unreachable"
+    }
+    if code == platform.e_host_unreach {
+        return "host unreachable"
+    }
+    "I/O error"
+}
+
+// `host:port`, with an IPv6 literal in brackets.
+fn shown_address(host: String, port: Int) -> String {
+    if host.contains(":") {
+        return "[{host}]:{port}"
+    }
+    "{host}:{port}"
+}
+
+// ---- IP addresses
+//
+// Parsed as Rust's `IpAddr::from_str` does (`std::net::parser`): an IPv4
+// address is four decimal numbers of one to three digits, none above 255
+// or with a leading zero, and an IPv6 address is up to eight groups of one
+// to four hexadecimal digits, with one `::` standing for zeros and an IPv4
+// address allowed at the end. No scope, no brackets, no spaces.
+
+// The value of the byte `b` as a digit of `radix`, or -1.
+fn ip_digit(b: Int, radix: Int) -> Int {
+    var digit = -1
+    if b >= 48 && b <= 57 {
+        digit = b - 48
+    }
+    if b >= 97 && b <= 102 {
+        digit = b - 87
+    }
+    if b >= 65 && b <= 70 {
+        digit = b - 55
+    }
+    if digit >= radix {
+        return -1
+    }
+    digit
+}
+
+// Read a number of `radix` at byte `at` of the `length` bytes at `data`,
+// of at most `max_digits` digits, no more than `largest`, and with no
+// leading zero unless `zero_prefix`: the position after it, with its value
+// stored at `cell`, or -1.
+fn ip_number(data: Int, length: Int, at: Int, radix: Int, max_digits: Int, zero_prefix: Bool, largest: Int, cell: Int) -> Int {
+    var value = 0
+    var count = 0
+    var i = at
+    while i < length {
+        let digit = ip_digit(rt_mem_load8(rt_mem_add(data, i)), radix)
+        if digit < 0 {
+            break
+        }
+        value = value * radix + digit
+        count = count + 1
+        if count > max_digits {
+            return -1
+        }
+        i = i + 1
+    }
+    if count == 0 {
+        return -1
+    }
+    if !zero_prefix && count > 1 && rt_mem_load8(rt_mem_add(data, at)) == 48 {
+        return -1
+    }
+    if value > largest {
+        return -1
+    }
+    rt_mem_store64(cell, value)
+    i
+}
+
+// Read an IPv4 address at byte `at`, its four bytes written to `out`: the
+// position after it, or -1.
+fn ip4_read(data: Int, length: Int, at: Int, out: Int, cell: Int) -> Int {
+    var pos = at
+    var i = 0
+    while i < 4 {
+        if i > 0 {
+            if pos >= length || rt_mem_load8(rt_mem_add(data, pos)) != 46 {
+                return -1
+            }
+            pos = pos + 1
+        }
+        pos = ip_number(data, length, pos, 10, 3, false, 255, cell)
+        if pos < 0 {
+            return -1
+        }
+        rt_mem_store8(rt_mem_add(out, i), rt_mem_load64(cell))
+        i = i + 1
+    }
+    pos
+}
+
+// Read up to `limit` groups of an IPv6 address from byte `at`, each after
+// the first behind a `:`, their bytes written to `out`, an IPv4 address at
+// the end counting as two groups. What it gives is `32 * position + 2 *
+// groups + 1 if an IPv4 address ended them`: `cell` and the four bytes
+// after it are scratch.
+fn ip6_groups(data: Int, length: Int, at: Int, out: Int, limit: Int, cell: Int) -> Int {
+    var pos = at
+    var i = 0
+    while i < limit {
+        var start = pos
+        var separated = true
+        if i > 0 {
+            if pos < length && rt_mem_load8(rt_mem_add(data, pos)) == 58 {
+                start = pos + 1
+            } else {
+                separated = false
+            }
+        }
+        if !separated {
+            return pos * 32 + i * 2
+        }
+        if i < limit - 1 {
+            let tmp = rt_mem_add(cell, 8)
+            let end = ip4_read(data, length, start, tmp, cell)
+            if end >= 0 {
+                let to = rt_mem_add(out, i * 2)
+                var k = 0
+                while k < 4 {
+                    rt_mem_store8(rt_mem_add(to, k), rt_mem_load8(rt_mem_add(tmp, k)))
+                    k = k + 1
+                }
+                return end * 32 + (i + 2) * 2 + 1
+            }
+        }
+        let end = ip_number(data, length, start, 16, 4, true, 65535, cell)
+        if end < 0 {
+            return pos * 32 + i * 2
+        }
+        let group = rt_mem_load64(cell)
+        rt_mem_store8(rt_mem_add(out, i * 2), rt_mem_shr(group, 8))
+        rt_mem_store8(rt_mem_add(out, i * 2 + 1), rt_mem_and(group, 255))
+        pos = end
+        i = i + 1
+    }
+    pos * 32 + limit * 2
+}
+
+// Whether the `length` bytes at `data` are an IPv6 address, its 16 bytes
+// written to `out` (zeroed), with `tail` (16 bytes) and `cell` (16 bytes)
+// as scratch.
+fn ip6_read(data: Int, length: Int, out: Int, tail: Int, cell: Int) -> Bool {
+    let first = ip6_groups(data, length, 0, out, 8, cell)
+    var pos = first / 32
+    let head = (first % 32) / 2
+    if head == 8 {
+        return pos == length
+    }
+    // An IPv4 address may not come before `::`.
+    if first % 2 == 1 {
+        return false
+    }
+    if pos + 2 > length {
+        return false
+    }
+    if rt_mem_load8(rt_mem_add(data, pos)) != 58 || rt_mem_load8(rt_mem_add(data, pos + 1)) != 58 {
+        return false
+    }
+    pos = pos + 2
+    let second = ip6_groups(data, length, pos, tail, 8 - (head + 1), cell)
+    pos = second / 32
+    let count = (second % 32) / 2
+    var k = 0
+    while k < count * 2 {
+        rt_mem_store8(rt_mem_add(out, (8 - count) * 2 + k), rt_mem_load8(rt_mem_add(tail, k)))
+        k = k + 1
+    }
+    pos == length
+}
+
+// Whether `host` is an IP address: 4 for an IPv4 address, 16 for an IPv6
+// one, and 0 for anything else. The address's bytes are written to `out`,
+// 16 bytes of which are its own, and the next 24 scratch.
+fn ip_parse(host: String, out: Int) -> Int {
+    let object = rt_mem_text(host)
+    let data = text_data(object)
+    let length = text_length(object)
+    var i = 0
+    while i < 5 {
+        rt_mem_store64(rt_mem_add(out, i * 8), 0)
+        i = i + 1
+    }
+    let cell = rt_mem_add(out, 32)
+    let end = ip4_read(data, length, 0, out, cell)
+    if end >= 0 && end == length {
+        return 4
+    }
+    rt_mem_store64(out, 0)
+    let tail = rt_mem_add(out, 16)
+    if ip6_read(data, length, out, tail, cell) {
+        return 16
+    }
+    0
+}
+
+// Whether `host` is a DNS name: dot-separated labels of letters, digits,
+// `-` and `_`, none empty or over 63 bytes, with an optional final dot, in
+// at most 253 bytes.
+fn is_dns_name(host: String) -> Bool {
+    let object = rt_mem_text(host)
+    let data = text_data(object)
+    var length = text_length(object)
+    if length > 0 && rt_mem_load8(rt_mem_add(data, length - 1)) == 46 {
+        length = length - 1
+    }
+    if length == 0 || length > 253 {
+        return false
+    }
+    var label = 0
+    var i = 0
+    while i < length {
+        let b = rt_mem_load8(rt_mem_add(data, i))
+        if b == 46 {
+            if label == 0 {
+                return false
+            }
+            label = 0
+        } else {
+            let letter = (b >= 97 && b <= 122) || (b >= 65 && b <= 90)
+            let digit = b >= 48 && b <= 57
+            if !letter && !digit && b != 45 && b != 95 {
+                return false
+            }
+            label = label + 1
+            if label > 63 {
+                return false
+            }
+        }
+        i = i + 1
+    }
+    label > 0
+}
+
+// ---- Socket addresses
+
+// The bytes of a `struct sockaddr_in` (16) or `sockaddr_in6` (28) for the
+// IPv4 or IPv6 address at `ip` and `port`, in a new object: its address,
+// which the caller frees. The bytes start 8 after it.
+fn sockaddr_new(v6: Bool, ip: Int, port: Int) -> Int {
+    let platform = rt_mem_platform()
+    let object = alloc(40)
+    let at = rt_mem_add(object, 8)
+    var i = 0
+    while i < 4 {
+        rt_mem_store64(rt_mem_add(at, i * 8), 0)
+        i = i + 1
+    }
+    var family = 2
+    var size = 16
+    var address = 4
+    if v6 {
+        family = platform.af_inet6
+        size = 28
+        address = 8
+    }
+    if platform.sockaddr_length_byte {
+        rt_mem_store8(at, size)
+        rt_mem_store8(rt_mem_add(at, 1), family)
+    } else {
+        rt_mem_store16(at, family)
+    }
+    rt_mem_store8(rt_mem_add(at, 2), rt_mem_shr(port, 8))
+    rt_mem_store8(rt_mem_add(at, 3), rt_mem_and(port, 255))
+    var n = 4
+    if v6 {
+        n = 16
+    }
+    var k = 0
+    while k < n {
+        rt_mem_store8(rt_mem_add(at, address + k), rt_mem_load8(rt_mem_add(ip, k)))
+        k = k + 1
+    }
+    object
+}
+
+fn sockaddr_size(v6: Bool) -> Int {
+    if v6 {
+        return 28
+    }
+    16
+}
+
+// ---- Waiting
+
+// Start Winsock on Windows, which every use of a socket needs first; it
+// counts its callers, and the process never lets go.
+fn socket_start() {
+    if on_windows() {
+        let object = alloc(512)
+        let _ = rt_sys_wsa_startup(514, rt_mem_add(object, 8))
+        free(object)
+    }
+}
+
+// Wait until the socket `fd` has one of `events`, or `ms` milliseconds
+// have passed: 1 when it does, 0 when they have, and minus the error when
+// the wait fails.
+fn wait_ready(fd: Int, events: Int, ms: Int) -> Int {
+    let platform = rt_mem_platform()
+    let object = alloc(48)
+    let entry = rt_mem_add(object, 8)
+    rt_mem_store64(entry, 0)
+    rt_mem_store64(rt_mem_add(entry, 8), 0)
+    if on_windows() {
+        rt_mem_store64(entry, fd)
+        rt_mem_store16(rt_mem_add(entry, 8), events)
+    } else {
+        rt_mem_store32(entry, fd)
+        rt_mem_store16(rt_mem_add(entry, 4), events)
+    }
+    var wait = ms
+    if platform.poll_timespec {
+        let spec = rt_mem_add(object, 24)
+        rt_mem_store64(spec, ms / 1000)
+        rt_mem_store64(rt_mem_add(spec, 8), (ms % 1000) * 1000000)
+        wait = spec
+    }
+    var ready = rt_sys_poll(entry, 1, wait)
+    while interrupted(ready) {
+        ready = rt_sys_poll(entry, 1, wait)
+    }
+    free(object)
+    ready
+}
+
+// A new non-blocking socket of the IPv4 or IPv6 family: its descriptor, or
+// minus the error.
+fn socket_open(v6: Bool) -> Int {
+    let platform = rt_mem_platform()
+    socket_start()
+    var domain = 2
+    if v6 {
+        domain = platform.af_inet6
+    }
+    let fd = rt_sys_socket(domain, 1, 0)
+    if fd < 0 {
+        return fd
+    }
+    var result = 0
+    if on_windows() {
+        let object = alloc(16)
+        rt_mem_store32(rt_mem_add(object, 8), 1)
+        // `FIONBIO`.
+        result = rt_sys_ioctl_socket(fd, 2147772030, rt_mem_add(object, 8))
+        free(object)
+    } else {
+        result = rt_sys_fcntl(fd, 4, platform.o_nonblock)
+    }
+    if result < 0 {
+        close_socket(fd)
+        return result
+    }
+    fd
+}
+
+// Make the accepted socket `fd` non-blocking, as every socket is: 0, or
+// minus the error.
+fn socket_nonblocking(fd: Int) -> Int {
+    if on_windows() {
+        let object = alloc(16)
+        rt_mem_store32(rt_mem_add(object, 8), 1)
+        let result = rt_sys_ioctl_socket(fd, 2147772030, rt_mem_add(object, 8))
+        free(object)
+        return result
+    }
+    rt_sys_fcntl(fd, 4, rt_mem_platform().o_nonblock)
+}
+
+// The pending error of the socket `fd` (`SO_ERROR`): the error's number, 0
+// for none, or minus the error of asking.
+fn socket_error(fd: Int) -> Int {
+    let platform = rt_mem_platform()
+    let object = alloc(24)
+    rt_mem_store64(rt_mem_add(object, 8), 0)
+    rt_mem_store32(rt_mem_add(object, 16), 4)
+    let result = rt_sys_getsockopt(fd, platform.sol_socket, platform.so_error, rt_mem_add(object, 8), rt_mem_add(object, 16))
+    let code = rt_mem_load32(rt_mem_add(object, 8))
+    free(object)
+    if result < 0 {
+        return result
+    }
+    code
+}
+
+// ---- Connecting
+
+// A socket connected to the IPv4 or IPv6 address at `ip`, at `port`,
+// waiting at most `connect_wait` for it to answer: its descriptor, or minus
+// the error.
+fn connect_to(v6: Bool, ip: Int, port: Int) -> Int {
+    let platform = rt_mem_platform()
+    let fd = socket_open(v6)
+    if fd < 0 {
+        return fd
+    }
+    let address = sockaddr_new(v6, ip, port)
+    let result = rt_sys_connect(fd, rt_mem_add(address, 8), sockaddr_size(v6))
+    free(address)
+    if result >= 0 {
+        return fd
+    }
+    if result != 0 - platform.e_in_progress && !interrupted(result) {
+        close_socket(fd)
+        return result
+    }
+    let ready = wait_ready(fd, platform.poll_out, connect_wait())
+    if ready < 0 {
+        close_socket(fd)
+        return ready
+    }
+    if ready == 0 {
+        close_socket(fd)
+        return 0 - platform.e_timed_out
+    }
+    let code = socket_error(fd)
+    if code != 0 {
+        close_socket(fd)
+        if code > 0 {
+            return 0 - code
+        }
+        return code
+    }
+    fd
+}
+
+// `localhost`, in any case, which the system's hosts file gives as ::1 and
+// 127.0.0.1, in that order on every platform Oska targets.
+fn is_localhost(host: String) -> Bool {
+    string_to_lowercase(host) == "localhost"
+}
+
+// Connect to `host` at `port`, as `NetStream::connect`: the socket's
+// descriptor, or the text of the error.
+fn net_connect(host: String, port: Int) -> Result<Int, String> {
+    if port < 1 || port > 65535 {
+        return Err("port {port} is out of range: use 1 to 65535")
+    }
+    let object = alloc(72)
+    let ip = rt_mem_add(object, 8)
+    let kind = ip_parse(host, ip)
+    let shown = shown_address(host, port)
+    if kind == 0 && !is_dns_name(host) {
+        free(object)
+        let name = os_debug(host)
+        return Err("invalid host {name}: it is not a DNS name or an IP address")
+    }
+    var fd = 0
+    if kind != 0 {
+        fd = connect_to(kind == 16, ip, port)
+    } else if is_localhost(host) {
+        rt_mem_store8(rt_mem_add(ip, 15), 1)
+        fd = connect_to(true, ip, port)
+        if fd < 0 {
+            rt_mem_store8(rt_mem_add(ip, 15), 0)
+            rt_mem_store8(ip, 127)
+            rt_mem_store8(rt_mem_add(ip, 3), 1)
+            fd = connect_to(false, ip, port)
+        }
+    } else {
+        free(object)
+        return Err("cannot connect to {shown}: host not found")
+    }
+    free(object)
+    if fd < 0 {
+        let why = net_wording(0 - fd)
+        return Err("cannot connect to {shown}: {why}")
+    }
+    Ok(fd)
+}
+
+// ---- Attenuation
+
+// `Net.restrict_to(host, port)` and `NetConnect.restrict_to(host, port)`: the
+// host capability. Attenuation never fails.
+pub fn net_restrict_to(net: Int, host: String, port: Int) -> Int {
+    sock_new(-1, host, port, "")
+}
+
+// `HostConnect.name`.
+pub fn host_name(host: Int) -> String {
+    sock_text(host, 16)
+}
+
+// `HostConnect.port`.
+pub fn host_port(host: Int) -> Int {
+    sock_port(host)
+}
+
+// `HostConnect.connect`.
+pub fn host_connect(host: Int) -> Result<Int, IoError> {
+    let name = sock_text(host, 16)
+    let port = sock_port(host)
+    if faking() {
+        return Err(io_error_text(no_network()))
+    }
+    match net_connect(name, port) {
+        Ok(fd) => Ok(link_new(sock_new(fd, name, port, "")))
+        Err(message) => Err(io_error_text(message))
+    }
+}
+
+// ---- Listening
+
+// A socket listening on the loopback address of the IPv4 or IPv6 family at
+// `port`: its descriptor, or minus the error.
+fn listen_on(v6: Bool, port: Int) -> Int {
+    let platform = rt_mem_platform()
+    let fd = socket_open(v6)
+    if fd < 0 {
+        return fd
+    }
+    if platform.so_reuseaddr != 0 {
+        let object = alloc(16)
+        rt_mem_store32(rt_mem_add(object, 8), 1)
+        let _ = rt_sys_setsockopt(fd, platform.sol_socket, platform.so_reuseaddr, rt_mem_add(object, 8), 4)
+        free(object)
+    }
+    let ip = alloc(24)
+    rt_mem_store64(rt_mem_add(ip, 8), 0)
+    rt_mem_store64(rt_mem_add(ip, 16), 0)
+    if v6 {
+        rt_mem_store8(rt_mem_add(ip, 23), 1)
+    } else {
+        rt_mem_store8(rt_mem_add(ip, 8), 127)
+        rt_mem_store8(rt_mem_add(ip, 11), 1)
+    }
+    let address = sockaddr_new(v6, rt_mem_add(ip, 8), port)
+    free(ip)
+    var result = rt_sys_bind(fd, rt_mem_add(address, 8), sockaddr_size(v6))
+    free(address)
+    if result >= 0 {
+        result = rt_sys_listen(fd, 128)
+    }
+    if result < 0 {
+        close_socket(fd)
+        return result
+    }
+    fd
+}
+
+// The port the socket `fd` is bound to, or 0.
+fn socket_port(fd: Int) -> Int {
+    let object = alloc(48)
+    let address = rt_mem_add(object, 8)
+    rt_mem_store32(rt_mem_add(object, 40), 32)
+    let result = rt_sys_getsockname(fd, address, rt_mem_add(object, 40))
+    var port = 0
+    if result >= 0 {
+        port = rt_mem_or(rt_mem_shl(rt_mem_load8(rt_mem_add(address, 2)), 8), rt_mem_load8(rt_mem_add(address, 3)))
+    }
+    free(object)
+    port
+}
+
+// `NetListen.restrict_to_loopback(port)`: the listener, which listens now.
+// A port that cannot be listened on leaves one whose `accept` fails with
+// the reason.
+pub fn net_restrict_to_loopback(net: Int, port: Int) -> Int {
+    if port < 0 || port > 65535 {
+        return sock_new(-1, "loopback", 0, "port {port} is out of range: use 0 to 65535")
+    }
+    if faking() {
+        return sock_new(-1, "loopback", 0, no_network())
+    }
+    var fd = listen_on(false, port)
+    if fd < 0 {
+        fd = listen_on(true, port)
+    }
+    if fd < 0 {
+        let why = net_wording(0 - fd)
+        return sock_new(-1, "loopback", 0, "listen failed: {why}")
+    }
+    sock_new(fd, "loopback", socket_port(fd), "")
+}
+
+// `LoopbackListen.port`: the port, or 0 when it could not listen.
+pub fn loopback_port(listener: Int) -> Int {
+    sock_port(listener)
+}
+
+// `LoopbackListen.accept`: the next connection, waiting at most 30 seconds.
+pub fn loopback_accept(listener: Int) -> Result<Int, IoError> {
+    let why = sock_text(listener, 32)
+    if why != "" {
+        return Err(io_error_text(why))
+    }
+    let platform = rt_mem_platform()
+    let fd = sock_handle(listener)
+    while true {
+        let ready = wait_ready(fd, platform.poll_in, read_wait())
+        if ready < 0 {
+            let words = net_wording(0 - ready)
+            return Err(io_error_text("accept failed: {words}"))
+        }
+        if ready == 0 {
+            let words = net_wording(platform.e_timed_out)
+            return Err(io_error_text("accept failed: {words}"))
+        }
+        let accepted = rt_sys_accept(fd, 0, 0)
+        if accepted == 0 - platform.e_would_block || interrupted(accepted) {
+            continue
+        }
+        if accepted < 0 {
+            let words = net_wording(0 - accepted)
+            return Err(io_error_text("accept failed: {words}"))
+        }
+        let blocking = socket_nonblocking(accepted)
+        if blocking < 0 {
+            close_socket(accepted)
+            let words = net_wording(0 - blocking)
+            return Err(io_error_text("accept failed: {words}"))
+        }
+        return Ok(link_new(sock_new(accepted, "loopback", sock_port(listener), "")))
+    }
+    Err(io_error_text("accept failed: I/O error"))
+}
+
+// ---- Connections
+
+// The socket of the `Connection` at `link`.
+fn link_sock(link: Int) -> Int {
+    rt_mem_load64(rt_mem_add(link, 8))
+}
+
+// The error for a connection that `close` ended.
+fn closed_error() -> IoError {
+    io_error_text("the connection is closed")
+}
+
+// `Connection.host`.
+pub fn connection_host(link: Int) -> String {
+    sock_text(link_sock(link), 16)
+}
+
+// `Connection.close`: the socket is closed now, and every later use fails.
+pub fn connection_close(link: Int) {
+    let sock = link_sock(link)
+    let handle = sock_handle(sock)
+    if handle >= 0 {
+        close_socket(handle)
+        rt_mem_store64(rt_mem_add(sock, 8), -1)
+    }
+}
+
+// Send the `count` bytes at `buf` on the socket `fd`, however many sends it
+// takes: 0, or minus the error.
+fn socket_send_all(fd: Int, buf: Int, count: Int) -> Int {
+    let platform = rt_mem_platform()
+    var at = buf
+    var left = count
+    while left > 0 {
+        let wrote = rt_sys_send(fd, at, io_count(left))
+        if interrupted(wrote) {
+            continue
+        }
+        if wrote == 0 - platform.e_would_block {
+            let ready = wait_ready(fd, platform.poll_out, read_wait())
+            if ready < 0 {
+                return ready
+            }
+            if ready == 0 {
+                return 0 - platform.e_timed_out
+            }
+            continue
+        }
+        if wrote < 0 {
+            return wrote
+        }
+        if wrote == 0 {
+            return -5
+        }
+        at = rt_mem_add(at, wrote)
+        left = rt_mem_sub(left, wrote)
+    }
+    0
+}
+
+// Send the `count` bytes at `buf` on the `Connection` at `link`.
+fn connection_send_raw(link: Int, buf: Int, count: Int) -> Result<(), IoError> {
+    let handle = sock_handle(link_sock(link))
+    if handle < 0 {
+        return Err(closed_error())
+    }
+    let result = socket_send_all(handle, buf, count)
+    if result < 0 {
+        let why = net_wording(0 - result)
+        return Err(io_error_text("send failed: {why}"))
+    }
+    Ok(())
+}
+
+// `Connection.send`.
+pub fn connection_send(link: Int, body: String) -> Result<(), IoError> {
+    let object = rt_mem_text(body)
+    connection_send_raw(link, text_data(object), text_length(object))
+}
+
+// `Connection.send_bytes`.
+pub fn connection_send_bytes(link: Int, body: Bytes) -> Result<(), IoError> {
+    let object = rt_mem_bytes(body)
+    connection_send_raw(link, bytes_data(object), bytes_length(object))
+}
+
+// The next bytes that arrive on the `Connection` at `link`, at most
+// `receive_chunk` of them, in a new buffer that the caller frees: the count
+// is its word 0 and the bytes follow. No bytes means the other side ended
+// the stream.
+fn connection_receive_raw(link: Int) -> Result<Int, IoError> {
+    let platform = rt_mem_platform()
+    let handle = sock_handle(link_sock(link))
+    if handle < 0 {
+        return Err(closed_error())
+    }
+    let buffer = alloc(receive_chunk() + 8)
+    var got = 0
+    while true {
+        let ready = wait_ready(handle, platform.poll_in, read_wait())
+        if ready < 0 {
+            got = ready
+            break
+        }
+        if ready == 0 {
+            got = 0 - platform.e_timed_out
+            break
+        }
+        got = rt_sys_recv(handle, rt_mem_add(buffer, 8), receive_chunk())
+        if interrupted(got) || got == 0 - platform.e_would_block {
+            continue
+        }
+        break
+    }
+    if got < 0 {
+        free(buffer)
+        let why = net_wording(0 - got)
+        return Err(io_error_text("receive failed: {why}"))
+    }
+    rt_mem_store64(buffer, got)
+    Ok(buffer)
+}
+
+// `Connection.receive`: what arrived, as text, or an error when it is not
+// UTF-8.
+pub fn connection_receive(link: Int) -> Result<String, IoError> {
+    let buffer = connection_receive_raw(link)?
+    let got = rt_mem_load64(buffer)
+    let text = text_new(got)
+    copy_bytes(text_data(text), rt_mem_add(buffer, 8), got)
+    free(buffer)
+    text_checked(text)
+}
+
+// `Connection.receive_bytes`: what arrived, as bytes.
+pub fn connection_receive_bytes(link: Int) -> Result<Bytes, IoError> {
+    let buffer = connection_receive_raw(link)?
+    let got = rt_mem_load64(buffer)
+    let bytes = bytes_copy_of(rt_mem_add(buffer, 8), got)
+    free(buffer)
+    Ok(rt_mem_as_bytes(bytes))
 }
 
 // ---- The test host ---------------------------------------------------------

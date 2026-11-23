@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{assert_refused, fs_program, run_differential, test_fake};
+use common::{fs_program, run_differential, test_fake};
 use oska_run::{FakeHost, TestStatus};
 
 /// What the program running `body` with [`common::fs_program`]'s
@@ -178,17 +178,26 @@ fn the_text_of_a_fake_file_that_is_not_utf8_is_never_taken_for_no_file() {
     let _ = host.file("escape.txt");
 }
 
-/// `Connection.send_bytes` and `receive_bytes` are declared, but no
-/// runtime has `Net` yet: a program that reaches them is refused before
-/// it starts, as one that reaches `send` and `receive` is.
+/// `Connection.send_bytes` and `receive_bytes` check and run: a program
+/// that reaches them runs until the fake host refuses its connection,
+/// which is the stable `IoError` of a plain test (ADR 0023). Their
+/// round trip is in `network_capabilities.rs`.
 #[test]
-fn a_program_sending_or_receiving_bytes_is_refused_before_it_starts() {
+fn a_program_sending_or_receiving_bytes_runs_until_the_fake_host_refuses_its_connection() {
     for call in ["c.send_bytes(Bytes.zeroed(1))", "c.receive_bytes().is_ok()"] {
         let src = format!(
             "fn talk(c: Connection) -> Result<(), IoError> {{\n    let _ = {call}\n    Ok(())\n}}\n\
              fn main(net: Net) -> Result<(), IoError> {{\n    \
-             let c = net.connect_only().connect(\"example.com\", 443)?\n    talk(c)\n}}\n"
+             let c = net.connect_only().restrict_to(\"example.com\", 443).connect()?\n    talk(c)\n}}\n"
         );
-        assert_refused(&src, "E0370");
+        let outcome = oska_run::run(&src, &mut FakeHost::new(), &["prog.osk".to_string()]);
+        assert!(outcome.diagnostics.is_empty(), "{src}: {outcome:#?}");
+        assert_eq!(outcome.exit_code, 1, "{outcome:#?}");
+        assert!(
+            outcome
+                .stderr
+                .contains("network access is not available here"),
+            "{outcome:#?}"
+        );
     }
 }

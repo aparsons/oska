@@ -1,8 +1,10 @@
 exit: 3
 --- stdout
 fn pkg.main.fetch: NetConnect (net)
+  crates/oskac/tests/fixtures/authority_grant/package_past/src/main.osk:5:5: NetConnect -> HostConnect: restrict_to "example.com:443" (bytes 157..192)
 fn pkg.main.main: Stdout (io)
 grant: <grant>
   added fn pkg.main.fetch: NetConnect (new to the program: NetConnect)
+  new attenuation fn pkg.main.fetch: NetConnect -> HostConnect: restrict_to "example.com:443" +1
 --- stderr
 error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it

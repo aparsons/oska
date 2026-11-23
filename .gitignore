@@ -21,3 +21,6 @@
 # Local secrets
 .env
 .env.*
+
+# Python bytecode (the scripts under scripts/ import each other)
+__pycache__/
