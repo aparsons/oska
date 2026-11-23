@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The musl build's allocator holds freed large blocks (ticket #614, spec
 //! #612): a request above the small-block limit (1 KiB) and up to
 //! `HOLD_MAX` (1 MiB) is kept when freed, up to `HOLD_CAP` bytes in all,
