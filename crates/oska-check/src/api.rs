@@ -47,6 +47,7 @@ pub const MODULES: &[&str] = &[
     "std.x25519",
     "std.chacha20poly1305",
     "std.aes128gcm",
+    "std.tls",
 ];
 
 /// What kind of item an entry is.

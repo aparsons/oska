@@ -1,0 +1,134 @@
+// SPDX-License-Identifier: Apache-2.0
+// The client of the loopback TLS tests (#244): connects to the test server
+// with `tls.connect`, exchanges what its mode says and prints what happened.
+//
+//     client.osk -- <port> <host> <mode> <root hex>
+//
+// The root is the test CA's certificate, trusted by the program's own
+// assertion (an `.assume_trusted()` that `oskac audit` lists). Modes:
+// `echo` sends `hello` and prints everything the server sends until it
+// closes; `twice` sends `one`, prints the reply, sends `two` and prints
+// that (a KeyUpdate in between); `large` sends `go` and prints the length
+// and a checksum of what comes back; `alpn` offers two protocols and
+// prints the chosen one; `default_roots` trusts only Mozilla's roots.
+
+use std.tls
+use std.x509
+
+fn say(io: Stdout, text: String) -> Result<(), IoError> {
+    io.println(text)
+}
+
+// What the error is, by kind, then its message.
+fn show(io: Stdout, error: tls.TlsError) -> Result<(), IoError> {
+    let kind = match error {
+        tls.TlsError.Certificate(_) => "certificate"
+        tls.TlsError.AlertReceived(_) => "alert"
+        tls.TlsError.Protocol(_) => "protocol"
+        tls.TlsError.Unsupported(_) => "unsupported"
+        tls.TlsError.Truncated => "truncated"
+        tls.TlsError.Io(_) => "io"
+    }
+    io.println("error {kind}: {error}")
+}
+
+// Everything the server sends until it closes or fails: the text, or the
+// error.
+fn drain(io: Stdout, stream: tls.TlsStream) -> Result<(), IoError> {
+    var open = stream
+    var total = 0
+    var sum = 0
+    var text = ""
+    while true {
+        match open.receive() {
+            Err(error) => {
+                show(io, error)?
+                return Ok(())
+            }
+            Ok(data) => {
+                if data.len() == 0 {
+                    let note = if total <= 64 { text } else { "{total} bytes, checksum {sum}" }
+                    io.println("closed after: {note}")?
+                    return Ok(())
+                }
+                for i in 0..data.len() {
+                    sum = (sum * 31 + data.at(i).to_int()) % 1000003
+                }
+                total = total + data.len()
+                match data.to_text() {
+                    Some(piece) => {
+                        let shown = piece.trim()
+                        text = "{text}{shown}"
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn exchange(io: Stdout, stream: tls.TlsStream, mode: String) -> Result<(), IoError> {
+    var open = stream
+    if mode == "twice" {
+        let first = if mode == "twice" { "one" } else { "go" }
+        match open.send(first.to_bytes()) {
+            Ok(_) => {}
+            Err(error) => { return show(io, error) }
+        }
+        match open.receive() {
+            Ok(data) => {
+                let text = data.to_text().unwrap_or("?")
+                io.println("first: {text}")?
+            }
+            Err(error) => { return show(io, error) }
+        }
+        match open.send("two".to_bytes()) {
+            Ok(_) => {}
+            Err(error) => { return show(io, error) }
+        }
+        match open.receive() {
+            Ok(data) => {
+                let text = data.to_text().unwrap_or("?")
+                io.println("second: {text}")?
+            }
+            Err(error) => { return show(io, error) }
+        }
+        open.close()
+        return io.println("done")
+    }
+    if mode == "alpn" {
+        let chosen = open.protocol().unwrap_or("none")
+        io.println("protocol: {chosen}")?
+    }
+    let request = if mode == "large" { "go" } else { "hello" }
+    match open.send(request.to_bytes()) {
+        Ok(_) => {}
+        Err(error) => { return show(io, error) }
+    }
+    drain(io, open)
+}
+
+fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Result<(), IoError> {
+    let port = args.get(1).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+    let name = args.get(2).unwrap_or("127.0.0.1").assume_trusted()
+    let mode = args.get(3).unwrap_or("echo").assume_trusted()
+    let root = Bytes.from_hex(args.get(4).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
+    var config = tls.TlsConfig.default()
+    if mode != "default_roots" {
+        match x509.TrustConfig.only_roots([]).with_root_der(root) {
+            Ok(trust) => { config = config.with_trust(trust) }
+            Err(_) => { return say(io, "the root is malformed") }
+        }
+    }
+    if mode == "alpn" {
+        config = config.with_alpn(["h2", "http/1.1"])
+    }
+    match tls.connect(net.restrict_to(name, port), config, random, clock) {
+        Err(error) => { show(io, error) }
+        Ok(stream) => {
+            io.println("connected")?
+            exchange(io, stream, mode)
+        }
+    }
+}

@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: Apache-2.0
+// Records one TLS 1.3 handshake of `std.tls`'s engine (#244): connects to a
+// server by an address, runs the engine over the connection with the
+// randomness and the time it is given, and prints every byte the engine sent
+// and received, a `C` or an `S` and hexadecimal a line, in order.
+// `scripts/tls-fixtures/record.py` runs it against openssl's server and turns
+// the lines into the files of `recorded/`, which `replay.osk` plays back.
+//
+//     record.osk -- <port> <server name> <random hex> <time> <root hex>
+
+use std.tls
+use std.x509
+
+fn main(io: Stdout, log: Stderr, net: Net, args: Args) -> Result<(), IoError> {
+    let port = args.get(1).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+    let name = args.get(2).unwrap_or("localhost").assume_trusted()
+    let random = Bytes.from_hex(args.get(3).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
+    let now = args.get(4).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+    let root = Bytes.from_hex(args.get(5).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
+    let trust = match x509.TrustConfig.only_roots([]).with_root_der(root) {
+        Ok(trust) => trust
+        Err(_) => { return io.println("bad root") }
+    }
+    let connection = net.restrict_to("127.0.0.1", port).connect()?
+    var engine = tls.Engine.new(name, tls.TlsConfig.default().with_trust(trust), Secret.new(random), now)
+    var step = engine.start()
+    var done = false
+    while !done {
+        if step.output.len() > 0 {
+            let sent = step.output.to_hex()
+            io.println("C {sent}")?
+            connection.send_bytes(step.output)?
+        }
+        for event in step.events {
+            match event {
+                tls.Event.HandshakeDone => { done = true }
+                tls.Event.Failed(error) => {
+                    io.println("failed {error}")?
+                    done = true
+                }
+                tls.Event.Data(_) => {}
+                tls.Event.Closed => { done = true }
+            }
+        }
+        if !done {
+            let chunk = connection.receive_bytes()?
+            if chunk.len() == 0 {
+                io.println("ended")?
+                done = true
+            } else {
+                let got = chunk.assume_trusted().to_hex()
+                io.println("S {got}")?
+                step = engine.receive(chunk)
+            }
+        }
+    }
+    // A native program's stdout is written when a line goes to stderr.
+    log.println("recorded")?
+    connection.close()
+    Ok(())
+}
