@@ -10,7 +10,8 @@ git tag vX.Y.Z on main ─▶ release.yml
              (check-linux-build.sh: gnu needs glibc ≤ 2.35, musl is static)
   assemble   image.sh: the image from the two musl builds, its index digest in
              oskac-image-digest; SHA256SUMS: line 1 "# oska-release vX.Y.Z",
-             then "<sha256>  <file>" per binary and for oskac-image-digest
+             then "<sha256>  <file>" per binary, for oskac-image-digest and for
+             oskac.spdx.json (the SPDX SBOM, sbom.sh, from the tag's Cargo.lock)
              notes.sh: the release notes, release-notes.md beside the release
              (CHANGELOG.md's vX.Y.Z section and a footer); no section fails
   smoke-image  on ubuntu-24.04 / -arm: each musl build in alpine and in the image
@@ -52,9 +53,20 @@ On a pull request, `release.yml` does a dry run: the same builds and image smoke
 | `oskac-macos-x86_64`, `oskac-macos-aarch64` | on `macos-15-intel` / `macos-latest` | |
 | `oskac-windows-x86_64.exe` | on `windows-latest` | |
 
-Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, and `oskac-image-digest` (see [The container image](#the-container-image)), so the signature covers each. ADR 0022 records why Linux has two builds. `scripts/release/check-linux-build-test.sh` tests both checks.
+Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, `oskac-image-digest` (see [The container image](#the-container-image)) and `oskac.spdx.json` (see [The SBOM](#the-sbom)), so the signature covers each. ADR 0022 records why Linux has two builds. `scripts/release/check-linux-build-test.sh` tests both checks.
 
 **A breaking rename.** Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`. From the first release with them, those files are gone, and `latest.json`'s `binaries` has no `linux-x86_64` or `linux-aarch64` key: it has `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl` in their place (the macOS and Windows keys are unchanged). Anything that reads the old keys or downloads the old names breaks, an installer saved from before the rename included (`download_failed`); the v0.7.0 notes in the [changelog](../../CHANGELOG.md) say so (under Unreleased until v0.7.0 ships).
+
+## The SBOM
+
+Each release ships `oskac.spdx.json`, an SPDX 2.3 JSON document (data license CC0-1.0, as SPDX requires) that lists every package of the `Cargo.lock` of the tagged commit, the lock `cargo build --locked` builds from. `SHA256SUMS` lists it, so the `oska-release` signature covers it. It is a document, not a binary: `latest.json`'s `binaries` does not list it and the installers never download it. `stage-site.sh` publishes it with the release at `/releases/vX.Y.Z/oskac.spdx.json`.
+
+- **Written by `scripts/release/sbom.sh <tag> Cargo.lock`**, which `assemble.sh` runs, with awk and `jq` only: no network, no extra tool and no third-party action. It describes `oskac`; each other package has its version, its crates.io download location and the checksum Cargo recorded, a `pkg:cargo` locator, and `DEPENDS_ON` edges as the lock has them. The workspace's own crates declare `Apache-2.0`; any other package declares `NOASSERTION`, since the lock holds no license. It lists the lock, so it includes crates only tests or build scripts use. Today every package is a workspace crate.
+- **Same bytes for the same input.** The creation time is `SOURCE_DATE_EPOCH` (the tag's commit time, as for the image), and the document namespace names the tag.
+- **Fails closed.** `sbom.sh` refuses a missing or empty lock, no `oskac` package, a dependency the lock does not resolve to exactly one package, a bad tag and an unset `SOURCE_DATE_EPOCH`; `assemble.sh` then writes no release. A release never ships without it.
+- **Checked in the dry run.** The `assemble` job's "Check the SBOM" step, on every event and before signing, requires the `SHA256SUMS` line, SPDX 2.3, this tag's namespace, one package per lock entry, and `oskac` as the one described package.
+- **Verified like every listed file.** `verify.sh` and the Oska verifier need no special case: they accept it because the signed list names its digest, and refuse a changed copy, one the list does not name, and (the Oska verifier) a symlink. `scripts/release/test.sh` has a test for each.
+- **Check one by hand:** it is in the list `sha256sum --ignore-missing -c SHA256SUMS` checks (see [Verify an image by its digest](#verify-an-image-by-its-digest) for the signature), and `jq '.packages | length' oskac.spdx.json` must equal `grep -c '^\[\[package\]\]' Cargo.lock` at the tag.
 
 ## The second check: the Oska verifier
 
@@ -208,7 +220,7 @@ Nothing in the repo can check these settings, so verify them before a release.
 ## Checking a published release
 
 - `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"`, `"tag": "vX.Y.Z"` and the key's `"signing_key_fingerprint"`.
-- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig`, the 7 binaries (see [The release assets](#the-release-assets)), `oskac-image-digest`, and from v0.7.0 `oskac.intoto.jsonl` and `SHA256SUMS.intoto.jsonl`.
+- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig`, the 7 binaries (see [The release assets](#the-release-assets)), `oskac-image-digest`, `oskac.spdx.json` (valid JSON, `spdxVersion` `SPDX-2.3`, and its SHA-256 is in `SHA256SUMS`; see [The SBOM](#the-sbom)), and from v0.7.0 `oskac.intoto.jsonl` and `SHA256SUMS.intoto.jsonl`.
 - `ghcr.io/aparsons/oskac:vX.Y.Z` is the signed digest (see [Verify an image by its digest](#verify-an-image-by-its-digest)), and so is `:latest` for a stable release.
 - Verify the signature against the committed key:
   ```

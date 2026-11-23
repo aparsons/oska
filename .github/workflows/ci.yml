@@ -24,10 +24,26 @@ jobs:
     # #153): every runtime test, example, guide program, CLI fixture and
     # the site build runs as a native executable for the host too, and
     # must do what the interpreter does.
+    #
+    # The job runs as parallel parts, so a pull request waits for the
+    # slowest, not for all (spec #631): one x86_64 part runs every step of
+    # check.sh but the cargo tests (`--group checks`: formal, lint, script
+    # suites), and three shards of the cargo tests (`--group tests`) run on
+    # each processor. scripts/test-shard.sh names the shards, and its test
+    # checks that every test runs in exactly one.
+    # shards linux: site native rest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        include:
+          - {os: ubuntu-latest, group: checks, shard: ""}
+          - {os: ubuntu-latest, group: tests, shard: site}
+          - {os: ubuntu-latest, group: tests, shard: native}
+          - {os: ubuntu-latest, group: tests, shard: rest}
+          - {os: ubuntu-24.04-arm, group: tests, shard: site}
+          - {os: ubuntu-24.04-arm, group: tests, shard: native}
+          - {os: ubuntu-24.04-arm, group: tests, shard: rest}
+    name: test (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     # Incremental data about doubles the size of `target`, which is cached
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
@@ -61,7 +77,8 @@ jobs:
       - run: scripts/cargo-cache/mtimes.sh
       # check.sh type-checks oskac for Windows (#323); only this job needs the
       # target, so it is not in rust-toolchain.toml (every job would download it).
-      - run: rustup target add x86_64-pc-windows-gnu
+      - if: matrix.group == 'checks'
+        run: rustup target add x86_64-pc-windows-gnu
       # The differential suite is compiled only where a backend runs: a
       # label that moves to other hardware must fail, not skip it.
       - if: matrix.os == 'ubuntu-24.04-arm'
@@ -70,35 +87,46 @@ jobs:
         run: test "$(uname -m)" = x86_64
       # The pinned ShellCheck check.sh's shellcheck step verifies; runner
       # images ship different releases.
-      - run: scripts/shellcheck/install.sh "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - if: matrix.group == 'checks'
+        run: scripts/shellcheck/install.sh "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       # Claude Code, for check.sh's `claude plugin validate` step (spec #206):
       # its official install script, at a pinned version so the validator's
       # rules change only in a reviewed PR. It installs into ~/.local/bin,
       # already on PATH above. Without it the step fails here, never skips.
       # DISABLE_AUTOUPDATER stays set for the later steps, so check.sh runs
       # the pinned version.
-      - run: |
+      - if: matrix.group == 'checks'
+        run: |
           echo "DISABLE_AUTOUPDATER=1" >> "$GITHUB_ENV"
           curl -fsSL https://claude.ai/install.sh | DISABLE_AUTOUPDATER=1 bash -s 2.1.330
       # The pinned Lean and TLC check.sh's formal step runs (ADRs 0018,
       # 0019), checked against their pinned checksums; the runner's Java runs
-      # TLC. Without them the step fails here, never skips.
-      - run: |
+      # TLC. Without them the step fails here, never skips. The checks part
+      # runs the formal step; the shard that holds oska-run's lean_reference
+      # test needs Lean (check.sh makes that test fail without it, ADR 0018).
+      - if: matrix.group == 'checks' || matrix.shard == 'rest'
+        run: |
           scripts/formal/install.sh "$HOME/.local/formal"
           echo "$HOME/.local/formal/lean/bin" >> "$GITHUB_PATH"
           echo "OSKA_TLA2TOOLS=$HOME/.local/formal/tla2tools.jar" >> "$GITHUB_ENV"
       # The same script contributors and agents run locally (and the
       # pre-push hook runs), so local and CI checks cannot drift apart.
-      - run: scripts/check.sh
+      - run: scripts/check.sh --group ${{ matrix.group }}
+        env:
+          OSKA_TEST_SET: linux
+          OSKA_TEST_SHARD: ${{ matrix.shard }}
       # The saved list stands for the build only if no tracked file changed
       # meanwhile and every cargo step ran on the tree as checked out (CI
       # always runs them all). target/tmp holds the tests' scratch files,
       # sparse files of terabytes among them: tar would read them in full.
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Only each processor's `rest` shard saves, under the key every part
+      # of the processor restores from, so the cache stays one entry per
+      # processor and under GitHub's limit.
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest'
         run: |
           scripts/cargo-cache/mtimes.sh verify
           rm -rf target/tmp
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
@@ -111,10 +139,22 @@ jobs:
     # added in this job, not in rust-toolchain.toml (every clone would
     # download it), and to the pinned toolchain: a Rust upgrade that breaks
     # the musl build fails this job.
+    #
+    # The tests run as six parallel shards (scripts/test-shard.sh), because
+    # whole in one job they took some 20 minutes, the slowest job of a pull
+    # request. Every test runs in exactly one shard, so nothing is dropped;
+    # each shard builds `oskac` and its own test binaries, which trades
+    # runner minutes for wall time. A new shard must be added to this matrix
+    # and to the script (`scripts/test-shard.sh --sets` names them).
+    # shards musl: site-0 site-1 site-2 sites-1 sites-2 rest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [site-0, site-1, site-2, sites-1, sites-2, rest]
+    name: musl (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    # A release build, then the oska-run tests, whose interpreter runs
-    # about 1.5 times slower on musl: some 15 to 25 minutes.
-    timeout-minutes: 50
+    # One shard: the build, then at most some 8 minutes of tests.
+    timeout-minutes: 30
     env:
       TARGET: x86_64-unknown-linux-musl
     steps:
@@ -127,21 +167,18 @@ jobs:
       # (`DT_NEEDED`), so it runs on any Linux and in an empty root. The
       # release's own check, tested by check-linux-build-test.sh.
       - name: The musl build is static
+        if: matrix.shard == 'rest'
         run: scripts/release/check-linux-build.sh musl "target/$TARGET/dist/oskac"
-      # The confinement escape tests, the stress tests of the musl build's
-      # allocator (crates/oska-sys/tests/allocator.rs, ticket #523) and the
-      # interpreter, then the differential suite (the native backend
-      # against the interpreter), all run by the musl build. The
-      # differential suite runs this `oskac`, so its interpreter runs long
-      # programs on that allocator.
-      - run: cargo test --locked --target "$TARGET" -p oska-sys -p oska-run
-      - run: cargo test --locked --target "$TARGET" -p oskac --test native_files --test native_parity --test native_default
-      # oskac's own unit tests, among them the check that the musl build,
-      # and no other, uses that allocator (crates/oskac/src/heap.rs).
-      - run: cargo test --locked --target "$TARGET" -p oskac --bin oskac
+      # This shard's tests: the confinement escape tests, the stress tests
+      # of the musl build's allocator (crates/oska-sys/tests/allocator.rs,
+      # ticket #523) and the interpreter, the differential suite (the native
+      # backend against the interpreter) and oskac's own unit tests, all run
+      # by the musl build. See scripts/test-shard.sh for who runs what.
+      - run: scripts/test-shard.sh musl "${{ matrix.shard }}"
       # An empty root: the binary, an empty /tmp and the example's source,
       # with no libraries and no /proc, run as a user with no other rights.
       - name: Smoke test in an empty root
+        if: matrix.shard == 'rest'
         run: |
           root=$(mktemp -d)
           chmod 0755 "$root"
@@ -166,14 +203,19 @@ jobs:
     # host's macOS executable with the interpreter, and `build_macos`
     # checks that macOS accepts each executable's signature (`codesign
     # --verify --strict`).
+    #
+    # Intel is the slow one, so its tests run as three parallel shards
+    # (scripts/test-shard.sh, spec #631); Apple silicon runs them whole.
+    # shards macos: native-1 native-2 rest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
+          - {os: macos-latest, arch: arm64, shard: all}
+          - {os: macos-15-intel, arch: x86_64, shard: native-1}
+          - {os: macos-15-intel, arch: x86_64, shard: native-2}
+          - {os: macos-15-intel, arch: x86_64, shard: rest}
+    name: macos (${{ matrix.os }}, ${{ matrix.arch }}${{ matrix.shard != 'all' && format(', {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     # Incremental data about doubles the size of `target`, which is cached
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
@@ -204,16 +246,16 @@ jobs:
           key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
           restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
       - run: scripts/cargo-cache/mtimes.sh
-      - run: cargo test -p oskac --no-fail-fast
+      - run: scripts/test-shard.sh macos "${{ matrix.shard }}"
       # The saved list stands for the build only if no tracked file changed
       # meanwhile and every cargo step ran on the tree as checked out (CI
       # always runs them all). target/tmp holds the tests' scratch files,
       # sparse files of terabytes among them: tar would read them in full.
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (matrix.shard == 'rest' || matrix.shard == 'all')
         run: |
           scripts/cargo-cache/mtimes.sh verify
           rm -rf target/tmp
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (matrix.shard == 'rest' || matrix.shard == 'all')
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target

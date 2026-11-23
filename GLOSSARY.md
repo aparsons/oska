@@ -246,6 +246,10 @@ _Avoid_: syscall wrapper
 The tests that run every program of a corpus on both the interpreter and the native backend and fail on any difference in output, exit code, panic or files written.
 _Avoid_: parity tests, golden tests (for this suite)
 
+**Obfuscation pass**:
+A native-backend pass, chosen with `oskac build --obfuscate`, that reshapes a compiled program's machine code to raise the cost of static analysis: encrypted string and constant literals decrypted on first use, flattened control flow, opaque predicates, junk instructions and reordered basic blocks. It never changes a program's output, exit code or panics; the differential suite runs with it on.
+_Avoid_: packer, protector (for this concept; "stack protector" is a different, always-on mitigation)
+
 **Oska Core**:
 The formal calculus that defines the typing and running of a subset of Oska. It has no generics or traits and grows one construct at a time; the core IR export refuses any program outside it. Its semantics is executable, and it is the reference that the interpreter is judged by for programs in that subset (ADR 0018).
 _Avoid_: core language, kernel, mini-Oska

@@ -34,6 +34,7 @@ Each note answers one question, with its sources and the date it was written. A 
 ## Security and compliance
 
 - [FIPS 140-3 and a FIPS mode for Oska](2026-11-fips-140-3.md) (2026-11-21): FIPS 140-3 validates a cryptographic module, not a language, and Oska has no certificate. It covers what Oska can honestly claim in a self-assessment and three ways to offer a FIPS mode. Spec [#569](https://github.com/aparsons/oska/issues/569) came from it.
+- [Hardening `oskac` and the programs it compiles against reverse engineering](2026-11-binary-hardening.md) (2026-11-23): obfuscating `oskac` itself buys little since it is open source; the real answer is the signed-release pipeline already in place. Stripping, PIE, stack protector, RELRO and CFI are cheap, real hardening for both `oskac` and its compiled output. Packers, anti-debugging and whole-binary encryption are security theater that would conflict with code signing and reproducible builds.
 
 ## How the project itself is built
 
