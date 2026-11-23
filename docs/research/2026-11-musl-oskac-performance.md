@@ -680,6 +680,32 @@ The count went up by 2.4%, not down. The likely reasons: the standard library's 
 
 The ticket's criterion (the count falls) is not met, so the change is not merged. The branch `ticket/616-join-sizing` stays local in the session. The one-byte copies are left for ticket #581 (the `memcpy` override), which is the change that makes each of them cheap.
 
+## 15. After the large-block allocator (2026-11-23, spec #612, ticket #615)
+
+PR #620 (ticket #614) holds freed requests of 1 KiB to 1 MiB for reuse on the musl build. This section measures it against section 13 and applies the stop rule of spec #612 (revert if the site build gains under 5%).
+
+- **Tree:** `9833ae0` (main after PR #620), the `dist` profile for both builds, `scripts/bench-native.sh 5` for each (best CPU time of 5 runs), then the strace and `getrusage` script of section 13 for the kernel counts. Same kind of x86_64 KVM container, no other build running during the benchmark. Noise is about ±10%, so the counts are the figures to trust.
+
+| Workload | glibc | musl | musl / glibc | before (section 11) |
+| --- | ---: | ---: | ---: | ---: |
+| loop | 450 ms | 448 ms | 1.00x | 0.89x |
+| text | 33 ms | 61 ms | 1.85x | 1.92x |
+| bulk-text | 13 ms | 11 ms | 0.85x | 1.06x |
+| lists | 272 ms | 266 ms | 0.98x | 1.07x |
+| recursion | 340 ms | 337 ms | 0.99x | 0.96x |
+| site | 2534 ms | 2842 ms | 1.12x | 1.24x |
+
+| Command | Build | `mmap` | `munmap` | Minor page faults | User CPU | System CPU |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| interpreted site build | glibc | 20 | 9 | 9,045 | 2.54 s | 0.03 s |
+| interpreted site build | musl | 583 | 404 | 38,483 | 2.70 s | 0.08 s |
+| `oskac build` of the site | glibc | 16 | 4 | 4,497 | 0.03 s | 0.01 s |
+| `oskac build` of the site | musl | 223 | 47 | 6,241 | 0.02 s | 0.02 s |
+
+- **The change works on the kernel counts.** The interpreted site build under musl falls from 21,811 to 583 `mmap` calls, from 21,730 to 404 `munmap` calls, and from 211,827 to 38,483 minor faults (section 13). System CPU falls from 0.29 s to 0.08 s. Faults are still four times glibc's.
+- **The stop rule does not apply.** The musl site build time falls from 3,498 ms (section 11) to 2,842 ms, 19%, well over 5%. The two benchmark runs are on different days and the glibc time also moved (2,815 ms to 2,534 ms), so the musl to glibc ratio is the better figure: 1.24x to 1.12x. The change stays.
+- **Where the gap stands.** The site build is 1.12x, just over the 1.10x threshold of spec #521. `text` is the only row far above it (1.85x), as in section 11, where the `memcpy` override fixed it. The user CPU gap on the site build (0.16 s) is now the larger part. Ticket #617 re-measures once more and decides the fate of #581.
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
