@@ -27,7 +27,7 @@ _Avoid_: restricted Fs, sandboxed filesystem
 A capability confined to a single file, such as `FileRead`. Using it takes no path.
 
 **Host capability**:
-A capability confined to one host and one port, `HostConnect`. It alone can connect, and `connect()` takes no destination. `Net` and `NetConnect` only attenuate to one, with `restrict_to(host, port)` (ADR 0023). A loopback listener, `LoopbackListen`, is the listening counterpart, for a local test server.
+A capability confined to one host and one port, `HostConnect`. It alone can connect, and `connect()` takes no destination. `Net` and `NetConnect` only attenuate to one, with `restrict_to(host, port)` (ADR 0025). A loopback listener, `LoopbackListen`, is the listening counterpart, for a local test server.
 _Avoid_: restricted NetConnect, connect-to-any
 
 **Budget**:
@@ -205,7 +205,7 @@ The toolchain's way of running a checked program directly, with no executable. I
 _Avoid_: VM, evaluator
 
 **Native backend**:
-The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler or linker. On Linux the executable uses no C library; on macOS it calls the system only through `libSystem`, the one library macOS supports calling the kernel through (ADR 0015); on Windows it calls only `kernel32`, `ntdll`, `ProcessPrng` and `GetNetworkParams` of `iphlpapi` (ADR 0020, amended by ADR 0024). A program it cannot compile yet is refused, never compiled wrongly.
+The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler or linker. On Linux the executable uses no C library; on macOS it calls the system only through `libSystem`, the one library macOS supports calling the kernel through (ADR 0015); on Windows it calls only `kernel32`, `ntdll`, `ProcessPrng` and `GetNetworkParams` of `iphlpapi` (ADR 0020, amended by ADR 0026). A program it cannot compile yet is refused, never compiled wrongly.
 _Avoid_: codegen, JIT
 
 **Supported platform**:
@@ -245,6 +245,10 @@ _Avoid_: syscall wrapper
 **Differential suite**:
 The tests that run every program of a corpus on both the interpreter and the native backend and fail on any difference in output, exit code, panic or files written.
 _Avoid_: parity tests, golden tests (for this suite)
+
+**Obfuscation pass**:
+A native-backend pass, chosen with `oskac build --obfuscate`, that reshapes a compiled program's machine code to raise the cost of static analysis: encrypted string and constant literals decrypted on first use, flattened control flow, opaque predicates, junk instructions and reordered basic blocks. It never changes a program's output, exit code or panics; the differential suite runs with it on.
+_Avoid_: packer, protector (for this concept; "stack protector" is a different, always-on mitigation)
 
 **Oska Core**:
 The formal calculus that defines the typing and running of a subset of Oska. It has no generics or traits and grows one construct at a time; the core IR export refuses any program outside it. Its semantics is executable, and it is the reference that the interpreter is judged by for programs in that subset (ADR 0018).

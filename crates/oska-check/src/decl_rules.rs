@@ -268,7 +268,7 @@ impl Names {
 
 /// The directory, file and network capabilities that only attenuation
 /// makes. The runtime has no root, host or port to give one, so `main`
-/// cannot declare it (ADR 0008, ADR 0023).
+/// cannot declare it (ADR 0008, ADR 0025).
 const CONFINED: [&str; 7] = [
     "Dir",
     "DirRead",

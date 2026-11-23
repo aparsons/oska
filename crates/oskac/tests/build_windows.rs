@@ -2,7 +2,7 @@
 //! `oskac build --target windows-x86_64` (spec #155, ticket #176): a
 //! PE32+ console executable that the Windows loader loads, importing only
 //! from `kernel32.dll`, `ntdll.dll`, `bcryptprimitives.dll`, `iphlpapi.dll` and `ws2_32.dll`
-//! (ADR 0020, ADR 0024).
+//! (ADR 0020, ADR 0026).
 //!
 //! Every host checks the file against Microsoft's format (`pe-format.md`),
 //! byte by byte, so the writer is developed without Windows. On Windows the

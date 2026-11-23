@@ -30,6 +30,10 @@
 # thrown away if none is named. SOURCE_DATE_EPOCH, the time stamped into
 # the image, must be set: the release run takes the tag's commit time.
 #
+# It also writes the SPDX SBOM, <out-dir>/<tag>/oskac.spdx.json, from
+# Cargo.lock at the root of this checkout (scripts/release/sbom.sh), and
+# SHA256SUMS lists it too, so the release signature covers it.
+#
 # Runs on Linux (it needs GNU coreutils' sha256sum).
 
 set -euo pipefail
@@ -50,6 +54,9 @@ ASSETS=(
 )
 # Not a binary: the digest of the image built from the musl builds.
 IMAGE_DIGEST=oskac-image-digest
+# Not a binary either: the SPDX SBOM of the release (sbom.sh), from the
+# Cargo.lock of the commit this runs in, the one the builds used.
+SBOM=oskac.spdx.json
 
 die() {
   echo "assemble.sh: $*" >&2
@@ -89,14 +96,18 @@ digest=$("$here/image.sh" "$builds/oskac-linux-x86_64-musl" "$builds/oskac-linux
   die "could not build the image"
 [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || die "image.sh printed '$digest', not a digest"
 
+# Before the release folder exists, so a lock that gives no SBOM leaves nothing.
+sbom=$("$here/sbom.sh" "$tag" "$here/../../Cargo.lock") || die "could not write the SBOM"
+
 mkdir -p "$dir"
 for asset in "${ASSETS[@]}"; do
   cp "$builds/$asset" "$dir/$asset"
   chmod 755 "$dir/$asset"
 done
 printf '%s\n' "$digest" >"$dir/$IMAGE_DIGEST"
+printf '%s\n' "$sbom" >"$dir/$SBOM"
 
 {
   printf '# oska-release %s\n' "$tag"
-  (cd "$dir" && LC_ALL=C sha256sum -- "${ASSETS[@]}" "$IMAGE_DIGEST" | LC_ALL=C sort -k2)
+  (cd "$dir" && LC_ALL=C sha256sum -- "${ASSETS[@]}" "$IMAGE_DIGEST" "$SBOM" | LC_ALL=C sort -k2)
 } >"$dir/SHA256SUMS"

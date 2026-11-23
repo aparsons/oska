@@ -149,7 +149,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }
 
 /// `NetConnect.system_name_servers` runs on both backends, which connect
-/// nowhere: Windows' DNS servers come from `GetNetworkParams` (ADR 0024),
+/// nowhere: Windows' DNS servers come from `GetNetworkParams` (ADR 0026),
 /// and every other platform keeps them in `resolv.conf`, so it lists none.
 /// A test host lists none either, whatever the platform.
 #[test]

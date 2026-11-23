@@ -214,7 +214,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 | --- | --- |
 | `Stdin`, `Stdout`, `Stderr` | Standard streams |
 | `Fs` | Filesystem, only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). |
-| `Net` | Network, only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`, one host and port) with `restrict_to(host, port)`; `NetListen` attenuates to a loopback listener (`LoopbackListen`) with `restrict_to_loopback(port)` ([ADR 0023](adr/0023-network-access-goes-through-host-narrowed-capabilities.md)). |
+| `Net` | Network, only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`, one host and port) with `restrict_to(host, port)`; `NetListen` attenuates to a loopback listener (`LoopbackListen`) with `restrict_to_loopback(port)` ([ADR 0025](adr/0025-network-access-goes-through-host-narrowed-capabilities.md)). |
 | `Env` | Environment variables. These can hold secrets. |
 | `Budget` | Spending model tokens and calls, counted by the runtime. Attenuates to a smaller `Budget` with `limit(tokens, calls)`. |
 | `Clock`, `Random` | Nondeterministic inputs |

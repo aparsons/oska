@@ -299,7 +299,7 @@ fn a_module_with_no_runtime_is_refused_as_the_interpreter_refuses_it() {
     // the interpreter's refusal, with no note that it runs.
     let spawn = [("spawn.osk", "fn main(spawn: Spawn) {}\n")];
     assert_golden("run_ungranted", &spawn, &["run", "spawn.osk"]);
-    // The network runs on both backends (ADR 0023, ticket #238 of spec
+    // The network runs on both backends (ADR 0025, ticket #238 of spec
     // #228): a program that only narrows a capability runs the same.
     let net = [(
         "net.osk",

@@ -209,7 +209,7 @@ impl FileWrite {
 
 // Network access, as `main` declares it. `Net`, `NetConnect` and
 // `NetListen` grant no connection themselves: like `Fs`, they only
-// attenuate (ADR 0023). A program narrows `NetConnect` to one host and port
+// attenuate (ADR 0025). A program narrows `NetConnect` to one host and port
 // with `restrict_to`, which gives a `HostConnect`, and only that can
 // connect. Every narrowing is listed in the authority report.
 #[capability]

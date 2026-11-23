@@ -241,7 +241,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         "ApprovalError.to_string",
         Prelude::Runtime("approval_error_to_string"),
     ),
-    // The network (ADR 0023). `Net`, `NetConnect` and `NetListen` hold
+    // The network (ADR 0025). `Net`, `NetConnect` and `NetListen` hold
     // nothing, so narrowing one to the other is the identity.
     ("Net.connect_only", Prelude::Identity),
     ("Net.listen_only", Prelude::Identity),
@@ -496,7 +496,7 @@ pub enum Sys {
     Recv,
     Poll,
     // Windows' own calls, one per kernel32, ntdll, bcryptprimitives or
-    // iphlpapi function (ADR 0020, ADR 0024): no other platform has them.
+    // iphlpapi function (ADR 0020, ADR 0026): no other platform has them.
     GetStdHandle,
     WriteFile,
     ReadFile,
@@ -1349,7 +1349,7 @@ const WS_IOCTL_SOCKET: Import = ws("ioctlsocket", 3);
 /// `GetNetworkParams(info, size)`: the system's DNS servers in a
 /// `FIXED_INFO`. It returns the Win32 error code itself (0 on success,
 /// 111 when `size` is too small), so `std.rt` reads the result as it is
-/// (ADR 0024).
+/// (ADR 0026).
 const GET_NETWORK_PARAMS: Import = Import {
     library: IPHLPAPI,
     fails: Fails::Never,

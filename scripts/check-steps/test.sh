@@ -705,5 +705,30 @@ else
   bad "an unknown argument exits 2 and runs nothing" "exit $status, ran: $log"
 fi
 
+# --- --group splits the steps in two, with none lost ------------------------
+check --list
+all_steps=$(printf '%s\n' "$out" | sort)
+check --list --group tests
+tests_steps=$out
+check --list --group checks
+checks_steps=$out
+both=$(printf '%s\n%s\n' "$tests_steps" "$checks_steps" | sed '/^$/d' | sort)
+if [ "$both" = "$all_steps" ]; then
+  ok "--group tests and --group checks together list every step, each once"
+else
+  bad "--group tests and --group checks together list every step, each once" "all: $all_steps; groups: $both"
+fi
+if [ "$tests_steps" = "cargo test (private temporary directory)" ]; then
+  ok "--group tests is the cargo test step"
+else
+  bad "--group tests is the cargo test step" "got: $tests_steps"
+fi
+check --group nonsense
+if [ "$status" -eq 2 ] && [ -z "$log" ]; then
+  ok "an unknown group exits 2 and runs nothing"
+else
+  bad "an unknown group exits 2 and runs nothing" "exit $status, ran: $log"
+fi
+
 printf '\n%d passed, %d failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]

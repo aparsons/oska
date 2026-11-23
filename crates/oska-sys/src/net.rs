@@ -11,7 +11,7 @@
 //! A failure is worded by [`describe`], from its kind and never from the
 //! system's own text or error number, so a program's output does not depend
 //! on the operating system. Name resolution is the system's for now:
-//! `std.dns`, the Oska stub resolver (ADR 0024), takes it over when the
+//! `std.dns`, the Oska stub resolver (ADR 0026), takes it over when the
 //! native sockets and the TLS client need it. [`exchange_datagram`] is the
 //! UDP half that `std.dns` asks name servers with.
 

@@ -85,7 +85,7 @@ impl Publish for Site<String> {
 }
 
 // The network narrows by host and port, and a listener by port, and each is
-// listed with its address (ADR 0023). A host or port known only at run
+// listed with its address (ADR 0025). A host or port known only at run
 // time is computed.
 fn site(net: Net) -> HostConnect {
     net.connect_only().restrict_to("oskalang.dev", 443)

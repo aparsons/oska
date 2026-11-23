@@ -328,7 +328,7 @@ fn the_human_report_lists_attenuations_under_their_function() {
     assert_eq!(human, expected);
 }
 
-// ---- Network narrowing (ADR 0023) ----------------------------------------------------
+// ---- Network narrowing (ADR 0025) ----------------------------------------------------
 
 #[test]
 fn a_host_and_port_narrowing_is_listed_with_its_address() {

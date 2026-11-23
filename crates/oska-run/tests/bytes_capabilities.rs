@@ -181,7 +181,7 @@ fn the_text_of_a_fake_file_that_is_not_utf8_is_never_taken_for_no_file() {
 
 /// `Connection.send_bytes` and `receive_bytes` check and run: a program
 /// that reaches them runs until the fake host refuses its connection,
-/// which is the stable `IoError` of a plain test (ADR 0023). Their
+/// which is the stable `IoError` of a plain test (ADR 0025). Their
 /// round trip is in `network_capabilities.rs`.
 #[test]
 fn a_program_sending_or_receiving_bytes_runs_until_the_fake_host_refuses_its_connection() {
