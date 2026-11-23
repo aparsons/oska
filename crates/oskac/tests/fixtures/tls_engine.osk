@@ -1,0 +1,159 @@
+// SPDX-License-Identifier: Apache-2.0
+// The pure engine of `std.tls` (#244), with no socket and no clock: what it
+// sends, what it does with bytes that are not a TLS handshake, and what it
+// says when the stream ends. The corpus runs these on both backends. The
+// handshakes themselves are in `native_tls.rs` (a loopback server and
+// recorded transcripts), which run natively because they do the
+// cryptography many times.
+
+use std.tls
+
+fn engine(name: String, random: Secret<Bytes>) -> tls.Engine {
+    tls.Engine.new(name, tls.TlsConfig.default(), random, 1750000000)
+}
+
+// What a step holds, as one line: the bytes to send in hexadecimal, then the
+// events.
+fn describe(step: tls.Step) -> Untrusted<String> {
+    var events = ""
+    for event in step.events {
+        let text = match event {
+            tls.Event.HandshakeDone => "done"
+            tls.Event.Data(bytes) => {
+                let size = bytes.len()
+                "data {size}"
+            }
+            tls.Event.Closed => "closed"
+            tls.Event.Failed(error) => "failed: {error}"
+        }
+        events = "{events} [{text}]"
+    }
+    let sent = step.output.to_hex()
+    "{sent}{events}"
+}
+
+fn hello(name: String, random: Secret<Bytes>) -> String {
+    var e = engine(name, random)
+    e.start().output.to_hex()
+}
+
+test "the same name, randomness and time give the same ClientHello, other randomness another" {
+    let a = hello("example.test", t.random.secure_bytes(64))
+    let b = hello("example.test", t.random.secure_bytes(64))
+    let again = hello("example.test", Secret.new(Bytes.zeroed(64)))
+    let same = hello("example.test", Secret.new(Bytes.zeroed(64)))
+    t.assert_eq(again, same)
+    t.assert_eq(a == b, false)
+}
+
+test "the ClientHello is a handshake record offering TLS 1.3 and the two suites, groups and versions" {
+    let sent = hello("example.test", Secret.new(Bytes.zeroed(64)))
+    // The record: handshake, version 1.2; then the ClientHello message.
+    t.assert_eq(sent.starts_with("160303"), true)
+    t.assert_eq(sent.slice(10, 12), "01")
+    // The cipher suites, ChaCha20-Poly1305 first; supported_versions with
+    // TLS 1.3 only; the groups x25519 then secp256r1.
+    t.assert_eq(sent.contains("000413031301"), true)
+    t.assert_eq(sent.contains("002b0003020304"), true)
+    t.assert_eq(sent.contains("000a00060004001d0017"), true)
+}
+
+test "the name is sent for a DNS name and left out for an IP address" {
+    let dns = hello("example.test", Secret.new(Bytes.zeroed(64)))
+    let name_hex = "example.test".to_bytes().to_hex()
+    t.assert_eq(dns.contains(name_hex), true)
+    let v4 = hello("203.0.113.7", Secret.new(Bytes.zeroed(64)))
+    t.assert_eq(v4.contains("203.0.113.7".to_bytes().to_hex()), false)
+    let v6 = hello("2001:db8::1", Secret.new(Bytes.zeroed(64)))
+    t.assert_eq(v6.contains("2001:db8::1".to_bytes().to_hex()), false)
+    // Without the name extension the hello is shorter by its whole extension.
+    t.assert_eq(dns.byte_len() > v4.byte_len(), true)
+}
+
+test "the protocols to offer are sent as ALPN" {
+    let config = tls.TlsConfig.default().with_alpn(["h2", "http/1.1"])
+    var e = tls.Engine.new("example.test", config, Secret.new(Bytes.zeroed(64)), 0)
+    let sent = e.start().output.to_hex()
+    t.assert_eq(sent.contains("0010000e000c02683208687474702f312e31"), true)
+}
+
+test "randomness that is not 64 bytes makes the engine fail" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(10)))
+    t.assert_eq(describe(e.start()), " [failed: protocol error: the engine needs 64 bytes of randomness]")
+}
+
+test "bytes that are not a TLS record are refused with an alert" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    // A record that claims 65535 bytes: record_overflow (22), in plaintext.
+    let step = e.receive(Bytes.from_hex("16030fffff").unwrap_or(Bytes.new()))
+    t.assert_eq(describe(step), "15030300020216 [failed: protocol error: a record longer than 2^14 + 256 bytes]")
+    // Nothing is processed after a failure.
+    let more = e.receive(Bytes.from_hex("16030300").unwrap_or(Bytes.new()))
+    t.assert_eq(describe(more), "")
+}
+
+test "a fatal alert from the server is reported by its name and answered with none" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    let step = e.receive(Bytes.from_hex("15030300020228").unwrap_or(Bytes.new()))
+    t.assert_eq(describe(step), " [failed: the server sent the alert handshake_failure]")
+}
+
+test "a stream that ends before the handshake is truncated, with no alert" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    t.assert_eq(describe(e.end_of_input()), " [failed: the connection ended without close_notify]")
+    t.assert_eq(e.is_connected(), false)
+}
+
+test "nothing can be sent before the handshake is done" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    t.assert_eq(describe(e.send("early".to_bytes())), " [failed: protocol error: the connection is not open]")
+}
+
+test "a record is read across any number of calls" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    // The alert record of the test above, a byte at a time: nothing
+    // happens until the last byte.
+    let record = Bytes.from_hex("15030300020228").unwrap_or(Bytes.new())
+    for i in 0..6 {
+        t.assert_eq(describe(e.receive(record.slice(i, i + 1))), "")
+    }
+    t.assert_eq(describe(e.receive(record.slice(6, 7))), " [failed: the server sent the alert handshake_failure]")
+}
+
+test "a handshake record with no bytes in it is refused with unexpected_message" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    let step = e.receive(Bytes.from_hex("1603030000").unwrap_or(Bytes.new()))
+    t.assert_eq(describe(step), "1503030002020a [failed: protocol error: a zero-length handshake fragment]")
+}
+
+test "an alert in the middle of a handshake message is refused" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    // The first bytes of a ServerHello, then an alert record.
+    let _ = e.receive(Bytes.from_hex("16030300020200").unwrap_or(Bytes.new()))
+    let step = e.receive(Bytes.from_hex("15030300020128").unwrap_or(Bytes.new()))
+    t.assert_eq(describe(step), "1503030002020a [failed: protocol error: an alert in the middle of a handshake message]")
+}
+
+test "sending after the engine has failed or closed does not send and fails the engine" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    let _ = e.send("early".to_bytes())
+    t.assert_eq(e.is_connected(), false)
+    t.assert_eq(describe(e.send("again".to_bytes())), "")
+}
+
+test "an i/o error prints its reason, so that a refusal and a timeout differ" {
+    let refused = tls.TlsError.Io(IoError(message: "cannot connect to 192.0.2.1:443: connection refused"))
+    let slow = tls.TlsError.Io(IoError(message: "cannot connect to 192.0.2.1:443: timed out"))
+    let odd = tls.TlsError.Io(IoError(message: "something else"))
+    t.assert_eq("{refused}", "i/o error: connection refused")
+    t.assert_eq("{slow}", "i/o error: timed out")
+    t.assert_eq("{odd}", "i/o error: other")
+}
