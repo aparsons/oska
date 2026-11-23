@@ -7,8 +7,12 @@
 Each `chain_*.hex` is the server's certificate chain, one certificate a line, as
 hexadecimal DER, leaf first; `root.hex` is the root the clients trust;
 `leaf.key.hex` is the server's signing key (a P-256 scalar, shared by every leaf),
-and `leaf.pem` and `chain_good.pem` are the same for tools such as openssl. These are
-test keys: nothing trusts them but the tests.
+and `leaf.pem` and `chain_good.pem` are the same for tools such as openssl.
+
+`leaf.key.pem` and `leaf.key.hex` are TEST-ONLY keys. They are committed to the
+repository, so they are public; the test CA that signs the leaves is trusted by
+nothing but the tests, which add it as a root by hand. Never use them, or a key made
+by this script, anywhere else.
 """
 
 import os

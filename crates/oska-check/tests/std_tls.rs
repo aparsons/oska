@@ -16,10 +16,11 @@ use oska_check::{AuditKind, CheckReport};
 
 /// The public functions and methods of `std.tls`, as the authority report
 /// names them.
-const FUNCTIONS: [&str; 14] = [
+const FUNCTIONS: [&str; 15] = [
     "TlsConfig.default",
     "TlsConfig.with_trust",
     "TlsConfig.with_alpn",
+    "TlsConfig.with_rekey_after",
     "Engine.new",
     "Engine.is_connected",
     "Engine.selected_protocol",
@@ -40,8 +41,8 @@ const FUNCTIONS: [&str; 14] = [
 /// or after it has been checked or sealed (the plaintext of a record whose
 /// tag verified, the ciphertext to send).
 const EXPOSED: [&str; 8] = [
-    "self.write_iv = expand_label(secret, \"iv\", Bytes.new(), 12).expose()",
-    "self.read_iv = expand_label(secret, \"iv\", Bytes.new(), 12).expose()",
+    "self.write_iv = iv.expose()",
+    "self.read_iv = iv.expose()",
     "self.out.append(sealed.expose())",
     "let plain = opened.expose()",
     "Some(bytes) => { client_random = bytes.expose() }",

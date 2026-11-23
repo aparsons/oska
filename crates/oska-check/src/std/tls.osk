@@ -34,7 +34,10 @@
 // at most 2^14 bytes of plaintext and 2^14 + 256 of ciphertext, a handshake
 // message at most 64 KiB (and a certificate chain at most 16 certificates in
 // it), and the connection fails before a sequence number would wrap.
-// `KeyUpdate` is handled, answering when asked. Before it fails the client
+// `KeyUpdate` is handled, answering when asked, and the client sends one
+// itself after 2^24 records under one key, under AES-128-GCM's confidentiality
+// limit (RFC 8446, section 5.5; `TlsConfig.with_rekey_after`). The receive
+// side relies on the server to rekey: no limit is enforced on records read. Before it fails the client
 // sends the alert RFC 8446, section 6 names for the failure, and an alert it
 // receives is reported by name. A stream cut off without `close_notify` is
 // `Truncated`.
@@ -102,30 +105,59 @@ impl Display for TlsError {
             TlsError.Protocol(why) => "protocol error: {why}"
             TlsError.Unsupported(why) => "not supported: {why}"
             TlsError.Truncated => "the connection ended without close_notify"
-            TlsError.Io(_) => "the connection failed below TLS"
+            TlsError.Io(e) => {
+                let reason = io_reason(e)
+                "i/o error: {reason}"
+            }
         }
     }
 }
 
+// The reason of an `IoError`, as text the program can trust: the runtime's
+// messages are a fixed table (`docs/runtime.md`), so the text is matched
+// against it and the table's own wording is returned. A message outside the
+// table (a platform's own wording) is `other`, never copied: the message is
+// from outside the program and no trust assertion is made on it.
+fn io_reason(error: IoError) -> String {
+    let message = error.message
+    for known in ["host not found", "connection refused", "timed out", "network unreachable", "host unreachable", "connection reset", "the connection is closed", "invalid host"] {
+        if message.contains(known) {
+            return known
+        }
+    }
+    "other"
+}
+
 // What a TLS client trusts and offers: the roots a certificate chain must
 // end in, and the application protocols to offer (ALPN, by default none).
-pub struct TlsConfig { trust: x509.TrustConfig, alpn: List<String> }
+pub struct TlsConfig { trust: x509.TrustConfig, alpn: List<String>, rekey_after: Int }
 
 impl TlsConfig {
     // Mozilla's roots and no application protocols.
     pub fn default() -> TlsConfig {
-        TlsConfig(trust: x509.TrustConfig.default(), alpn: [])
+        TlsConfig(trust: x509.TrustConfig.default(), alpn: [], rekey_after: REKEY_AFTER)
     }
 
     // The same configuration with `trust` as the roots.
     pub fn with_trust(self, trust: x509.TrustConfig) -> TlsConfig {
-        TlsConfig(trust: trust, alpn: self.alpn)
+        TlsConfig(trust: trust, alpn: self.alpn, rekey_after: self.rekey_after)
     }
 
     // The same configuration offering `protocols` (such as `["http/1.1"]`)
     // in the ALPN extension; the server must choose one of them or none.
     pub fn with_alpn(self, protocols: List<String>) -> TlsConfig {
-        TlsConfig(trust: self.trust, alpn: protocols)
+        TlsConfig(trust: self.trust, alpn: protocols, rekey_after: self.rekey_after)
+    }
+
+    // The same configuration that sends a `KeyUpdate` and changes its write
+    // key once `records` records have been sent under one key (at least 1).
+    // The default is 2^24 (16777216), under the confidentiality limit of
+    // AES-128-GCM that RFC 8446, section 5.5 gives (about 2^24.5 full-size
+    // records), and ChaCha20-Poly1305 is held to it too. A smaller number is
+    // for tests of the rekeying.
+    pub fn with_rekey_after(self, records: Int) -> TlsConfig {
+        let most = if records < 1 { 1 } else { records }
+        TlsConfig(trust: self.trust, alpn: self.alpn, rekey_after: most)
     }
 }
 
@@ -160,6 +192,9 @@ const MAX_HANDSHAKE: Int = 65536
 const MAX_CERTIFICATES: Int = 16
 // The connection fails before a sequence number reaches 2^62, well before it
 // could wrap (2^64 - 1).
+// Records sent under one key before the client changes it: below the
+// AES-128-GCM limit of RFC 8446, section 5.5.
+const REKEY_AFTER: Int = 16777216
 const MAX_SEQUENCE: Int = 4611686018427387904
 
 const STATE_NEW: Int = 0
@@ -386,15 +421,17 @@ fn label_info(label: String, context: Bytes, length: Int) -> Bytes {
 }
 
 // `HKDF-Expand-Label(secret, label, context, length)`.
-fn expand_label(secret: Secret<Bytes>, label: String, context: Bytes, length: Int) -> Secret<Bytes> {
+// A primitive that gives no key fails the connection: there is no all-zero
+// fallback key.
+fn expand_label(secret: Secret<Bytes>, label: String, context: Bytes, length: Int) -> Result<Secret<Bytes>, Failure> {
     match hkdf.expand(secret, label_info(label, context, length), length) {
-        Some(key) => key
-        None => Secret.new(Bytes.zeroed(length))
+        Some(key) => Ok(key)
+        None => Err(protocol(ALERT_INTERNAL_ERROR, "key derivation failed"))
     }
 }
 
 // `Derive-Secret(secret, label, messages)`, given the hash of the messages.
-fn derive_secret(secret: Secret<Bytes>, label: String, hash: Bytes) -> Secret<Bytes> {
+fn derive_secret(secret: Secret<Bytes>, label: String, hash: Bytes) -> Result<Secret<Bytes>, Failure> {
     expand_label(secret, label, hash, 32)
 }
 
@@ -716,25 +753,26 @@ impl Engine {
             failure = Some(TlsError.Protocol("the engine needs 64 bytes of randomness"))
         } else {
             let prk = hkdf.extract(Secret.new(Bytes.new()), random)
+            let broken = TlsError.Protocol("key derivation failed")
             match hkdf.expand(prk, "oska tls client random".to_bytes(), 32) {
                 Some(bytes) => { client_random = bytes.expose() }
-                None => {}
+                None => { failure = Some(broken) }
             }
             match hkdf.expand(prk, "oska tls session id".to_bytes(), 32) {
                 Some(bytes) => { session_id = bytes.expose() }
-                None => {}
+                None => { failure = Some(broken) }
             }
             match hkdf.expand(prk, "oska tls x25519".to_bytes(), 32) {
                 Some(bytes) => { x_scalar = bytes }
-                None => {}
+                None => { failure = Some(broken) }
             }
             match hkdf.expand(prk, "oska tls p256".to_bytes(), 32) {
                 Some(bytes) => { p_scalar = bytes }
-                None => {}
+                None => { failure = Some(broken) }
             }
             match x25519.public_key(x_scalar) {
                 Some(point) => { share = point.expose() }
-                None => {}
+                None => { failure = Some(broken) }
             }
         }
         Engine(
@@ -852,12 +890,26 @@ impl Engine {
     // failure (`Protocol`) if the connection is not open.
     pub fn send(var self, data: Untrusted<Bytes>) -> Step {
         if self.state != STATE_CONNECTED {
-            self.events.push(Event.Failed(TlsError.Protocol("the connection is not open")))
+            // Sending on a connection that is not open ends it: the state
+            // is `Failed` from here, with no alert (nothing is wrong with
+            // the peer).
+            if self.state != STATE_FAILED {
+                self.fail(Failure(alert: -1, error: TlsError.Protocol("the connection is not open")))
+            }
             return self.drain()
         }
         let bytes = copied(data)
         var at = 0
         while at < bytes.len() {
+            if self.write_sequence >= self.config.rekey_after {
+                match self.rekey_write() {
+                    Ok(_) => {}
+                    Err(failure) => {
+                        self.fail(failure)
+                        return self.drain()
+                    }
+                }
+            }
             let size = if bytes.len() - at < MAX_RECORD { bytes.len() - at } else { MAX_RECORD }
             match self.emit(23, Secret.new(bytes.slice(at, at + size))) {
                 Ok(_) => {}
@@ -949,21 +1001,27 @@ impl Engine {
 
     // Use `secret` for what is sent from now on: its key, its IV and a
     // sequence number of zero.
-    fn set_write(var self, secret: Secret<Bytes>) {
+    fn set_write(var self, secret: Secret<Bytes>) -> Result<(), Failure> {
+        let key = expand_label(secret, "key", Bytes.new(), key_length(self.suite))?
+        let iv = expand_label(secret, "iv", Bytes.new(), 12)?
         self.write_secret = secret
-        self.write_key = expand_label(secret, "key", Bytes.new(), key_length(self.suite))
-        self.write_iv = expand_label(secret, "iv", Bytes.new(), 12).expose()
+        self.write_key = key
+        self.write_iv = iv.expose()
         self.write_sequence = 0
         self.write_on = true
+        Ok(())
     }
 
     // Use `secret` for what is received from now on.
-    fn set_read(var self, secret: Secret<Bytes>) {
+    fn set_read(var self, secret: Secret<Bytes>) -> Result<(), Failure> {
+        let key = expand_label(secret, "key", Bytes.new(), key_length(self.suite))?
+        let iv = expand_label(secret, "iv", Bytes.new(), 12)?
         self.read_secret = secret
-        self.read_key = expand_label(secret, "key", Bytes.new(), key_length(self.suite))
-        self.read_iv = expand_label(secret, "iv", Bytes.new(), 12).expose()
+        self.read_key = key
+        self.read_iv = iv.expose()
         self.read_sequence = 0
         self.read_on = true
+        Ok(())
     }
 
     // Take one record from the input and handle it: `false` when the input
@@ -1005,10 +1063,18 @@ impl Engine {
         }
         if !self.read_on {
             if kind == 22 && self.state == STATE_SERVER_HELLO {
+                // A zero-length handshake fragment is refused (RFC 8446,
+                // section 5.1).
+                if body.len() == 0 {
+                    return Err(protocol(ALERT_UNEXPECTED_MESSAGE, "a zero-length handshake fragment"))
+                }
                 self.hsbuf.append(body)
                 return self.handshake_messages()
             }
             if kind == 21 {
+                if self.hsbuf.len() > 0 {
+                    return Err(protocol(ALERT_UNEXPECTED_MESSAGE, "an alert in the middle of a handshake message"))
+                }
                 return self.on_alert(body)
             }
             return Err(protocol(ALERT_UNEXPECTED_MESSAGE, "an unexpected record before the keys are set"))
@@ -1047,7 +1113,15 @@ impl Engine {
 
     // What a protected record held.
     fn on_content(var self, kind: Int, content: Bytes) -> Result<(), Failure> {
+        // Handshake messages are not interleaved with other record types, and
+        // a handshake record is never empty (RFC 8446, section 5.1).
+        if kind != 22 && self.hsbuf.len() > 0 {
+            return Err(protocol(ALERT_UNEXPECTED_MESSAGE, "a record in the middle of a handshake message"))
+        }
         if kind == 22 {
+            if content.len() == 0 {
+                return Err(protocol(ALERT_UNEXPECTED_MESSAGE, "a zero-length handshake fragment"))
+            }
             self.hsbuf.append(content)
             return self.handshake_messages()
         }
@@ -1238,14 +1312,14 @@ impl Engine {
         self.transcript.update(message)
         let hash = self.transcript.finish()
         let early = hkdf.extract(Secret.new(Bytes.zeroed(32)), Secret.new(Bytes.zeroed(32)))
-        let derived = derive_secret(early, "derived", empty_hash())
+        let derived = derive_secret(early, "derived", empty_hash())?
         let handshake_secret = hkdf.extract(derived, shared)
-        self.client_handshake_secret = derive_secret(handshake_secret, "c hs traffic", hash)
-        self.server_handshake_secret = derive_secret(handshake_secret, "s hs traffic", hash)
-        let master_derived = derive_secret(handshake_secret, "derived", empty_hash())
+        self.client_handshake_secret = derive_secret(handshake_secret, "c hs traffic", hash)?
+        self.server_handshake_secret = derive_secret(handshake_secret, "s hs traffic", hash)?
+        let master_derived = derive_secret(handshake_secret, "derived", empty_hash())?
         self.master_secret = hkdf.extract(master_derived, Secret.new(Bytes.zeroed(32)))
-        self.set_read(self.server_handshake_secret)
-        self.set_write(self.client_handshake_secret)
+        self.set_read(self.server_handshake_secret)?
+        self.set_write(self.client_handshake_secret)?
         self.state = STATE_ENCRYPTED_EXTENSIONS
         Ok(())
     }
@@ -1481,14 +1555,14 @@ impl Engine {
         if self.hsbuf.len() != 0 {
             return Err(protocol(ALERT_UNEXPECTED_MESSAGE, "data follows the Finished message in its record"))
         }
-        let finished_key = expand_label(self.server_handshake_secret, "finished", Bytes.new(), 32)
+        let finished_key = expand_label(self.server_handshake_secret, "finished", Bytes.new(), 32)?
         if !hmac.verify_sha256(finished_key, self.transcript.finish(), message.slice(4, 36)) {
             return Err(protocol(ALERT_DECRYPT_ERROR, "the Finished message does not verify"))
         }
         self.transcript.update(message)
         let server_hash = self.transcript.finish()
-        let client_application = derive_secret(self.master_secret, "c ap traffic", server_hash)
-        let server_application = derive_secret(self.master_secret, "s ap traffic", server_hash)
+        let client_application = derive_secret(self.master_secret, "c ap traffic", server_hash)?
+        let server_application = derive_secret(self.master_secret, "s ap traffic", server_hash)?
         if self.asked_for_certificate {
             var body = Bytes.new()
             body.push(self.request_context.len().to_u8())
@@ -1500,15 +1574,23 @@ impl Engine {
             self.transcript.update(empty)
             self.emit(22, Secret.new(empty))?
         }
-        let own_key = expand_label(self.client_handshake_secret, "finished", Bytes.new(), 32)
+        let own_key = expand_label(self.client_handshake_secret, "finished", Bytes.new(), 32)?
         let mac = hmac.sha256(own_key, self.transcript.finish())
         var flight = Secret.new(Bytes.from_hex("14000020").unwrap_or(Bytes.new()))
         flight.append(mac)
         self.emit(22, flight)?
-        self.set_write(client_application)
-        self.set_read(server_application)
+        self.set_write(client_application)?
+        self.set_read(server_application)?
         self.state = STATE_CONNECTED
         self.events.push(Event.HandshakeDone)
+        Ok(())
+    }
+
+    // Our KeyUpdate, not asking for the server's: send it under the old key,
+    // then change the write key (RFC 8446, section 4.6.3).
+    fn rekey_write(var self) -> Result<(), Failure> {
+        self.emit(22, Secret.new(handshake(24, Bytes.from_hex("00").unwrap_or(Bytes.new()))))?
+        self.set_write(expand_label(self.write_secret, "traffic upd", Bytes.new(), 32)?)?
         Ok(())
     }
 
@@ -1519,10 +1601,10 @@ impl Engine {
             return Err(protocol(ALERT_ILLEGAL_PARAMETER, "a malformed KeyUpdate"))
         }
         let requested = message.at(4) == 1
-        self.set_read(expand_label(self.read_secret, "traffic upd", Bytes.new(), 32))
+        self.set_read(expand_label(self.read_secret, "traffic upd", Bytes.new(), 32)?)?
         if requested {
             self.emit(22, Secret.new(handshake(24, Bytes.from_hex("00").unwrap_or(Bytes.new()))))?
-            self.set_write(expand_label(self.write_secret, "traffic upd", Bytes.new(), 32))
+            self.set_write(expand_label(self.write_secret, "traffic upd", Bytes.new(), 32)?)?
         }
         Ok(())
     }

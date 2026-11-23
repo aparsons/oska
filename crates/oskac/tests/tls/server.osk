@@ -913,6 +913,21 @@ impl Session {
             self.put_record(21, alert(1, 0))?
             return Ok(())
         }
+        if scenario == "rekeyed" {
+            // The client updates its own keys before its second message.
+            self.put_record(23, reply)?
+            let update = self.next()?
+            if update.at(0) != 22 || update.len() != 6 || update.at(5) != 0 {
+                return Err(IoError(message: "no KeyUpdate from the client"))
+            }
+            self.set_read(expand_label(self.read_secret, "traffic upd", Bytes.new(), 32))
+            let again = self.next()?
+            var second = "echo:".to_bytes()
+            second.append(again.slice(1, again.len()))
+            self.put_record(23, second)?
+            self.put_record(21, alert(1, 0))?
+            return Ok(())
+        }
         if scenario == "large" {
             self.put_record(23, pattern(16384))?
             self.put_record(23, pattern(16384))?

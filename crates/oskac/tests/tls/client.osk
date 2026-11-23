@@ -8,7 +8,8 @@
 // assertion (an `.assume_trusted()` that `oskac audit` lists). Modes:
 // `echo` sends `hello` and prints everything the server sends until it
 // closes; `twice` sends `one`, prints the reply, sends `two` and prints
-// that (a KeyUpdate in between); `large` sends `go` and prints the length
+// that (a KeyUpdate in between); `rekey` is `twice` with the client
+// updating its own keys after every record; `large` sends `go` and prints the length
 // and a checksum of what comes back; `alpn` offers two protocols and
 // prints the chosen one; `default_roots` trusts only Mozilla's roots.
 
@@ -70,8 +71,8 @@ fn drain(io: Stdout, stream: tls.TlsStream) -> Result<(), IoError> {
 
 fn exchange(io: Stdout, stream: tls.TlsStream, mode: String) -> Result<(), IoError> {
     var open = stream
-    if mode == "twice" {
-        let first = if mode == "twice" { "one" } else { "go" }
+    if mode == "twice" || mode == "rekey" {
+        let first = "one"
         match open.send(first.to_bytes()) {
             Ok(_) => {}
             Err(error) => { return show(io, error) }
@@ -120,6 +121,9 @@ fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Resul
             Ok(trust) => { config = config.with_trust(trust) }
             Err(_) => { return say(io, "the root is malformed") }
         }
+    }
+    if mode == "rekey" {
+        config = config.with_rekey_after(1)
     }
     if mode == "alpn" {
         config = config.with_alpn(["h2", "http/1.1"])

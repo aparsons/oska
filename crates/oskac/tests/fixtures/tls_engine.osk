@@ -124,3 +124,36 @@ test "a record is read across any number of calls" {
     }
     t.assert_eq(describe(e.receive(record.slice(6, 7))), " [failed: the server sent the alert handshake_failure]")
 }
+
+test "a handshake record with no bytes in it is refused with unexpected_message" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    let step = e.receive(Bytes.from_hex("1603030000").unwrap_or(Bytes.new()))
+    t.assert_eq(describe(step), "1503030002020a [failed: protocol error: a zero-length handshake fragment]")
+}
+
+test "an alert in the middle of a handshake message is refused" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    // The first bytes of a ServerHello, then an alert record.
+    let _ = e.receive(Bytes.from_hex("16030300020200").unwrap_or(Bytes.new()))
+    let step = e.receive(Bytes.from_hex("15030300020128").unwrap_or(Bytes.new()))
+    t.assert_eq(describe(step), "1503030002020a [failed: protocol error: an alert in the middle of a handshake message]")
+}
+
+test "sending after the engine has failed or closed does not send and fails the engine" {
+    var e = engine("example.test", Secret.new(Bytes.zeroed(64)))
+    let _ = e.start()
+    let _ = e.send("early".to_bytes())
+    t.assert_eq(e.is_connected(), false)
+    t.assert_eq(describe(e.send("again".to_bytes())), "")
+}
+
+test "an i/o error prints its reason, so that a refusal and a timeout differ" {
+    let refused = tls.TlsError.Io(IoError(message: "cannot connect to 192.0.2.1:443: connection refused"))
+    let slow = tls.TlsError.Io(IoError(message: "cannot connect to 192.0.2.1:443: timed out"))
+    let odd = tls.TlsError.Io(IoError(message: "something else"))
+    t.assert_eq("{refused}", "i/o error: connection refused")
+    t.assert_eq("{slow}", "i/o error: timed out")
+    t.assert_eq("{odd}", "i/o error: other")
+}

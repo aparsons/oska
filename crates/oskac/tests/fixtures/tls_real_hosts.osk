@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.tls` against real hosts (#244, spec #228). Every test here is an
+// `#[integration]` test: it runs only under `oskac test --integration`, with
+// the real network and the real clock, and a plain `oskac test` skips it.
+//
+// These tests have NOT been run by the author. The sandbox the engine was
+// written in sends TLS through a proxy that re-signs every certificate with
+// its own CA, so no real host's chain can be verified there. They run in an
+// environment with direct internet access, and the hosts below must still
+// serve what the names promise (the badssl.com hosts exist for exactly
+// that). The loopback and recorded tests in `native_tls.rs` are the tests
+// that run in CI.
+
+use std.tls
+
+// Connects to `host` with Mozilla's roots, sends nothing and closes. The
+// result is `ok` or the error's text, so that a failing test shows it.
+fn outcome(net: Net, random: Random, clock: Clock, host: String) -> String {
+    match tls.connect(net.restrict_to(host, 443), tls.TlsConfig.default(), random, clock) {
+        Ok(stream) => {
+            var open = stream
+            open.close()
+            "ok"
+        }
+        Err(error) => {
+            let text = "{error}"
+            text.assume_trusted()
+        }
+    }
+}
+
+#[integration]
+test "oskalang.dev is reached and verified" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "oskalang.dev"), "ok")
+}
+
+#[integration]
+test "github.com is reached and verified" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "github.com"), "ok")
+}
+
+#[integration]
+test "gitlab.com is reached and verified" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "gitlab.com"), "ok")
+}
+
+#[integration]
+test "codeberg.org is reached and verified" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "codeberg.org"), "ok")
+}
+
+#[integration]
+test "api.anthropic.com is reached and verified" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "api.anthropic.com"), "ok")
+}
+
+#[integration]
+test "expired.badssl.com is refused as an expired certificate" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "expired.badssl.com"), "certificate: a certificate has expired")
+}
+
+#[integration]
+test "wrong.host.badssl.com is refused as a host mismatch" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "wrong.host.badssl.com"), "certificate: the certificate is not for this host name")
+}
+
+#[integration]
+test "self-signed.badssl.com is refused as an unknown issuer" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "self-signed.badssl.com"), "certificate: the certificate does not chain to a trusted root")
+}
+
+#[integration]
+test "untrusted-root.badssl.com is refused as an unknown issuer" {
+    t.assert_eq(outcome(t.net, t.random, t.clock, "untrusted-root.badssl.com"), "certificate: the certificate does not chain to a trusted root")
+}
