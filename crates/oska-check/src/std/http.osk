@@ -1,0 +1,744 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.http`: an HTTPS GET client (RFC 9110 and 9112) over `std.tls`. A
+// module sees it only after `use std.http`.
+//
+// `http.get(host, request, tls_config, random, clock)` connects to the host
+// and port the `HostConnect` is confined to, runs the TLS 1.3 handshake
+// (`tls.connect`, so the name checked in the certificate is `host.name()`),
+// sends one HTTP/1.1 GET and returns the `Response`, or an `HttpError`. It is
+// HTTPS only, and it does what a program that fetches one file needs and no
+// more: no redirect is followed (a `3xx` is a response like any other, so the
+// program never talks to a host it holds no capability for), no compression,
+// no cookies and no keep-alive.
+//
+// What the server sends is untrusted. The status is a number the parser
+// read, so it is trusted; the headers' names and values are
+// `Untrusted<String>`, the body is `Untrusted<Bytes>`, and the parser is
+// strict about what it reads (below), so a response that could be read two
+// ways is an error and never a guess.
+//
+// A request has a path and headers. The path is untrusted text, accepted only
+// if it starts with `/` and holds no control character, space or `#`, so it
+// stays on the host the capability names and cannot inject a header. A header
+// name is trusted text and a token; a value may be untrusted but holds no CR,
+// LF or NUL. `Host` is always set from the capability (with the port when it
+// is not 443), `Connection: close` and `Accept-Encoding: identity` are always
+// sent, and a program may not set those, `Content-Length` or
+// `Transfer-Encoding` itself. `User-Agent` is `oska` unless the program sets
+// one. ALPN `http/1.1` is offered on top of what `tls_config` holds. A
+// request is checked before anything is connected.
+//
+// A response is read with these rules. Lines end in CRLF: a bare LF or CR, or a
+// NUL, in the head is `Malformed`. The status line is `HTTP/1.1 NNN reason`.
+// A header line starts with a token, a colon and a value, with no space
+// before the colon; a line that starts with a space or tab (obsolete
+// folding) is `Malformed`. The head is at most 64 KiB and 100 fields
+// (`TooLarge` past either). `1xx` responses are skipped (at most 16). A
+// `204` or `304` has no body. Otherwise the body is framed by
+// `Transfer-Encoding: chunked`, else `Content-Length`, else the end of the
+// stream, which counts only after the server's `close_notify` (a stream cut
+// off before it is `Tls(Truncated)`). A response with both
+// `Transfer-Encoding` and `Content-Length`, with a repeated header that
+// disagrees, with another transfer coding, with a length or chunk size that
+// is not plain digits or overflows, or whose body ends early, is
+// `Malformed`. A body past the request's maximum (16 MiB unless
+// `with_max_body` says) is `TooLarge`, as soon as the length says so.
+//
+// Timeouts are the connection's (docs/runtime.md): connect 10 s per
+// address, 30 s overall, read 60 s of silence.
+//
+// For maintainers: `Reader` is the pure parser, with no capability, so a
+// test runs it on bytes without a socket and another transport can reuse
+// it. It keeps the bytes of the response it has not parsed in `buffer`, and
+// the part it has in `body`. Every number is read out of the bytes by
+// integers, bounds first, so a short or hostile response is an error and
+// never a panic. The module has no `.assume_trusted()`.
+
+use std.tls
+
+// The default maximum body, in bytes.
+pub const MAX_BODY: Int = 16777216
+
+// The most the status line and headers may hold, in bytes, and the most
+// header fields.
+pub const MAX_HEAD: Int = 65536
+pub const MAX_FIELDS: Int = 100
+
+// The longest chunk-size line, in bytes, and the most `1xx` responses
+// skipped.
+const MAX_LINE: Int = 1024
+const MAX_INTERIM: Int = 16
+
+pub enum HttpError {
+    // The TLS connection failed, or the stream ended without `close_notify`.
+    Tls(tls.TlsError),
+    // The server's response is not one this client accepts, and why.
+    Malformed(String),
+    // The head or the body is past its limit.
+    TooLarge,
+    // The request was refused before anything was sent, and why.
+    InvalidRequest(String),
+}
+
+impl Display for HttpError {
+    fn to_string(self) -> String {
+        match self {
+            HttpError.Tls(e) => {
+                let why = e.to_string()
+                "tls: {why}"
+            }
+            HttpError.Malformed(why) => "malformed response: {why}"
+            HttpError.TooLarge => "the response is too large"
+            HttpError.InvalidRequest(why) => "invalid request: {why}"
+        }
+    }
+}
+
+// One header of a response, as the server wrote it.
+pub struct Header {
+    pub name: Untrusted<String>,
+    pub value: Untrusted<String>,
+}
+
+// What the server answered: the status, the headers in order and the body.
+pub struct Response {
+    pub status: Int,
+    pub headers: List<Header>,
+    pub body: Untrusted<Bytes>,
+}
+
+impl Response {
+    // The value of the first header called `name`, which is compared
+    // without regard to case.
+    pub fn header(self, name: String) -> Option<Untrusted<String>> {
+        for h in self.headers {
+            if same_name(h.name, name) {
+                return Some(h.value)
+            }
+        }
+        None
+    }
+}
+
+struct Field {
+    name: String,
+    value: Untrusted<String>,
+}
+
+// A GET request: a path, headers and the largest body to accept.
+pub struct Request {
+    path: Untrusted<String>,
+    fields: List<Field>,
+    max_body: Int,
+}
+
+impl Request {
+    // A GET of `path`, which `http.get` checks (`InvalidRequest`).
+    pub fn get(path: Untrusted<String>) -> Request {
+        Request(path: path, fields: [], max_body: MAX_BODY)
+    }
+
+    // The request with one more header. The name is a token and the value
+    // holds no CR, LF or NUL, which `http.get` checks.
+    pub fn with_header(self, name: String, value: Untrusted<String>) -> Request {
+        var fields = self.fields
+        fields.push(Field(name: name, value: value))
+        Request(path: self.path, fields: fields, max_body: self.max_body)
+    }
+
+    // The request with its largest accepted body, in bytes (not below 0).
+    pub fn with_max_body(self, bytes: Int) -> Request {
+        Request(path: self.path, fields: self.fields, max_body: bytes)
+    }
+}
+
+// ---- Bytes ----------------------------------------------------------------------
+
+// `byte` as a lower-case letter, when it is an upper-case one.
+fn lower(byte: Int) -> Int {
+    if byte >= 65 && byte <= 90 { byte + 32 } else { byte }
+}
+
+fn is_digit(byte: Int) -> Bool {
+    byte >= 48 && byte <= 57
+}
+
+// Whether `byte` is a character of a token (RFC 9110, section 5.6.2).
+fn is_token(byte: Int) -> Bool {
+    if (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) {
+        return true
+    }
+    let marks = "!#$%&'*+-.^_`|~".to_bytes()
+    for i in 0..marks.len() {
+        if marks.at(i).to_int() == byte {
+            return true
+        }
+    }
+    false
+}
+
+// Whether `name` and `wanted` are the same without regard to case.
+fn same_name(name: Untrusted<String>, wanted: String) -> Bool {
+    let a = name.to_bytes()
+    let b = wanted.to_bytes()
+    if a.len() != b.len() {
+        return false
+    }
+    for i in 0..a.len() {
+        if lower(a.at(i).to_int()) != lower(b.at(i).to_int()) {
+            return false
+        }
+    }
+    true
+}
+
+// Whether the bytes of `buf` from `from` to `to` are `word`, ignoring case.
+fn is_word(buf: Untrusted<Bytes>, from: Int, to: Int, word: String) -> Bool {
+    let w = word.to_bytes()
+    if to - from != w.len() {
+        return false
+    }
+    for i in 0..w.len() {
+        if lower(buf.at(from + i).to_int()) != w.at(i).to_int() {
+            return false
+        }
+    }
+    true
+}
+
+// Whether `buf` starts with `word`, exactly.
+fn is_exact(buf: Untrusted<Bytes>, word: String) -> Bool {
+    let w = word.to_bytes()
+    if buf.len() < w.len() {
+        return false
+    }
+    for i in 0..w.len() {
+        if buf.at(i).to_int() != w.at(i).to_int() {
+            return false
+        }
+    }
+    true
+}
+
+// ---- The request ----------------------------------------------------------------
+
+fn invalid(why: String) -> Result<(), HttpError> {
+    Err(HttpError.InvalidRequest(why))
+}
+
+// The reason `request` cannot be sent, if there is one.
+fn check_request(request: Request) -> Result<(), HttpError> {
+    let path = request.path.to_bytes()
+    if path.len() == 0 || path.at(0).to_int() != 47 {
+        return invalid("the path must start with /")
+    }
+    for i in 0..path.len() {
+        let b = path.at(i).to_int()
+        if b <= 32 || b == 127 {
+            return invalid("the path holds a control character or a space")
+        }
+        if b == 35 {
+            return invalid("the path holds a #")
+        }
+    }
+    if request.max_body < 0 {
+        return invalid("the maximum body is below 0")
+    }
+    for field in request.fields {
+        let name = field.name.to_bytes()
+        if name.len() == 0 {
+            return invalid("a header name is empty")
+        }
+        for i in 0..name.len() {
+            if !is_token(name.at(i).to_int()) {
+                return invalid("a header name is not a token")
+            }
+        }
+        for reserved in ["host", "connection", "content-length", "transfer-encoding", "accept-encoding"] {
+            if field.name.to_lowercase() == reserved {
+                return invalid("the header {reserved} is set by the client")
+            }
+        }
+        let value = field.value.to_bytes()
+        for i in 0..value.len() {
+            let b = value.at(i).to_int()
+            if b == 13 || b == 10 || b == 0 {
+                return invalid("a header value holds CR, LF or NUL")
+            }
+        }
+    }
+    Ok(())
+}
+
+// The text of the request: the line, then the headers.
+fn encode_request(name: String, port: Int, request: Request) -> Untrusted<Bytes> {
+    var out: Untrusted<Bytes> = "GET ".to_bytes()
+    out.append(request.path.to_bytes())
+    out.append(" HTTP/1.1\r\nHost: ".to_bytes())
+    out.append((if name.contains(":") { "[{name}]" } else { name }).to_bytes())
+    if port != 443 {
+        out.append(":{port}".to_bytes())
+    }
+    out.append("\r\nConnection: close\r\nAccept-Encoding: identity\r\n".to_bytes())
+    var agent = false
+    for field in request.fields {
+        if field.name.to_lowercase() == "user-agent" {
+            agent = true
+        }
+        out.append(field.name.to_bytes())
+        out.append(": ".to_bytes())
+        out.append(field.value.to_bytes())
+        out.append("\r\n".to_bytes())
+    }
+    if !agent {
+        out.append("User-Agent: oska\r\n".to_bytes())
+    }
+    out.append("\r\n".to_bytes())
+    out
+}
+
+// ---- The parser -----------------------------------------------------------------
+
+fn malformed(why: String) -> Result<Bool, HttpError> {
+    Err(HttpError.Malformed(why))
+}
+
+// What the parser is waiting for.
+const HEAD: Int = 0
+const LENGTH: Int = 1
+const CHUNKS: Int = 2
+const TRAILERS: Int = 3
+const CLOSE: Int = 4
+const DONE: Int = 5
+
+// A response parser with no capability: `feed` it the bytes that arrive, and
+// it says when the response is complete. `end` tells it the server closed the
+// stream cleanly (with `close_notify`).
+pub struct Reader {
+    max_body: Int,
+    buffer: Untrusted<Bytes>,
+    scanned: Int,
+    phase: Int,
+    interim: Int,
+    remaining: Int,
+    trailer_lines: Int,
+    trailer_bytes: Int,
+    status: Int,
+    headers: List<Header>,
+    body: Untrusted<Bytes>,
+}
+
+impl Reader {
+    // A parser that accepts a body of at most `max_body` bytes.
+    pub fn new(max_body: Int) -> Reader {
+        Reader(
+            max_body: max_body,
+            buffer: Bytes.new(),
+            scanned: 0,
+            phase: HEAD,
+            interim: 0,
+            remaining: 0,
+            trailer_lines: 0,
+            trailer_bytes: 0,
+            status: 0,
+            headers: [],
+            body: Bytes.new(),
+        )
+    }
+
+    // Whether the whole response has been read.
+    pub fn is_done(self) -> Bool {
+        self.phase == DONE
+    }
+
+    // The response, once `is_done`.
+    pub fn response(self) -> Option<Response> {
+        if self.phase == DONE {
+            Some(Response(status: self.status, headers: self.headers, body: self.body))
+        } else {
+            None
+        }
+    }
+
+    // Give the parser what arrived. `Ok(true)` when the response is
+    // complete; bytes after its end are ignored.
+    pub fn feed(var self, data: Untrusted<Bytes>) -> Result<Bool, HttpError> {
+        if self.phase == DONE {
+            return Ok(true)
+        }
+        if self.phase == CLOSE {
+            self.body.append(data)
+            return self.check_body()
+        }
+        self.buffer.append(data)
+        self.advance()
+    }
+
+    // The server closed the stream with `close_notify`: complete when the
+    // body runs to the end of the stream, an error when the response is not
+    // whole.
+    pub fn end(var self) -> Result<(), HttpError> {
+        if self.phase == CLOSE {
+            self.phase = DONE
+            return Ok(())
+        }
+        if self.phase == DONE {
+            return Ok(())
+        }
+        Err(HttpError.Malformed("the response ended before it was complete"))
+    }
+
+    fn check_body(self) -> Result<Bool, HttpError> {
+        if self.body.len() > self.max_body {
+            return Err(HttpError.TooLarge)
+        }
+        Ok(self.phase == DONE)
+    }
+
+    // Parse as far as the bytes go.
+    fn advance(var self) -> Result<Bool, HttpError> {
+        while true {
+            if self.phase == HEAD {
+                if !self.head()? {
+                    return Ok(false)
+                }
+            } else if self.phase == LENGTH {
+                if self.buffer.len() < self.remaining {
+                    return Ok(false)
+                }
+                self.body = self.buffer.slice(0, self.remaining)
+                self.buffer = Bytes.new()
+                self.phase = DONE
+            } else if self.phase == CHUNKS {
+                if !self.chunk()? {
+                    return Ok(false)
+                }
+            } else if self.phase == TRAILERS {
+                if !self.trailer()? {
+                    return Ok(false)
+                }
+            } else if self.phase == CLOSE {
+                self.body.append(self.buffer)
+                self.buffer = Bytes.new()
+                return self.check_body()
+            } else {
+                return Ok(true)
+            }
+        }
+        Ok(true)
+    }
+
+    // The index of the CRLF that ends the line starting at `from`, -1 when
+    // it has not arrived, and an error for a bare CR or LF, or a NUL.
+    fn line_end(self, from: Int, limit: Int) -> Result<Int, HttpError> {
+        let buf = self.buffer
+        let stop = if buf.len() < from + limit { buf.len() } else { from + limit }
+        var i = from
+        while i < stop {
+            let b = buf.at(i).to_int()
+            if b == 0 {
+                return Err(HttpError.Malformed("a NUL in the response"))
+            }
+            if b == 10 {
+                if i == from || buf.at(i - 1).to_int() != 13 {
+                    return Err(HttpError.Malformed("a bare line feed"))
+                }
+                return Ok(i - 1)
+            }
+            if i > from && buf.at(i - 1).to_int() == 13 {
+                return Err(HttpError.Malformed("a bare carriage return"))
+            }
+            i = i + 1
+        }
+        if stop - from >= limit {
+            return Err(HttpError.TooLarge)
+        }
+        Ok(-1)
+    }
+
+    // The end of the head (the index of its last CRLF's start), -1 while it
+    // has not all arrived.
+    fn head_end(var self) -> Result<Int, HttpError> {
+        let buf = self.buffer
+        var i = self.scanned
+        while i < buf.len() {
+            let b = buf.at(i).to_int()
+            if b == 0 {
+                return Err(HttpError.Malformed("a NUL in the response"))
+            }
+            if b == 10 && (i == 0 || buf.at(i - 1).to_int() != 13) {
+                return Err(HttpError.Malformed("a bare line feed"))
+            }
+            if i > 0 && buf.at(i - 1).to_int() == 13 && b != 10 {
+                return Err(HttpError.Malformed("a bare carriage return"))
+            }
+            if b == 10 && i >= 3 && buf.at(i - 1).to_int() == 13 && buf.at(i - 2).to_int() == 10 && buf.at(i - 3).to_int() == 13 {
+                if i + 1 > MAX_HEAD {
+                    return Err(HttpError.TooLarge)
+                }
+                return Ok(i - 3)
+            }
+            i = i + 1
+        }
+        self.scanned = buf.len()
+        if buf.len() > MAX_HEAD {
+            return Err(HttpError.TooLarge)
+        }
+        Ok(-1)
+    }
+
+    // Read the status line and headers when they have all arrived, and
+    // choose the framing. `Ok(false)` when more must arrive.
+    fn head(var self) -> Result<Bool, HttpError> {
+        let end = self.head_end()?
+        if end < 0 {
+            return Ok(false)
+        }
+        let buf = self.buffer
+        // The status line.
+        var line_stop = 0
+        while line_stop < end && buf.at(line_stop).to_int() != 13 {
+            line_stop = line_stop + 1
+        }
+        if line_stop < 12 || !is_exact(buf, "HTTP/1.1 ") {
+            return malformed("the status line is not HTTP/1.1")
+        }
+        if !is_digit(buf.at(9).to_int()) || !is_digit(buf.at(10).to_int()) || !is_digit(buf.at(11).to_int()) {
+            return malformed("the status is not three digits")
+        }
+        if line_stop > 12 && buf.at(12).to_int() != 32 {
+            return malformed("the status line has no space after the status")
+        }
+        let status = (buf.at(9).to_int() - 48) * 100 + (buf.at(10).to_int() - 48) * 10 + (buf.at(11).to_int() - 48)
+        if status < 100 {
+            return malformed("the status is below 100")
+        }
+        // The header fields, one per line.
+        var headers: List<Header> = []
+        var length = -1
+        var chunked = false
+        var seen_chunked = false
+        var at = line_stop + 2
+        while at < end {
+            var stop = at
+            while stop < end && buf.at(stop).to_int() != 13 {
+                stop = stop + 1
+            }
+            if headers.len() >= MAX_FIELDS {
+                return Err(HttpError.TooLarge)
+            }
+            let first = buf.at(at).to_int()
+            if first == 32 || first == 9 {
+                return malformed("obsolete line folding")
+            }
+            var colon = at
+            while colon < stop && buf.at(colon).to_int() != 58 {
+                colon = colon + 1
+            }
+            if colon == at || colon == stop {
+                return malformed("a header line has no name or no colon")
+            }
+            for i in at..colon {
+                if !is_token(buf.at(i).to_int()) {
+                    return malformed("a header name is not a token")
+                }
+            }
+            var from = colon + 1
+            var to = stop
+            while from < to && (buf.at(from).to_int() == 32 || buf.at(from).to_int() == 9) {
+                from = from + 1
+            }
+            while to > from && (buf.at(to - 1).to_int() == 32 || buf.at(to - 1).to_int() == 9) {
+                to = to - 1
+            }
+            if is_word(buf, at, colon, "content-length") {
+                if to == from || to - from > 18 {
+                    return malformed("the Content-Length is not a plain number")
+                }
+                var n = 0
+                for i in from..to {
+                    let d = buf.at(i).to_int()
+                    if !is_digit(d) {
+                        return malformed("the Content-Length is not a plain number")
+                    }
+                    n = n * 10 + (d - 48)
+                }
+                if length >= 0 && length != n {
+                    return malformed("two different Content-Length values")
+                }
+                length = n
+            } else if is_word(buf, at, colon, "transfer-encoding") {
+                if seen_chunked || !is_word(buf, from, to, "chunked") {
+                    return malformed("a transfer coding other than a single chunked")
+                }
+                seen_chunked = true
+                chunked = true
+            }
+            match buf.slice(at, colon).to_text() {
+                Some(name) => {
+                    match buf.slice(from, to).to_text() {
+                        Some(value) => { headers.push(Header(name: name, value: value)) }
+                        None => { return malformed("a header value is not text") }
+                    }
+                }
+                None => { return malformed("a header name is not text") }
+            }
+            at = stop + 2
+        }
+        self.buffer = buf.slice(end + 4, buf.len())
+        self.scanned = 0
+        if status < 200 {
+            self.interim = self.interim + 1
+            if self.interim > MAX_INTERIM {
+                return malformed("too many interim responses")
+            }
+            return Ok(true)
+        }
+        self.status = status
+        self.headers = headers
+        if status == 204 || status == 304 {
+            self.phase = DONE
+        } else if chunked && length >= 0 {
+            return malformed("both Transfer-Encoding and Content-Length")
+        } else if chunked {
+            self.phase = CHUNKS
+        } else if length >= 0 {
+            if length > self.max_body {
+                return Err(HttpError.TooLarge)
+            }
+            self.remaining = length
+            self.phase = LENGTH
+        } else {
+            self.phase = CLOSE
+        }
+        Ok(true)
+    }
+
+    // Read the chunk at the start of the buffer when all of it has arrived.
+    // `Ok(false)` when more must arrive.
+    fn chunk(var self) -> Result<Bool, HttpError> {
+        let end = self.line_end(0, MAX_LINE)?
+        if end < 0 {
+            return Ok(false)
+        }
+        let buf = self.buffer
+        var size = 0
+        var digits = 0
+        var i = 0
+        while i < end {
+            let c = lower(buf.at(i).to_int())
+            var d = -1
+            if c >= 48 && c <= 57 {
+                d = c - 48
+            } else if c >= 97 && c <= 102 {
+                d = c - 87
+            }
+            if d < 0 {
+                break
+            }
+            if digits >= 15 {
+                return malformed("a chunk size that overflows")
+            }
+            size = size * 16 + d
+            digits = digits + 1
+            i = i + 1
+        }
+        if digits == 0 {
+            return malformed("a chunk size is not hexadecimal")
+        }
+        // Past the digits only a chunk extension (`;` and more) may follow.
+        if i < end && buf.at(i).to_int() != 59 {
+            return malformed("a chunk size line holds more than a size")
+        }
+        if self.body.len() + size > self.max_body {
+            return Err(HttpError.TooLarge)
+        }
+        if size == 0 {
+            self.buffer = buf.slice(end + 2, buf.len())
+            self.phase = TRAILERS
+            return Ok(true)
+        }
+        let start = end + 2
+        if buf.len() < start + size + 2 {
+            return Ok(false)
+        }
+        if buf.at(start + size).to_int() != 13 || buf.at(start + size + 1).to_int() != 10 {
+            return malformed("a chunk is not followed by CRLF")
+        }
+        self.body.append(buf.slice(start, start + size))
+        self.buffer = buf.slice(start + size + 2, buf.len())
+        Ok(true)
+    }
+
+    // Skip the trailer fields after the last chunk: up to the empty line.
+    fn trailer(var self) -> Result<Bool, HttpError> {
+        let end = self.line_end(0, MAX_HEAD)?
+        if end < 0 {
+            return Ok(false)
+        }
+        if end == 0 {
+            self.buffer = Bytes.new()
+            self.phase = DONE
+            return Ok(true)
+        }
+        self.trailer_lines = self.trailer_lines + 1
+        self.trailer_bytes = self.trailer_bytes + end + 2
+        if self.trailer_lines > MAX_FIELDS || self.trailer_bytes > MAX_HEAD {
+            return Err(HttpError.TooLarge)
+        }
+        self.buffer = self.buffer.slice(end + 2, self.buffer.len())
+        Ok(true)
+    }
+}
+
+// ---- GET ------------------------------------------------------------------------
+
+// Fetch `request` from the host and port `host` is confined to over TLS 1.3
+// and give the response, whatever its status: a redirect is returned, never
+// followed. The certificates are checked against `tls_config`'s roots at
+// `clock`'s time, and `random` gives the secure randomness. The request is
+// checked first, and nothing is connected if it is refused.
+pub fn get(host: HostConnect, request: Request, tls_config: tls.TlsConfig, random: Random, clock: Clock) -> Result<Response, HttpError> {
+    check_request(request)?
+    let text = encode_request(host.name(), host.port(), request)
+    var stream = match tls.connect(host, tls_config.with_alpn(["http/1.1"]), random, clock) {
+        Ok(opened) => opened
+        Err(error) => { return Err(HttpError.Tls(error)) }
+    }
+    var reader = Reader.new(request.max_body)
+    var failure: Option<HttpError> = None
+    match stream.send(text) {
+        Ok(_) => {}
+        Err(error) => { failure = Some(HttpError.Tls(error)) }
+    }
+    var finished = false
+    while !finished && !failure.is_some() {
+        match stream.receive() {
+            Err(error) => { failure = Some(HttpError.Tls(error)) }
+            Ok(chunk) => {
+                if chunk.len() == 0 {
+                    // The server's `close_notify`.
+                    match reader.end() {
+                        Ok(_) => {}
+                        Err(error) => { failure = Some(error) }
+                    }
+                    finished = true
+                } else {
+                    match reader.feed(chunk) {
+                        Ok(done) => { finished = done }
+                        Err(error) => { failure = Some(error) }
+                    }
+                }
+            }
+        }
+    }
+    // The connection ends here, whatever came of the response.
+    stream.close()
+    match failure {
+        Some(error) => Err(error)
+        None => match reader.response() {
+            Some(response) => Ok(response)
+            None => Err(HttpError.Malformed("the response ended before it was complete"))
+        }
+    }
+}
