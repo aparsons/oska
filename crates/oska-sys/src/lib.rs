@@ -55,7 +55,7 @@ pub use wording::{
     WINDOWS_ERRORS,
 };
 
-pub use heap::SizeClassAlloc;
+pub use heap::{SizeClassAlloc, HOLD_CAP, HOLD_MAX};
 #[cfg(unix)]
 pub use unix::{effective_uid, Dir};
 #[cfg(windows)]
