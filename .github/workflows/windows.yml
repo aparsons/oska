@@ -61,9 +61,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The tests run as two parallel shards (scripts/test-shard.sh windows), so
+  # the job stays well inside its limit: the slowest test binary, native_tests,
+  # is one shard and every other test is the other. A dispatch runs one job
+  # with the inputs below.
+  # shards windows: native rest
   test:
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["dispatch"]') || fromJSON('["native","rest"]') }}
+    name: test (${{ matrix.shard }})
     steps:
       # The golden files are compared byte for byte, so check them out
       # with the LF line endings they were written with.
@@ -73,7 +83,12 @@ jobs:
       # The inputs reach the shell only through env, and are checked first.
       # Push and pull-request runs have no inputs and test both crates. A
       # dispatch that selects a test or filter fails if it ran no test.
+      - name: Test (shard)
+        if: matrix.shard != 'dispatch'
+        shell: bash
+        run: scripts/test-shard.sh windows "${{ matrix.shard }}"
       - name: Test
+        if: matrix.shard == 'dispatch'
         shell: bash
         env:
           CRATE: ${{ inputs.crate }}
