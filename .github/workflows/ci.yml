@@ -111,10 +111,21 @@ jobs:
     # added in this job, not in rust-toolchain.toml (every clone would
     # download it), and to the pinned toolchain: a Rust upgrade that breaks
     # the musl build fails this job.
+    #
+    # The tests run as six parallel shards (scripts/musl-shard.sh), because
+    # whole in one job they took some 20 minutes, the slowest job of a pull
+    # request. Every test runs in exactly one shard, so nothing is dropped;
+    # each shard builds `oskac` and its own test binaries, which trades
+    # runner minutes for wall time. A new shard must be added to this matrix
+    # and to the script (`scripts/musl-shard.sh --list` names them).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [site-0, site-1, site-2, sites-1, sites-2, rest]
+    name: musl (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    # A release build, then the oska-run tests, whose interpreter runs
-    # about 1.5 times slower on musl: some 15 to 25 minutes.
-    timeout-minutes: 50
+    # One shard: the build, then at most some 8 minutes of tests.
+    timeout-minutes: 30
     env:
       TARGET: x86_64-unknown-linux-musl
     steps:
@@ -127,21 +138,18 @@ jobs:
       # (`DT_NEEDED`), so it runs on any Linux and in an empty root. The
       # release's own check, tested by check-linux-build-test.sh.
       - name: The musl build is static
+        if: matrix.shard == 'rest'
         run: scripts/release/check-linux-build.sh musl "target/$TARGET/dist/oskac"
-      # The confinement escape tests, the stress tests of the musl build's
-      # allocator (crates/oska-sys/tests/allocator.rs, ticket #523) and the
-      # interpreter, then the differential suite (the native backend
-      # against the interpreter), all run by the musl build. The
-      # differential suite runs this `oskac`, so its interpreter runs long
-      # programs on that allocator.
-      - run: cargo test --locked --target "$TARGET" -p oska-sys -p oska-run
-      - run: cargo test --locked --target "$TARGET" -p oskac --test native_files --test native_parity --test native_default
-      # oskac's own unit tests, among them the check that the musl build,
-      # and no other, uses that allocator (crates/oskac/src/heap.rs).
-      - run: cargo test --locked --target "$TARGET" -p oskac --bin oskac
+      # This shard's tests: the confinement escape tests, the stress tests
+      # of the musl build's allocator (crates/oska-sys/tests/allocator.rs,
+      # ticket #523) and the interpreter, the differential suite (the native
+      # backend against the interpreter) and oskac's own unit tests, all run
+      # by the musl build. See scripts/musl-shard.sh for who runs what.
+      - run: scripts/musl-shard.sh "${{ matrix.shard }}"
       # An empty root: the binary, an empty /tmp and the example's source,
       # with no libraries and no /proc, run as a user with no other rights.
       - name: Smoke test in an empty root
+        if: matrix.shard == 'rest'
         run: |
           root=$(mktemp -d)
           chmod 0755 "$root"
