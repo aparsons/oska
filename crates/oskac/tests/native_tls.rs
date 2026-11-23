@@ -671,3 +671,23 @@ fn some_mutations_are_the_same_on_both_backends() {
         assert_eq!(outcome.stdout, format!("{expected}\n"), "{name}: {mode:?}");
     }
 }
+
+/// The real-host tests (`tls/real_hosts.osk`) compile, and a plain run skips
+/// every one of them: they need the internet and run under `--integration`
+/// only.
+#[test]
+fn the_real_host_tests_are_skipped_without_integration() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tls/real_hosts.osk");
+    let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .arg("test")
+        .arg(&file)
+        .env_clear()
+        .output()
+        .expect("oskac should run");
+    let out = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{out}");
+    assert!(
+        out.contains("9 tests: 0 passed, 0 failed, 9 skipped"),
+        "{out}"
+    );
+}

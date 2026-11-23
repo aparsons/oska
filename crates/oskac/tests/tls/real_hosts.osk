@@ -9,7 +9,8 @@
 // environment with direct internet access, and the hosts below must still
 // serve what the names promise (the badssl.com hosts exist for exactly
 // that). The loopback and recorded tests in `native_tls.rs` are the tests
-// that run in CI.
+// that run in CI. It lives here, not in `fixtures/`, because the corpus
+// differential tests run `--integration` too, and this needs the internet.
 
 use std.tls
 
