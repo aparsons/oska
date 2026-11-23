@@ -1,0 +1,49 @@
+name: Scorecard
+
+# Runs OpenSSF Scorecard on the repository, publishes the result to the
+# public Scorecard API (the badge and the score at scorecard.dev) and to the
+# Security tab, and keeps the SARIF file as an artifact. The score is what the
+# OpenSSF Scorecard self-assessment under docs/compliance cites. It runs on
+# main only, never on a pull request, so a fork cannot reach its token.
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "23 5 * * 2"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# No permission by default; the job asks for what Scorecard needs.
+permissions: {}
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Upload the results to the Security tab.
+      security-events: write
+      # Publish the results (OIDC token for the Scorecard API).
+      id-token: write
+      # Read the repository, and the workflow runs for the Token-Permissions check.
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@23f22cd43608bae7a1f1fa2603d7314dee9538a5 # v2.6.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+      - uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: results.sarif

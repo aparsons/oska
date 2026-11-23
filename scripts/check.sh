@@ -480,16 +480,10 @@ if step "std.rt intrinsics only in std.rt" --no-slot; then
   scripts/intrinsic-guard/guard.sh
 fi
 
-if step "only official actions and rust-toolchain, pinned to a commit" --no-slot; then
-  # An official action may be one in a subdirectory of its repository, as
-  # actions/cache/restore: the same repository, at the same pinned commit.
-  sha_pin='@[0-9a-f]{40}'
-  bad_uses=$(grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows |
-    grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_-]+)?|dtolnay/rust-toolchain)$sha_pin([[:space:]]|$)" || true)
-  if [ -n "$bad_uses" ]; then
-    printf '%s\n' "$bad_uses" >&2
-    fail "workflows may use only actions/* and dtolnay/rust-toolchain, each pinned to a full commit SHA"
-  fi
+if step "only allowed actions, pinned to a commit" --no-slot --fast-when '.github/workflows/*' --fast-when 'scripts/workflow-guard/*'; then
+  # actions/*, dtolnay/rust-toolchain and the two OpenSSF Scorecard actions,
+  # each pinned to a full commit SHA; the list is in the script.
+  scripts/workflow-guard/allowlist.sh || fail "workflows may use only actions/*, dtolnay/rust-toolchain, ossf/scorecard-action and github/codeql-action/upload-sarif, each pinned to a full commit SHA"
 fi
 
 if step "SPDX headers and NOTICE" --no-slot --fast-when 'scripts/spdx-guard/*'; then

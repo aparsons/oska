@@ -346,5 +346,7 @@ expect_refused "a tree with no workflows" "$dir" "no workflow files"
 real=$(cd "$here/../.." && pwd)
 expect_pass "the real workflows" "$real"
 
+bash "$here/allowlist-test.sh" || failures=$((failures + 1))
+
 printf '%s passed, %s failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]
