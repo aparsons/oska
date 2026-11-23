@@ -6,8 +6,11 @@
 //! `chacha20poly1305_*.osk` and `aes128gcm_*.osk`), which the native test
 //! corpus runs on both backends; this file runs whole programs through the
 //! differential harness, from a single file and from a package's module,
-//! builds one for every target, and runs FIPS 180-4's one-million-`a`
-//! example natively.
+//! builds one for every target, and runs natively what the interpreter is
+//! too slow for: FIPS 180-4's one-million-`a` example, every Wycheproof
+//! X25519 vector (`native_only/x25519_wycheproof_full.osk`; the fixture
+//! the corpus runs on both backends holds every sixth) and RFC 7748's
+//! 1,000-step ladder (`native_only/x25519_ladder.osk`).
 
 #![cfg(any(
     all(
@@ -256,4 +259,36 @@ fn main(io: Stdout) -> Result<(), IoError> {
         stdout,
         "9d0e1809716474cb086e834e310a4a1ced149e9c00f248527972cec5704c2a5b07b8b3dc38ecc4ebae97ddd87f3d8985\n"
     );
+}
+
+/// The test blocks of a file under `tests/native_only`, run natively by
+/// `oskac test`: all must pass, and at least `least` must run.
+fn native_only_tests_pass(file: &str, least: usize) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/native_only")
+        .join(file);
+    let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .arg("test")
+        .arg(&path)
+        .output()
+        .expect("oskac runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{file}: {output:?}");
+    assert!(stdout.contains("0 failed"), "{file}: {stdout}");
+    let passed = stdout.matches("... ok").count();
+    assert!(passed >= least, "{file}: {passed} tests passed: {stdout}");
+}
+
+/// Every one of Wycheproof's 518 X25519 vectors, which the interpreter
+/// takes about a second each to run.
+#[test]
+fn every_wycheproof_x25519_vector_passes_natively() {
+    native_only_tests_pass("x25519_wycheproof_full.osk", 13);
+}
+
+/// RFC 7748's 1,000 iterations of the ladder, which end at the published
+/// value.
+#[test]
+fn the_rfc_7748_ladder_of_1000_steps_passes_natively() {
+    native_only_tests_pass("x25519_ladder.osk", 1);
 }

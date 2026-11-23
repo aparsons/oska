@@ -1,0 +1,28 @@
+// `std.x25519` against RFC 7748 section 5.2's iterated ladder, 1,000
+// iterations. It runs natively only, from `native_kex_primitives.rs`: the
+// interpreter takes minutes over it. One iteration is in
+// `fixtures/x25519_rfc7748.osk`, on both backends.
+
+use std.x25519
+
+fn hex(text: String) -> Bytes {
+    Bytes.from_hex(text).unwrap_or(Bytes.new())
+}
+
+fn mult(scalar: String, u: String) -> String {
+    match x25519.scalarmult(Secret.new(hex(scalar)), hex(u)) {
+        Some(result) => result.expose().to_hex()
+        None => "none"
+    }
+}
+
+test "RFC 7748 section 5.2, 1,000 iterations of the ladder" {
+    var k = "0900000000000000000000000000000000000000000000000000000000000000"
+    var u = "0900000000000000000000000000000000000000000000000000000000000000"
+    for _ in 0..1000 {
+        let next = mult(k, u)
+        u = k
+        k = next
+    }
+    t.assert_eq(k, "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51")
+}

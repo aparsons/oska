@@ -1,6 +1,7 @@
 // `std.x25519` against RFC 7748's test vectors, on both backends (the native
 // test corpus runs every test-bearing fixture): section 5.2's two
-// computations and its iterated ladder (1 and 1,000 iterations), and
+// computations and one iteration of its ladder (the 1,000 iterations run natively
+// only, as `native_only/x25519_ladder.osk`: the interpreter is too slow), and
 // section 6.1's Diffie-Hellman between Alice and Bob. Then what the RFC
 // says of the input: the top bit of the peer's `u` is ignored, a scalar
 // that differs only in its clamped bits gives the same answer, and a point
@@ -37,17 +38,6 @@ test "RFC 7748 section 5.2, second computation" {
 
 test "RFC 7748 section 5.2, one iteration of the ladder" {
     t.assert_eq(mult("0900000000000000000000000000000000000000000000000000000000000000", "0900000000000000000000000000000000000000000000000000000000000000"), "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079")
-}
-
-test "RFC 7748 section 5.2, 1,000 iterations of the ladder" {
-    var k = "0900000000000000000000000000000000000000000000000000000000000000"
-    var u = "0900000000000000000000000000000000000000000000000000000000000000"
-    for _ in 0..1000 {
-        let next = mult(k, u)
-        u = k
-        k = next
-    }
-    t.assert_eq(k, "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51")
 }
 
 test "RFC 7748 section 6.1, Alice and Bob agree" {
