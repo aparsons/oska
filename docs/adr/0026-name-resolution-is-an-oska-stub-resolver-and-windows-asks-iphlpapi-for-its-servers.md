@@ -4,7 +4,7 @@
 
 ## Decision
 
-Names are resolved by **`std.dns`, one stub resolver written in Oska**, the same on all five platforms. It reads the hosts file and the name server configuration, asks each name server over UDP, retries over TCP when an answer is truncated, and treats every answer as untrusted data: the transaction id and question must match, compression pointers only point backwards, every length is checked, and only the records that belong to the name asked (or its `CNAME` chain) are kept. Nothing calls the C library's `getaddrinfo`, on any platform.
+Names are resolved by **`std.dns`, one stub resolver written in Oska**, the same on all five platforms. It reads the hosts file and the name server configuration, asks each name server over UDP, retries over TCP when an answer is truncated, and treats every answer as untrusted data: the transaction id and question must match, compression pointers only point backwards, every length is checked, and only the records that belong to the name asked (or its `CNAME` chain) are kept. `std.dns` calls no `getaddrinfo`. `connect()` does not use it yet, though: see Consequences.
 
 Where the name servers come from:
 
@@ -28,5 +28,5 @@ The datagram itself is one prelude method, `HostConnect.exchange_datagram(messag
 ## Consequences
 
 - **Every Windows executable imports `iphlpapi.dll`.** The import list is always the whole list (ADR 0020), so a Windows program loads one more DLL at start-up, whether or not it resolves names. The import table is checked by `build_windows.rs`, which lists `GetNetworkParams` as the only function of that DLL.
-- **Name resolution inside `connect()` is a later step.** `HostConnect.connect()` still resolves a DNS name with the system's resolver on the interpreter. It moves to `std.dns` when the native socket ticket (#238) and the TLS client (`tls.connect`) take a resolved address; until then a program that wants Oska's resolver calls `dns.resolve` itself.
-- **`HostConnect.exchange_datagram` and `NetConnect.system_name_servers` are interpreter-first:** the native backend refuses the first with `E0390` with the rest of the network (ADR 0025) and runs the second, which only reads the system's settings. `std.dns`'s message, hosts file and `resolv.conf` code is pure Oska and runs on both backends today.
+- **Name resolution inside `connect()` is not wired yet.** `connect()` does not use `std.dns`: on the interpreter `HostConnect.connect()` resolves a DNS name with the operating system's resolver (`getaddrinfo`, in `oska-sys`), and the native backend resolves only IP literals and `localhost` (any other name is `host not found`). Moving both to `std.dns` is tracked in a follow-up issue; until then a program that wants Oska's resolver calls `dns.resolve` itself.
+- **`HostConnect.exchange_datagram` and `NetConnect.system_name_servers` run on the interpreter only.** The native backend has neither yet. `std.dns`'s message, hosts file and `resolv.conf` code is pure Oska and runs on both backends today.

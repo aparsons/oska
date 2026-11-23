@@ -1,6 +1,7 @@
 # On macOS, a system-call intrinsic is one libSystem call
 
 - **Status:** Accepted (2026-11-17), for spec #154. On 2026-11-17 the user accepted all six decisions the research recommends (its §4, Q1–Q6). Amends [ADR 0013](0013-system-calls-only-in-std-rt.md). The research behind it is [docs/research/2026-11-macos-libsystem-calls.md](../research/2026-11-macos-libsystem-calls.md).
+- **Amended by:** [ADR 0025](0025-network-access-goes-through-host-narrowed-capabilities.md), which adds eleven `libSystem` functions for sockets.
 
 Spec #228 added eleven `libSystem` functions for sockets: `socket`, `connect`, `bind`, `listen`, `accept`, `getsockname`, `getsockopt`, `setsockopt`, `send`, `recv` and `poll`.
 
