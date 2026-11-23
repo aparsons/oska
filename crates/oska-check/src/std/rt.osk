@@ -6296,7 +6296,7 @@ fn connect_wait() -> Int {
 }
 
 fn read_wait() -> Int {
-    30000
+    60000
 }
 
 // The most bytes one `receive` returns: 64 KiB, as the interpreter's.
@@ -6978,7 +6978,7 @@ pub fn loopback_port(listener: Int) -> Int {
     sock_port(listener)
 }
 
-// `LoopbackListen.accept`: the next connection, waiting at most 30 seconds.
+// `LoopbackListen.accept`: the next connection, waiting at most 60 seconds.
 pub fn loopback_accept(listener: Int) -> Result<Int, IoError> {
     let why = sock_text(listener, 32)
     if why != "" {

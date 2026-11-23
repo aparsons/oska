@@ -20,12 +20,16 @@
 // A request has a path and headers. The path is untrusted text, accepted only
 // if it starts with `/` and holds no control character, space or `#`, so it
 // stays on the host the capability names and cannot inject a header. A header
-// name is trusted text and a token; a value may be untrusted but holds no CR,
-// LF or NUL. `Host` is always set from the capability (with the port when it
+// name is trusted text and a token; a value may be untrusted but holds no
+// control character (none of 0x00 to 0x1F but tab, nor 0x7F). `Host` is always set from the capability (with the port when it
 // is not 443), `Connection: close` and `Accept-Encoding: identity` are always
-// sent, and a program may not set those, `Content-Length` or
-// `Transfer-Encoding` itself. `User-Agent` is `oska` unless the program sets
-// one. ALPN `http/1.1` is offered on top of what `tls_config` holds. A
+// sent, and a program may not set those, `Content-Length`,
+// `Transfer-Encoding`, `Upgrade`, `Expect` or `TE` itself (the refusals of
+// `Accept-Encoding`, `Upgrade`, `Expect` and `TE` go beyond what the spec
+// names, so that the response is never compressed, upgraded or held for a
+// `100 Continue`; a response with no body for `204` and `304` is RFC 9112's). `User-Agent` is `oska` unless the program sets
+// one. ALPN `http/1.1` is offered, in place of any protocol list `tls_config`
+// holds (`TlsConfig.with_alpn` replaces it). A
 // request is checked before anything is connected.
 //
 // A response is read with these rules. Lines end in CRLF: a bare LF or CR, or a
@@ -33,7 +37,8 @@
 // A header line starts with a token, a colon and a value, with no space
 // before the colon; a line that starts with a space or tab (obsolete
 // folding) is `Malformed`. The head is at most 64 KiB and 100 fields
-// (`TooLarge` past either). `1xx` responses are skipped (at most 16). A
+// (`TooLarge` past either). `1xx` responses are skipped (at most 16), but a `101 Switching Protocols`, which
+// would hand the connection to another protocol, is `Malformed`. A
 // `204` or `304` has no body. Otherwise the body is framed by
 // `Transfer-Encoding: chunked`, else `Content-Length`, else the end of the
 // stream, which counts only after the server's `close_notify` (a stream cut
@@ -256,7 +261,7 @@ fn check_request(request: Request) -> Result<(), HttpError> {
                 return invalid("a header name is not a token")
             }
         }
-        for reserved in ["host", "connection", "content-length", "transfer-encoding", "accept-encoding"] {
+        for reserved in ["host", "connection", "content-length", "transfer-encoding", "accept-encoding", "upgrade", "expect", "te"] {
             if field.name.to_lowercase() == reserved {
                 return invalid("the header {reserved} is set by the client")
             }
@@ -264,8 +269,8 @@ fn check_request(request: Request) -> Result<(), HttpError> {
         let value = field.value.to_bytes()
         for i in 0..value.len() {
             let b = value.at(i).to_int()
-            if b == 13 || b == 10 || b == 0 {
-                return invalid("a header value holds CR, LF or NUL")
+            if (b < 32 && b != 9) || b == 127 {
+                return invalid("a header value holds a control character")
             }
         }
     }
@@ -297,6 +302,24 @@ fn encode_request(name: String, port: Int, request: Request) -> Untrusted<Bytes>
     }
     out.append("\r\n".to_bytes())
     out
+}
+
+// Why byte `i` of `buf` breaks the response's line endings, when it does: a
+// NUL, a bare LF (not after a CR) or a bare CR (not before an LF). `from` is
+// where the line being read starts, so the byte before it is not looked at.
+fn framing_fault(buf: Untrusted<Bytes>, i: Int, from: Int) -> Option<String> {
+    let b = buf.at(i).to_int()
+    if b == 0 {
+        return Some("a NUL in the response")
+    }
+    let after_cr = i > from && buf.at(i - 1).to_int() == 13
+    if b == 10 && !after_cr {
+        return Some("a bare line feed")
+    }
+    if after_cr && b != 10 {
+        return Some("a bare carriage return")
+    }
+    None
 }
 
 // ---- The parser -----------------------------------------------------------------
@@ -437,18 +460,12 @@ impl Reader {
         let stop = if buf.len() < from + limit { buf.len() } else { from + limit }
         var i = from
         while i < stop {
-            let b = buf.at(i).to_int()
-            if b == 0 {
-                return Err(HttpError.Malformed("a NUL in the response"))
+            match framing_fault(buf, i, from) {
+                Some(why) => { return Err(HttpError.Malformed(why)) }
+                None => {}
             }
-            if b == 10 {
-                if i == from || buf.at(i - 1).to_int() != 13 {
-                    return Err(HttpError.Malformed("a bare line feed"))
-                }
+            if buf.at(i).to_int() == 10 {
                 return Ok(i - 1)
-            }
-            if i > from && buf.at(i - 1).to_int() == 13 {
-                return Err(HttpError.Malformed("a bare carriage return"))
             }
             i = i + 1
         }
@@ -464,16 +481,11 @@ impl Reader {
         let buf = self.buffer
         var i = self.scanned
         while i < buf.len() {
+            match framing_fault(buf, i, 0) {
+                Some(why) => { return Err(HttpError.Malformed(why)) }
+                None => {}
+            }
             let b = buf.at(i).to_int()
-            if b == 0 {
-                return Err(HttpError.Malformed("a NUL in the response"))
-            }
-            if b == 10 && (i == 0 || buf.at(i - 1).to_int() != 13) {
-                return Err(HttpError.Malformed("a bare line feed"))
-            }
-            if i > 0 && buf.at(i - 1).to_int() == 13 && b != 10 {
-                return Err(HttpError.Malformed("a bare carriage return"))
-            }
             if b == 10 && i >= 3 && buf.at(i - 1).to_int() == 13 && buf.at(i - 2).to_int() == 10 && buf.at(i - 3).to_int() == 13 {
                 if i + 1 > MAX_HEAD {
                     return Err(HttpError.TooLarge)
@@ -589,6 +601,9 @@ impl Reader {
         }
         self.buffer = buf.slice(end + 4, buf.len())
         self.scanned = 0
+        if status == 101 {
+            return malformed("a 101 Switching Protocols response")
+        }
         if status < 200 {
             self.interim = self.interim + 1
             if self.interim > MAX_INTERIM {

@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a read, or an `accept`, waits for the other side.
-pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
+pub const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How long [`exchange_datagram`] waits for the answer.
 pub const DATAGRAM_TIMEOUT: Duration = Duration::from_secs(5);

@@ -131,6 +131,12 @@ test "1xx responses are skipped, and 204 and 304 have no body" {
     t.assert_eq(whole("HTTP/1.1 304 Not Modified\r\nContent-Length: 9\r\n\r\n"), "304 [] Content-Length=9")
 }
 
+test "101 Switching Protocols is refused, though other 1xx responses are skipped" {
+    t.assert_eq(whole("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\n\r\n"), "!malformed response: a 101 Switching Protocols response")
+    t.assert_eq(whole("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 101 Switching Protocols\r\n\r\n"), "!malformed response: a 101 Switching Protocols response")
+    t.assert_eq(whole("HTTP/1.1 102 Processing\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), "200 [] Content-Length=0")
+}
+
 test "a redirect is a response like any other" {
     t.assert_eq(whole("HTTP/1.1 301 Moved\r\nLocation: https://other.test/\r\nContent-Length: 0\r\n\r\n"), "301 [] Location=https://other.test/ Content-Length=0")
 }
@@ -229,13 +235,17 @@ test "a path must start with a slash and hold no control character, space or has
     t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/a#b")), "invalid request: the path holds a #")
 }
 
-test "a header value may not hold CR, LF or NUL, and a name must be a token" {
+test "a header value may not hold a control character, and a name must be a token" {
     let nul = Bytes.from_hex("00").unwrap_or(Bytes.new()).to_text().unwrap_or("")
     let get = http.Request.get("/")
-    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\r\nX-B: 2")), "invalid request: a header value holds CR, LF or NUL")
-    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\nX-B: 2")), "invalid request: a header value holds CR, LF or NUL")
-    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\rX-B: 2")), "invalid request: a header value holds CR, LF or NUL")
-    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1{nul}")), "invalid request: a header value holds CR, LF or NUL")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\r\nX-B: 2")), "invalid request: a header value holds a control character")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\nX-B: 2")), "invalid request: a header value holds a control character")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\rX-B: 2")), "invalid request: a header value holds a control character")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1{nul}")), "invalid request: a header value holds a control character")
+    for hex in ["01", "08", "0b", "0c", "0e", "1f", "7f"] {
+        let c = Bytes.from_hex(hex).unwrap_or(Bytes.new()).to_text().unwrap_or("")
+        t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "a{c}b")), "invalid request: a header value holds a control character")
+    }
     t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X A", "1")), "invalid request: a header name is not a token")
     t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A:", "1")), "invalid request: a header name is not a token")
     t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("", "1")), "invalid request: a header name is empty")
@@ -243,7 +253,7 @@ test "a header value may not hold CR, LF or NUL, and a name must be a token" {
 
 test "the headers the client sets itself cannot be set, in any case" {
     let get = http.Request.get("/")
-    for name in ["Host", "host", "CONNECTION", "Content-Length", "transfer-encoding", "Accept-Encoding"] {
+    for name in ["Host", "host", "CONNECTION", "Content-Length", "transfer-encoding", "Accept-Encoding", "Upgrade", "EXPECT", "te"] {
         let lowered = name.to_lowercase()
         t.assert_eq(asked(t.net, t.random, t.clock, get.with_header(name, "x")), "invalid request: the header {lowered} is set by the client")
     }
