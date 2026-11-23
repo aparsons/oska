@@ -10,6 +10,10 @@
 #                              origin/main (and the crates that depend on
 #                              it); never writes a pass stamp
 #   scripts/check.sh --list    print the step names, in order; run nothing
+#   scripts/check.sh --group G only the steps of group G: `tests` (the cargo
+#                              test step) or `checks` (every other step);
+#                              CI runs the groups in separate jobs. Never
+#                              writes a pass stamp. See also OSKA_TEST_SHARD.
 #
 # --fast is the inner loop, and what the pre-push hook runs for a push to
 # ticket/** branches only. It ends by saying it is NOT the full check: CI
@@ -78,11 +82,17 @@ usage() {
 }
 
 mode=run  # run, or list: print the step names and run nothing
+only_group= # set by --group: run only the steps of that group
 tier=full # full, or fast: only steps tagged --fast or --fast-when
 fast_run= # set by --fast; stays set if the run falls back to every step
 while [ $# -gt 0 ]; do
   case $1 in
     --list) mode=list ;;
+    --group)
+      only_group=${2:-}
+      case $only_group in tests | checks) ;; *) usage ;; esac
+      shift
+      ;;
     --fast)
       tier=fast
       fast_run=1
@@ -122,7 +132,7 @@ ran_any=      # set once a step's block runs
 fast_decided= # set once a --fast run has decided whether it can be fast
 
 # step NAME [--fast] [--fast-when PATTERN]... [--no-slot] [--cargo]
-# [--docs-tests]: opens a step's block,
+# [--docs-tests] [--group tests]: opens a step's block,
 # `if step "NAME"; then ... fi`. In a run it prints the step's header and the
 # block runs; with --list it prints NAME and the block is skipped. So the list
 # is always the steps that run, in order. The first step of a run records the
@@ -130,7 +140,7 @@ fast_decided= # set once a --fast run has decided whether it can be fast
 # skipped waits for a build slot. In the fast tier a step runs only when its
 # tags say so (see the top of this file).
 step() {
-  local name=$1 fast='' slot=1 cargo='' docs='' when=()
+  local name=$1 fast='' slot=1 cargo='' docs='' when=() group=checks
   shift
   while [ $# -gt 0 ]; do
     case $1 in
@@ -142,6 +152,10 @@ step() {
       --no-slot) slot= ;;
       --cargo) cargo=1 ;;
       --docs-tests) docs=1 ;;
+      --group)
+        group=${2:?}
+        shift
+        ;;
       *)
         printf 'check.sh: step "%s": unknown option %s\n' "$name" "$1" >&2
         exit 2
@@ -152,6 +166,10 @@ step() {
   if [ -n "$docs" ] && [ -z "$cargo" ]; then
     printf 'check.sh: step "%s": --docs-tests needs --cargo\n' "$name" >&2
     exit 2
+  fi
+  # --group: another group's steps are not listed and do not run.
+  if [ -n "$only_group" ] && [ "$only_group" != "$group" ]; then
+    return 1
   fi
   if [ -n "$fast_run" ] && [ -z "$fast_decided" ]; then
     fast_decided=1
@@ -445,6 +463,10 @@ finish() {
     printf '\n--fast: no steps ran; nothing they check changed. This was NOT the full check: no pass stamp written; scripts/check.sh (and CI) runs every step.\n'
     exit 0
   fi
+  if [ -n "$only_group" ]; then
+    printf '\nGroup %s passed. This was NOT the full check: no pass stamp written; scripts/check.sh (and the other CI jobs) run the rest.\n' "$only_group"
+    exit 0
+  fi
   if [ -n "$fast_run" ] || [ "$tier" != full ]; then
     printf '\nFast checks passed. This was NOT the full check: no pass stamp written; scripts/check.sh (and CI) runs every step.\n'
     exit 0
@@ -521,7 +543,7 @@ if step "oskac type-checks for Windows" --cargo; then
   fi
 fi
 
-if step "cargo test (private temporary directory)" --fast --cargo --docs-tests; then
+if step "cargo test (private temporary directory)" --fast --cargo --docs-tests --group tests; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.
   # The fast tier tests only the changed crates and their dependents
@@ -537,6 +559,11 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests; 
   elif [ "$tier" = fast ]; then
     # shellcheck disable=SC2046 # one word per package argument
     scripts/temp-leak/run.sh cargo test $(fast_crates)
+  elif [ -n "${OSKA_TEST_SHARD:-}" ]; then
+    # CI's parallel shards of this step (scripts/test-shard.sh): the set is
+    # the host's, "linux" or "macos". Every shard of a set together is the
+    # whole `cargo test --all`.
+    scripts/temp-leak/run.sh scripts/test-shard.sh "${OSKA_TEST_SET:?OSKA_TEST_SHARD needs OSKA_TEST_SET}" "$OSKA_TEST_SHARD"
   else
     scripts/temp-leak/run.sh cargo test --all
   fi
@@ -688,6 +715,11 @@ fi
 if step "docs-test list tests" --fast-when 'scripts/docs-tests/*'; then
   # The Rust tests that read docs/, which a docs-only change runs.
   bash scripts/docs-tests/test.sh
+fi
+
+if step "test shard tests" --fast-when 'scripts/test-shard*' --fast-when '.github/workflows/ci.yml' --fast-when 'crates/*/tests/*'; then
+  # Each test of a CI job's set runs in exactly one shard (scripts/test-shard.sh).
+  bash scripts/test-shard/test.sh
 fi
 
 if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh; then
