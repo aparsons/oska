@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sink literals: `sql"..."` and the like. A literal's tag names the
 //! sink module that provides it, which must be imported, and the literal
 //! has the type that module declares for it.

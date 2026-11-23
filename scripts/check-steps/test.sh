@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for scripts/check.sh's step registry: `--list` prints the steps in
 # the order a run prints their headers, so the list cannot drift from the
 # steps that run. Each case runs the real check.sh in a scratch tree where

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `test` blocks: the test executable's entry, each test's body, and the
 //! `TestContext` methods.
 //!

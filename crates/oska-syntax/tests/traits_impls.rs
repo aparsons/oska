@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `parse_module` tests for `trait` and `impl` declarations, generic
 //! parameters on type declarations, and where a `self` receiver may appear,
 //! asserted through the JSON export.

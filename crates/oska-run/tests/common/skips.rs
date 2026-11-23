@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The one list of runtime tests that are not differential (spec #125):
 //! the tests whose program the native backend does not run, each with
 //! the reason. Every helper in this module compares the interpreter with

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.rt` is the toolchain's own (ADR 0013). Its source is embedded here
 //! and is the only text that may import `std.rt` or name an intrinsic: a
 //! raw system call is ambient authority. Everything else, user code and

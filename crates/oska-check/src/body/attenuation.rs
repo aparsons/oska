@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Attenuations: calls that narrow a capability, listed in the report's
 //! `attenuations` array.
 //!

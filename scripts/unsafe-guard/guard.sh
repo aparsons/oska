@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Prove that only crates/oska-sys uses `unsafe` (ADR 0009). check.sh runs
 # it on this repo; test.sh runs it on small workspaces that try each way
 # around it.

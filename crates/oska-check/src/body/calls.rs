@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Calls and construction: functions, methods, associated functions,
 //! constructors, and variants, each instantiated as a [`Callable`] and
 //! applied to its arguments, with labels, bounds, and contract purity

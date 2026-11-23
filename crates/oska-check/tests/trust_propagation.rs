@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Trust propagation (#52): untrusted-ness carries through prelude text
 //! operations, interpolation, and every route a value can take, while
 //! results that are not text stay trusted.

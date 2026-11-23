@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The guard, fed code that a broken lowering or optimizer could make.
 
 use super::{secrets, verify, Leak};

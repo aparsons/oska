@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Review fixes for spec #105, at runtime: contracts that could perform an
 //! effect are refused before the program starts, a `P0007` message counts
 //! its column in characters, and an inherent impl method keeps its own

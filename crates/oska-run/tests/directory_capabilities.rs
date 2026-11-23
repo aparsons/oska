@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Directory capabilities (#96, ADR 0008): `restrict_to` on `Fs`, `FsRead`
 //! and `FsWrite` gives a `Dir`, `DirRead` or `DirWrite` that reaches only
 //! beneath its root, and narrows further with a `Path` that may come from

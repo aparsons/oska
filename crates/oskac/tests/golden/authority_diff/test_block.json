@@ -6,11 +6,11 @@ exit: 0
     {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
   ],
   "audit": [
-    {"function":"test \"reads a note\"","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":394,"end":415}}
+    {"function":"test \"reads a note\"","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":433,"end":454}}
   ],
   "attenuations": [
-    {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":298,"end":314},"source":"Fs","result":"FsRead","root":null},
-    {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":298,"end":335},"source":"FsRead","result":"DirRead","root":"notes"}
+    {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":337,"end":353},"source":"Fs","result":"FsRead","root":null},
+    {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":337,"end":374},"source":"FsRead","result":"DirRead","root":"notes"}
   ],
   "authority_diff": {
     "baseline": "<baseline>",

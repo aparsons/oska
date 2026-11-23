@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Splitting a program into modules never weakens a guarantee (spec #115,
 //! #119). Each test splits the violating code of a single-file test across
 //! modules and expects the same code, in the file where the single-file

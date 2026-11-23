@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # shellcheck shell=bash disable=SC2034 # read by the scripts that source this file
 # The pinned versions and checksums of the formal step's tools (ADRs 0018,
 # 0019), and the checks run.sh, install.sh and test.sh share, which source it. To move a pin, change it here and,

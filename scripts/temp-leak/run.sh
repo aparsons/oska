@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Runs a command with a private temporary directory and fails if the command
 # leaves anything in it. check.sh runs `cargo test --all` through this, so a
 # test that leaks a file or directory fails the check at once, naming what it

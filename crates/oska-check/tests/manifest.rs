@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska.toml`, read by our own parser for a strict subset of TOML (spec
 //! #115, ticket #117). Text in; a manifest or diagnostics out. Every
 //! diagnostic names the manifest's path, line and column.

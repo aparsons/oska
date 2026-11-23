@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers that make a test behave the same on Linux, macOS and Windows:
 //! a scratch directory, JSON escapes for paths, a home environment, and
 //! paths that keep `..` literal. Any test that builds a path, writes a path

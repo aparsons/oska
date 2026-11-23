@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Running the site generator, `site/build.osk`, and the link checker,
 //! `site/check-links.osk`, on a [`FakeHost`], and the repository's own
 //! files as the generator reads them. The site tests share these.

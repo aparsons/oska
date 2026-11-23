@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The agent-setup files a variant gives the agent: `prepare --setup`
 //! writes the files a real user's agent gets (`AGENTS.md` and `CLAUDE.md`
 //! from the published templates in `site/agent-setup/`) into the workspace,

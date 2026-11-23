@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Bitwise operators, shifts and rotations on `U8`, `U32` and `U64`
 //! (ticket #220), run on both backends through the differential harness:
 //! every operator and rotation on each type at the edges (0, 1, the

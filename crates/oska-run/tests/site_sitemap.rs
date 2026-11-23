@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The sitemap's `<lastmod>` (#293): each page with a source file is
 //! dated from `site/lastmod.txt`, which the Pages workflow writes from git
 //! before the build, and a line that is not a real `YYYY-MM-DD` date is

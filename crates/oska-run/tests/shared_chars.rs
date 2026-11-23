@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `String.chars` shares its one-character texts (#501): the interpreter
 //! makes each ASCII character's text once and hands out that text, not a
 //! new copy for every character. A program sees the same characters as

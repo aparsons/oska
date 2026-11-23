@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A bug inside `oskac`, here a failed write to standard output (the one
 //! panic `oskac` has on purpose, `print!`'s), ends with one clear line, a
 //! request to report it, and exit code 101: the code a Rust panic ends the

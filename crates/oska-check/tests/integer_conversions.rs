@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Wrapping arithmetic and integer conversions (ticket #221):
 //! `wrapping_add`, `wrapping_sub` and `wrapping_mul` on `U8`, `U32` and
 //! `U64`; `to_<type>()` between `Int`, `U8`, `U16`, `U32` and `U64`; and

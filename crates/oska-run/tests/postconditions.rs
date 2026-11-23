@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Postconditions enforced on every return path (#107, spec #105): a
 //! function's `ensures` clauses are evaluated whenever it returns, in every
 //! build, with `r` bound to the value being returned, and a false one stops

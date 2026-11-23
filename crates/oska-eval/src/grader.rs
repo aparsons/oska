@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Runs the `oskac` under test on a workspace, through its command line
 //! only, and reads what it reports: the same outputs an agent sees.
 //!

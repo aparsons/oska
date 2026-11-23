@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac check` on trust on bytes (#223).
 //! `tests/fixtures/bytes_trust.osk` passes a slice of bytes read through
 //! a capability where trusted `Bytes` is required, and gets `E0300`.

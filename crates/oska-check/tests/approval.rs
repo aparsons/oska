@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Approval` and `Approver` (#252) in the checker: an approval has no
 //! constructor a program can call and no field it can read, so a tool
 //! that takes one cannot be called without a person's yes; an approver

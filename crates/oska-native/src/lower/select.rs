@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `ExprKind::Select`, the choice `ct_select`, `and` and `or` on a secret
 //! lower to (#224): every operand is evaluated, and no branch decides
 //! which value is taken.

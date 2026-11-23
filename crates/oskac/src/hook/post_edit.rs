@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The post-edit event: after the agent edited a `.osk` file or an
 //! `oska.toml`, check what it belongs to and hand back only the
 //! diagnostics, compactly.

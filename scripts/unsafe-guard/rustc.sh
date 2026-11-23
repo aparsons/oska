@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # The rustc wrapper behind guard.sh's compile check. Cargo runs it, as
 # RUSTC_WORKSPACE_WRAPPER, for every workspace crate:
 #

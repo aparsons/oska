@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac fix` (spec #185, ticket #193): applying the fixes that are safe
 //! to apply automatically, one at a time with a check after each, and
 //! writing each changed file once, or nothing when a rule refuses it.

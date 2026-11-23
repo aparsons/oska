@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for scripts/release/check-linux-build.sh, the check the release
 # build job runs on each Linux build. Run from anywhere:
 #

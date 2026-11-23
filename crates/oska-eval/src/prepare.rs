@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `prepare`: materialises a task into a fresh run directory.
 //!
 //! The run directory holds `workspace/` (the starting package, the only

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Bytes` (ticket #222), run on both backends through the differential
 //! harness: every method against fixed byte strings, copy-on-write (a
 //! changed copy leaves the original unchanged), the endian reads and

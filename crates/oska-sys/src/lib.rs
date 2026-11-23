@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Confined filesystem access for the Oska runtime, and the musl build's
 //! allocator: the one crate in the workspace allowed to use `unsafe`
 //! (ADR 0009).
@@ -54,7 +55,7 @@ pub use wording::{
     WINDOWS_ERRORS,
 };
 
-pub use heap::SizeClassAlloc;
+pub use heap::{SizeClassAlloc, HOLD_CAP, HOLD_MAX};
 #[cfg(unix)]
 pub use unix::{effective_uid, Dir};
 #[cfg(windows)]

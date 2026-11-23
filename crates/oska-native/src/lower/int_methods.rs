@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Wrapping arithmetic on `U8`, `U32` and `U64`, and the conversions
 //! between `Int`, `U8`, `U16`, `U32` and `U64`.
 //!

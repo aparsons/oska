@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Steps: 4. `==` and `!=` on a type with its own `Eq` call its `eq`,
 // written in Oska, and so does comparing two lists of it, once for each
 // pair of items the runtime compares.

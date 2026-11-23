@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.ed25519`: verifying Ed25519 signatures (RFC 8032, section 5.1), as
 // `ed25519.verify(key, message, signature)`. A module sees it only after
 // `use std.ed25519`. There is no signing and no key generation.

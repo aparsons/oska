@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The executable file for Windows: a PE32+ console executable for
 //! x86_64 that the Windows loader maps, importing functions only from
 //! the DLLs ADR 0020 allows: today `kernel32.dll` and

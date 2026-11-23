@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! File capabilities (#97, ADR 0008): `restrict_to_file` on `FsRead` and
 //! `FsWrite` gives a `FileRead` or `FileWrite` for one file, and a
 //! directory capability hands out one for a file beneath it, from a

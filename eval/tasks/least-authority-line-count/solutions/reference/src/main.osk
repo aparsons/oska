@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Prints how many lines `notes.txt` has.
 //
 //     oskac run

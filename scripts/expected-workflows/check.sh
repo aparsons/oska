@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # The merge gate for a ticket PR: every workflow the PR must trigger has
 # reported checks. A workflow GitHub cannot parse, or that never ran, reports
 # nothing and the PR looks green (#329), so a missing workflow is a failure.

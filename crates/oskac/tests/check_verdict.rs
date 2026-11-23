@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `verdict` of `oskac check --format=json` (#448): always the last
 //! key of the check object, and always the same answer as the exit code:
 //! `ok` (0), `diagnostics` (1) or `widened` (3), so that an embedder

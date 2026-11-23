@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Directory capabilities (#96, ADR 0008): attenuating `Fs`, `FsRead` or
 //! `FsWrite` to a directory gives a `Dir`, `DirRead` or `DirWrite`, which
 //! reads and writes only beneath that root and can narrow further with a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `summarise`: a batch's run records aggregated into its summary.
 //!
 //! A batch is a directory, named by the batch's id, whose `runs/` holds one

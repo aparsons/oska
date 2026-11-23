@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The contract step of ADR 0008 (#99): `Fs`, `FsRead` and `FsWrite` only
 //! attenuate, so a path-taking call on one gets `E0273`, and `main` cannot
 //! declare a directory or file capability (`E0217`).

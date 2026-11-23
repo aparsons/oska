@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The parity gaps the earlier native tickets left (ticket #140), run on
 //! both backends through the differential harness (seam 1): range values,
 //! function values made from prelude functions that may panic, function

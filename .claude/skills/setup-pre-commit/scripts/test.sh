@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the fast pre-commit hook (pre-commit.sh in the setup-pre-commit
 # skill, installed as .githooks/pre-commit).
 #

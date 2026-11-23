@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac check` on implementations of `std.mcp`'s `Toolset` (#249):
 //! the authority report lists each tool under `call`, with what its arm
 //! reaches, in the human and the JSON report.

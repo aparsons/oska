@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Conformance (#42, #56): the example programs check cleanly, a mutation
 //! that passes untrusted text to a trusted `String` parameter is rejected,
 //! and the table of checker codes (`E02xx` and `E03xx`) in

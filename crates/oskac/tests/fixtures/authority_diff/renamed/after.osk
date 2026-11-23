@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `load` renamed `read_notes`: the diff reports one function removed and
 // one added, never the same function renamed. The added function reaches
 // nothing the program did not, so it passes.

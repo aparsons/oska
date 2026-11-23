@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The checks that need a database (`search_orders` against a table of
 // orders) arrive with the `std.sql` test double after v0.6.0.
 

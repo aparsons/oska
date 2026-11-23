@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Approval` and `Approver` (#252): a person's yes to one consequential
 //! action. Only an approver makes an approval; the terminal approver asks
 //! on standard error and reads the answer from standard input; a tool

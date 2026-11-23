@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Make a new, private, empty file for the architecture report and print its
 # absolute path.
 #

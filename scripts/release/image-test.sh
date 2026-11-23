@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the image builder, scripts/release/image.sh. Run from anywhere:
 #
 #   scripts/release/image-test.sh

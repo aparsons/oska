@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Packages on disk: what a path given to `oskac check`, `run` or `test`
 //! names, the discovery of a package's modules, and the reading and
 //! replacing of its files that `oskac fix` and `--update-baseline` do.

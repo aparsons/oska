@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac hook claude --event=stop` (spec #185, ticket #195): when Claude
 //! Code's agent tries to finish, run the release check and the tests on
 //! each target, and block it while any fails.

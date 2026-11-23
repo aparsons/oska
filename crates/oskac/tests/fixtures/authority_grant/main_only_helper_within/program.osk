@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The grant lists only `main`, with `Stdout`. The snippet adds a helper
 // that `main` passes its `Stdout` to: within the grant, so it runs.
 

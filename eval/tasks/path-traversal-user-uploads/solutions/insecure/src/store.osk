@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Stores the files users upload. Each user has a directory, named after
 // the user, beneath the uploads directory.
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # ShellCheck over every shell script in the repo, at ShellCheck's default
 # severity (all of error, warning, info and style). scripts/check.sh and the
 # installers workflow both run this, so a local pass is a CI pass.

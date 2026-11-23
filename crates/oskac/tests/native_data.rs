@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native structs, enums, `match` and generic functions (ticket #130),
 //! run on both backends through the differential harness (seam 1):
 //! compound values built at run time, field reads and updates with

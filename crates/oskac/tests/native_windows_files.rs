@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native confinement on Windows only (#178), run on both backends
 //! through the differential harness: what `native_files.rs` cannot plant
 //! on Linux and macOS, and the paths only Windows writes. The

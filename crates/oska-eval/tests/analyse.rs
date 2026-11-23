@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oska-eval analyse`: how an agent worked, read from a recorded Claude
 //! Code `stream-json` transcript. Each case is a transcript under
 //! `tests/fixtures/analyse/`; the analysis is compared with

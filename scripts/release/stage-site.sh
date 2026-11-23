@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Put signed releases into a built site.
 #
 #   scripts/release/stage-site.sh <releases-dir> <site-dir> <public-key>

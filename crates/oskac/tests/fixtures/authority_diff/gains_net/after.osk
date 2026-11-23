@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `main` gains the network: a widening.
 
 fn main(io: Stdout, net: Net) -> Result<(), IoError> {

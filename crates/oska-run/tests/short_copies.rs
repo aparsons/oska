@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Fewer short copies of text (#572): `String.replace` with a
 //! replacement of the same length copies the text once and overwrites
 //! each match, `trim`, `slice` and a `replace` that finds nothing share

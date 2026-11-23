@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The checked program a backend runs (ADR 0007): what the checker
 //! exports beyond its diagnostics.
 

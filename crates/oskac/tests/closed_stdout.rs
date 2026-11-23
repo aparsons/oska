@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `oskac`'s own output into a pipe whose reader has gone, as in
 //! `oskac check --format=json | head -1`: it ends quietly with 0, as a
 //! program it runs does (#86), rather than panicking.

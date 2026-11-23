@@ -9,10 +9,10 @@
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":1983,"end":1997},"source":"Fs","result":"FsRead","root":null},
-    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":1983,"end":2018},"source":"FsRead","result":"DirRead","root":"notes"},
-    {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":2036,"end":2051},"source":"Fs","result":"FsWrite","root":null},
-    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":2036,"end":2073},"source":"FsWrite","result":"DirWrite","root":"drafts"}
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":2022,"end":2036},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":2022,"end":2057},"source":"FsRead","result":"DirRead","root":"notes"},
+    {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":2075,"end":2090},"source":"Fs","result":"FsWrite","root":null},
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/toolset_split.osk","span":{"start":2075,"end":2112},"source":"FsWrite","result":"DirWrite","root":"drafts"}
   ],
   "verdict": "ok"
 }

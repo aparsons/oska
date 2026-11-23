@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Validates the evaluation task set: every task in eval/tasks is well formed,
 # and each active task's hidden checks pass its reference solution and catch
 # its insecure one, run with the oskac just built. Offline: no model is

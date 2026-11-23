@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `std.mcp`'s `Toolset`, `ToolSpec` and `ToolResult` (#249), run on both
 //! backends through the differential harness: a toolset lists its specs,
 //! with a title and an input schema, and its `call` gives text, JSON and

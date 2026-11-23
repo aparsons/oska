@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The fixture for `oskac test`: one test that passes, one that fails,
 // one that panics, and one integration test, which runs only with
 // `--integration`. The first writes to stderr through `dbg`.

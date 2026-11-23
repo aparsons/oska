@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Result discipline (#37): a `Result` can't be dropped silently, and `?`
 //! propagates a failure only into a function that returns the same kind.
 

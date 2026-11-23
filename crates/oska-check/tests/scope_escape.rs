@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A closure that captures a `Scope` handle is scoped: like the handle
 //! itself, it cannot outlive its `scope` block (issue #44, `E0292`).
 

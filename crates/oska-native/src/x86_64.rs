@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Instruction selection for x86_64; `encode.rs` encodes each instruction.
 //!
 //! Each temporary has one location for the whole function, which

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native closures and function values (ticket #135), run on both
 //! backends through the differential harness (seam 1): closures capturing
 //! by value, `cap fn` values, named functions and methods used as values,

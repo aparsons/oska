@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Prints one of the two Unicode tables in crates/oska-check/src/std/rt.osk,
 // as the Rust that compiles this file knows Unicode. scripts/bump-rust.sh
 // builds it with `rustc +<version>` and splices the output into rt.osk.

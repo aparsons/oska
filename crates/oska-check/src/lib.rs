@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Type checker for the Oska programming language.
 //!
 //! [`check_module`] checks one source file against the embedded

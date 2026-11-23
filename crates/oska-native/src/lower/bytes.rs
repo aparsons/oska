@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Bytes`, natively: its mutating methods. `layout.rs` says how a bytes
 //! object is laid out, and `std.rt` implements every method (`rt.osk`,
 //! "Bytes"); `intrinsics.rs` says which function each calls.

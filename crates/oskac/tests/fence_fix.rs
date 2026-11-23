@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A module wrapped in one Markdown fence (spec #446, ticket #449).
 //!
 //! A model often wraps its code in a fence. The checker still refuses it

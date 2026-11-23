@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Intrinsics for `Bytes`, the prelude's packed buffer of bytes, and
 //! `String.to_bytes`.
 //!

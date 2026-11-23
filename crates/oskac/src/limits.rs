@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The run limits' flags (spec #446): `oskac run --max-steps=<n>`,
 //! `--timeout=<ms>`, `--max-output=<bytes>` and `--max-memory=<bytes>`,
 //! read into the [`Limits`] both backends take (`oska_check::limits`,

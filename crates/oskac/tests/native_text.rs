@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native text (ticket #131), run on both backends through the
 //! differential harness (seam 1): every `String` method that does not
 //! return a `List`, `String` equality, `Path` construction and the

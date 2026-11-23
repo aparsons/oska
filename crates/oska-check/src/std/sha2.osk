@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `std.sha2`: the SHA-256 and SHA-512 hash functions of FIPS 180-4, in
 // one call (`sha2.sha256(data)`) or a piece at a time (`Sha256`,
 // `Sha512`). A module sees them only after `use std.sha2`.

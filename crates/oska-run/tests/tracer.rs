@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The tracer: a capability's method called with a string literal prints,
 //! and a program with checker diagnostics never starts.
 

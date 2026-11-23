@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // `shout` vouches for untrusted text: a new audit site, which fails the
 // gate although the function is still pure.
 

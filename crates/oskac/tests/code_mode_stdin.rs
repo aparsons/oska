@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Source from standard input (#447, spec #446): `oskac check -` and
 //! `oskac run -` read one module from standard input, as an embedder
 //! pipes a snippet, and report it as the same bytes in a file, named

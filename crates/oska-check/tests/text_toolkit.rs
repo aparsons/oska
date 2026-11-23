@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The text toolkit (#72): `starts_with`, `ends_with`, `replace`, `join`,
 //! `chars`, `slice`, and `repeat` on `String`, and `DirRead.list_dir`.
 //! Every text-returning method follows the trust of its inputs.

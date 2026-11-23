@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Assemble a release directory from the binaries CI built.
 #
 #   SOURCE_DATE_EPOCH=<seconds> \

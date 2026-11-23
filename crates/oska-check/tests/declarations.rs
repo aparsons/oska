@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Declaration rules (#35): `cap` on capability-bearing types, `main` as
 //! the root of authority, capitalization (ADR 0005), recursive types, and
 //! `dbg` under `--release`.

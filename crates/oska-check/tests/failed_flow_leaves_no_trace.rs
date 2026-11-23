@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A failed flow leaves no trace (#503): when a value cannot flow where a
 //! type is expected, the checker reports one mismatch and carries on as
 //! if the flow had never been tried. No inference variable it solved on
