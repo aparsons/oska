@@ -14,7 +14,10 @@ fn fetch(host: HostConnect, random: Random, clock: Clock) -> Result<Int, http.Ht
     Ok(response.status)
 }
 
-fn main(io: Stdout, net: Net, random: Random, clock: Clock) -> Result<(), IoError> {
+fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Result<(), IoError> {
+    if !args.get(1).is_some() {
+        return io.println("pass any argument to fetch")
+    }
     match fetch(net.restrict_to("oskalang.dev", 443), random, clock) {
         Ok(status) => io.println("status {status}")
         Err(error) => io.println("failed: {error}")

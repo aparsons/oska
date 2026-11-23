@@ -13,7 +13,10 @@ fn fetch_banner(host: HostConnect) -> Result<Int, IoError> {
     Ok(banner.len())
 }
 
-fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+fn main(io: Stdout, net: Net, args: Args) -> Result<(), IoError> {
+    if !args.get(1).is_some() {
+        return io.println("pass any argument to connect")
+    }
     let host = net.restrict_to("mail.example.com", 25)
     let name = host.name()
     let size = fetch_banner(host)?
@@ -26,7 +29,7 @@ The signature of `fetch_banner` is its promise: it talks to the one host it was 
 ```console cmd=check
 fn fetch_banner: HostConnect (host)
 fn main: Stdout (io), Net (net)
-  main.osk:8:16: Net -> HostConnect: restrict_to "mail.example.com:25" (bytes 231..270)
+  main.osk:11:16: Net -> HostConnect: restrict_to "mail.example.com:25" (bytes 339..378)
 ```
 
 ## The host is a structural position
@@ -57,7 +60,10 @@ fn serve_once(listen: LoopbackListen) -> Result<(), IoError> {
     Ok(())
 }
 
-fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+fn main(io: Stdout, net: Net, args: Args) -> Result<(), IoError> {
+    if !args.get(1).is_some() {
+        return io.println("pass any argument to serve")
+    }
     let listen = net.listen_only().restrict_to_loopback(0)
     io.println("serving on 127.0.0.1")?
     serve_once(listen)
@@ -67,8 +73,8 @@ fn main(io: Stdout, net: Net) -> Result<(), IoError> {
 ```console cmd=check
 fn serve_once: LoopbackListen (listen)
 fn main: Stdout (io), Net (net)
-  main.osk:9:18: Net -> NetListen: listen_only (bytes 242..259)
-  main.osk:9:18: NetListen -> LoopbackListen: restrict_to_loopback "loopback:0" (bytes 242..283)
+  main.osk:12:18: Net -> NetListen: listen_only (bytes 348..365)
+  main.osk:12:18: NetListen -> LoopbackListen: restrict_to_loopback "loopback:0" (bytes 348..389)
 ```
 
 ## Testing

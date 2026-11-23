@@ -15,7 +15,10 @@ fn ping(host: HostConnect, random: Random, clock: Clock) -> Result<Int, tls.TlsE
     Ok(reply.len())
 }
 
-fn main(io: Stdout, net: Net, random: Random, clock: Clock) -> Result<(), IoError> {
+fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Result<(), IoError> {
+    if !args.get(1).is_some() {
+        return io.println("pass any argument to connect")
+    }
     match ping(net.restrict_to("oskalang.dev", 443), random, clock) {
         Ok(count) => io.println("reply of {count} bytes")
         Err(error) => io.println("failed: {error}")
