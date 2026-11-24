@@ -2075,11 +2075,17 @@ pub fn bytes_new() -> Bytes {
 // and for one past `max_bytes` the word -1, in place of a buffer, for the
 // generated code to panic (`P0042`, `P0043`).
 pub fn bytes_zeroed(length: Int) -> Bytes {
+    rt_mem_as_bytes(bytes_zeroed_word(length))
+}
+
+// The buffer `bytes_zeroed` makes, or its refusal word, as an `Int`, so
+// `random_secure_bytes` shares the one check without holding a `Bytes`.
+fn bytes_zeroed_word(length: Int) -> Int {
     if length < 0 {
-        return rt_mem_as_bytes(0)
+        return 0
     }
     if length > max_bytes() {
-        return rt_mem_as_bytes(-1)
+        return -1
     }
     let room = bytes_room(length)
     let size = 24 + room
@@ -2103,7 +2109,7 @@ pub fn bytes_zeroed(length: Int) -> Bytes {
         }
     }
     rt_mem_store64(rt_mem_add(object, 8), length)
-    rt_mem_as_bytes(object)
+    object
 }
 
 // The value of the hexadecimal digit `c`, in either case, or -1.
@@ -4065,14 +4071,12 @@ pub fn random_next_int(random: Random) -> Int {
 // length and -1 one past `max_bytes`. No secure source ends the program:
 // there is no guessable fallback.
 pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
-    if length < 0 {
-        return rt_mem_as_secret_bytes(0)
+    let bytes = bytes_zeroed_word(length)
+    if bytes == 0 || bytes == -1 {
+        // `bytes_zeroed`'s own refusal (`P0042`, `P0043`), passed on.
+        return rt_mem_as_secret_bytes(bytes)
     }
-    if length > max_bytes() {
-        return rt_mem_as_secret_bytes(-1)
-    }
-    let bytes = bytes_zeroed(length)
-    let data = bytes_data(rt_mem_bytes(bytes))
+    let data = bytes_data(bytes)
     if faking() {
         var word = 0
         var i = 0
@@ -4107,9 +4111,7 @@ pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
         }
     }
     let object = alloc(16)
-    let held = rt_mem_bytes(bytes)
-    retain(held)
-    rt_mem_store64(rt_mem_add(object, 8), held)
+    rt_mem_store64(rt_mem_add(object, 8), bytes)
     rt_mem_as_secret_bytes(object)
 }
 
