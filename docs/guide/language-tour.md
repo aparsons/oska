@@ -376,6 +376,6 @@ A `test "name" { ... }` item is a top-level test with the built-in value `t`. Se
 
 These are gaps in this release, so do not write programs that depend on them:
 
-- `std.sql` and `std.proc` check but do not run (`E0371`). `Net` runs on both backends; natively a host is an IP address or `localhost`, and any other name is `host not found` natively, because `connect()` does not use `std.dns` yet (tracked in a follow-up issue); the interpreter resolves names with `std.dns`.
+- `std.sql` and `std.proc` check but do not run (`E0371`). `Net` runs on both backends; a host is an IP address or a DNS name, which both backends resolve with `std.dns`.
 - Packages have no dependencies yet, no re-exports and no renaming of imports. See [packages and modules](packages.md).
 - No formatter or package manager.
