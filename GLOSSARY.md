@@ -246,6 +246,18 @@ _Avoid_: syscall wrapper
 The tests that run every program of a corpus on both the interpreter and the native backend and fail on any difference in output, exit code, panic or files written.
 _Avoid_: parity tests, golden tests (for this suite)
 
+**Float**:
+The number type for fractions, IEEE 754 binary64. Every result of every operation on it is a pinned result (ADR 0027). There is no implicit conversion to or from `Int`.
+_Avoid_: double, real, decimal
+
+**Canonical NaN**:
+The one NaN that every `Float` operation makes. `to_bits` returns its bit pattern, so no program can see which operation produced it.
+_Avoid_: NaN payload, quiet NaN (for this concept)
+
+**Pinned result**:
+A result that the spec fixes down to the bits, so it is the same on the interpreter and on every supported platform. All `Float` operations and all `std.math` functions have one; each `std.math` function is pinned in the fast tier and, where it has one, in the exact tier (ADR 0027).
+_Avoid_: deterministic result, approximate result
+
 **Obfuscation pass**:
 A native-backend pass, chosen with `oskac build --obfuscate`, that reshapes a compiled program's machine code to raise the cost of static analysis: encrypted string and constant literals decrypted on first use, flattened control flow, opaque predicates, junk instructions and reordered basic blocks. It never changes a program's output, exit code or panics; the differential suite runs with it on.
 _Avoid_: packer, protector (for this concept; "stack protector" is a different, always-on mitigation)
