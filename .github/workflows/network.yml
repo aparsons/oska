@@ -1,0 +1,33 @@
+name: Network checks
+
+# Two checks need the real internet and never run in ci.yml (#696, spec #659):
+# the real-host TLS tests (`oskac test --integration`, crates/oskac/tests/tls/
+# real_hosts.osk) and the root-store match test (scripts/x509-roots/verify.sh,
+# which checks the pinned roots against the NSS release they name). Weekly and
+# by hand. There is no pull_request trigger, so a fork's pull request never
+# runs it, and it holds no secrets: it reads public hosts with a read-only
+# token and writes nothing.
+
+on:
+  schedule:
+    - cron: "43 5 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  network:
+    # A fork that enables schedules has no reason to run this.
+    if: github.repository == 'aparsons/oska'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Root store matches its NSS release
+        run: bash scripts/x509-roots/verify.sh
+      - name: Real-host TLS tests
+        run: cargo run --locked -p oskac -- test crates/oskac/tests/tls/real_hosts.osk --integration
