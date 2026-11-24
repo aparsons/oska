@@ -10,16 +10,15 @@
 //!
 //! A failure is worded by [`describe`], from its kind and never from the
 //! system's own text or error number, so a program's output does not depend
-//! on the operating system. Name resolution is the system's for now:
-//! `std.dns`, the Oska stub resolver (ADR 0026), takes it over when the
-//! native sockets and the TLS client need it. [`exchange_datagram`] is the
-//! UDP half that `std.dns` asks name servers with.
+//! on the operating system. This module resolves no name: the caller
+//! resolves one with `std.dns`, the Oska stub resolver (ADR 0026), and
+//! connects to the addresses. [`exchange_datagram`] is the UDP half that
+//! `std.dns` asks name servers with.
 
 use std::cell::Cell;
 use std::io::{self, Read, Write};
 use std::net::{
-    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs,
-    UdpSocket,
+    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket,
 };
 use std::time::{Duration, Instant};
 
@@ -53,11 +52,23 @@ pub struct NetStream {
 }
 
 impl NetStream {
-    /// Connect to `host` at `port`, trying each address the name resolves
-    /// to in turn, each for at most [`CONNECT_TIMEOUT`]. `host` is a DNS
-    /// name, an IPv4 literal or an IPv6 literal, and `port` is 1 to 65535;
-    /// anything else is an error that says so, and no socket is opened.
+    /// Connect to `host` at `port`. `host` is an IPv4 or IPv6 literal and
+    /// `port` is 1 to 65535; anything else is an error that says so, and no
+    /// socket is opened. A DNS name is never resolved here, by the system's
+    /// resolver or any other: the caller resolves it (`std.dns`) and passes
+    /// the addresses to [`NetStream::connect_resolved`], so a name given
+    /// here is `host not found`.
     pub fn connect(host: &str, port: i128) -> io::Result<NetStream> {
+        NetStream::connect_resolved(host, &[], port)
+    }
+
+    /// Connect to `host` at `port` through `addresses`, the address
+    /// literals its name resolved to, each tried in turn for at most
+    /// [`CONNECT_TIMEOUT`] and all of them for at most
+    /// [`CONNECT_TOTAL_TIMEOUT`]. For an IP literal `host`, `addresses` is
+    /// ignored and the literal is the one address. `host` is only what the
+    /// errors name.
+    pub fn connect_resolved(host: &str, addresses: &[String], port: i128) -> io::Result<NetStream> {
         let port = check_port(port, 1)?;
         let address = parse_host(host)?;
         let failed = |why: &str| {
@@ -68,16 +79,26 @@ impl NetStream {
         };
         let candidates: Vec<SocketAddr> = match address {
             Some(ip) => vec![SocketAddr::new(ip, port)],
-            None => (host, port)
-                .to_socket_addrs()
-                .map(Iterator::collect)
-                .map_err(|_| failed("host not found"))?,
+            None => addresses
+                .iter()
+                .filter_map(|text| text.parse::<IpAddr>().ok())
+                .map(|ip| SocketAddr::new(ip, port))
+                .collect(),
         };
         match connect_any(&candidates, CONNECT_TIMEOUT, CONNECT_TOTAL_TIMEOUT) {
             Ok(socket) => NetStream::new(socket),
             Err(Some(err)) => Err(failed(describe(&err))),
             Err(None) => Err(failed("host not found")),
         }
+    }
+
+    /// Whether `host` is a DNS name that needs resolving, rather than an IP
+    /// literal; an error for text that is neither, as [`NetStream::connect`]
+    /// words it. The port is checked too, so a bad one is refused before
+    /// any name server is asked.
+    pub fn needs_resolving(host: &str, port: i128) -> io::Result<bool> {
+        check_port(port, 1)?;
+        Ok(parse_host(host)?.is_none())
     }
 
     fn new(socket: TcpStream) -> io::Result<NetStream> {

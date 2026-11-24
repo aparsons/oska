@@ -57,6 +57,7 @@ mod net;
 mod ops;
 mod panics;
 mod prng;
+mod resolve;
 mod secrets;
 pub mod snapshots;
 mod support;
@@ -69,6 +70,7 @@ pub use host::{FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEE
 pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;
 pub use panics::codes;
+pub use resolve::Files as NameFiles;
 pub use testing::{
     escape_control, test, test_duration_ms, test_program, test_refusal, test_result, Filtered,
     TestOptions, TestReport, TestResult, TestStatus,
