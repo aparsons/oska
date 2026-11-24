@@ -339,7 +339,11 @@ fn no_module_matches_an_error_by_its_message_text() {
                 || code.contains("message.ends_with(")
                 || code.contains("message.starts_with(")
                 || code.contains("message ==");
-            assert!(!reads_message, "{name}:{}: matches a message: {line}", n + 1);
+            assert!(
+                !reads_message,
+                "{name}:{}: matches a message: {line}",
+                n + 1
+            );
         }
     }
 }
