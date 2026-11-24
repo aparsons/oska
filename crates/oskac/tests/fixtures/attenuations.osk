@@ -84,6 +84,25 @@ impl Publish for Site<String> {
     }
 }
 
+// The network narrows by host and port, and a listener by port, and each is
+// listed with its address (ADR 0025). A host or port known only at run
+// time is computed.
+fn site(net: Net) -> HostConnect {
+    net.connect_only().restrict_to("oskalang.dev", 443)
+}
+
+fn local(net: NetConnect) -> HostConnect {
+    net.restrict_to("::1", 8080)
+}
+
+fn pick(net: NetConnect, host: String, port: Int) -> HostConnect {
+    net.restrict_to(host, port)
+}
+
+fn serve(net: NetListen) -> LoopbackListen {
+    net.restrict_to_loopback(0)
+}
+
 // A test narrows too, and is listed under its name (#150).
 test "reads a note" {
     let notes = t.fs.read_only().restrict_to("notes")

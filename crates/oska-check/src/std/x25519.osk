@@ -1,0 +1,357 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.x25519`: the X25519 key agreement of RFC 7748, section 5. A module
+// sees it only after `use std.x25519`. `x25519.public_key(scalar)` gives
+// the 32 bytes to send a peer, and `x25519.scalarmult(scalar, peer)` the
+// shared secret from the peer's 32 bytes.
+//
+// The scalar, every value computed from it and the result are secret:
+// held in secret integers and `Secret<Bytes>`, so no branch or memory
+// address depends on them. The ladder swaps its two working points with a
+// mask, not a branch, and the field arithmetic has no data-dependent
+// step. The peer's bytes are public, as is every length. A result leaves
+// as a `Secret<Bytes>`, which the caller exposes in its own code to put
+// a public key on the wire.
+//
+// A peer's point of small order (the all-zero point, for one) gives an
+// all-zero shared secret, as RFC 7748 allows. A protocol that must refuse
+// it (TLS 1.3 does) compares the result with `Bytes.zeroed(32)` by
+// `constant_time_eq`.
+//
+// Every function here is a pure function, and the module has no audit
+// site: no `expose()` and no `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by RFC 7748's test vectors (sections 5.2 and 6.1), on the
+// interpreter and natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+//
+// A field element mod p = 2^255 - 19 is a `List<Secret<U64>>` of ten limbs
+// in radix 2^25.5, as in `std.ed25519`: 26 bits for an even limb and 25 for
+// an odd one. There is no 128-bit integer, so products are 64 bits, and
+// every operation ends with `carry`, which keeps each limb below 2^26 (even)
+// or 2^25 (odd), except limb 1, below 2^25 + 2^16, so no sum of products
+// overflows. A secret integer wraps instead of panicking, so the bounds
+// are the arithmetic's to keep, and the tests hold them. There are no
+// negative limbs: `sub` adds 2p first.
+
+// The base point's u-coordinate, 9, as 32 little-endian bytes.
+fn base_u() -> Bytes {
+    var out = Bytes.zeroed(32)
+    out.set(0, 9)
+    out
+}
+
+// The 32 bytes that `scalar` and the base point give: the public key for
+// the secret `scalar`, or `None` unless `scalar` is 32 bytes. The scalar
+// is clamped as RFC 7748 says, so any 32 random bytes are a key.
+pub fn public_key(scalar: Secret<Bytes>) -> Option<Secret<Bytes>> {
+    scalarmult(scalar, base_u())
+}
+
+// The X25519 function of RFC 7748, section 5: `scalar` times the point
+// with u-coordinate `u`, as 32 bytes, in constant time. `None` unless the
+// scalar and `u` are each 32 bytes. The top bit of `u` is ignored, and a
+// `u` of p or more is reduced, as the RFC says. The scalar is clamped.
+pub fn scalarmult(scalar: Secret<Bytes>, u: Untrusted<Bytes>) -> Option<Secret<Bytes>> {
+    if scalar.len() != 32 || u.len() != 32 {
+        return None
+    }
+    let k = clamped(scalar)
+    let x1 = field_from_bytes(u)
+    var x2 = one()
+    var z2 = zero()
+    var x3 = x1
+    var z3 = one()
+    var swap: Secret<U64> = Secret.new(0)
+    var t = 254
+    while t >= 0 {
+        let bit = ((k.at(t / 8) >> (t % 8).to_u8()) & 1).to_u64()
+        swap = swap ^ bit
+        let mask = mask_of(swap)
+        let top = cswap(mask, x2, x3)
+        x2 = top.at(0)
+        x3 = top.at(1)
+        let bottom = cswap(mask, z2, z3)
+        z2 = bottom.at(0)
+        z3 = bottom.at(1)
+        swap = bit
+        let a = add(x2, z2)
+        let aa = mul(a, a)
+        let b = sub(x2, z2)
+        let bb = mul(b, b)
+        let e = sub(aa, bb)
+        let c = add(x3, z3)
+        let d = sub(x3, z3)
+        let da = mul(d, a)
+        let cb = mul(c, b)
+        let s = add(da, cb)
+        let r = sub(da, cb)
+        x3 = mul(s, s)
+        z3 = mul(x1, mul(r, r))
+        x2 = mul(aa, bb)
+        z2 = mul(e, add(aa, mul_121665(e)))
+        t = t - 1
+    }
+    let mask = mask_of(swap)
+    let top = cswap(mask, x2, x3)
+    let bottom = cswap(mask, z2, z3)
+    Some(field_to_bytes(mul(top.at(0), invert(bottom.at(0)))))
+}
+
+// `scalar` clamped (RFC 7748, section 5): the low three bits of the first
+// byte cleared, the top bit of the last cleared and the one below it set.
+fn clamped(scalar: Secret<Bytes>) -> Secret<Bytes> {
+    var out = Secret.new(Bytes.new())
+    for i in 0..32 {
+        let byte = scalar.at(i)
+        if i == 0 {
+            out.push(byte & 248)
+        } else if i == 31 {
+            out.push((byte & 127) | 64)
+        } else {
+            out.push(byte)
+        }
+    }
+    out
+}
+
+// All ones when the secret `bit` is 1 and all zeros when it is 0.
+fn mask_of(bit: Secret<U64>) -> Secret<U64> {
+    let none: Secret<U64> = Secret.new(0)
+    none - bit
+}
+
+// `a` and `b` swapped when `mask` is all ones and left alone when it is
+// zero, limb by limb, with no branch.
+fn cswap(mask: Secret<U64>, a: List<Secret<U64>>, b: List<Secret<U64>>) -> List<List<Secret<U64>>> {
+    var first: List<Secret<U64>> = List.new()
+    var second: List<Secret<U64>> = List.new()
+    for i in 0..10 {
+        let t = mask & (a.at(i) ^ b.at(i))
+        first.push(a.at(i) ^ t)
+        second.push(b.at(i) ^ t)
+    }
+    [first, second]
+}
+
+// ---- The field GF(2^255 - 19) -----------------------------------------------
+
+// The masks of a 26-bit and a 25-bit limb.
+const MASK26: U64 = 67108863
+const MASK25: U64 = 33554431
+
+fn zero() -> List<Secret<U64>> {
+    var out: List<Secret<U64>> = List.new()
+    for _ in 0..10 {
+        out.push(Secret.new(0))
+    }
+    out
+}
+
+fn one() -> List<Secret<U64>> {
+    var out: List<Secret<U64>> = List.new()
+    for i in 0..10 {
+        out.push(Secret.new(if i == 0 { 1 } else { 0 }))
+    }
+    out
+}
+
+// 2p, limb by limb: added before a subtraction, so no limb goes below 0.
+fn two_p() -> List<U64> {
+    [134217690, 67108862, 134217726, 67108862, 134217726, 67108862, 134217726, 67108862, 134217726, 67108862]
+}
+
+// The low 255 bits of the 32-byte little-endian `bytes`, as a field
+// element whose limbs are each below 2^26 or 2^25. The bytes are public;
+// limb `i` starts at bit `ceil(25.5 * i)` and is read from the 32 bits at
+// the byte holding it.
+fn field_from_bytes(bytes: Untrusted<Bytes>) -> List<Secret<U64>> {
+    let limbs: List<U64> = [
+        bytes.read_u32_le(0).to_u64() & MASK26,
+        (bytes.read_u32_le(3).to_u64() >> 2) & MASK25,
+        (bytes.read_u32_le(6).to_u64() >> 3) & MASK26,
+        (bytes.read_u32_le(9).to_u64() >> 5) & MASK25,
+        (bytes.read_u32_le(12).to_u64() >> 6) & MASK26,
+        bytes.read_u32_le(16).to_u64() & MASK25,
+        (bytes.read_u32_le(19).to_u64() >> 1) & MASK26,
+        (bytes.read_u32_le(22).to_u64() >> 3) & MASK25,
+        (bytes.read_u32_le(25).to_u64() >> 4) & MASK26,
+        (bytes.read_u32_le(28).to_u64() >> 6) & MASK25
+    ]
+    var out: List<Secret<U64>> = List.new()
+    for limb in limbs {
+        out.push(Secret.new(limb))
+    }
+    out
+}
+
+// The limbs `h`, of any size up to 2^63, carried so that each is below
+// 2^26 or 2^25 again, except limb 1, below 2^25 + 2^16. The carry out of
+// limb 9, worth 2^255, comes back into limb 0 as 19, as 2^255 = 19 mod p.
+fn carry(h: List<Secret<U64>>) -> List<Secret<U64>> {
+    var out: List<Secret<U64>> = List.new()
+    var c: Secret<U64> = Secret.new(0)
+    for i in 0..10 {
+        let limb = h.at(i) + c
+        if i % 2 == 0 {
+            out.push(limb & MASK26)
+            c = limb >> 26
+        } else {
+            out.push(limb & MASK25)
+            c = limb >> 25
+        }
+    }
+    let low = out.at(0) + c * 19
+    [
+        low & MASK26, out.at(1) + (low >> 26), out.at(2), out.at(3), out.at(4),
+        out.at(5), out.at(6), out.at(7), out.at(8), out.at(9)
+    ]
+}
+
+fn add(f: List<Secret<U64>>, g: List<Secret<U64>>) -> List<Secret<U64>> {
+    var h: List<Secret<U64>> = List.new()
+    for i in 0..10 {
+        h.push(f.at(i) + g.at(i))
+    }
+    carry(h)
+}
+
+// f - g, as f + 2p - g: each limb of `g` is below the same limb of 2p.
+fn sub(f: List<Secret<U64>>, g: List<Secret<U64>>) -> List<Secret<U64>> {
+    let two_p = two_p()
+    var h: List<Secret<U64>> = List.new()
+    for i in 0..10 {
+        h.push(f.at(i) + two_p.at(i) - g.at(i))
+    }
+    carry(h)
+}
+
+// f * 121665, the curve constant (A - 2) / 4 of RFC 7748.
+fn mul_121665(f: List<Secret<U64>>) -> List<Secret<U64>> {
+    var h: List<Secret<U64>> = List.new()
+    for i in 0..10 {
+        h.push(f.at(i) * 121665)
+    }
+    carry(h)
+}
+
+// f * g. Limb `i` of `f` times limb `j` of `g` lands at limb `i + j`,
+// doubled when `i` and `j` are both odd, as their bit offsets then sum to
+// one more than that limb's; a product past limb 9 comes back times 19.
+// With limbs below 2^26, each sum is below 2^60.
+fn mul(f: List<Secret<U64>>, g: List<Secret<U64>>) -> List<Secret<U64>> {
+    let f0 = f.at(0)
+    let f1 = f.at(1)
+    let f2 = f.at(2)
+    let f3 = f.at(3)
+    let f4 = f.at(4)
+    let f5 = f.at(5)
+    let f6 = f.at(6)
+    let f7 = f.at(7)
+    let f8 = f.at(8)
+    let f9 = f.at(9)
+    let g0 = g.at(0)
+    let g1 = g.at(1)
+    let g2 = g.at(2)
+    let g3 = g.at(3)
+    let g4 = g.at(4)
+    let g5 = g.at(5)
+    let g6 = g.at(6)
+    let g7 = g.at(7)
+    let g8 = g.at(8)
+    let g9 = g.at(9)
+    let f1_2 = f1 * 2
+    let f3_2 = f3 * 2
+    let f5_2 = f5 * 2
+    let f7_2 = f7 * 2
+    let f9_2 = f9 * 2
+    let g1_19 = g1 * 19
+    let g2_19 = g2 * 19
+    let g3_19 = g3 * 19
+    let g4_19 = g4 * 19
+    let g5_19 = g5 * 19
+    let g6_19 = g6 * 19
+    let g7_19 = g7 * 19
+    let g8_19 = g8 * 19
+    let g9_19 = g9 * 19
+    let h0 = f0 * g0 + f1_2 * g9_19 + f2 * g8_19 + f3_2 * g7_19 + f4 * g6_19 + f5_2 * g5_19 + f6 * g4_19 + f7_2 * g3_19 + f8 * g2_19 + f9_2 * g1_19
+    let h1 = f0 * g1 + f1 * g0 + f2 * g9_19 + f3 * g8_19 + f4 * g7_19 + f5 * g6_19 + f6 * g5_19 + f7 * g4_19 + f8 * g3_19 + f9 * g2_19
+    let h2 = f0 * g2 + f1_2 * g1 + f2 * g0 + f3_2 * g9_19 + f4 * g8_19 + f5_2 * g7_19 + f6 * g6_19 + f7_2 * g5_19 + f8 * g4_19 + f9_2 * g3_19
+    let h3 = f0 * g3 + f1 * g2 + f2 * g1 + f3 * g0 + f4 * g9_19 + f5 * g8_19 + f6 * g7_19 + f7 * g6_19 + f8 * g5_19 + f9 * g4_19
+    let h4 = f0 * g4 + f1_2 * g3 + f2 * g2 + f3_2 * g1 + f4 * g0 + f5_2 * g9_19 + f6 * g8_19 + f7_2 * g7_19 + f8 * g6_19 + f9_2 * g5_19
+    let h5 = f0 * g5 + f1 * g4 + f2 * g3 + f3 * g2 + f4 * g1 + f5 * g0 + f6 * g9_19 + f7 * g8_19 + f8 * g7_19 + f9 * g6_19
+    let h6 = f0 * g6 + f1_2 * g5 + f2 * g4 + f3_2 * g3 + f4 * g2 + f5_2 * g1 + f6 * g0 + f7_2 * g9_19 + f8 * g8_19 + f9_2 * g7_19
+    let h7 = f0 * g7 + f1 * g6 + f2 * g5 + f3 * g4 + f4 * g3 + f5 * g2 + f6 * g1 + f7 * g0 + f8 * g9_19 + f9 * g8_19
+    let h8 = f0 * g8 + f1_2 * g7 + f2 * g6 + f3_2 * g5 + f4 * g4 + f5_2 * g3 + f6 * g2 + f7_2 * g1 + f8 * g0 + f9_2 * g9_19
+    let h9 = f0 * g9 + f1 * g8 + f2 * g7 + f3 * g6 + f4 * g5 + f5 * g4 + f6 * g3 + f7 * g2 + f8 * g1 + f9 * g0
+    carry([h0, h1, h2, h3, h4, h5, h6, h7, h8, h9])
+}
+
+// f squared `n` times: f^(2^n).
+fn square_times(f: List<Secret<U64>>, n: Int) -> List<Secret<U64>> {
+    var h = f
+    for _ in 0..n {
+        h = mul(h, h)
+    }
+    h
+}
+
+// 1 / f, as f^(p - 2) = f^(2^255 - 21), by the addition chain of ref10; 0
+// for 0. Each name `f_a_b` is f^(2^a - 2^b).
+fn invert(f: List<Secret<U64>>) -> List<Secret<U64>> {
+    let f2 = mul(f, f)
+    let f9 = mul(f, square_times(f2, 2))
+    let f11 = mul(f2, f9)
+    let f_5_0 = mul(f9, mul(f11, f11))
+    let f_10_0 = mul(square_times(f_5_0, 5), f_5_0)
+    let f_20_0 = mul(square_times(f_10_0, 10), f_10_0)
+    let f_40_0 = mul(square_times(f_20_0, 20), f_20_0)
+    let f_50_0 = mul(square_times(f_40_0, 10), f_10_0)
+    let f_100_0 = mul(square_times(f_50_0, 50), f_50_0)
+    let f_200_0 = mul(square_times(f_100_0, 100), f_100_0)
+    let f_250_0 = mul(square_times(f_200_0, 50), f_50_0)
+    mul(square_times(f_250_0, 5), f11)
+}
+
+// The canonical 32-byte little-endian encoding of `f`, below p, with the
+// top bit clear, in constant time.
+fn field_to_bytes(f: List<Secret<U64>>) -> Secret<Bytes> {
+    // After two carries every limb is below its 2^26 or 2^25, so f is
+    // below 2^255, and f is at least p exactly when f + 19 reaches 2^255.
+    let h = carry(carry(f))
+    var q: Secret<U64> = Secret.new(19)
+    for i in 0..10 {
+        q = (h.at(i) + q) >> (if i % 2 == 0 { 26 } else { 25 })
+    }
+    // Then f - p is f + 19 less the 2^255 bit, which the last mask drops.
+    var limbs: List<Secret<U64>> = List.new()
+    var c = q * 19
+    for i in 0..10 {
+        let limb = h.at(i) + c
+        if i % 2 == 0 {
+            limbs.push(limb & MASK26)
+            c = limb >> 26
+        } else {
+            limbs.push(limb & MASK25)
+            c = limb >> 25
+        }
+    }
+    // Pack the limbs' 255 bits, eight at a time, least significant first.
+    var out = Secret.new(Bytes.new())
+    var acc: Secret<U64> = Secret.new(0)
+    var bits: U64 = 0
+    for i in 0..10 {
+        acc = acc | (limbs.at(i) << bits)
+        bits = bits + (if i % 2 == 0 { 26 } else { 25 })
+        while bits >= 8 {
+            out.push((acc & 255).wrapping_to_u8())
+            acc = acc >> 8
+            bits = bits - 8
+        }
+    }
+    out.push(acc.wrapping_to_u8())
+    out
+}

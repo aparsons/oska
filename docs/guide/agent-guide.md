@@ -157,7 +157,7 @@ Using Claude Code? Install the `oska` plugin instead of copying the hook setting
 - **Newlines end statements.** There is no `;`.
 - **Interpolation holds only a name or a field path.** Compute with `let` first. In a method the path may start with `self`, as in `"{self.balance}"`.
 - **Contracts are enforced.** `requires` and `ensures` run on every call, in every build. `P0006` points at the call that broke a `requires`, so fix the caller. `P0007` points at the `ensures` clause, so fix the function. A trait method's contract is declared on the trait, not on its impls (`E0218`), and not on `main` (`E0219`).
-- **Known gaps in this release:** `Net`, `std.sql`, and `std.proc` check but do not run. See [troubleshooting](troubleshooting.md#by-symptom).
+- **Known gaps in this release:** `std.sql` and `std.proc` check but do not run, and `Net` runs on the interpreter only (`oskac run --interpret`). See [troubleshooting](troubleshooting.md#by-symptom).
 - **Packages.** A program can be one file or a package: an `oska.toml` and modules under `src/`, imported with `use pkg.a.b`. Give `oskac` the package directory (or no path, in it). Items are private to their module until marked `pub(pkg)` or `pub`; `E0206`'s fix does it. There are no dependencies, re-exports or renaming yet. See [packages and modules](packages.md).
 - **`dbg` writes to standard error** and returns its argument.
 

@@ -73,6 +73,8 @@ pub enum Check {
     Secret,
     /// `Bytes.zeroed`: `P0042` on the word 0, `P0043` on -1.
     Zeroed,
+    /// `Random.secure_bytes`: as `Zeroed`, the capability first.
+    SecureBytes,
     /// `Bytes.slice`: `P0042` on the word 0.
     BytesSlice,
     /// `Bytes.set`: `P0002` on the word 0.
@@ -115,7 +117,15 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::Checked("bytes_select", Check::BytesSelect),
     ),
     ("Clock.now_millis", Prelude::Runtime("clock_now_millis")),
+    (
+        "NetConnect.system_name_servers",
+        Prelude::Runtime("net_system_name_servers"),
+    ),
     ("Random.next_int", Prelude::Runtime("random_next_int")),
+    (
+        "Random.secure_bytes",
+        Prelude::Checked("random_secure_bytes", Check::SecureBytes),
+    ),
     ("Budget.limit", Prelude::Runtime("budget_limit")),
     ("Budget.remaining", Prelude::Runtime("budget_remaining")),
     ("Budget.spent", Prelude::Runtime("budget_spent")),
@@ -231,6 +241,36 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         "ApprovalError.to_string",
         Prelude::Runtime("approval_error_to_string"),
     ),
+    // The network (ADR 0025). `Net`, `NetConnect` and `NetListen` hold
+    // nothing, so narrowing one to the other is the identity.
+    ("Net.connect_only", Prelude::Identity),
+    ("Net.listen_only", Prelude::Identity),
+    ("Net.restrict_to", Prelude::Runtime("net_restrict_to")),
+    (
+        "NetConnect.restrict_to",
+        Prelude::Runtime("net_restrict_to"),
+    ),
+    (
+        "NetListen.restrict_to_loopback",
+        Prelude::Runtime("net_restrict_to_loopback"),
+    ),
+    ("HostConnect.connect", Prelude::Runtime("host_connect")),
+    ("HostConnect.name", Prelude::Runtime("host_name")),
+    ("HostConnect.port", Prelude::Runtime("host_port")),
+    ("LoopbackListen.accept", Prelude::Runtime("loopback_accept")),
+    ("LoopbackListen.port", Prelude::Runtime("loopback_port")),
+    ("Connection.send", Prelude::Runtime("connection_send")),
+    (
+        "Connection.send_bytes",
+        Prelude::Runtime("connection_send_bytes"),
+    ),
+    ("Connection.receive", Prelude::Runtime("connection_receive")),
+    (
+        "Connection.receive_bytes",
+        Prelude::Runtime("connection_receive_bytes"),
+    ),
+    ("Connection.host", Prelude::Runtime("connection_host")),
+    ("Connection.close", Prelude::Runtime("connection_close")),
     ("Bytes.new", Prelude::Runtime("bytes_new")),
     (
         "Bytes.zeroed",
@@ -440,8 +480,23 @@ pub enum Sys {
     Getpid,
     Kill,
     Exit,
-    // Windows' own calls, one per kernel32 or bcryptprimitives function
-    // (ADR 0020): no other platform has them.
+    // The sockets of spec #228: the BSD calls of their names, and `poll`,
+    // which is Linux's `ppoll` there. Linux's `Accept` is `accept4`,
+    // `Send` is `sendto` and `Recv` is `recvfrom`, with the arguments
+    // those take beyond the neutral ones.
+    Socket,
+    Connect,
+    Bind,
+    Listen,
+    Accept,
+    Getsockname,
+    Getsockopt,
+    Setsockopt,
+    Send,
+    Recv,
+    Poll,
+    // Windows' own calls, one per kernel32, ntdll, bcryptprimitives or
+    // iphlpapi function (ADR 0020, ADR 0026): no other platform has them.
     GetStdHandle,
     WriteFile,
     ReadFile,
@@ -464,6 +519,11 @@ pub enum Sys {
     StackGuarantee,
     SystemTime,
     ProcessPrng,
+    // `ws2_32.dll`'s calls that no other platform has.
+    WsaStartup,
+    CloseSocket,
+    IoctlSocket,
+    GetNetworkParams,
 }
 
 /// What the backend gives `std.rt` for a target platform: how its
@@ -635,6 +695,15 @@ fn linux_call(call: Sys, number: fn(Sys) -> Option<u16>) -> OsCall {
     let extra_args: &'static [i64] = match call {
         Sys::Random => &[0],
         Sys::Sigaction => &[0, 8],
+        // accept4(fd, 0, 0, flags): no flags.
+        Sys::Accept => &[0],
+        // sendto(fd, buf, count, flags, 0, 0): `MSG_NOSIGNAL`, so a send
+        // to a closed connection fails with `EPIPE` and raises no signal.
+        Sys::Send => &[16384, 0, 0],
+        // recvfrom(fd, buf, count, 0, 0, 0): no flags, no sender.
+        Sys::Recv => &[0, 0, 0],
+        // ppoll(entries, count, timeout, 0, 8): no signal mask, of 8 bytes.
+        Sys::Poll => &[0, 8],
         _ => &[],
     };
     OsCall::Trap { number, extra_args }
@@ -672,6 +741,17 @@ fn linux_aarch64_syscall(call: Sys) -> Option<u16> {
         Sys::Getpid => 172,
         Sys::Kill => 129,
         Sys::Exit => 94,
+        Sys::Socket => 198,
+        Sys::Connect => 203,
+        Sys::Bind => 200,
+        Sys::Listen => 201,
+        Sys::Accept => 242,
+        Sys::Getsockname => 204,
+        Sys::Getsockopt => 209,
+        Sys::Setsockopt => 208,
+        Sys::Send => 206,
+        Sys::Recv => 207,
+        Sys::Poll => 73,
         // Windows' own: absent (`linux_call`).
         _ => return None,
     })
@@ -718,6 +798,17 @@ fn linux_x86_64_syscall(call: Sys) -> Option<u16> {
         Sys::Getpid => 39,
         Sys::Kill => 62,
         Sys::Exit => 231,
+        Sys::Socket => 41,
+        Sys::Connect => 42,
+        Sys::Bind => 49,
+        Sys::Listen => 50,
+        Sys::Accept => 288,
+        Sys::Getsockname => 51,
+        Sys::Getsockopt => 55,
+        Sys::Setsockopt => 54,
+        Sys::Send => 44,
+        Sys::Recv => 45,
+        Sys::Poll => 271,
         _ => return None,
     })
 }
@@ -859,10 +950,36 @@ const EXIT: Import = Import {
     ..plain("__exit", 1)
 };
 
+const SOCKET: Import = plain("_socket", 3);
+const CONNECT: Import = plain("_connect", 3);
+const BIND: Import = plain("_bind", 3);
+const LISTEN: Import = plain("_listen", 2);
+const ACCEPT: Import = plain("_accept", 3);
+const GETSOCKNAME: Import = plain("_getsockname", 3);
+const GETSOCKOPT: Import = plain("_getsockopt", 5);
+const SETSOCKOPT: Import = plain("_setsockopt", 5);
+/// `send(fd, buf, count, flags)`: no flags. A write to a closed connection
+/// fails with `EPIPE` because the runtime ignores `SIGPIPE`.
+const SEND: Import = Import {
+    wide: true,
+    fixed: 4,
+    extra_args: &[0],
+    ..plain("_send", 3)
+};
+/// `recv(fd, buf, count, flags)`: no flags.
+const RECV: Import = Import {
+    wide: true,
+    fixed: 4,
+    extra_args: &[0],
+    ..plain("_recv", 3)
+};
+/// `poll(entries, count, milliseconds)`.
+const POLL: Import = plain("_poll", 3);
+
 /// Every function a macOS executable imports from `libSystem`: always
 /// all of them, whatever the program calls, so the import table depends
 /// on the target alone. [`ERROR`] is first ([`Platform::errno`]).
-const MACOS_IMPORTS: [&Import; 24] = [
+const MACOS_IMPORTS: [&Import; 35] = [
     &ERROR,
     &READ,
     &WRITE,
@@ -887,11 +1004,22 @@ const MACOS_IMPORTS: [&Import; 24] = [
     &GETPID,
     &KILL,
     &EXIT,
+    &SOCKET,
+    &CONNECT,
+    &BIND,
+    &LISTEN,
+    &ACCEPT,
+    &GETSOCKNAME,
+    &GETSOCKOPT,
+    &SETSOCKOPT,
+    &SEND,
+    &RECV,
+    &POLL,
 ];
 
 /// [`MACOS_IMPORTS`] with the `$INODE64` functions of x86_64's
 /// `libSystem` in place of the plain ones, in the same slots.
-const MACOS_X86_64_IMPORTS: [&Import; 24] = [
+const MACOS_X86_64_IMPORTS: [&Import; 35] = [
     &ERROR,
     &READ,
     &WRITE,
@@ -916,6 +1044,17 @@ const MACOS_X86_64_IMPORTS: [&Import; 24] = [
     &GETPID,
     &KILL,
     &EXIT,
+    &SOCKET,
+    &CONNECT,
+    &BIND,
+    &LISTEN,
+    &ACCEPT,
+    &GETSOCKNAME,
+    &GETSOCKOPT,
+    &SETSOCKOPT,
+    &SEND,
+    &RECV,
+    &POLL,
 ];
 
 /// The `libSystem` function behind each call on macOS. A directory is
@@ -949,6 +1088,17 @@ fn macos_call(call: Sys) -> OsCall {
         Sys::Getpid => &GETPID,
         Sys::Kill => &KILL,
         Sys::Exit => &EXIT,
+        Sys::Socket => &SOCKET,
+        Sys::Connect => &CONNECT,
+        Sys::Bind => &BIND,
+        Sys::Listen => &LISTEN,
+        Sys::Accept => &ACCEPT,
+        Sys::Getsockname => &GETSOCKNAME,
+        Sys::Getsockopt => &GETSOCKOPT,
+        Sys::Setsockopt => &SETSOCKOPT,
+        Sys::Send => &SEND,
+        Sys::Recv => &RECV,
+        Sys::Poll => &POLL,
         _ => return OsCall::Absent,
     })
 }
@@ -979,11 +1129,15 @@ fn windows_only(call: Sys) -> bool {
             | Sys::StackGuarantee
             | Sys::SystemTime
             | Sys::ProcessPrng
+            | Sys::WsaStartup
+            | Sys::CloseSocket
+            | Sys::IoctlSocket
+            | Sys::GetNetworkParams
     )
 }
 
-/// `windows-x86_64`: every call is a function of `kernel32.dll` or
-/// `bcryptprimitives.dll`, through the import table, by the Windows x64
+/// `windows-x86_64`: every call is a function of `kernel32.dll`,
+/// `ntdll.dll`, `bcryptprimitives.dll` or `iphlpapi.dll`, through the import table, by the Windows x64
 /// convention, and a failure is `-GetLastError()` (ADR 0020). The POSIX
 /// calls are absent.
 pub const WINDOWS_X86_64: Platform = Platform {
@@ -1000,6 +1154,8 @@ pub const WINDOWS_X86_64: Platform = Platform {
 const KERNEL32: &str = "KERNEL32.dll";
 const NTDLL: &str = "ntdll.dll";
 const BCRYPTPRIMITIVES: &str = "bcryptprimitives.dll";
+const WS2_32: &str = "WS2_32.dll";
+const IPHLPAPI: &str = "IPHLPAPI.DLL";
 
 /// A function of `kernel32.dll` that takes `args` of the intrinsic's
 /// arguments, gives a `BOOL` and fails with `FALSE`.
@@ -1141,10 +1297,69 @@ const PROCESS_PRNG: Import = Import {
     ..win("ProcessPrng", 2)
 };
 
+/// A function of `ws2_32.dll` that takes `args` of the intrinsic's
+/// arguments and gives an `int`, `SOCKET_ERROR` (-1) on failure. Winsock's
+/// error is `GetLastError()`'s.
+const fn ws(symbol: &'static str, args: u8) -> Import {
+    Import {
+        library: WS2_32,
+        fails: Fails::MinusOne,
+        ..win(symbol, args)
+    }
+}
+/// `WSAStartup(version, &data)`: the error itself, 0 for none.
+const WSA_STARTUP: Import = Import {
+    fails: Fails::Never,
+    ..ws("WSAStartup", 2)
+};
+/// `socket(family, type, protocol)`: a `SOCKET`, `INVALID_SOCKET` (-1) on
+/// failure.
+const WS_SOCKET: Import = Import {
+    wide: true,
+    ..ws("socket", 3)
+};
+const WS_CONNECT: Import = ws("connect", 3);
+const WS_BIND: Import = ws("bind", 3);
+const WS_LISTEN: Import = ws("listen", 2);
+/// `accept(socket, NULL, NULL)`: a `SOCKET`.
+const WS_ACCEPT: Import = Import {
+    wide: true,
+    ..ws("accept", 3)
+};
+const WS_GETSOCKNAME: Import = ws("getsockname", 3);
+const WS_GETSOCKOPT: Import = ws("getsockopt", 5);
+const WS_SETSOCKOPT: Import = ws("setsockopt", 5);
+/// `send(socket, buf, count, 0)`.
+const WS_SEND: Import = Import {
+    fixed: 4,
+    extra_args: &[0],
+    ..ws("send", 3)
+};
+/// `recv(socket, buf, count, 0)`.
+const WS_RECV: Import = Import {
+    fixed: 4,
+    extra_args: &[0],
+    ..ws("recv", 3)
+};
+/// `WSAPoll(entries, count, milliseconds)`: the number of ready entries.
+const WS_POLL: Import = ws("WSAPoll", 3);
+const WS_CLOSE_SOCKET: Import = ws("closesocket", 1);
+/// `ioctlsocket(socket, command, &argument)`.
+const WS_IOCTL_SOCKET: Import = ws("ioctlsocket", 3);
+/// `GetNetworkParams(info, size)`: the system's DNS servers in a
+/// `FIXED_INFO`. It returns the Win32 error code itself (0 on success,
+/// 111 when `size` is too small), so `std.rt` reads the result as it is
+/// (ADR 0026).
+const GET_NETWORK_PARAMS: Import = Import {
+    library: IPHLPAPI,
+    fails: Fails::Never,
+    ..win("GetNetworkParams", 2)
+};
+
 /// Every function a Windows executable imports, `kernel32.dll`'s first:
 /// always all of them, so the import table depends on the target alone.
 /// [`GET_LAST_ERROR`] is first ([`Platform::errno`]).
-const WINDOWS_IMPORTS: [&Import; 24] = [
+const WINDOWS_IMPORTS: [&Import; 39] = [
     &GET_LAST_ERROR,
     &GET_STD_HANDLE,
     &WRITE_FILE,
@@ -1169,6 +1384,21 @@ const WINDOWS_IMPORTS: [&Import; 24] = [
     &NT_QUERY_DIRECTORY_FILE,
     &NT_STATUS_TO_ERROR,
     &PROCESS_PRNG,
+    &GET_NETWORK_PARAMS,
+    &WSA_STARTUP,
+    &WS_SOCKET,
+    &WS_CONNECT,
+    &WS_BIND,
+    &WS_LISTEN,
+    &WS_ACCEPT,
+    &WS_GETSOCKNAME,
+    &WS_GETSOCKOPT,
+    &WS_SETSOCKOPT,
+    &WS_SEND,
+    &WS_RECV,
+    &WS_POLL,
+    &WS_CLOSE_SOCKET,
+    &WS_IOCTL_SOCKET,
 ];
 
 /// The function behind each of Windows' own calls; the POSIX calls are
@@ -1197,6 +1427,21 @@ fn windows_call(call: Sys) -> OsCall {
         Sys::NtQueryInformationFile => &NT_QUERY_INFORMATION_FILE,
         Sys::NtQueryDirectoryFile => &NT_QUERY_DIRECTORY_FILE,
         Sys::ProcessPrng => &PROCESS_PRNG,
+        Sys::WsaStartup => &WSA_STARTUP,
+        Sys::Socket => &WS_SOCKET,
+        Sys::Connect => &WS_CONNECT,
+        Sys::Bind => &WS_BIND,
+        Sys::Listen => &WS_LISTEN,
+        Sys::Accept => &WS_ACCEPT,
+        Sys::Getsockname => &WS_GETSOCKNAME,
+        Sys::Getsockopt => &WS_GETSOCKOPT,
+        Sys::Setsockopt => &WS_SETSOCKOPT,
+        Sys::Send => &WS_SEND,
+        Sys::Recv => &WS_RECV,
+        Sys::Poll => &WS_POLL,
+        Sys::CloseSocket => &WS_CLOSE_SOCKET,
+        Sys::IoctlSocket => &WS_IOCTL_SOCKET,
+        Sys::GetNetworkParams => &GET_NETWORK_PARAMS,
         _ => return OsCall::Absent,
     })
 }
@@ -1280,6 +1525,24 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ),
     ("rt_sys_system_time", Runtime::Syscall(Sys::SystemTime)),
     ("rt_sys_process_prng", Runtime::Syscall(Sys::ProcessPrng)),
+    ("rt_sys_socket", Runtime::Syscall(Sys::Socket)),
+    ("rt_sys_connect", Runtime::Syscall(Sys::Connect)),
+    ("rt_sys_bind", Runtime::Syscall(Sys::Bind)),
+    ("rt_sys_listen", Runtime::Syscall(Sys::Listen)),
+    ("rt_sys_accept", Runtime::Syscall(Sys::Accept)),
+    ("rt_sys_getsockname", Runtime::Syscall(Sys::Getsockname)),
+    ("rt_sys_getsockopt", Runtime::Syscall(Sys::Getsockopt)),
+    ("rt_sys_setsockopt", Runtime::Syscall(Sys::Setsockopt)),
+    ("rt_sys_send", Runtime::Syscall(Sys::Send)),
+    ("rt_sys_recv", Runtime::Syscall(Sys::Recv)),
+    ("rt_sys_poll", Runtime::Syscall(Sys::Poll)),
+    ("rt_sys_wsa_startup", Runtime::Syscall(Sys::WsaStartup)),
+    ("rt_sys_close_socket", Runtime::Syscall(Sys::CloseSocket)),
+    ("rt_sys_ioctl_socket", Runtime::Syscall(Sys::IoctlSocket)),
+    (
+        "rt_sys_get_network_params",
+        Runtime::Syscall(Sys::GetNetworkParams),
+    ),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),
     ("rt_mem_load32", Runtime::Load(Width::W32)),
@@ -1303,6 +1566,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_text", Runtime::Identity),
     ("rt_mem_secret", Runtime::Identity),
     ("rt_mem_as_secret", Runtime::Identity),
+    ("rt_mem_as_secret_bytes", Runtime::Identity),
     ("rt_mem_as_io_error", Runtime::Identity),
     ("rt_mem_path", Runtime::Identity),
     ("rt_mem_as_path", Runtime::Identity),
@@ -1422,6 +1686,21 @@ mod tests {
             ("rt_sys_getpid", 172, 39, &[]),
             ("rt_sys_kill", 129, 62, &[]),
             ("rt_sys_exit", 94, 231, &[]),
+            ("rt_sys_socket", 198, 41, &[]),
+            ("rt_sys_connect", 203, 42, &[]),
+            ("rt_sys_bind", 200, 49, &[]),
+            ("rt_sys_listen", 201, 50, &[]),
+            // accept4(fd, 0, 0, flags): no flags.
+            ("rt_sys_accept", 242, 288, &[0]),
+            ("rt_sys_getsockname", 204, 51, &[]),
+            ("rt_sys_getsockopt", 209, 55, &[]),
+            ("rt_sys_setsockopt", 208, 54, &[]),
+            // sendto(fd, buf, count, MSG_NOSIGNAL, 0, 0).
+            ("rt_sys_send", 206, 44, &[0x4000, 0, 0]),
+            // recvfrom(fd, buf, count, 0, 0, 0).
+            ("rt_sys_recv", 207, 45, &[0, 0, 0]),
+            // ppoll(entries, count, timeout, 0, 8): no signal mask.
+            ("rt_sys_poll", 73, 271, &[0, 8]),
         ];
         for (name, implementation) in RUNTIME {
             let Runtime::Syscall(call) = implementation else {
@@ -1458,7 +1737,7 @@ mod tests {
     /// standard streams, the clock and randomness, and confined reads,
     /// writes, listings and directories, whose paths are resolved against
     /// the working directory.
-    const EVERY_CALL: &str = r#"fn main(io: Stdout, input: Stdin, fs: Fs, clock: Clock, random: Random) -> Result<(), IoError> {
+    const EVERY_CALL: &str = r#"fn main(io: Stdout, input: Stdin, fs: Fs, clock: Clock, random: Random, net: Net) -> Result<(), IoError> {
     let read = fs.read_only().restrict_to("root")
     let write = fs.write_only().restrict_to("root")
     let names = read.list_dir(Path.new("sub"))?
@@ -1467,6 +1746,16 @@ mod tests {
     write.create_dir(Path.new("c"))?
     let file = fs.write_only().restrict_to_file("root/d.txt")
     file.write("d")?
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let host = net.restrict_to("127.0.0.1", listener.port())
+    let client = host.connect()?
+    let server = listener.accept()?
+    client.send("ping")?
+    let heard = server.receive_bytes()?
+    server.send_bytes(heard)?
+    io.println(client.receive()?)?
+    io.println(server.host())?
+    client.close()
     io.println(clock.now_millis().to_string())?
     io.println(random.next_int().to_string())?
     let line = input.read_line()?
@@ -1524,6 +1813,7 @@ mod tests {
             (61, 3),
             (63, 3),
             (64, 3),
+            (73, 5),
             (78, 4),
             (80, 2),
             (94, 1),
@@ -1532,8 +1822,18 @@ mod tests {
             (132, 2),
             (134, 4),
             (172, 0),
+            (198, 3),
+            (200, 3),
+            (201, 2),
+            (203, 3),
+            (204, 3),
+            (206, 6),
+            (207, 6),
+            (208, 5),
+            (209, 5),
             (215, 2),
             (222, 6),
+            (242, 4),
             (278, 3),
         ];
         // read, write, close, fstat, mmap, munmap, rt_sigaction, ioctl,
@@ -1550,6 +1850,15 @@ mod tests {
             (13, 4),
             (16, 3),
             (39, 0),
+            (41, 3),
+            (42, 3),
+            (44, 6),
+            (45, 6),
+            (49, 3),
+            (50, 2),
+            (51, 3),
+            (54, 5),
+            (55, 5),
             (62, 2),
             (72, 3),
             (77, 2),
@@ -1561,6 +1870,8 @@ mod tests {
             (257, 4),
             (258, 3),
             (267, 4),
+            (271, 5),
+            (288, 4),
             (318, 3),
         ];
         assert_eq!(system_calls(crate::Target::LinuxAarch64), aarch64);
@@ -1653,6 +1964,42 @@ mod tests {
             ("rt_sys_kill", "_kill", 2, 2, false, MinusOne, &[]),
             // _exit, not exit: no atexit handlers, as exit_group.
             ("rt_sys_exit", "__exit", 1, 1, false, Never, &[]),
+            ("rt_sys_socket", "_socket", 3, 3, false, MinusOne, &[]),
+            ("rt_sys_connect", "_connect", 3, 3, false, MinusOne, &[]),
+            ("rt_sys_bind", "_bind", 3, 3, false, MinusOne, &[]),
+            ("rt_sys_listen", "_listen", 2, 2, false, MinusOne, &[]),
+            ("rt_sys_accept", "_accept", 3, 3, false, MinusOne, &[]),
+            (
+                "rt_sys_getsockname",
+                "_getsockname",
+                3,
+                3,
+                false,
+                MinusOne,
+                &[],
+            ),
+            (
+                "rt_sys_getsockopt",
+                "_getsockopt",
+                5,
+                5,
+                false,
+                MinusOne,
+                &[],
+            ),
+            (
+                "rt_sys_setsockopt",
+                "_setsockopt",
+                5,
+                5,
+                false,
+                MinusOne,
+                &[],
+            ),
+            // send(fd, buf, count, flags) and recv: no flags.
+            ("rt_sys_send", "_send", 3, 4, true, MinusOne, &[0]),
+            ("rt_sys_recv", "_recv", 3, 4, true, MinusOne, &[0]),
+            ("rt_sys_poll", "_poll", 3, 3, false, MinusOne, &[]),
         ];
         // x86_64's `libSystem` gives the 64-bit-inode `struct stat` and
         // `struct dirent`, arm64's only ones, under `$INODE64` names.
@@ -1774,6 +2121,7 @@ mod tests {
     fn windows_makes_each_call_as_kernel32_declares_it() {
         use Fails::*;
         const K: &str = "KERNEL32.dll";
+        const W: &str = "WS2_32.dll";
         let rows: &[WindowsRow] = &[
             // GetStdHandle: INVALID_HANDLE_VALUE on failure.
             (
@@ -1944,6 +2292,16 @@ mod tests {
                 Status,
                 &[],
             ),
+            // GetNetworkParams returns its error code, not a BOOL.
+            (
+                "rt_sys_get_network_params",
+                "IPHLPAPI.DLL",
+                "GetNetworkParams",
+                2,
+                false,
+                Never,
+                &[],
+            ),
             // ProcessPrng: "Always returns TRUE".
             (
                 "rt_sys_process_prng",
@@ -1954,13 +2312,71 @@ mod tests {
                 Never,
                 &[],
             ),
+            // Winsock: `SOCKET_ERROR` (-1) says a call failed, and
+            // `WSAGetLastError` is `GetLastError`; `WSAStartup` gives its
+            // error itself.
+            ("rt_sys_wsa_startup", W, "WSAStartup", 2, false, Never, &[]),
+            ("rt_sys_socket", W, "socket", 3, true, MinusOne, &[]),
+            ("rt_sys_connect", W, "connect", 3, false, MinusOne, &[]),
+            ("rt_sys_bind", W, "bind", 3, false, MinusOne, &[]),
+            ("rt_sys_listen", W, "listen", 2, false, MinusOne, &[]),
+            ("rt_sys_accept", W, "accept", 3, true, MinusOne, &[]),
+            (
+                "rt_sys_getsockname",
+                W,
+                "getsockname",
+                3,
+                false,
+                MinusOne,
+                &[],
+            ),
+            (
+                "rt_sys_getsockopt",
+                W,
+                "getsockopt",
+                5,
+                false,
+                MinusOne,
+                &[],
+            ),
+            (
+                "rt_sys_setsockopt",
+                W,
+                "setsockopt",
+                5,
+                false,
+                MinusOne,
+                &[],
+            ),
+            // send(socket, buf, count, flags) and recv: no flags.
+            ("rt_sys_send", W, "send", 3, false, MinusOne, &[0]),
+            ("rt_sys_recv", W, "recv", 3, false, MinusOne, &[0]),
+            ("rt_sys_poll", W, "WSAPoll", 3, false, MinusOne, &[]),
+            (
+                "rt_sys_close_socket",
+                W,
+                "closesocket",
+                1,
+                false,
+                MinusOne,
+                &[],
+            ),
+            (
+                "rt_sys_ioctl_socket",
+                W,
+                "ioctlsocket",
+                3,
+                false,
+                MinusOne,
+                &[],
+            ),
         ];
         let platform = WINDOWS_X86_64;
         for (name, implementation) in RUNTIME {
             let Runtime::Syscall(call) = implementation else {
                 continue;
             };
-            if !windows_only(*call) {
+            if !windows_only(*call) && !is_socket_call(*call) {
                 assert_eq!((platform.call)(*call), OsCall::Absent, "`{name}`");
                 continue;
             }
@@ -2019,6 +2435,24 @@ mod tests {
             platform.slot_of(last),
             u16::try_from(last + runs.len() - 1).ok()
         );
+    }
+
+    /// Whether `call` is one of the socket calls every platform makes.
+    fn is_socket_call(call: Sys) -> bool {
+        matches!(
+            call,
+            Sys::Socket
+                | Sys::Connect
+                | Sys::Bind
+                | Sys::Listen
+                | Sys::Accept
+                | Sys::Getsockname
+                | Sys::Getsockopt
+                | Sys::Setsockopt
+                | Sys::Send
+                | Sys::Recv
+                | Sys::Poll
+        )
     }
 
     /// A Windows executable makes no system call and reaches every

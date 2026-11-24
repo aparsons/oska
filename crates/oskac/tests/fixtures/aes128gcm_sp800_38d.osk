@@ -1,0 +1,132 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.aes128gcm` against the test cases of the GCM specification (the
+// "Galois/Counter Mode of Operation" submission that SP 800-38D
+// standardizes), cases 1 to 4, which use a 96-bit nonce, on both backends
+// (the native test corpus runs every test-bearing fixture); then messages
+// of every length around the block sizes, recorded from OpenSSL through
+// Python's `cryptography` package, and forgery, truncation and
+// wrong-length tests. Wycheproof's vectors are in
+// `aes128gcm_wycheproof.osk`.
+
+use std.aes128gcm
+
+fn hex(text: String) -> Bytes {
+    Bytes.from_hex(text).unwrap_or(Bytes.new())
+}
+
+// Whether sealing `message` gives `expected` (ciphertext then tag) and
+// opening `expected` gives `message` back.
+fn seals(key: String, nonce: String, aad: String, message: String, expected: String) -> Bool {
+    let secret_key = Secret.new(hex(key))
+    let made = match aes128gcm.seal(secret_key, hex(nonce), hex(aad), Secret.new(hex(message))) {
+        Some(out) => out.constant_time_eq(hex(expected))
+        None => false
+    }
+    let opened = match aes128gcm.open(secret_key, hex(nonce), hex(aad), hex(expected)) {
+        Some(out) => out.constant_time_eq(hex(message))
+        None => false
+    }
+    made && opened
+}
+
+fn opens(key: Bytes, nonce: Bytes, aad: Bytes, sealed: Bytes) -> Bool {
+    match aes128gcm.open(Secret.new(key), nonce, aad, sealed) {
+        Some(_) => true
+        None => false
+    }
+}
+
+test "GCM test case 1, empty message and no data" {
+    t.assert(seals("00000000000000000000000000000000", "000000000000000000000000", "", "", "58e2fccefa7e3061367f1d57a4e7455a"))
+}
+
+test "GCM test case 2, one block of zeros" {
+    t.assert(seals("00000000000000000000000000000000", "000000000000000000000000", "", "00000000000000000000000000000000", "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf"))
+}
+
+test "GCM test case 3, four blocks and no data" {
+    t.assert(seals("feffe9928665731c6d6a8f9467308308", "cafebabefacedbaddecaf888", "", "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255", "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091473f59854d5c2af327cd64a62cf35abd2ba6fab4"))
+}
+
+test "GCM test case 4, a partial block and data" {
+    t.assert(seals("feffe9928665731c6d6a8f9467308308", "cafebabefacedbaddecaf888", "feedfacedeadbeeffeedfacedeadbeefabaddad2", "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e0915bc94fbc3221a5db94fae95ae7121a47"))
+}
+
+test "recorded messages of every length around the block sizes" {
+    t.assert(seals("6b41ce5ce7cbe9c4710d6a04efeb2e67", "92b8061f6471cd186f168842", "d7c84747c19f8aea82c93ce8d78691d212f63584", "", "5ab49d7a254f22f7b3a62570125cf469")) // 0 bytes
+    t.assert(seals("3a904ef64f23f6d52e881ef650d22337", "df14fb148d278fa523bbb650", "a65bd3a02aa113ad6d0f725e", "0f", "0970398503b12b40be6a99c7efb0f9ff25")) // 1 bytes
+    t.assert(seals("2b89c3b742977b1bf8f6775d430d906e", "b2f1337e94a25fb2b6d59fb4", "fe52d183ab38552bffa7f4b1", "144d71080bbfd4f63cc733907fc68c", "2df484eee005253c0994ff9bfae29ac72553a8c51cb5771de7f51a2e2ca5c1")) // 15 bytes
+    t.assert(seals("0de0ce6ef302090c0fcfaf8ff2e849f3", "cfba1b03820f4e783723bd1d", "4625c60c19661bf582d84b3c08243a5e6b97d4db71128127a1a376c6be3a1c39f1", "a02e3711d7137392650447352f05b507", "b7e29c512ef6b492f769571cb6d2e541644b6fb174224a91006790649981eee2")) // 16 bytes
+    t.assert(seals("5620dcfb5f506e94d75c31768fb694da", "e1842375b19819c017b9d0a0", "", "8b4aa16890e8c6bf0b465fd40f708c421e", "3cf92558055e59176f2ed6d90b16e8fc486d958603603877bd9dbafafe539494c6")) // 17 bytes
+    t.assert(seals("e040aea1528b2b7b8d6259ae60938692", "f5c62d0bb6dcee10643d9a8c", "53598cab13cd032623e07b65", "8bf3bc903d10003d942e5f0d17402c7458ed28a2161145346216c334bc8ce2", "fdc18ff37de98d2ba6950fbafc61b21e54114dafd8abb812ec8a13868f4c7eb7ae31f25ae0366a289a6a9d35f8bfa8")) // 31 bytes
+    t.assert(seals("a90620a7a0804864e6615d2fc81434d8", "65d8194d1f6a1d0c3b8c68e9", "d11a1a7eb65a101af8aea4f8", "002cd3efed95e878ae8e61fcb6270e9be61a311f9130b01938fbe16882245a68", "2d65706b28d4108f911ca63a8de9ca73dd92f85fc0fc2c34831b4151600870c540def2cdc5577ae3d603f1ad1cbc1af3")) // 32 bytes
+    t.assert(seals("066d307a878fe18639c2af014ec6aa04", "83807f9891642886801cbf23", "d26cca431b86ff5373bfa3af22445e62", "11132630f736ab333cdb5854a8af1e27d1ef38d37246d25762f2b7b0f4fff86679", "92029b07243a625855d15348218db8621a82ecf16f81ed1092efc4f18430fde4301a191c3e15524e61b408de46752a78c0")) // 33 bytes
+    t.assert(seals("7df78a635e3998f13cd1fba67568d728", "be139ff238d89c81e010767a", "3e5ee29812a88bb10512759fed6bcd5c95ea6f32", "f978ec9a3bc5a60d4f7ef03c26ae35ab0bee139dc349b942ccb10bd18bb234f0f952f7cdf48b06f94fcd109dd52ea6ff60157de4288ca26fdc4f82304384d2", "4be1aac79d2c2427bcb91d9d61f7f7df13a50e367c360094917541f97ea55fba7ae25d99f10da0620c3211c30a7460a776e63b67d5db56612e5b528ed83cff98f6ba4d59755576591038d3cc6df19c")) // 63 bytes
+    t.assert(seals("91f900caf90af0e5256f5a4f691ccca0", "5fb4ece1594786455591095e", "55", "1f9b7244bc4948865ac3dd9ee5e4c075d410e0cbb91e4478e172552c35d1985b6b477d8df0fbb4882adf2a1f47e90c89838dbb5ba73a4427a72ddd5130a12a45", "f5fae7520326884339e2601665be0846fd6caf019c6ad4a408e6850368457e27d51285493b4a876ee461cdb552aadd27a9e456e560a88bde40560856863f135c5c12e6ae0dd2f48f5c44c6bfb2bb2098")) // 64 bytes
+    t.assert(seals("e22584a88c79bc0603a8a5ed3c5fe722", "3576c70110c31da7dd916024", "1550111c38eb8f276ffc91f8", "80540ef498acdce023a800d47714e631e156ae3c82f5ad9a6f5009a4f33784482aae5c1968c2e13815a5e17ae4f795a4f73f287f9601e5a4cb98494c034dc2e8d6", "3933ef6111305abf280ff97aef9bc294f9ee993a0d36bf32e5dbf290189b56e73ecf9497e9581c2bcbfd21516c78d0d8717931bd3e42dce5ba188b5b4937c4e34c2d7338d95825a92281b5ae45cf39ddda")) // 65 bytes
+    t.assert(seals("ba621b7ee5008fc831409eefc247227e", "4af037a8459dfa5474e79e21", "8a", "62f7ea9b21bc04f8f85916da618e83a1918286c2933fa4a8edc7a250a64ec4f36ba4f8574f5eb6c170c6ca02972ec1ca4c6c97df99d4487d372f0bb82ab274852cab1d23720c7511f5bd620aafa98160c00269dc2d86a02a461c933d7aab0a3980fc9b2a701ae04cbd4bc53e78df8e98dbe990a777d41f3d4ae54b1884d13a", "c173e8ae57511919effbcc47c95af6e786ecc0dea63f57e789e8bc6dc9a1d6aa657ac2b64955bfa293409d14ed1ce34904fd49bacf2c70b6e11454227ff769ab1ab23bbabdcffe63e42e9778b8224413b839cfac7b08282a36d4c7b7a659352209fadbbe7cd4fe35ffad802f3fc3e1def06b6ae6b80ff007cbd05d0439f9ac97378b0764a46ada3fc4623bd4f60b9f")) // 127 bytes
+    t.assert(seals("5b4cb32e230f553ee22e301bce0986b3", "443b5cc7fcab1640a662d0a6", "66dce7029d6fd561b5681fb5f513fbc5167a3dbe8d16da96d80a1861519806aa08", "9a8c914b96a41e64ea171e1dafc72d9288838a3cb68fbb2b26237cc690b8de7a673a9ca5593ff65c24415c28c2d09de0529e17d86856b40e49c2d78908b4499ef390c438474888aa2c4ee64804175bc8bccdb05fbc60d58e8bb5225fc6267390f51781f5a8a391f0209cc3aea522dc5c851130b4cd808df53986a47d80511503", "3e84cd8ef9d8dfc94fe5a0b55199af9036b0e8e9264000f74cbcea092d9a500e6cc90883de52ea427a59b573084e11d05dbe26dee6bf5ce3478427d0786ab28370ff9211aee63a750e010d06e801614e05700126950e619720d93f0cd4cee13b236ee86b694e10ccad996f255749c687053c886dc824311f0b3666321f94e11df4b3b13d7fecee845954bd80232056ae")) // 128 bytes
+    t.assert(seals("73a9c8a242065f2cfb33d2b5790cdf3d", "41a76d0c4fe500b882746753", "ffd7c55c30d8b1712f230f3f6ec41df9f6233c9ed49cacb93e690ce7dbf9cf8a78", "5827a09c856c26a994f8ca069ad1e7b5f9534ae21934b0a4c003264b9e7e296418ae4748492c03f34998afc86486312bf23c7b42a70408978366626f1e9be95a040b33e601823773d5ca6fac66ac864590d46e620c1536b1cc80cf86663ac3669bb232ae7876474b725fc15f5bb1db9c49958db4462cbe9ff7138fb8e8a67d0eb0", "78d98c2a7d57fe96a12488689a06224984018fc94de545050aaa778e2a9193e1c2892694743d8e6d3d99acb9ef24b0c39d109d22b09036735708ed56ceb325583788536c8cab45f1be8893436e969b2f1c4b686d5e20b98d0fd034fe14572ddc47d1769ad46e7895ed27754cf6d35a192c94c0c210a78f732b6ba2ea2469dd581e6ce4da2086fd64fb03a0eb48b67dd145")) // 129 bytes
+    t.assert(seals("0e222d30953ccad0bc6b4077b69bcf6b", "90fcee2282f6959d0eae629f", "77c19f8020744dd84daec4db9de84b74e994aa2d660c2f3e18abcce2729e3b8a0a", "63afc22288744c238ce2f78417a83b2f6baa928105cd46c702156003207dfc1032dd510f32d9dad6a8e7ce12acb8f9bb08432c942efbe6de61bec05fb8cbf8739f0037fb96e82ad0bc17c601c826e588af3caed37b0d3058f0ef583033fae1c6c8ca06f3f11e3c4428c1304aa127b06274079de9955172d3e04a40b34d37043d702af1a5a82fbb8761f71c97f09b2d598e58d9ce34db9bde100f3cbdff7b8a0140d1d39714347624b75fe5862b3bb1609dd2fe4b1bdd777ef3c55d8cd49d51ce57338195b184155f", "e6f93a03da9e9e138a8b00c56a72f9fc78dc54ac087630f20fc7112f2f1e6fc8bd46cf4ca209513fe818f39d1ece52ebf6ecda5e2357da4fe76a6cf43908b6d2b4be88787e8903bdd18f03cff0ce892e9ec29a1ccadb737d1ee3bb54404908306bdb0e33714aa8d5304e8941e6cdbc3c56f638d1169a12b67661f62ce2ca07e3429837e722b78ffd63d0fa34e40edff114d40b64d2f4d9fec2334fb45f72810c007bbe51c5233e2737dee23d3ef6828a57d596dd5333f74e07cde35f31a832f1df824ae14c6a530974701ba7cd5e8b4b5d21e88c4681dcc7")) // 200 bytes
+}
+
+// A sealed message of 53 bytes: every bit of every byte changed
+// in turn, which a correct tag check refuses.
+test "a changed bit anywhere in a sealed message is refused" {
+    let key = hex("4c5dcd0d2fb6614f264fe97c922c8778")
+    let nonce = hex("c73ca2d4ef0f119c4d9657eb")
+    let aad = hex("8cb86fa94913fcae625a04e636d0286bc5effaf9")
+    let sealed = hex("f6806a8502feb432a2b603d44b5f467a90b1426f006ba6b73e0bb56780de2871f5efade90bb15415d10a4544da2002ff38eb32d24b")
+    t.assert(opens(key, nonce, aad, sealed))
+    for i in 0..sealed.len() {
+        for bit in 0..8 {
+            var forged = sealed
+            forged.set(i, forged.at(i) ^ (1 << bit.to_u8()))
+            t.assert(!opens(key, nonce, aad, forged))
+        }
+    }
+}
+
+test "a changed key, nonce or additional data is refused" {
+    let key = hex("4c5dcd0d2fb6614f264fe97c922c8778")
+    let nonce = hex("c73ca2d4ef0f119c4d9657eb")
+    let aad = hex("8cb86fa94913fcae625a04e636d0286bc5effaf9")
+    let sealed = hex("f6806a8502feb432a2b603d44b5f467a90b1426f006ba6b73e0bb56780de2871f5efade90bb15415d10a4544da2002ff38eb32d24b")
+    var other_key = key
+    other_key.set(0, other_key.at(0) ^ 1)
+    var other_nonce = nonce
+    other_nonce.set(11, other_nonce.at(11) ^ 128)
+    t.assert(!opens(other_key, nonce, aad, sealed))
+    t.assert(!opens(key, other_nonce, aad, sealed))
+    t.assert(!opens(key, nonce, hex("00"), sealed))
+    t.assert(!opens(key, nonce, aad.slice(0, 19), sealed))
+}
+
+test "a message cut short, extended or empty is refused" {
+    let key = hex("4c5dcd0d2fb6614f264fe97c922c8778")
+    let nonce = hex("c73ca2d4ef0f119c4d9657eb")
+    let aad = hex("8cb86fa94913fcae625a04e636d0286bc5effaf9")
+    let sealed = hex("f6806a8502feb432a2b603d44b5f467a90b1426f006ba6b73e0bb56780de2871f5efade90bb15415d10a4544da2002ff38eb32d24b")
+    for cut in 0..sealed.len() {
+        t.assert(!opens(key, nonce, aad, sealed.slice(0, cut)))
+    }
+    var longer = sealed
+    longer.push(0)
+    t.assert(!opens(key, nonce, aad, longer))
+    t.assert(!opens(key, nonce, aad, Bytes.new()))
+}
+
+test "a key or a nonce of the wrong length gives none" {
+    let key = hex("4c5dcd0d2fb6614f264fe97c922c8778")
+    let nonce = hex("c73ca2d4ef0f119c4d9657eb")
+    let aad = Bytes.new()
+    let message = Secret.new("message".to_bytes())
+    t.assert(!aes128gcm.seal(Secret.new(key.slice(0, 15)), nonce, aad, message).is_some())
+    t.assert(!aes128gcm.seal(Secret.new(hex("4c5dcd0d2fb6614f264fe97c922c877800")), nonce, aad, message).is_some())
+    t.assert(!aes128gcm.seal(Secret.new(Bytes.new()), nonce, aad, message).is_some())
+    t.assert(!aes128gcm.seal(Secret.new(key), nonce.slice(0, 11), aad, message).is_some())
+    t.assert(!aes128gcm.seal(Secret.new(key), hex("c73ca2d4ef0f119c4d9657eb00"), aad, message).is_some())
+    t.assert(!aes128gcm.seal(Secret.new(key), Bytes.new(), aad, message).is_some())
+    t.assert(!opens(key.slice(0, 15), nonce, aad, hex("f6806a8502feb432a2b603d44b5f467a90b1426f006ba6b73e0bb56780de2871f5efade90bb15415d10a4544da2002ff38eb32d24b")))
+    t.assert(!opens(key, nonce.slice(0, 11), aad, hex("f6806a8502feb432a2b603d44b5f467a90b1426f006ba6b73e0bb56780de2871f5efade90bb15415d10a4544da2002ff38eb32d24b")))
+}

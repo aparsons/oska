@@ -14,6 +14,7 @@
 #          target; ci.yml sets it)
 #   linux  every test of the workspace, for the host (the Linux test jobs)
 #   macos  the tests of oskac (the macOS jobs)
+#   windows  every test of oska-run and oskac (the Windows job)
 #
 # A plan is one line a target: "PACKAGE lib", "PACKAGE bins", "PACKAGE doc",
 # "PACKAGE test NAME" or "PACKAGE test site/K" (K of the SITE_SPLIT slices of
@@ -36,6 +37,7 @@ shards_of() {
     musl) echo "site-0 site-1 site-2 sites-1 sites-2 rest all" ;;
     linux) echo "site native rest all" ;;
     macos) echo "native-1 native-2 rest all" ;;
+    windows) echo "native rest all" ;;
     *) return 1 ;;
   esac
 }
@@ -45,6 +47,7 @@ heavy_of() { # SET SHARD
     "musl sites-2") echo "oska-run:site_links oska-run:site_corpus oska-run:site_compliance" ;;
     "linux site") echo "oska-run:site oska-run:site_api oska-run:site_links oska-run:site_corpus oska-run:site_compliance oska-run:site_home oska-run:site_meta" ;;
     "linux native") echo "oskac:native_tests oskac:native_prelude oskac:build_cache oskac:run_limits oskac:native_corpus oskac:run_limits_steps_native oskac:native_sshsig" ;;
+    "windows native") echo "oskac:native_tests" ;;
     "macos native-1") echo "oskac:native_prelude oskac:native_data oskac:native_system_calls" ;;
     "macos native-2") echo "oskac:native_tests oskac:run_limits oskac:run_limits_steps_native" ;;
   esac
@@ -59,6 +62,7 @@ universe() { # SET
   case $1 in
     musl) set -- oska-sys oska-run ;;
     macos) set -- oskac ;;
+    windows) set -- oska-run oskac ;;
     *) mapfile -t pkgs < <(ls crates); set -- "${pkgs[@]}" ;;
   esac
   for pkg in "$@"; do
@@ -108,7 +112,7 @@ plan() { # SET SHARD
 usage() { echo "usage: scripts/test-shard.sh SET SHARD [--plan] | --sets" >&2; exit 2; }
 
 if [ "${1:-}" = --sets ]; then
-  for set in musl linux macos; do
+  for set in musl linux macos windows; do
     for shard in $(shards_of "$set"); do echo "$set $shard"; done
   done
   exit 0

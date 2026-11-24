@@ -1,8 +1,10 @@
 exit: 3
 --- stdout
 fn fetch: NetConnect (net)
+  crates/oskac/tests/fixtures/authority_diff/helper_new_kind/after.osk:7:5: NetConnect -> HostConnect: restrict_to "example.com:443" (bytes 279..314)
 fn main: Stdout (io)
 baseline: <baseline>
   added fn fetch: NetConnect (new to the program: NetConnect)
+  new attenuation fn fetch: NetConnect -> HostConnect: restrict_to "example.com:443" +1
 --- stderr
 error: authority widened against the baseline <baseline>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; approving this means updating the baseline, a change for the user to review

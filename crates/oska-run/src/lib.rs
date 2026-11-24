@@ -53,6 +53,7 @@ mod int_methods;
 mod interp;
 mod intrinsics;
 mod memory;
+mod net;
 mod ops;
 mod panics;
 mod prng;
@@ -274,12 +275,14 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
         .map(|p| p.ty.to_string())
         .find(|ty| ty != builtins::ARGS && Capability::granted(ty).is_none())?;
     let (code, message) = if Capability::implemented(&param) {
-        let (kind, how) = match param.starts_with("File") {
-            true => (
+        let (kind, how) = match param.as_str() {
+            "HostConnect" => ("host", "`restrict_to` on `Net` or `NetConnect`"),
+            "LoopbackListen" => ("loopback listener", "`restrict_to_loopback` on `NetListen`"),
+            _ if param.starts_with("File") => (
                 "file",
                 "`restrict_to_file` on `FsRead`, `FsWrite` or a directory capability",
             ),
-            false => ("directory", "`restrict_to` on `Fs`, `FsRead` or `FsWrite`"),
+            _ => ("directory", "`restrict_to` on `Fs`, `FsRead` or `FsWrite`"),
         };
         (
             codes::UNIMPLEMENTED_CAPABILITY,

@@ -25,6 +25,6 @@ pub fn deliver(net: NetConnect, url: Untrusted<String>, body: Untrusted<String>)
         Ok(host) => host
         Err(refused) => { return Err(IoError(message: "not a webhook host: {refused.url}")) }
     }
-    let connection = net.connect(host.name, 443)?
+    let connection = net.restrict_to(host.name, 443).connect()?
     connection.send(body)
 }

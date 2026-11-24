@@ -284,9 +284,12 @@ const PROBES: &[(&str, Probe)] = &[
         "`Net`, `NetConnect` and `NetListen`",
         Probe::Program(
             "fn main(io: Stdout, net: Net) -> Result<(), IoError> {\n    \
-             let conn = net.connect_only().connect(\"example.com\", 443)?\n    \
-             conn.send(\"ping\")?\n    \
-             io.println(\"sent\")\n}\n",
+             let listener = net.listen_only().restrict_to_loopback(0)\n    \
+             let client = net.restrict_to(\"127.0.0.1\", listener.port()).connect()?\n    \
+             let server = listener.accept()?\n    \
+             client.send(\"ping\")?\n    \
+             let got = server.receive()?\n    \
+             io.println(got)\n}\n",
         ),
     ),
 ];
@@ -541,11 +544,7 @@ fn every_probe_is_a_row_of_the_table() {
 #[test]
 fn the_table_says_which_sinks_and_capabilities_check_but_do_not_run() {
     let rows = table_rows();
-    for feature in [
-        "`std.sql`",
-        "`std.proc` and `Spawn`",
-        "`Net`, `NetConnect` and `NetListen`",
-    ] {
+    for feature in ["`std.sql`", "`std.proc` and `Spawn`"] {
         let row = rows
             .iter()
             .find(|row| row.feature == feature)
@@ -604,7 +603,7 @@ fn the_home_page_itself_says_which_features_check_but_do_not_run() {
         named += 1;
     }
     assert!(
-        named >= 3,
+        named >= 2,
         "the table lists {named} features that do not run"
     );
     assert!(

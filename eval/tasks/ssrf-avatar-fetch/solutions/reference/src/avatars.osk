@@ -35,7 +35,7 @@ pub fn fetch_avatar(net: NetConnect, url: Untrusted<String>) -> Result<Untrusted
     let rest = url.slice(8, url.len())
     let start = host.name.len()
     let path = rest.slice(start, rest.len())
-    let connection = net.connect(host.name, 443)?
+    let connection = net.restrict_to(host.name, 443).connect()?
     connection.send(path)?
     connection.receive()
 }

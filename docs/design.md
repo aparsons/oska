@@ -214,7 +214,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 | --- | --- |
 | `Stdin`, `Stdout`, `Stderr` | Standard streams |
 | `Fs` | Filesystem, only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). |
-| `Net` | Network. Attenuates to `NetConnect` or `NetListen`. |
+| `Net` | Network, only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`, one host and port) with `restrict_to(host, port)`; `NetListen` attenuates to a loopback listener (`LoopbackListen`) with `restrict_to_loopback(port)` ([ADR 0025](adr/0025-network-access-goes-through-host-narrowed-capabilities.md)). |
 | `Env` | Environment variables. These can hold secrets. |
 | `Budget` | Spending model tokens and calls, counted by the runtime. Attenuates to a smaller `Budget` with `limit(tokens, calls)`. |
 | `Clock`, `Random` | Nondeterministic inputs |
@@ -245,6 +245,13 @@ There are two deliberate exceptions to the rules above:
 - A dependency can only use the capabilities you pass it.
 - The lockfile records each dependency's **authority**: the union of the capability-bearing types in its public API.
 - If an upgrade widens a dependency's authority, the build fails until someone approves the change.
+
+### Network, TLS and HTTP
+
+- **Host capabilities.** `Net` and `NetConnect` grant no connection. `restrict_to(host, port)` gives a `HostConnect`, which alone can `connect()`, and `connect()` takes no destination. The host is a structural position, so untrusted text there is `E0300`; a program that must reach a host chosen at run time validates it and writes `.assume_trusted()`, which `oskac audit` lists. This is ADR 0008's rule for files, applied to hosts ([ADR 0025](adr/0025-network-access-goes-through-host-narrowed-capabilities.md)). Package authority orders `Net` > `NetConnect` > `HostConnect` and `Net` > `NetListen` > `LoopbackListen`. Listening is loopback-only until a server design exists.
+- **Resolution** is meant to be part of `connect()`: one stub resolver written in Oska, `std.dns`, the same on all five platforms, which parses every answer as untrusted input. `std.dns` exists today as a module a program can call, but `connect()` does not use it yet: the interpreter resolves names with the operating system's resolver (`getaddrinfo`), and the native backend resolves only IP addresses and `localhost` (tracked in a follow-up issue) ([ADR 0026](adr/0026-name-resolution-is-an-oska-stub-resolver-and-windows-asks-iphlpapi-for-its-servers.md)).
+- **Everything read is untrusted.** `Connection.receive` gives `Untrusted<String>`, `receive_bytes` gives `Untrusted<Bytes>`, and failures are worded from Oska's message table, never the operating system's.
+- **TLS and HTTP are libraries written in Oska** ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)). `std.tls` is a TLS 1.3 client whose core is a pure engine (bytes, randomness and time in; bytes and events out). `tls.connect` takes a `HostConnect` and uses `host.name()` for both the server name and the certificate check, so one capability fixes what is connected to and what is verified. `std.x509` holds the pinned Mozilla roots. `std.http.get` sends an HTTP/1.1 GET over it, follows no redirect and returns an `Untrusted<Bytes>` body. See the guides for [networking](guide/networking.md), [TLS](guide/tls.md) and [HTTP](guide/http.md).
 
 ## Untrusted data and sinks
 
@@ -286,7 +293,7 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
 | Process (`std.proc`) | Arguments: `run("git", ["log", branch])` | The program name | A shell string. Running a shell is a separate, explicitly named capability. |
 | HTML (`std.html`) | Text, which is escaped for its context | `TrustedHtml` | Writing untyped strings into markup |
 | Paths | `Path.from` (see below) | The root passed to `restrict_to` or `restrict_to_file` on `Fs`, `FsRead`, or `FsWrite` | `..` traversal outside a directory capability |
-| Network | Request bodies | The host passed to `NetConnect` | |
+| Network | Request bodies | The host passed to `restrict_to` on `Net` or `NetConnect` | |
 | Output | `Stdout.println` and `Stderr` | | |
 
 - **Sink modules.**
@@ -471,7 +478,7 @@ Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench
   - `Clock`
   - `Random`, with a built-in pseudo-random generator
   - `std.html`: `text` escapes `&`, `<`, `>`, `"`, and `'`; `TrustedHtml` markup passes through unescaped
-- **Not yet implemented:** `Net`, `std.proc`, and `std.sql`. `oskac run` refuses, before execution starts and with a stable code, any program that uses them.
+- **Not yet implemented:** `std.proc` and `std.sql`. `oskac run` refuses, before execution starts and with a stable code, any program that uses them. `Net` runs through host capabilities (see the network notes under Capabilities).
 - **Filesystem confinement.** A directory or file capability resolves every `Path` against its root. `..` is normalized lexically, and a path that climbs above the root is rejected, as is an absolute path or an empty one. On every platform the capability holds an OS handle for its root, and each path is opened one component at a time beneath it without following a symlink, or on Windows any other reparse point such as a junction, so any of them beneath the root is refused and there is no check to race against ([ADR 0009](adr/0009-oska-sys-is-the-only-crate-with-unsafe.md), [ADR 0014](adr/0014-every-supported-platform-builds-and-runs-natively.md)).
 - **Prelude functions without a body** are each backed by a built-in implementation in the runtime. A test enforces that none is missing.
 
@@ -528,8 +535,8 @@ Once escape hatches exist, the following policy applies:
   2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
   3. Native backends for x86_64 Linux, macOS and Windows (v0.4.0 to v0.6.0), which turn the parity gate on.
   4. `Bytes`, the bitwise and wrapping operations, and secret integers (#209), the first language work under the parity gate.
-  5. The first crypto in Oska, after `Bytes` and before TLS: `std.sha2`, `std.hmac`, `std.ed25519` and `std.sshsig`, enough to verify a release's SSH signature (#227; see [the guide](guide/hashing-and-signatures.md)).
-  6. The `NetConnect` runtime and a TLS 1.3 client, with the rest of the crypto it needs, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
+  5. The first crypto in Oska, after `Bytes` and before TLS: `std.sha2`, `std.hmac`, `std.ed25519` and `std.sshsig`, enough to verify a release's SSH signature (#227; `std.ecdsa`, `std.rsa` and `std.p256` follow for TLS, #242, and `std.x509` for certificates, #243; see [the guide](guide/hashing-and-signatures.md)).
+  6. Host capabilities, a TLS 1.3 client and HTTPS GET, with the rest of the crypto they need, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md); see the guides for [networking](guide/networking.md), [TLS](guide/tls.md) and [HTTP](guide/http.md)).
   7. git fetch, minimal version selection, the lockfile, and authority approval (#12).
 - **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).
 - **Formatting:** deterministic, with a single canonical style.

@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// The guides the ticket asks for, relative to `docs/guide`.
-const REQUIRED_PAGES: [&str; 15] = [
+const REQUIRED_PAGES: [&str; 18] = [
     "index.md",
     "install.md",
     "quickstart.md",
@@ -53,6 +53,9 @@ const REQUIRED_PAGES: [&str; 15] = [
     "cli-reference.md",
     "agent-guide.md",
     "packages.md",
+    "networking.md",
+    "tls.md",
+    "http.md",
 ];
 
 /// The marker a page needs before it documents a `planned` block.

@@ -144,6 +144,9 @@ mod tests {
             assert!(found.contains(&expected), "{expected} in {found:?}");
         }
         assert!(!found.contains(&"Connection"), "a `cap struct` is not one");
+        for host in ["HostConnect", "LoopbackListen"] {
+            assert!(found.contains(&host), "{host} in {found:?}");
+        }
         assert!(!found.contains(&ARGS));
     }
 
@@ -158,7 +161,7 @@ mod tests {
     fn a_test_context_holds_its_capabilities_in_order() {
         assert_eq!(
             test_context_fields(),
-            ["Fs", "Clock", "Random", "Stdout", "Budget", "Approver"]
+            ["Fs", "Clock", "Random", "Stdout", "Budget", "Approver", "Net"]
         );
     }
 }

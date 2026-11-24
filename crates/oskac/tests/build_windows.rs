@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `oskac build --target windows-x86_64` (spec #155, ticket #176): a
 //! PE32+ console executable that the Windows loader loads, importing only
-//! from `kernel32.dll` and `bcryptprimitives.dll` (ADR 0020).
+//! from `kernel32.dll`, `ntdll.dll`, `bcryptprimitives.dll`, `iphlpapi.dll` and `ws2_32.dll`
+//! (ADR 0020, ADR 0026).
 //!
 //! Every host checks the file against Microsoft's format (`pe-format.md`),
 //! byte by byte, so the writer is developed without Windows. On Windows the
@@ -23,7 +24,7 @@ const PLATFORM: &str = "windows-x86_64";
 
 /// The functions every Windows executable imports, by DLL, in the order
 /// of the import table (ADR 0020: the list is reviewed surface).
-const IMPORTS: [(&str, &[&str]); 3] = [
+const IMPORTS: [(&str, &[&str]); 5] = [
     (
         "KERNEL32.dll",
         &[
@@ -58,6 +59,26 @@ const IMPORTS: [(&str, &[&str]); 3] = [
         ],
     ),
     ("bcryptprimitives.dll", &["ProcessPrng"]),
+    ("IPHLPAPI.DLL", &["GetNetworkParams"]),
+    (
+        "WS2_32.dll",
+        &[
+            "WSAStartup",
+            "socket",
+            "connect",
+            "bind",
+            "listen",
+            "accept",
+            "getsockname",
+            "getsockopt",
+            "setsockopt",
+            "send",
+            "recv",
+            "WSAPoll",
+            "closesocket",
+            "ioctlsocket",
+        ],
+    ),
 ];
 
 /// A new, empty directory for `case`, holding `files`.
@@ -353,11 +374,11 @@ fn code_is_never_writable_and_data_never_executable() {
 }
 
 /// The import table names only the platform's functions, from only
-/// `kernel32.dll` and `bcryptprimitives.dll`, by name, in a fixed order;
+/// `kernel32.dll`, `ntdll.dll`, `bcryptprimitives.dll` and `iphlpapi.dll`, by name, in a fixed order;
 /// each DLL's address table, as the file holds it, is its lookup table;
 /// and the IAT directory covers them all.
 #[test]
-fn it_imports_only_the_reviewed_functions_of_kernel32_and_bcryptprimitives() {
+fn it_imports_only_the_reviewed_functions_of_the_four_dlls() {
     let file = build("imports", HELLO);
     let h = headers(&file);
     let (import_rva, import_size) = h.directory(&file, 1);

@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.hkdf`: HKDF with HMAC-SHA-256 (RFC 5869), the key derivation TLS 1.3
+// builds its key schedule on. A module sees it only after `use std.hkdf`.
+// `hkdf.extract(salt, ikm)` turns input keying material into a
+// pseudorandom key, and `hkdf.expand(prk, info, length)` stretches that key
+// into `length` bytes of output keying material.
+//
+// The salt, the input keying material, the pseudorandom key and the output
+// are secret: held in `Secret<Bytes>` and secret integers, so no branch or
+// memory address depends on them. The `info` is public, and so are the
+// lengths of everything. A key leaves as a `Secret<Bytes>`, which the
+// caller exposes in its own code if it needs it in the clear. A salt that
+// is not secret is passed as `Secret.new(salt)`, and no salt as an empty
+// one (RFC 5869 treats it as a string of 32 zero bytes, which is what
+// HMAC's zero padding makes of an empty key).
+//
+// Every function here is a pure function, and the module has no audit
+// site: no `expose()` and no `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by RFC 5869's test cases 1 to 3, Wycheproof's HKDF-SHA-256 vectors
+// and outputs of OpenSSL's HKDF for other lengths, on the interpreter and
+// natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference. `std.hmac`
+// takes a public message, and HKDF's messages are secret, so the HMAC here
+// is its own, over `std.sha2`'s secret hasher.
+
+use std.sha2
+
+// The most output `expand` gives: 255 blocks of 32 bytes (RFC 5869,
+// section 2.3).
+const MOST: Int = 8160
+
+// HKDF-Extract (RFC 5869, section 2.2): the 32-byte pseudorandom key,
+// HMAC-SHA-256 with `salt` as the key over `ikm`, computed in constant
+// time. A salt of any length works. The lengths of `salt` and `ikm` are
+// public.
+pub fn extract(salt: Secret<Bytes>, ikm: Secret<Bytes>) -> Secret<Bytes> {
+    mac(salt, ikm)
+}
+
+// HKDF-Expand (RFC 5869, section 2.3): `length` bytes of output keying
+// material from the pseudorandom key `prk` and the public `info`, computed
+// in constant time. `None` for a `length` below 0 or above 8160 (255
+// blocks of 32 bytes). A `prk` shorter than 32 bytes works but is not what
+// the RFC means by one. `length` and the length of `info` are public.
+pub fn expand(prk: Secret<Bytes>, info: Untrusted<Bytes>, length: Int) -> Option<Secret<Bytes>> {
+    if length < 0 || length > MOST {
+        return None
+    }
+    let context = copied(info)
+    var out = Secret.new(Bytes.new())
+    var block = Secret.new(Bytes.new())
+    var counter: U8 = 1
+    while out.len() < length {
+        var message = block
+        message.append(Secret.new(context))
+        message.push(Secret.new(counter))
+        block = mac(prk, message)
+        out.append(block)
+        counter = counter.wrapping_add(1)
+    }
+    Some(out.slice(0, length))
+}
+
+// HMAC-SHA-256 (RFC 2104) of secret `message` under `key`.
+fn mac(key: Secret<Bytes>, message: Secret<Bytes>) -> Secret<Bytes> {
+    let block = key_block(key)
+    var inner = sha2.Sha256Secret.new()
+    inner.update(padded(block, 54))
+    inner.update(message)
+    var outer = sha2.Sha256Secret.new()
+    outer.update(padded(block, 92))
+    outer.update(inner.finish())
+    outer.finish()
+}
+
+// `key` as one 64-byte block (RFC 2104, section 2): hashed first when it
+// is longer than a block, then padded with zeros. Its length is public.
+fn key_block(key: Secret<Bytes>) -> Secret<Bytes> {
+    var block = if key.len() > 64 { sha2.sha256_secret(key) } else { key }
+    block.append(Secret.new(Bytes.zeroed(64 - block.len())))
+    block
+}
+
+// The 64-byte `block` with every byte XORed with `pad`: 54 (`0x36`) for
+// the inner pad and 92 (`0x5c`) for the outer.
+fn padded(block: Secret<Bytes>, pad: U8) -> Secret<Bytes> {
+    var out = Secret.new(Bytes.new())
+    for i in 0..block.len() {
+        out.push(block.at(i) ^ pad)
+    }
+    out
+}
+
+// The bytes of `data`, as trusted `Bytes`: built from the integers read
+// out of it, which are trusted. The copy goes only into a hash, so the
+// data cannot shape anything structural.
+fn copied(data: Untrusted<Bytes>) -> Bytes {
+    var out = Bytes.new()
+    for i in 0..data.len() {
+        out.push(data.at(i))
+    }
+    out
+}

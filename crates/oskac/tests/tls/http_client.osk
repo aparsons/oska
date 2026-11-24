@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: Apache-2.0
+// The client of the loopback HTTPS tests (#245): fetches a path from the test
+// server with `http.get` and prints what came back.
+//
+//     http_client.osk -- <port> <host> <mode> <root hex>
+//
+// The root is the test CA's certificate, trusted by the program's own
+// assertion (an `.assume_trusted()` that `oskac audit` lists). It prints the
+// status, the headers `X-Test` and `Location` when they are there, and the
+// body (as text when it is short, else its length and a checksum), or
+// `error` and the error's wording. Modes: `get` asks for `/index`; `echo`
+// asks for `/a%20b?q=1` with two extra headers, one of them from untrusted
+// text; `large` asks for a big body; `limit` asks for one with a maximum
+// of 30000 bytes; `default_roots` trusts only Mozilla's roots.
+
+use std.http
+use std.x509
+use std.tls
+
+fn show(io: Stdout, error: http.HttpError) -> Result<(), IoError> {
+    let why = error.to_string()
+    io.println("error {why}")
+}
+
+fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Result<(), IoError> {
+    let port = args.get(1).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+    let name = args.get(2).unwrap_or("127.0.0.1").assume_trusted()
+    let mode = args.get(3).unwrap_or("get").assume_trusted()
+    let root = Bytes.from_hex(args.get(4).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
+    var config = tls.TlsConfig.default()
+    if mode != "default_roots" {
+        match x509.TrustConfig.only_roots([]).with_root_der(root) {
+            Ok(trust) => { config = config.with_trust(trust) }
+            Err(_) => { return io.println("the root is malformed") }
+        }
+    }
+    var request = http.Request.get("/index")
+    if mode == "echo" {
+        // A path and a header value that come from outside the program.
+        let outside = args.get(5).unwrap_or("/a%20b?q=1")
+        request = http.Request.get(outside).with_header("X-One", "1").with_header("X-Two", args.get(6).unwrap_or("two"))
+    }
+    if mode == "limit" {
+        request = request.with_max_body(30000)
+    }
+    match http.get(net.restrict_to(name, port), request, config, random, clock) {
+        Err(error) => { show(io, error) }
+        Ok(response) => {
+            let status = response.status
+            io.println("status {status}")?
+            let marked = response.header("x-test").unwrap_or("none")
+            io.println("x-test {marked}")?
+            let moved = response.header("LOCATION").unwrap_or("none")
+            io.println("location {moved}")?
+            let body = response.body
+            if body.len() > 200 {
+                var sum = 0
+                for i in 0..body.len() {
+                    sum = (sum * 31 + body.at(i).to_int()) % 1000003
+                }
+                let size = body.len()
+                io.println("body {size} bytes, checksum {sum}")
+            } else {
+                let text = body.to_text().unwrap_or("?")
+                io.println("body [{text}]")
+            }
+        }
+    }
+}

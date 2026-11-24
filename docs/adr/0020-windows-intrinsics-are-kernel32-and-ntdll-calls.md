@@ -1,10 +1,11 @@
 # On Windows, a system-call intrinsic is one kernel32 or ntdll call
 
 - **Status:** Accepted (2026-11-19), for spec #155 (#176). On 2026-11-19 the user accepted all eight decisions the research recommends (its §4, Q1–Q8). Amends [ADR 0015](0015-macos-intrinsics-are-libsystem-calls.md) for Windows. The research behind it is [docs/research/2026-11-windows-kernel32-calls.md](../research/2026-11-windows-kernel32-calls.md), whose §4 lists the decisions (Q1–Q8).
+- **Amended by:** [ADR 0026](0026-name-resolution-is-an-oska-stub-resolver-and-windows-asks-iphlpapi-for-its-servers.md), which adds one function, `GetNetworkParams` of `iphlpapi.dll`, for the system's DNS servers.
 
 ## Decision
 
-ADR 0015's rule holds on Windows: a `std.rt` system-call intrinsic is **one call of the operating system's interface**. On Windows that is one function of `kernel32.dll` or `ntdll.dll`, or `ProcessPrng` of `bcryptprimitives.dll` for random bytes, which neither of the two provides.
+ADR 0015's rule holds on Windows: a `std.rt` system-call intrinsic is **one call of the operating system's interface**. On Windows that is one function of `kernel32.dll` or `ntdll.dll`, or `ProcessPrng` of `bcryptprimitives.dll` for random bytes, which neither of the two provides, or one function of `ws2_32.dll` for a socket (Winsock, spec #228), which neither provides either.
 
 Because Windows' functions are not POSIX-shaped, Windows has **its own intrinsics**, one per function, named for it and taking its arguments in its order, out-parameters included (`rt_sys_write_file(handle, buf, count, done)` for `WriteFile`). A platform lowers an intrinsic it does not have to a constant failure, with no call.
 

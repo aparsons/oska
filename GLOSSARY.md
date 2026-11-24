@@ -26,6 +26,10 @@ _Avoid_: restricted Fs, sandboxed filesystem
 **File capability**:
 A capability confined to a single file, such as `FileRead`. Using it takes no path.
 
+**Host capability**:
+A capability confined to one host and one port, `HostConnect`. It alone can connect, and `connect()` takes no destination. `Net` and `NetConnect` only attenuate to one, with `restrict_to(host, port)` (ADR 0025). A loopback listener, `LoopbackListen`, is the listening counterpart, for a local test server.
+_Avoid_: restricted NetConnect, connect-to-any
+
 **Budget**:
 The capability to spend model tokens and calls, which a model client such as `std.llm` takes. Its counters live in the runtime, so every copy of a budget draws from the same ones. `main`'s is unlimited, and `limit` attenuates it to a child budget that draws from its parent and never has more than the parent has left. It counts tokens, not money.
 _Avoid_: quota, allowance (for the capability), wallet
@@ -201,7 +205,7 @@ The toolchain's way of running a checked program directly, with no executable. I
 _Avoid_: VM, evaluator
 
 **Native backend**:
-The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler or linker. On Linux the executable uses no C library; on macOS it calls the system only through `libSystem`, the one library macOS supports calling the kernel through (ADR 0015); on Windows it calls only `kernel32`, `ntdll` and `ProcessPrng` (ADR 0020). A program it cannot compile yet is refused, never compiled wrongly.
+The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler or linker. On Linux the executable uses no C library; on macOS it calls the system only through `libSystem`, the one library macOS supports calling the kernel through (ADR 0015); on Windows it calls only `kernel32`, `ntdll`, `ProcessPrng` and `GetNetworkParams` of `iphlpapi` (ADR 0020, amended by ADR 0026). A program it cannot compile yet is refused, never compiled wrongly.
 _Avoid_: codegen, JIT
 
 **Supported platform**:

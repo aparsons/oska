@@ -327,3 +327,74 @@ fn the_human_report_lists_attenuations_under_their_function() {
     );
     assert_eq!(human, expected);
 }
+
+// ---- Network narrowing (ADR 0025) ----------------------------------------------------
+
+#[test]
+fn a_host_and_port_narrowing_is_listed_with_its_address() {
+    assert_eq!(
+        attenuations(
+            "fn site(net: NetConnect) -> HostConnect {\n    net.restrict_to(\"oskalang.dev\", 443)\n}"
+        ),
+        vec![entry(
+            "site",
+            "restrict_to",
+            "NetConnect",
+            "HostConnect",
+            Literal("oskalang.dev:443".to_string()),
+            "net.restrict_to(\"oskalang.dev\", 443)"
+        )]
+    );
+}
+
+#[test]
+fn net_narrows_to_a_host_directly_and_an_ipv6_literal_is_bracketed() {
+    let found =
+        attenuations("fn local(net: Net) -> HostConnect {\n    net.restrict_to(\"::1\", 8_080)\n}");
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        (found[0].2.as_str(), found[0].3.as_str()),
+        ("Net", "HostConnect")
+    );
+    assert_eq!(found[0].4, Literal("[::1]:8080".to_string()));
+}
+
+#[test]
+fn a_computed_host_or_port_is_listed_as_computed() {
+    for call in [
+        "net.restrict_to(host, 443)",
+        "net.restrict_to(\"a.example\", port)",
+    ] {
+        let found = attenuations(&format!(
+            "fn pick(net: NetConnect, host: String, port: Int) -> HostConnect {{\n    {call}\n}}"
+        ));
+        assert_eq!(found.len(), 1, "{call}");
+        assert_eq!(found[0].4, Computed, "{call}");
+    }
+}
+
+#[test]
+fn a_loopback_listener_is_listed_with_its_port() {
+    assert_eq!(
+        attenuations(
+            "fn serve(net: NetListen) -> LoopbackListen {\n    net.restrict_to_loopback(0)\n}"
+        ),
+        vec![entry(
+            "serve",
+            "restrict_to_loopback",
+            "NetListen",
+            "LoopbackListen",
+            Literal("loopback:0".to_string()),
+            "net.restrict_to_loopback(0)"
+        )]
+    );
+}
+
+#[test]
+fn net_connect_and_net_listen_attenuations_are_listed_without_a_root() {
+    let found = attenuations(
+        "fn split(net: Net) -> NetConnect {\n    let _ = net.listen_only()\n    net.connect_only()\n}",
+    );
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().all(|e| e.4 == Absent), "{found:?}");
+}

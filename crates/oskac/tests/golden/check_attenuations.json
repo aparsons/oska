@@ -14,7 +14,11 @@
     {"name":"everything","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false},
     {"name":"main","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false},
     {"name":"<Site<Int> as Publish>.out","authority":["FsWrite"],"via":[{"param":"write","capabilities":["FsWrite"]}],"pure":false},
-    {"name":"<Site<String> as Publish>.out","authority":["FsWrite"],"via":[{"param":"write","capabilities":["FsWrite"]}],"pure":false}
+    {"name":"<Site<String> as Publish>.out","authority":["FsWrite"],"via":[{"param":"write","capabilities":["FsWrite"]}],"pure":false},
+    {"name":"site","authority":["Net"],"via":[{"param":"net","capabilities":["Net"]}],"pure":false},
+    {"name":"local","authority":["NetConnect"],"via":[{"param":"net","capabilities":["NetConnect"]}],"pure":false},
+    {"name":"pick","authority":["NetConnect"],"via":[{"param":"net","capabilities":["NetConnect"]}],"pure":false},
+    {"name":"serve","authority":["NetListen"],"via":[{"param":"net","capabilities":["NetListen"]}],"pure":false}
   ],
   "audit": [],
   "attenuations": [
@@ -34,8 +38,13 @@
     {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1516,"end":1531},"source":"Fs","result":"FsWrite","root":null},
     {"function":"<Site<Int> as Publish>.out","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1904,"end":1933},"source":"FsWrite","result":"DirWrite","root":"numbered"},
     {"function":"<Site<String> as Publish>.out","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2030,"end":2056},"source":"FsWrite","result":"DirWrite","root":"named"},
-    {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2164,"end":2180},"source":"Fs","result":"FsRead","root":null},
-    {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2164,"end":2201},"source":"FsRead","result":"DirRead","root":"notes"}
+    {"function":"site","method":"connect_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2275,"end":2293},"source":"Net","result":"NetConnect","root":null},
+    {"function":"site","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2275,"end":2326},"source":"NetConnect","result":"HostConnect","root":"oskalang.dev:443"},
+    {"function":"local","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2377,"end":2405},"source":"NetConnect","result":"HostConnect","root":"[::1]:8080"},
+    {"function":"pick","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2480,"end":2507},"source":"NetConnect","result":"HostConnect","root":null},
+    {"function":"serve","method":"restrict_to_loopback","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2560,"end":2587},"source":"NetListen","result":"LoopbackListen","root":"loopback:0"},
+    {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2689,"end":2705},"source":"Fs","result":"FsRead","root":null},
+    {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2689,"end":2726},"source":"FsRead","result":"DirRead","root":"notes"}
   ],
   "verdict": "ok"
 }

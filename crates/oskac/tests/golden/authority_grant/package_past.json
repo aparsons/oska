@@ -7,7 +7,9 @@ exit: 3
     {"name":"pkg.main.main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
   ],
   "audit": [],
-  "attenuations": [],
+  "attenuations": [
+    {"function":"pkg.main.fetch","method":"restrict_to","path":"src/main.osk","span":{"start":196,"end":231},"source":"NetConnect","result":"HostConnect","root":"example.com:443"}
+  ],
   "authority_diff": {
     "grant": "<grant>",
     "grant_oskac": null,
@@ -20,7 +22,9 @@ exit: 3
     "removed": [],
     "new_audit_sites": [],
     "removed_audit_sites": [],
-    "new_attenuations": [],
+    "new_attenuations": [
+      {"function":"pkg.main.fetch","method":"restrict_to","source":"NetConnect","result":"HostConnect","root":"example.com:443","count":1}
+    ],
     "removed_attenuations": [],
     "fails": true
   },

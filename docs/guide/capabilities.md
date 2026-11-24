@@ -10,9 +10,9 @@ Oska has no **ambient authority**. Reading a file, opening a connection, reading
 | `Fs` | The filesystem, but only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). | Yes |
 | `Env` | Environment variables, which can hold secrets | Yes |
 | `Clock` | The time: `now_millis()` | Yes |
-| `Random` | Pseudo-random numbers: `next_int()` | Yes |
+| `Random` | Pseudo-random numbers: `next_int()`, and secure bytes for keys: `secure_bytes(n)` | Yes |
 | `Budget` | Spending model tokens and calls. Unlimited in `main`; attenuates to a smaller `Budget` with `limit(tokens, calls)`. See [Budgets](#budgets). | Yes |
-| `Net` | The network. Attenuates to `NetConnect` or `NetListen`. | No: `E0370` |
+| `Net` | The network, but only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`). | Every host; native on Linux, macOS and Windows |
 | `Sched` | Channels and `select` | No: `E0370` |
 | `Spawn` | Starting OS processes | No: `E0370` |
 
@@ -120,7 +120,7 @@ You cannot forge a capability. You get one by being passed it, or by **attenuati
 - `fs.restrict_to("dir")` gives a `Dir`, a **directory capability** that reaches only `dir` and what is beneath it. `read.restrict_to("dir")` on an `FsRead` gives a `DirRead`, and `write.restrict_to("dir")` on an `FsWrite` gives a `DirWrite`. The directory must be trusted text, because it decides where the program may reach (a **structural position**).
 - A `Dir` gives a `DirRead` with `read_only()` and a `DirWrite` with `write_only()`. Each directory capability narrows to a subdirectory with `restrict_to(path)`, which takes a `Path` and returns its own type.
 - `read.restrict_to_file("name")` on an `FsRead` gives a `FileRead`, and `write.restrict_to_file("name")` on an `FsWrite` gives a `FileWrite`: a **file capability** for exactly one file. A `DirRead` or `DirWrite` hands out one for a file beneath it, with a `Path`.
-- `net.connect_only()` and `net.listen_only()` narrow `Net`. They check, but a program that declares `Net` does not run yet.
+- `net.connect_only()` and `net.listen_only()` narrow `Net` to `NetConnect` and `NetListen`. `net.restrict_to("host", 443)` on `Net` or `NetConnect` gives a `HostConnect`, a **host capability** for one host and port, and only that can `connect()`. The host must be trusted text, because it decides where the program connects (a structural position, so untrusted text there is `E0300`). `listen.restrict_to_loopback(port)` on `NetListen` gives a `LoopbackListen`, which accepts connections from this machine only. `Net`, `NetConnect` and `NetListen` have no `connect` or `accept` of their own, and every narrowing is in the authority report. See [networking](networking.md) and ADR 0025.
 
 `Fs`, `FsRead`, and `FsWrite` only attenuate. They have no `read_to_string`, `list_dir`, `write`, or `create_dir`, so every read and write goes through a directory or file capability whose root the code names. Calling one of those methods on them is `E0273`, which shows the shape of the fix:
 
@@ -364,17 +364,26 @@ fn main() {
 
 ## What the runtime refuses
 
-A program that declares `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched` in `main` passes `oskac check` but is refused by `oskac run` with `E0370` and exit code 2, before anything runs.
+A program that declares `Spawn` or `Sched` in `main` passes `oskac check` but is refused by `oskac run` with `E0370` and exit code 2, before anything runs.
 
 ```oska
-fn main(net: Net) -> Result<(), IoError> {
-    let connection = net.connect_only().connect("example.com", 443)?
-    connection.send("hello")
+fn main(spawn: Spawn) -> Result<(), IoError> {
+    Ok(())
 }
 ```
 
 ```console cmd=run stream=stderr
-main.osk:1:42: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 41..142)
+main.osk:1:46: error[E0370]: `oskac run` cannot grant `Spawn` yet: the capability has no runtime (bytes 45..59)
+```
+
+`Net` has a runtime, on both backends. A program that connects goes through a host capability. Natively the host is an IP address or `localhost`; any other name fails with `host not found` natively, because `connect()` does not use `std.dns` yet (tracked in a follow-up issue), so run such a program with `oskac run --interpret`, which resolves names with the operating system's resolver:
+
+```oska fragment
+fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let connection = net.restrict_to("example.com", 443).connect()?
+    connection.send("hello")?
+    io.println("sent")
+}
 ```
 
 ## Two exceptions

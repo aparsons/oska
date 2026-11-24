@@ -566,6 +566,10 @@ impl Host for TestHost<'_> {
         self.world().next_random()
     }
 
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        self.world().secure_bytes(len)
+    }
+
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
         self.world().open_root(path)
     }
@@ -603,6 +607,34 @@ impl Host for TestHost<'_> {
         self.world().list_dir_beneath(root, names)
     }
 
+    fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
+        self.world().net_connect(host, port)
+    }
+
+    fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
+        self.world().net_listen_loopback(port)
+    }
+
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        self.world().net_exchange_datagram(host, port, message)
+    }
+
+    fn net_name_servers(&mut self) -> io::Result<Vec<String>> {
+        self.world().net_name_servers()
+    }
+
+    fn net_attempts(&self) -> Vec<String> {
+        match &self.fake {
+            Some(fake) => fake.net_attempts(),
+            None => self.given.net_attempts(),
+        }
+    }
+
     fn take_output(&mut self) -> Output {
         Output::default()
     }
@@ -615,6 +647,7 @@ impl Host for TestHost<'_> {
 pub const INTRINSICS: Table = &[
     ("TestContext.assert", Plain(assert)),
     ("TestContext.fail", Plain(fail)),
+    ("TestContext.net_attempts", Plain(net_attempts)),
     ("TestContext.printed", Plain(printed)),
     (ASSERT_SNAPSHOT, HigherOrder(assert_snapshot)),
     ("TestContext.assert_eq", HigherOrder(assert_eq)),
@@ -643,6 +676,13 @@ fn fail(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
 fn printed(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
     let lines = host.printed().iter().map(|l| Value::str(l)).collect();
     Ok(Value::List(std::rc::Rc::new(lines)))
+}
+
+/// `t.net_attempts()`: where the program tried to connect or listen, in
+/// order.
+fn net_attempts(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {
+    let attempts = host.net_attempts().iter().map(|a| Value::str(a)).collect();
+    Ok(Value::List(std::rc::Rc::new(attempts)))
 }
 
 /// `t.assert_snapshot(value)`: records `value`, as `dbg` renders it, for

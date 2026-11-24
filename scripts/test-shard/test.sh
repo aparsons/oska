@@ -18,7 +18,7 @@ bad() { printf 'FAIL %s: %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
 split=$(grep '^SITE_SPLIT=' scripts/test-shard.sh | cut -d= -f2)
 
-for set in musl linux macos; do
+for set in musl linux macos windows; do
   # Each shard but `all`, one "PACKAGE KIND NAME" line a target; a site slice
   # is "oska-run test site/K".
   got=$(for shard in $(scripts/test-shard.sh --sets | awk -v s="$set" '$1 == s && $2 != "all" {print $2}'); do
@@ -56,15 +56,17 @@ for f in crates/oska-run/tests/*.rs crates/oska-sys/tests/*.rs crates/oskac/test
 done
 ok "linux: every test file of the crates is a target"
 
-# ci.yml names each shard of every set, and none the script lacks: a line
+# ci.yml (windows.yml for windows) names each shard of every set, and none the script lacks: a line
 # `# shards SET: a b c` above each matrix lists them.
-for set in musl linux macos; do
+for set in musl linux macos windows; do
   want=$(scripts/test-shard.sh --sets | awk -v s="$set" '$1 == s && $2 != "all" {print $2}' | sort | tr '\n' ' ')
-  have=$(sed -n "s/^ *# shards $set: //p" .github/workflows/ci.yml | tr ' ' '\n' | sort | tr '\n' ' ')
+  wf=.github/workflows/ci.yml
+  [ "$set" = windows ] && wf=.github/workflows/windows.yml
+  have=$(sed -n "s/^ *# shards $set: //p" "$wf" | tr ' ' '\n' | sort | tr '\n' ' ')
   if [ "$want" = "$have" ]; then
-    ok "$set: ci.yml names every shard"
+    ok "$set: its workflow names every shard"
   else
-    bad "$set: ci.yml names every shard" "script: $want; ci.yml: $have"
+    bad "$set: its workflow names every shard" "script: $want; workflow: $have"
   fi
 done
 if scripts/test-shard.sh bogus rest --plan 2>/dev/null; then

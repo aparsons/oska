@@ -1,0 +1,264 @@
+// SPDX-License-Identifier: Apache-2.0
+// The response parser of `std.http` (#245 of spec #228), with no socket and
+// no TLS, on both backends (the native test corpus runs every test-bearing
+// fixture). Every way a response can be framed is here, and every way the
+// spec says to refuse one: both lengths, differing lengths, obsolete
+// folding, bare line feeds, a chunk size that overflows, a body past its
+// limit, too many headers. The handshakes and the request are in
+// `native_http.rs`, over a loopback server.
+
+use std.http
+use std.tls
+
+// What a parse of `text` (fed in pieces of `piece` bytes) comes to: the
+// status, the body and the headers on one line, or the error's wording
+// with `!` in front. `closed` says the server then ended the stream.
+fn parse(text: String, piece: Int, max_body: Int, closed: Bool) -> Untrusted<String> {
+    var reader = http.Reader.new(max_body)
+    let bytes = text.to_bytes()
+    var at = 0
+    while at < bytes.len() && !reader.is_done() {
+        let stop = if at + piece > bytes.len() { bytes.len() } else { at + piece }
+        match reader.feed(bytes.slice(at, stop)) {
+            Ok(_) => {}
+            Err(error) => { return "!{error}" }
+        }
+        at = stop
+    }
+    if closed {
+        match reader.end() {
+            Ok(_) => {}
+            Err(error) => { return "!{error}" }
+        }
+    }
+    match reader.response() {
+        None => "incomplete"
+        Some(response) => {
+            let status = response.status
+            let body = response.body.to_text().unwrap_or("?")
+            var names = ""
+            for h in response.headers {
+                let name = h.name
+                let value = h.value
+                names = "{names} {name}={value}"
+            }
+            "{status} [{body}]{names}"
+        }
+    }
+}
+
+fn whole(text: String) -> Untrusted<String> {
+    parse(text, 1000000, 1000, true)
+}
+
+test "a body framed by Content-Length" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nX-A: b\r\n\r\nhello"), "200 [hello] Content-Length=5 X-A=b")
+}
+
+test "the same response in pieces of any size parses the same" {
+    let text = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nX-A: b\r\n\r\nhello"
+    let expected = whole(text)
+    for size in [1, 2, 3, 7, 11] {
+        t.assert_eq(parse(text, size, 1000, true), expected)
+    }
+    let chunked = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3;x=1\r\nabc\r\n2\r\nde\r\n0\r\nT: 1\r\n\r\n"
+    let again = whole(chunked)
+    for size in [1, 2, 3, 5, 8] {
+        t.assert_eq(parse(chunked, size, 1000, true), again)
+    }
+}
+
+test "the status line needs HTTP/1.1, three digits and a space before the reason" {
+    t.assert_eq(whole("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"), "404 [] Content-Length=0")
+    t.assert_eq(whole("HTTP/1.1 200\r\nContent-Length: 0\r\n\r\n"), "200 [] Content-Length=0")
+    t.assert_eq(whole("HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n"), "!malformed response: the status line is not HTTP/1.1")
+    t.assert_eq(whole("garbage garbage garbage\r\n\r\n"), "!malformed response: the status line is not HTTP/1.1")
+    t.assert_eq(whole("HTTP/1.1 20 OK\r\n\r\n"), "!malformed response: the status is not three digits")
+    t.assert_eq(whole("HTTP/1.1 2000 OK\r\n\r\n"), "!malformed response: the status line has no space after the status")
+    t.assert_eq(whole("HTTP/1.1 099 OK\r\n\r\n"), "!malformed response: the status is below 100")
+}
+
+test "header names are matched without regard to case and values are trimmed" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\ncontent-LENGTH:   2 \t\r\nX-B:\tv  w \r\n\r\nok"), "200 [ok] content-LENGTH=2 X-B=v  w")
+}
+
+test "a response finds its first header by name" {
+    var reader = http.Reader.new(100)
+    let _ = reader.feed("HTTP/1.1 302 Found\r\nLocation: /a\r\nlocation: /b\r\nContent-Length: 0\r\n\r\n".to_bytes())
+    match reader.response() {
+        None => { t.assert_eq(true, false) }
+        Some(response) => {
+            t.assert_eq(response.header("LOCATION").unwrap_or("none"), "/a")
+            t.assert_eq(response.header("etag").unwrap_or("none"), "none")
+            t.assert_eq(response.status, 302)
+        }
+    }
+}
+
+test "chunked bodies, with extensions and trailers" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6;ext=1\r\n world\r\n0\r\n\r\n"), "200 [hello world] Transfer-Encoding=chunked")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\nA\r\n0123456789\r\n0\r\nX-T: 1\r\nY-T: 2\r\n\r\n"), "200 [0123456789] Transfer-Encoding=Chunked")
+}
+
+test "a chunked body that is wrong is refused" {
+    let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    t.assert_eq(whole("{head}zz\r\n"), "!malformed response: a chunk size is not hexadecimal")
+    t.assert_eq(whole("{head}\r\n"), "!malformed response: a chunk size is not hexadecimal")
+    t.assert_eq(whole("{head}3 \r\nabc\r\n0\r\n\r\n"), "!malformed response: a chunk size line holds more than a size")
+    t.assert_eq(whole("{head}3\r\nabcde\r\n"), "!malformed response: a chunk is not followed by CRLF")
+    t.assert_eq(whole("{head}ffffffffffffffffff\r\nx"), "!malformed response: a chunk size that overflows")
+    t.assert_eq(whole("{head}3\nabc\r\n"), "!malformed response: a bare line feed")
+    t.assert_eq(whole("{head}3\r\nabc\r\n"), "!malformed response: the response ended before it was complete")
+    t.assert_eq(whole("{head}0\r\nT: 1\r\n"), "!malformed response: the response ended before it was complete")
+}
+
+test "a body that runs to the end of the stream counts only when the stream ends" {
+    let text = "HTTP/1.1 200 OK\r\nX: y\r\n\r\nall of it"
+    t.assert_eq(parse(text, 1000, 1000, true), "200 [all of it] X=y")
+    t.assert_eq(parse(text, 1000, 1000, false), "incomplete")
+    t.assert_eq(parse(text, 4, 1000, true), "200 [all of it] X=y")
+}
+
+test "a response that ends early is refused" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhello"), "!malformed response: the response ended before it was complete")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n"), "!malformed response: the response ended before it was complete")
+    t.assert_eq(whole(""), "!malformed response: the response ended before it was complete")
+}
+
+test "1xx responses are skipped, and 204 and 304 have no body" {
+    t.assert_eq(whole("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"), "200 [hi] Content-Length=2")
+    t.assert_eq(whole("HTTP/1.1 103 Early Hints\r\nLink: x\r\n\r\nHTTP/1.1 204 No Content\r\n\r\nignored"), "204 []")
+    t.assert_eq(whole("HTTP/1.1 304 Not Modified\r\nContent-Length: 9\r\n\r\n"), "304 [] Content-Length=9")
+}
+
+test "101 Switching Protocols is refused, though other 1xx responses are skipped" {
+    t.assert_eq(whole("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\n\r\n"), "!malformed response: a 101 Switching Protocols response")
+    t.assert_eq(whole("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 101 Switching Protocols\r\n\r\n"), "!malformed response: a 101 Switching Protocols response")
+    t.assert_eq(whole("HTTP/1.1 102 Processing\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), "200 [] Content-Length=0")
+}
+
+test "a redirect is a response like any other" {
+    t.assert_eq(whole("HTTP/1.1 301 Moved\r\nLocation: https://other.test/\r\nContent-Length: 0\r\n\r\n"), "301 [] Location=https://other.test/ Content-Length=0")
+}
+
+test "a response framed two ways, or two different lengths, is refused" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"), "!malformed response: both Transfer-Encoding and Content-Length")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n"), "!malformed response: both Transfer-Encoding and Content-Length")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\nhello!"), "!malformed response: two different Content-Length values")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello"), "200 [hello] Content-Length=5 Content-Length=5")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n"), "!malformed response: a transfer coding other than a single chunked")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"), "!malformed response: a transfer coding other than a single chunked")
+}
+
+test "a length that is not plain digits is refused" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: +5\r\n\r\nhello"), "!malformed response: the Content-Length is not a plain number")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 5, 5\r\n\r\nhello"), "!malformed response: the Content-Length is not a plain number")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: \r\n\r\n"), "!malformed response: the Content-Length is not a plain number")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 99999999999999999999\r\n\r\n"), "!malformed response: the Content-Length is not a plain number")
+}
+
+test "obsolete folding, bare line feeds and carriage returns, and NUL are refused" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nX-A: b\r\n  folded\r\nContent-Length: 0\r\n\r\n"), "!malformed response: obsolete line folding")
+    t.assert_eq(whole("HTTP/1.1 200 OK\nContent-Length: 0\r\n\r\n"), "!malformed response: a bare line feed")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nContent-Length: 0\n\n"), "!malformed response: a bare line feed")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nX-A: b\rc\r\n\r\n"), "!malformed response: a bare carriage return")
+    let nul = Bytes.from_hex("00").unwrap_or(Bytes.new()).to_text().unwrap_or("")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nX-A: b{nul}\r\n\r\n"), "!malformed response: a NUL in the response")
+}
+
+test "a header that is not name, colon and value is refused" {
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nno colon here\r\n\r\n"), "!malformed response: a header line has no name or no colon")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nX-A : b\r\n\r\n"), "!malformed response: a header name is not a token")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\n: b\r\n\r\n"), "!malformed response: a header line has no name or no colon")
+    t.assert_eq(whole("HTTP/1.1 200 OK\r\nX-A\r\n\r\n"), "!malformed response: a header line has no name or no colon")
+}
+
+test "a body past its limit is too large, as soon as the length says so" {
+    t.assert_eq(parse("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n", 1000, 10, true), "!the response is too large")
+    t.assert_eq(parse("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789", 1000, 10, true), "200 [0123456789] Content-Length=10")
+    t.assert_eq(parse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n6\r\n012345\r\n5\r\n67890\r\n0\r\n\r\n", 1000, 10, true), "!the response is too large")
+    t.assert_eq(parse("HTTP/1.1 200 OK\r\n\r\n01234567890", 1000, 10, true), "!the response is too large")
+    t.assert_eq(parse("HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nx", 1000, 0, true), "!the response is too large")
+}
+
+test "a head past 100 fields or 64 KiB is too large" {
+    var many = "HTTP/1.1 200 OK\r\n"
+    for i in 0..101 {
+        many = "{many}X-{i}: v\r\n"
+    }
+    t.assert_eq(whole("{many}\r\n"), "!the response is too large")
+    let digits = "0123456789".repeat(100)
+    var big = "HTTP/1.1 200 OK\r\nX-Big: "
+    for _ in 0..70 {
+        big = "{big}{digits}"
+    }
+    t.assert_eq(whole(big), "!the response is too large")
+    t.assert_eq(whole("{big}\r\n\r\n"), "!the response is too large")
+}
+
+test "too many interim responses are refused" {
+    var text = ""
+    for _ in 0..17 {
+        text = "{text}HTTP/1.1 100 Continue\r\n\r\n"
+    }
+    t.assert_eq(whole("{text}HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), "!malformed response: too many interim responses")
+}
+
+test "the error wording" {
+    t.assert_eq(http.HttpError.TooLarge.to_string(), "the response is too large")
+    t.assert_eq(http.HttpError.InvalidRequest("the path must start with /").to_string(), "invalid request: the path must start with /")
+}
+
+// What `http.get` says for `request` on a network that refuses every
+// connection: a request that is refused is told so before anything is
+// connected; one that is not reaches the (refused) connection.
+fn asked(net: Net, random: Random, clock: Clock, request: http.Request) -> String {
+    let host = net.restrict_to("example.test", 443)
+    match http.get(host, request, tls.TlsConfig.default(), random, clock) {
+        Ok(_) => "ok"
+        Err(error) => error.to_string()
+    }
+}
+
+test "a request that is sound reaches the connection" {
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/a/b?c=d&e=f%20g")), "tls: i/o error: other")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/").with_header("X-Id", "a b\tc").with_header("User-Agent", "mine").with_max_body(0)), "tls: i/o error: other")
+}
+
+test "a path must start with a slash and hold no control character, space or hash" {
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("")), "invalid request: the path must start with /")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("index")), "invalid request: the path must start with /")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("http://other.test/")), "invalid request: the path must start with /")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/a b")), "invalid request: the path holds a control character or a space")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/a\r\nHost: evil.test")), "invalid request: the path holds a control character or a space")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/a\tb")), "invalid request: the path holds a control character or a space")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/a#b")), "invalid request: the path holds a #")
+}
+
+test "a header value may not hold a control character, and a name must be a token" {
+    let nul = Bytes.from_hex("00").unwrap_or(Bytes.new()).to_text().unwrap_or("")
+    let get = http.Request.get("/")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\r\nX-B: 2")), "invalid request: a header value holds a control character")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\nX-B: 2")), "invalid request: a header value holds a control character")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1\rX-B: 2")), "invalid request: a header value holds a control character")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "1{nul}")), "invalid request: a header value holds a control character")
+    for hex in ["01", "08", "0b", "0c", "0e", "1f", "7f"] {
+        let c = Bytes.from_hex(hex).unwrap_or(Bytes.new()).to_text().unwrap_or("")
+        t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A", "a{c}b")), "invalid request: a header value holds a control character")
+    }
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X A", "1")), "invalid request: a header name is not a token")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("X-A:", "1")), "invalid request: a header name is not a token")
+    t.assert_eq(asked(t.net, t.random, t.clock, get.with_header("", "1")), "invalid request: a header name is empty")
+}
+
+test "the headers the client sets itself cannot be set, in any case" {
+    let get = http.Request.get("/")
+    for name in ["Host", "host", "CONNECTION", "Content-Length", "transfer-encoding", "Accept-Encoding", "Upgrade", "EXPECT", "te"] {
+        let lowered = name.to_lowercase()
+        t.assert_eq(asked(t.net, t.random, t.clock, get.with_header(name, "x")), "invalid request: the header {lowered} is set by the client")
+    }
+}
+
+test "a negative maximum body is refused" {
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/").with_max_body(-1)), "invalid request: the maximum body is below 0")
+}

@@ -21,6 +21,45 @@ use std::path::Path;
 
 use crate::refusal;
 
+/// Fill `buf` from the operating system's secure random source
+/// (`ProcessPrng`).
+pub fn fill_random(buf: &mut [u8]) -> io::Result<()> {
+    // SAFETY: `buf` is a live, writable buffer of exactly the length
+    // passed.
+    let ok = unsafe { nt::process_prng(buf.as_mut_ptr(), buf.len()) };
+    if ok == 0 {
+        return Err(io::Error::other("the system's random source failed"));
+    }
+    Ok(())
+}
+
+/// The DNS servers Windows is configured with, in order, as IPv4
+/// literals: the list `GetNetworkParams` (`iphlpapi.dll`) reports in its
+/// `FIXED_INFO`.
+pub fn system_name_servers() -> io::Result<Vec<String>> {
+    // `FIXED_INFO` is about 1 KiB and the list's nodes follow it in the
+    // same buffer. A first call with no buffer says how much is needed.
+    let mut size: u32 = 0;
+    // SAFETY: a null buffer with `size` 0 is the documented way to ask for
+    // the size: the function writes only `size`.
+    let first = unsafe { nt::get_network_params(std::ptr::null_mut(), &mut size) };
+    const ERROR_BUFFER_OVERFLOW: u32 = 111;
+    if first != ERROR_BUFFER_OVERFLOW || size == 0 || size > 65536 {
+        return Err(io::Error::other("the system's DNS servers cannot be read"));
+    }
+    // 8-byte units, so the pointers inside are aligned.
+    let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+    // SAFETY: `buffer` is writable for at least `size` bytes, as the
+    // first call asked.
+    let second = unsafe { nt::get_network_params(buffer.as_mut_ptr().cast(), &mut size) };
+    if second != 0 {
+        return Err(io::Error::other("the system's DNS servers cannot be read"));
+    }
+    let base = buffer.as_ptr() as usize;
+    let bytes: Vec<u8> = buffer.iter().flat_map(|word| word.to_le_bytes()).collect();
+    Ok(crate::net::servers_from_fixed_info(&bytes, base))
+}
+
 /// The declarations from `ntdll` this crate uses, with their values from
 /// the Windows SDK's headers (`winternl.h`, `ntifs.h`, `winnt.h`), for
 /// x86_64 Windows, the one Windows target Oska releases for.
@@ -137,6 +176,27 @@ mod nt {
         /// `RtlNtStatusToDosError`: the Win32 error code for a status.
         #[link_name = "RtlNtStatusToDosError"]
         pub fn status_to_error(status: NtStatus) -> u32;
+    }
+
+    // `ProcessPrng` is in `bcryptprimitives.dll`, which every Windows
+    // process can load; it is the system's secure random source.
+    #[link(name = "bcryptprimitives", kind = "raw-dylib")]
+    extern "system" {
+        /// `ProcessPrng`: fill `buffer` with `length` random bytes. It
+        /// returns nonzero, and always succeeds.
+        #[link_name = "ProcessPrng"]
+        pub fn process_prng(buffer: *mut u8, length: usize) -> i32;
+    }
+
+    // `GetNetworkParams` is in `iphlpapi.dll`, which every Windows process
+    // can load.
+    #[link(name = "iphlpapi", kind = "raw-dylib")]
+    extern "system" {
+        /// `GetNetworkParams(FIXED_INFO *info, ULONG *size)`: 0 on
+        /// success, `ERROR_BUFFER_OVERFLOW` (111) with the size needed in
+        /// `size` when the buffer is too small.
+        #[link_name = "GetNetworkParams"]
+        pub fn get_network_params(info: *mut u8, size: *mut u32) -> u32;
     }
 
     // Access rights.

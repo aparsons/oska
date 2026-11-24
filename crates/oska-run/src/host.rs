@@ -65,6 +65,13 @@ pub trait Host: Send {
     /// The next pseudo-random 64 bits.
     fn next_random(&mut self) -> u64;
 
+    /// `len` bytes for keys and nonces. The real host takes them from the
+    /// operating system's secure random source and returns its error if
+    /// that fails. A test host gives [`generator_bytes`] explicitly. Every
+    /// host says which it is: there is no default, so none can serve
+    /// generator bytes as secure ones by accident.
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>>;
+
     /// Open the directory at `path` as the root of a directory
     /// capability. Its last component must not be a symlink; earlier ones
     /// are followed, since the root is trusted text. A file there is an
@@ -121,6 +128,48 @@ pub trait Host: Send {
     /// valid UTF-8. No names lists `root`.
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>>;
 
+    /// Open a connection to `host` at `port`, as `HostConnect.connect`
+    /// asks. A host with no network refuses with an error whose message is
+    /// the same every time.
+    fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
+        let _ = (host, port);
+        Err(no_network())
+    }
+
+    /// Listen on the loopback address at `port`, as
+    /// `NetListen.restrict_to_loopback` asks.
+    fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
+        let _ = port;
+        Err(no_network())
+    }
+
+    /// Send one datagram to the address literal `host` at `port` and
+    /// return the one that comes back, as `HostConnect.exchange_datagram`
+    /// asks. A host with no network refuses, as `net_connect` does.
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        let _ = (host, port, message);
+        Err(no_network())
+    }
+
+    /// The DNS servers the operating system lists, as
+    /// `NetConnect.system_name_servers` asks. A host with no network
+    /// lists none.
+    fn net_name_servers(&mut self) -> io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    /// Where the program has tried to go, in order, as `t.net_attempts()`
+    /// returns them: `host:port`, or `loopback:port` for a listener. A host
+    /// that records none returns none.
+    fn net_attempts(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Every line written to stdout so far, without its line break: one
     /// per `println`, as `t.printed()` returns them. A host that writes
     /// straight to the real stream records none.
@@ -136,6 +185,12 @@ pub trait Host: Send {
     /// the last call. A host that writes straight to the real streams
     /// records nothing.
     fn take_output(&mut self) -> Output;
+}
+
+/// The error of a host with no network, such as a plain test's: the same
+/// message on every platform, so a test can assert it.
+fn no_network() -> io::Error {
+    io::Error::other("network access is not available here: a plain test is offline")
 }
 
 /// The root of a directory or file capability, as a host opened it: a directory,
@@ -312,6 +367,18 @@ impl RealHost {
     }
 }
 
+/// `len` bytes from `next`'s 64-bit words, each little-endian, the last
+/// one cut short: what a test host gives for `Random.secure_bytes`, so a
+/// test replays byte for byte. Never for a real host.
+pub fn generator_bytes(mut next: impl FnMut() -> u64, len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(len + 8);
+    while out.len() < len {
+        out.extend_from_slice(&next().to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
 impl Host for RealHost {
     /// A closed pipe ends the process quietly with 0, as `head` expects
     /// of what it reads, and as the native runtime does: the program
@@ -378,6 +445,12 @@ impl Host for RealHost {
 
     fn next_random(&mut self) -> u64 {
         self.random.next()
+    }
+
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        let mut out = vec![0; len];
+        oska_sys::fill_random(&mut out)?;
+        Ok(out)
     }
 
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
@@ -470,6 +543,27 @@ impl Host for RealHost {
 
     fn printed(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
+        oska_sys::NetStream::connect(host, port)
+    }
+
+    fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
+        oska_sys::NetListener::bind_loopback(port)
+    }
+
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        oska_sys::exchange_datagram(host, port, message)
+    }
+
+    fn net_name_servers(&mut self) -> io::Result<Vec<String>> {
+        oska_sys::system_name_servers()
     }
 
     fn take_output(&mut self) -> Output {
@@ -641,6 +735,9 @@ pub struct FakeHost {
     /// Symlinks, by their path, to their target's.
     links: BTreeMap<PathBuf, PathBuf>,
     random: SplitMix64,
+    /// Where the program tried to connect or listen, which this host
+    /// refused.
+    net_attempts: Vec<String>,
 }
 
 impl Default for FakeHost {
@@ -654,6 +751,7 @@ impl Default for FakeHost {
             dirs: BTreeSet::new(),
             links: BTreeMap::new(),
             random: SplitMix64::new(FAKE_SEED),
+            net_attempts: Vec::new(),
         }
     }
 }
@@ -999,6 +1097,10 @@ impl Host for FakeHost {
         self.random.next()
     }
 
+    fn secure_bytes(&mut self, len: usize) -> io::Result<Vec<u8>> {
+        Ok(generator_bytes(|| self.random.next(), len))
+    }
+
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
         if path.as_os_str().is_empty() {
             return Err(not_found(path));
@@ -1081,6 +1183,30 @@ impl Host for FakeHost {
         }
         let path = self.walk(root, names)?;
         self.entries(&path)
+    }
+
+    fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
+        self.net_attempts.push(format!("{host}:{port}"));
+        Err(no_network())
+    }
+
+    fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
+        self.net_attempts.push(format!("loopback:{port}"));
+        Err(no_network())
+    }
+
+    fn net_exchange_datagram(
+        &mut self,
+        host: &str,
+        port: i128,
+        _message: &[u8],
+    ) -> io::Result<Vec<u8>> {
+        self.net_attempts.push(format!("{host}:{port}"));
+        Err(no_network())
+    }
+
+    fn net_attempts(&self) -> Vec<String> {
+        self.net_attempts.clone()
     }
 
     fn take_output(&mut self) -> Output {

@@ -1192,8 +1192,10 @@ impl<'l, 'p> Body<'l, 'p> {
             rhs: one,
             target: shared,
         });
-        if layout::is_confined(ty) {
+        if layout::is_directory(ty) {
             self.call_runtime("root_drop", vec![value], NOWHERE)?;
+        } else if layout::is_socket(ty) {
+            self.call_runtime("sock_drop", vec![value], NOWHERE)?;
         } else if matches!(ty, Type::Fn { .. }) {
             if self.dropping {
                 let code = self.load(value, layout::FN_DROP);
@@ -2159,7 +2161,13 @@ impl<'l, 'p> Body<'l, 'p> {
                     target: long,
                 });
             }
-            Check::Zeroed => {
+            Check::Zeroed | Check::SecureBytes => {
+                // `Random.secure_bytes` passes the capability first.
+                let args = if matches!(check, Check::SecureBytes) {
+                    &args[1..]
+                } else {
+                    args
+                };
                 let negative = self.panic_text(
                     panics::BYTES_OUT_OF_RANGE,
                     "panic_bytes_negative",
@@ -3405,12 +3413,14 @@ fn borrows_arguments(name: &str) -> bool {
 /// Whether `main` can be given a value of `ty` by `_start`: the word 0.
 /// Each of these keeps its state, if it has any (the arguments, the
 /// environment, the input buffer, the generator, the root budget), in the
-/// runtime's globals.
+/// runtime's globals. `Net`, `NetConnect` and `NetListen` have no state:
+/// they only attenuate (ADR 0025), and what they give, a host capability or
+/// a loopback listener, is an object.
 fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),
         "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Budget" | "Args"
-            | "Fs" | "FsRead" | "FsWrite"
+            | "Fs" | "FsRead" | "FsWrite" | "Net" | "NetConnect" | "NetListen"
     ))
 }
 

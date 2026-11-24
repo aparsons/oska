@@ -77,7 +77,7 @@ fn a_parsed_string_is_refused_in_every_structural_position() {
         (
             "",
             ", net: NetConnect",
-            "    let _ = net.connect(name, 443)\n",
+            "    let _ = net.restrict_to(name, 443).connect()\n",
         ),
         ("", ", fs: FsRead", "    let _ = fs.restrict_to(name)\n"),
         (

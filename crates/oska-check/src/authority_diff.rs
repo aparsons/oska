@@ -1067,6 +1067,14 @@ mod tests {
         assert!(covers("FsRead", "FileRead"));
         assert!(!covers("DirRead", "Fs"));
         assert!(!covers("FsRead", "DirWrite"));
+        assert!(covers("Net", "NetConnect"));
+        assert!(covers("Net", "HostConnect"));
+        assert!(covers("NetConnect", "HostConnect"));
+        assert!(covers("Net", "LoopbackListen"));
+        assert!(covers("NetListen", "LoopbackListen"));
+        assert!(!covers("HostConnect", "NetConnect"));
+        assert!(!covers("NetConnect", "NetListen"));
+        assert!(!covers("LoopbackListen", "NetListen"));
         assert!(!covers("Stdout", "Net"));
         assert!(!covers("cap fn", "generic T"));
         assert!(covers("generic T", "generic T"));

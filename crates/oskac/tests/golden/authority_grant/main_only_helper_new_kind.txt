@@ -1,8 +1,10 @@
 exit: 3
 --- stdout
 fn fetch: NetConnect (net)
+  crates/oskac/tests/fixtures/authority_grant/main_only_helper_new_kind/program.osk:7:5: NetConnect -> HostConnect: restrict_to "example.com:443" (bytes 302..337)
 fn main: Stdout (io)
 grant: <grant>
   added fn fetch: NetConnect (new to the program: NetConnect)
+  new attenuation fn fetch: NetConnect -> HostConnect: restrict_to "example.com:443" +1
 --- stderr
 error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it

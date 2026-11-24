@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: Apache-2.0
+// Plays a recorded TLS 1.3 handshake back through `std.tls`'s engine, with no
+// socket (#244). The recording is on stdin (`recorded/*.txt`, made by
+// `scripts/tls-fixtures/record.py`): the server name, the time, the 64 bytes
+// of randomness and the root, then the TLS records the engine sent (`C`) and
+// received (`S`). The engine is given the stored randomness and time, so the
+// recording replays offline and never expires.
+//
+//     replay.osk -- <mode> [<record> [<offset> [<bit>]]]
+//
+// `exact` feeds every server record and requires the engine to send exactly the
+// recorded bytes and finish the handshake. The other modes change the server's
+// records first: `flip` flips a bit (the bit `bit` of byte `offset`) of
+// server record number `record`, `duplicate` repeats it, `swap` exchanges it with
+// the next, `drop` leaves it out, and `cut` ends the stream before it. The
+// program prints one line: `done`, `mismatch N` (the engine's Nth output differs
+// from the recording), or `failed KIND ALERT`, the error's kind and what the
+// engine sent first (`alert N` in a plaintext alert record, `encrypted alert`,
+// or `no alert`).
+
+use std.tls
+use std.x509
+
+fn kind_of(error: tls.TlsError) -> String {
+    match error {
+        tls.TlsError.Certificate(_) => "certificate"
+        tls.TlsError.AlertReceived(_) => "alert"
+        tls.TlsError.Protocol(_) => "protocol"
+        tls.TlsError.Unsupported(_) => "unsupported"
+        tls.TlsError.Truncated => "truncated"
+        tls.TlsError.Io(_) => "io"
+    }
+}
+
+// What the engine sent when it failed, as a note: the description of a
+// plaintext alert record, an encrypted record (the alert is protected, so only
+// its being sent shows), or neither. A `change_cipher_spec` record before it is
+// the compatibility one.
+fn alert_note(output: Bytes) -> String {
+    var at = 0
+    var note = "no alert"
+    while at + 5 <= output.len() {
+        let size = output.read_u16_be(at + 3).to_int()
+        let kind = output.at(at).to_int()
+        if kind == 21 && at + 7 <= output.len() {
+            let code = output.at(at + 6).to_int()
+            note = "alert {code}"
+        }
+        if kind == 23 {
+            note = "encrypted alert"
+        }
+        at = at + 5 + size
+    }
+    note
+}
+
+fn main(io: Stdout, input: Stdin, args: Args) -> Result<(), IoError> {
+    let mode = args.get(1).unwrap_or("exact").assume_trusted()
+    let at = args.get(2).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+    let offset = args.get(3).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+    let bit = args.get(4).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+    var name = "localhost"
+    var now = 0
+    var random = Bytes.new()
+    var root = Bytes.new()
+    var sent: List<String> = []
+    var received: List<Bytes> = []
+    var reading = true
+    while reading {
+        match input.read_line()? {
+            None => { reading = false }
+            Some(line) => {
+                let text = line.trim().assume_trusted()
+                if text.starts_with("name ") {
+                    name = text.slice(5, text.len())
+                } else if text.starts_with("time ") {
+                    now = text.slice(5, text.len()).parse_int().unwrap_or(0)
+                } else if text.starts_with("random ") {
+                    random = Bytes.from_hex(text.slice(7, text.len())).unwrap_or(Bytes.new())
+                } else if text.starts_with("root ") {
+                    root = Bytes.from_hex(text.slice(5, text.len())).unwrap_or(Bytes.new())
+                } else if text.starts_with("C ") {
+                    sent.push(text.slice(2, text.len()))
+                } else if text.starts_with("S ") {
+                    received.push(Bytes.from_hex(text.slice(2, text.len())).unwrap_or(Bytes.new()))
+                }
+            }
+        }
+    }
+    // The server's records as the mode changes them.
+    var feed: List<Bytes> = []
+    for i in 0..received.len() {
+        var record = received.at(i)
+        if mode == "flip" && i == at {
+            var mask: U8 = 1
+            mask = mask << bit.to_u8()
+            record.set(offset, record.at(offset) ^ mask)
+        }
+        if mode == "drop" && i == at {
+            continue
+        }
+        if mode == "cut" && i >= at {
+            break
+        }
+        if mode == "swap" && i == at && i + 1 < received.len() {
+            feed.push(received.at(i + 1))
+            feed.push(record)
+            continue
+        }
+        if mode == "swap" && i == at + 1 {
+            continue
+        }
+        feed.push(record)
+        if mode == "duplicate" && i == at {
+            feed.push(record)
+        }
+    }
+    let trust = match x509.TrustConfig.only_roots([]).with_root_der(root) {
+        Ok(trust) => trust
+        Err(_) => { return io.println("bad root") }
+    }
+    var engine = tls.Engine.new(name, tls.TlsConfig.default().with_trust(trust), Secret.new(random), now)
+    var step = engine.start()
+    var outputs = 0
+    var next = 0
+    var finished = false
+    var failure = ""
+    while !finished {
+        if step.output.len() > 0 {
+            if mode == "exact" {
+                let wanted = sent.get(outputs).unwrap_or("")
+                if step.output.to_hex() != wanted {
+                    return io.println("mismatch {outputs}")
+                }
+            }
+            outputs = outputs + 1
+        }
+        for event in step.events {
+            match event {
+                tls.Event.HandshakeDone => { finished = true }
+                tls.Event.Failed(error) => {
+                    let kind = kind_of(error)
+                    let note = alert_note(step.output)
+                    failure = "failed {kind} {note}"
+                    finished = true
+                }
+                tls.Event.Data(_) => {}
+                tls.Event.Closed => { finished = true }
+            }
+        }
+        if !finished {
+            if next < feed.len() {
+                step = engine.receive(feed.at(next))
+                next = next + 1
+            } else {
+                step = engine.end_of_input()
+            }
+        }
+    }
+    if failure.len() > 0 {
+        return io.println(failure)
+    }
+    if mode == "exact" && outputs != sent.len() {
+        return io.println("mismatch {outputs}")
+    }
+    io.println("done")
+}

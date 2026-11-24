@@ -1,0 +1,405 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.dns` on recorded DNS messages, on both backends (the native test
+// corpus runs every test-bearing fixture). The messages are real wire
+// format built to RFC 1035: answers with compressed names, `CNAME` chains,
+// every error code, a truncated answer, and hostile ones (the wrong id or
+// question, pointer loops and forward pointers, over-long labels and
+// names, records that overrun the message, a count larger than the data,
+// an unrelated owner, a `CNAME` chain that never ends). A hostile answer
+// must give an error and never panic. Then address literals, hosts files
+// and `resolv.conf`, and the resolver itself over a transport that
+// replays messages by name server, with no network.
+//
+// Every message is built to RFC 1035 by hand: id 0x1234, recursion
+// desired, the question echoed, and an owner that is a pointer to it
+// (`c00c`) unless the test says otherwise.
+
+use std.dns
+
+fn hex(text: String) -> Bytes {
+    Bytes.from_hex(text).unwrap_or(Bytes.new())
+}
+
+// `ok` when a query for `name` is built, else the error's wording.
+fn built(id: Int, name: String, kind: Int) -> String {
+    match dns.build_query(id, name, kind) {
+        Ok(_) => "ok"
+        Err(error) => error.to_string()
+    }
+}
+
+// The canonical text of the address literal `text`, or `none`.
+fn literal(text: String) -> String {
+    match dns.parse_ip(text) {
+        Some(ip) => ip.text
+        None => "none"
+    }
+}
+
+// The answer to `name` (kind `kind`) in `reply`, as its addresses joined
+// by spaces, or the error's wording with `!` in front.
+fn answer(reply: String, name: String, kind: Int) -> String {
+    match dns.parse_response(hex(reply), 4660, name, kind) {
+        Ok(found) => " ".join(found.addresses)
+        Err(error) => "!{error}"
+    }
+}
+test "a query for example.com" {
+    t.assert_eq(dns.build_query(4660, "example.com", 1).unwrap_or(Bytes.new()).to_hex(), "123401000001000000000000076578616d706c6503636f6d0000010001")
+    t.assert_eq(dns.build_query(4660, "example.com", 28).unwrap_or(Bytes.new()).to_hex(), "123401000001000000000000076578616d706c6503636f6d00001c0001")
+    t.assert_eq(dns.build_query(65535, "a.b", 1).unwrap_or(Bytes.new()).to_hex(), "ffff01000001000000000000016101620000010001")
+}
+test "queries refuse a name that is not a host name" {
+    t.assert_eq(built(1, "", 1), "invalid host name")
+    t.assert_eq(built(1, "a..b", 1), "invalid host name")
+    t.assert_eq(built(1, ".a", 1), "invalid host name")
+    t.assert_eq(built(1, "a b", 1), "invalid host name")
+    t.assert_eq(built(1, "a/b", 1), "invalid host name")
+    t.assert_eq(built(1, "bücher.example", 1), "invalid host name")
+    t.assert_eq(built(1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com", 1), "invalid host name")
+    t.assert_eq(built(1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com", 1), "invalid host name")
+    t.assert_eq(built(70000, "a.com", 1), "malformed answer")
+    t.assert_eq(built(1, "a.com", 15), "malformed answer")
+    t.assert_eq(built(1, "a_b-c.example.com", 1), "ok")
+}
+test "answers with compressed names give their addresses in order" {
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c0001000100000e1000045db8d822c00c000100010000025800045db8d823", "example.com", 1), "93.184.216.34 93.184.216.35")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d00001c0001c00c001c00010000012c001026062800022000010248189325c81946", "example.com", 28), "2606:2800:220:1:248:1893:25c8:1946")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d00001c0001c00c001c00010000012c001000000000000000000000000000000001", "example.com", 28), "::1")
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c0001000100000e1000045db8d822c00c000100010000025800045db8d823", "EXAMPLE.com", 1), "93.184.216.34 93.184.216.35")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001074558414d504c4503436f6d00000100010000003c00045db8d822", "example.com", 1), "93.184.216.34")
+}
+test "the shortest time to live of the records used is kept" {
+    match dns.parse_response(hex("123481800001000200000000076578616d706c6503636f6d0000010001c00c0001000100000e1000045db8d822c00c000100010000025800045db8d823"), 4660, "example.com", 1) {
+        Ok(found) => t.assert_eq(found.ttl, 600)
+        Err(_) => t.fail("an answer")
+    }
+    match dns.parse_response(hex("12348180000100030000000003777777076578616d706c6503636f6d0000010001c00c0005000100000078001103776562076578616d706c65036e65740003776562076578616d706c65036e657400000500010000003c00110363646e076578616d706c65036f7267000363646e076578616d706c65036f726700000100010000001e0004c6336407"), 4660, "www.example.com", 1) {
+        Ok(found) => t.assert_eq(found.ttl, 30)
+        Err(_) => t.fail("an answer")
+    }
+    match dns.parse_response(hex("123481800001000000000000076578616d706c6503636f6d00001c0001"), 4660, "example.com", 28) {
+        Ok(found) => t.assert_eq(found.ttl, 0)
+        Err(_) => t.fail("an answer")
+    }
+}
+test "a CNAME chain is followed to its addresses" {
+    t.assert_eq(answer("12348180000100030000000003777777076578616d706c6503636f6d0000010001c00c0005000100000078001103776562076578616d706c65036e65740003776562076578616d706c65036e657400000500010000003c00110363646e076578616d706c65036f7267000363646e076578616d706c65036f726700000100010000001e0004c6336407", "www.example.com", 1), "198.51.100.7")
+}
+test "records for other owners, classes and types are ignored" {
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001046576696c076578616d706c6500000100010000012c0004cb007142c00c000100010000012c00045db8d822", "example.com", 1), "93.184.216.34")
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c000100030000012c0004cb007142c00c000100010000012c00045db8d822", "example.com", 1), "93.184.216.34")
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c001000010000012c00060568656c6c6fc00c000100010000012c00045db8d822", "example.com", 1), "93.184.216.34")
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c000500010000012c001103776562076578616d706c65036e657400c00c000100010000012c0004cb007142", "example.com", 1), "")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c00045db8d822deadbeef", "example.com", 1), "93.184.216.34")
+}
+test "a name that exists with no address of the kind gives an empty answer" {
+    t.assert_eq(answer("123481800001000000000000076578616d706c6503636f6d00001c0001", "example.com", 28), "")
+}
+test "the name server errors have Oska wording" {
+    t.assert_eq(answer("123481830001000000000000046e6f7065076578616d706c6503636f6d0000010001", "nope.example.com", 1), "!host not found")
+    t.assert_eq(answer("123481820001000000000000076578616d706c6503636f6d0000010001", "example.com", 1), "!name server failed")
+    t.assert_eq(answer("123481850001000000000000076578616d706c6503636f6d0000010001", "example.com", 1), "!name server refused")
+    t.assert_eq(answer("123481840001000000000000076578616d706c6503636f6d0000010001", "example.com", 1), "!name server failed")
+    t.assert_eq(answer("12348380000100000000000003626967076578616d706c6503636f6d0000010001", "big.example.com", 1), "!answer truncated")
+}
+test "an answer to another query is refused" {
+    t.assert_eq(answer("432181800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c0004cb007109", "example.com", 1), "!answer does not match the query")
+    t.assert_eq(answer("123401800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c0004cb007109", "example.com", 1), "!answer does not match the query")
+    t.assert_eq(answer("123481800001000100000000046576696c076578616d706c650000010001c00c000100010000012c0004cb007109", "example.com", 1), "!answer does not match the query")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d00001c0001c00c001c00010000012c001000000000000000000000000000000002", "example.com", 1), "!answer does not match the query")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010003c00c000100010000012c0004cb007109", "example.com", 1), "!answer does not match the query")
+    t.assert_eq(answer("123481800002000100000000076578616d706c6503636f6d0000010001076578616d706c6503636f6d0000010001c00c000100010000012c0004cb007109", "example.com", 1), "!answer does not match the query")
+    t.assert_eq(answer("123491800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c0004cb007109", "example.com", 1), "!answer does not match the query")
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c0001000100000e1000045db8d822c00c000100010000025800045db8d823", "example.com", 1), "93.184.216.34 93.184.216.35")
+}
+test "a hostile answer is refused as malformed, with no panic" {
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001c01d000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001c031000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d00000100010161c01f000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001416100000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d00000100013f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d000001000103612e6203636f6d00000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("1234818000010002000000", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000200000000076578616d706c65", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c000100", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000200000000076578616d706c6503636f6d0000010001c00c0001000100000e1000045db8d822c00c000100010000025800045d", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001c00c000100010000003c00c801020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c00050102030405", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001ffff00000000076578616d706c6503636f6d0000010001c00c000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000500000000076578616d706c6503636f6d0000010001c00c000100010000012c000401020304", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000a00000000076578616d706c6503636f6d0000010001c00c000500010000003c0010026330076578616d706c6503636f6d00026330076578616d706c6503636f6d00000500010000003c0010026331076578616d706c6503636f6d00026331076578616d706c6503636f6d00000500010000003c0010026332076578616d706c6503636f6d00026332076578616d706c6503636f6d00000500010000003c0010026333076578616d706c6503636f6d00026333076578616d706c6503636f6d00000500010000003c0010026334076578616d706c6503636f6d00026334076578616d706c6503636f6d00000500010000003c0010026335076578616d706c6503636f6d00026335076578616d706c6503636f6d00000500010000003c0010026336076578616d706c6503636f6d00026336076578616d706c6503636f6d00000500010000003c0010026337076578616d706c6503636f6d00026337076578616d706c6503636f6d00000500010000003c0010026338076578616d706c6503636f6d00026338076578616d706c6503636f6d00000500010000003c0010026339076578616d706c6503636f6d00", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d0000010001c00c000500010000012c001303776562076578616d706c65036e6574000000", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("", "example.com", 1), "!malformed answer")
+    t.assert_eq(answer("123481800001000100000000076578616d706c6503636f6d00001c0001c00c001c00010000012c000f000000000000000000000000000000", "example.com", 28), "!malformed answer")
+}
+test "address literals are read and written in canonical form" {
+    t.assert_eq(literal("1.2.3.4"), "1.2.3.4")
+    t.assert_eq(literal("255.255.255.255"), "255.255.255.255")
+    t.assert_eq(literal("0.0.0.0"), "0.0.0.0")
+    t.assert_eq(literal("::1"), "::1")
+    t.assert_eq(literal("::"), "::")
+    t.assert_eq(literal("1::"), "1::")
+    t.assert_eq(literal("2001:db8::1"), "2001:db8::1")
+    t.assert_eq(literal("2001:0db8:0000:0000:0000:0000:0000:0001"), "2001:db8::1")
+    t.assert_eq(literal("2001:DB8:0:0:1:0:0:1"), "2001:db8::1:0:0:1")
+    t.assert_eq(literal("1:0:0:2:0:0:0:3"), "1:0:0:2::3")
+    t.assert_eq(literal("1:2:3:4:5:6:7:8"), "1:2:3:4:5:6:7:8")
+    t.assert_eq(literal("1:0:3:4:5:6:7:8"), "1:0:3:4:5:6:7:8")
+    t.assert_eq(literal("::ffff:192.0.2.128"), "::ffff:c000:280")
+    t.assert_eq(literal("64:ff9b::198.51.100.1"), "64:ff9b::c633:6401")
+    t.assert_eq(literal("1:2:3:4:5:6:1.2.3.4"), "1:2:3:4:5:6:102:304")
+    t.assert_eq(literal("0:0:0:0:0:0:0:0"), "::")
+    t.assert_eq(literal("1::8"), "1::8")
+}
+test "text that is not an address literal is refused" {
+    t.assert_eq(literal(""), "none")
+    t.assert_eq(literal("1.2.3"), "none")
+    t.assert_eq(literal("1.2.3.4.5"), "none")
+    t.assert_eq(literal("1.2.3.256"), "none")
+    t.assert_eq(literal("01.2.3.4"), "none")
+    t.assert_eq(literal("1.2.3.04"), "none")
+    t.assert_eq(literal("1..2.3"), "none")
+    t.assert_eq(literal(".1.2.3"), "none")
+    t.assert_eq(literal("1.2.3."), "none")
+    t.assert_eq(literal("a.b.c.d"), "none")
+    t.assert_eq(literal("1.2.3.-4"), "none")
+    t.assert_eq(literal("+1.2.3.4"), "none")
+    t.assert_eq(literal("1.2.3.4 "), "none")
+    t.assert_eq(literal("example.com"), "none")
+    t.assert_eq(literal(":"), "none")
+    t.assert_eq(literal("::::"), "none")
+    t.assert_eq(literal("1::2::3"), "none")
+    t.assert_eq(literal(":::1"), "none")
+    t.assert_eq(literal("1:::2"), "none")
+    t.assert_eq(literal("1:2:3:4:5:6:7"), "none")
+    t.assert_eq(literal("1:2:3:4:5:6:7:8:9"), "none")
+    t.assert_eq(literal("1:2:3:4:5:6:7::8"), "none")
+    t.assert_eq(literal("12345::1"), "none")
+    t.assert_eq(literal("g::1"), "none")
+    t.assert_eq(literal("fe80::1%eth0"), "none")
+    t.assert_eq(literal("::1.2.3"), "none")
+    t.assert_eq(literal("::1.2.3.4:5"), "none")
+    t.assert_eq(literal("1.2.3.4::"), "none")
+    t.assert_eq(literal("::1.2.3.4.5"), "none")
+    t.assert_eq(literal("1:2:3:4:5:6:7:8::"), "none")
+    t.assert_eq(literal("::1:2:3:4:5:6:7:8"), "none")
+    t.assert_eq(literal(" ::1"), "none")
+    t.assert_eq(literal("::-1"), "none")
+}
+
+test "an address literal is not read from more than 45 bytes" {
+    t.assert_eq(literal("0000:0000:0000:0000:0000:0000:0000:00000"), "none")
+}
+
+fn hosts() -> List<dns.HostsEntry> {
+    dns.parse_hosts("127.0.0.1 localhost loopback\n# a comment\n::1\tlocalhost ip6-localhost # trailing\n10.0.0.5   Web.Example.COM. web\nnot-an-ip   foo\n10.0.0.6\n192.168.1.1 good bad_name! also.good\n10.0.0.7 web ; semicolon comment\r\n2001:db8::7 web\nfe80::1%lo0 zoned\n")
+}
+
+test "a hosts file gives each name its addresses, IPv6 first" {
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "localhost")), "::1 127.0.0.1")
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "ip6-localhost")), "::1")
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "loopback")), "127.0.0.1")
+}
+
+test "host names in a hosts file match in any case and without a trailing dot" {
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "web.example.com")), "10.0.0.5")
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "WEB.example.COM")), "10.0.0.5")
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "web")), "2001:db8::7 10.0.0.5 10.0.0.7")
+}
+
+test "a hosts file line with no address or no name is skipped" {
+    t.assert_eq(dns.lookup_hosts(hosts(), "foo").len(), 0)
+    t.assert_eq(dns.lookup_hosts(hosts(), "zoned").len(), 0)
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "good")), "192.168.1.1")
+    t.assert_eq(" ".join(dns.lookup_hosts(hosts(), "also.good")), "192.168.1.1")
+    t.assert_eq(dns.lookup_hosts(hosts(), "bad_name!").len(), 0)
+    t.assert_eq(dns.lookup_hosts(hosts(), "nothing").len(), 0)
+}
+
+test "an empty hosts file has no entries" {
+    t.assert_eq(dns.parse_hosts("").len(), 0)
+    t.assert_eq(dns.parse_hosts("\n\n# only comments\n").len(), 0)
+}
+
+fn conf() -> dns.ResolvConf {
+    dns.parse_resolv_conf("# a comment\nnameserver 192.0.2.1\nnameserver 2001:db8::53 # v6\nnameserver not-an-ip\nnameserver 192.0.2.2\nnameserver 192.0.2.3\nsearch corp.test Example.ORG.\noptions ndots:2 timeout:3 attempts:4 rotate\n")
+}
+
+test "a resolv.conf gives at most three name servers, in order" {
+    t.assert_eq(" ".join(conf().servers), "192.0.2.1 2001:db8::53 192.0.2.2")
+}
+
+test "a resolv.conf gives its search list and options" {
+    t.assert_eq(" ".join(conf().search), "corp.test example.org")
+    t.assert_eq(conf().ndots, 2)
+    t.assert_eq(conf().timeout_ms, 3000)
+    t.assert_eq(conf().attempts, 4)
+}
+
+test "a resolv.conf with nothing in it has the defaults" {
+    let empty = dns.parse_resolv_conf("")
+    t.assert_eq(empty.servers.len(), 0)
+    t.assert_eq(empty.search.len(), 0)
+    t.assert_eq(empty.ndots, 1)
+    t.assert_eq(empty.timeout_ms, 5000)
+    t.assert_eq(empty.attempts, 2)
+}
+
+test "the options are held to the limits of the C library" {
+    let big = dns.parse_resolv_conf("options ndots:99 timeout:999 attempts:99")
+    t.assert_eq(big.ndots, 15)
+    t.assert_eq(big.timeout_ms, 30000)
+    t.assert_eq(big.attempts, 5)
+    let bad = dns.parse_resolv_conf("options ndots:x timeout: attempts:0 ndots:-1 timeout:1234567")
+    t.assert_eq(bad.ndots, 1)
+    t.assert_eq(bad.timeout_ms, 5000)
+    t.assert_eq(bad.attempts, 2)
+}
+
+test "domain gives one search name and the last of domain and search wins" {
+    t.assert_eq(" ".join(dns.parse_resolv_conf("domain a.test b.test").search), "a.test")
+    t.assert_eq(" ".join(dns.parse_resolv_conf("search a.test\ndomain b.test").search), "b.test")
+    t.assert_eq(" ".join(dns.parse_resolv_conf("domain b.test\nsearch a.test c.test").search), "a.test c.test")
+    t.assert_eq(dns.parse_resolv_conf("search 1 2 3 4 5 6 7 8").search.len(), 6)
+}
+
+test "a configuration takes the system's name servers only when the file names none" {
+    let from_file = dns.Config.new("", "nameserver 192.0.2.1\n", ["10.0.0.1"])
+    t.assert_eq(" ".join(from_file.servers), "192.0.2.1")
+    let from_system = dns.Config.new("", "", ["10.0.0.1", "bad", "10.0.0.2", "10.0.0.3", "10.0.0.4"])
+    t.assert_eq(" ".join(from_system.servers), "10.0.0.1 10.0.0.2 10.0.0.3")
+    let none = dns.Config.new("", "", [])
+    t.assert_eq(" ".join(none.servers), "127.0.0.1")
+}
+
+test "search names are added by ndots" {
+    let conf = dns.Config.new("", "search corp.test lab.test\noptions ndots:2", [])
+    t.assert_eq(" ".join(dns.candidates(conf, "www", false)), "www.corp.test www.lab.test www")
+    t.assert_eq(" ".join(dns.candidates(conf, "www.dev", false)), "www.dev.corp.test www.dev.lab.test www.dev")
+    t.assert_eq(" ".join(dns.candidates(conf, "a.b.c", false)), "a.b.c a.b.c.corp.test a.b.c.lab.test")
+    t.assert_eq(" ".join(dns.candidates(conf, "www", true)), "www")
+}
+
+// A transport that replays recorded messages: the reply is chosen by the
+// name server asked and by the query (its hex), and the id is always
+// 0x1234. A query it has no record of is answered with nothing at all.
+struct Replay {}
+
+impl dns.Exchange for Replay {
+    fn query_id(self) -> Int {
+        4660
+    }
+
+    fn datagram(self, server: String, message: Bytes) -> Result<Untrusted<Bytes>, IoError> {
+        let query = message.to_hex()
+        if server == "192.0.2.66" {
+            return Ok(hex("999981800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c0004cb007142"))
+        }
+        if server == "192.0.2.77" {
+            return Err(IoError(message: "cannot reach 192.0.2.77:53: timed out"))
+        }
+        if query == "123401000001000000000000076578616d706c6503636f6d0000010001" {
+            return Ok(hex("123481800001000200000000076578616d706c6503636f6d0000010001c00c0001000100000e1000045db8d822c00c000100010000025800045db8d823"))
+        }
+        if query == "123401000001000000000000076578616d706c6503636f6d00001c0001" {
+            return Ok(hex("123481800001000100000000076578616d706c6503636f6d00001c0001c00c001c00010000012c001026062800022000010248189325c81946"))
+        }
+        if query == "123401000001000000000000046e6f7065076578616d706c6503636f6d0000010001" {
+            return Ok(hex("123481830001000000000000046e6f7065076578616d706c6503636f6d0000010001"))
+        }
+        if query == "123401000001000000000000046e6f7065076578616d706c6503636f6d00001c0001" {
+            return Ok(hex("123481830001000000000000046e6f7065076578616d706c6503636f6d00001c0001"))
+        }
+        if query == "12340100000100000000000003626967076578616d706c6503636f6d0000010001" {
+            return Ok(hex("12348380000100000000000003626967076578616d706c6503636f6d0000010001"))
+        }
+        if query == "12340100000100000000000003626967076578616d706c6503636f6d00001c0001" {
+            return Ok(hex("12348180000100000000000003626967076578616d706c6503636f6d00001c0001"))
+        }
+        if query == "123401000001000000000000037777770000010001" {
+            return Ok(hex("123481830001000000000000037777770000010001"))
+        }
+        if query == "1234010000010000000000000377777700001c0001" {
+            return Ok(hex("1234818300010000000000000377777700001c0001"))
+        }
+        if query == "1234010000010000000000000377777704636f727004746573740000010001" {
+            return Ok(hex("1234818000010001000000000377777704636f727004746573740000010001c00c000100010000012c00040a010203"))
+        }
+        if query == "1234010000010000000000000377777704636f7270047465737400001c0001" {
+            return Ok(hex("1234818000010000000000000377777704636f7270047465737400001c0001"))
+        }
+        Err(IoError(message: "cannot reach the server: connection refused"))
+    }
+
+    fn stream(self, server: String, message: Bytes) -> Result<Untrusted<Bytes>, IoError> {
+        if server == "192.0.2.88" {
+            return Err(IoError(message: "cannot connect to 192.0.2.88:53: connection refused"))
+        }
+        Ok(hex("12348180000100020000000003626967076578616d706c6503636f6d0000010001c00c000100010000012c0004c0000201c00c000100010000012c0004c0000202"))
+    }
+}
+
+fn config(resolv: String) -> dns.Config {
+    dns.Config.new("127.0.0.1 localhost\n10.9.9.9 pinned.example.com\n", resolv, [])
+}
+
+fn resolved(resolv: String, name: String) -> String {
+    match dns.resolve(config(resolv), Replay(), name) {
+        Ok(found) => " ".join(found)
+        Err(error) => "!{error}"
+    }
+}
+
+test "a name server's addresses come back, IPv6 first" {
+    t.assert_eq(resolved("nameserver 192.0.2.1", "example.com"), "2606:2800:220:1:248:1893:25c8:1946 93.184.216.34 93.184.216.35")
+    t.assert_eq(resolved("nameserver 192.0.2.1", "Example.COM."), "2606:2800:220:1:248:1893:25c8:1946 93.184.216.34 93.184.216.35")
+}
+
+test "an address literal is its own answer and asks no one" {
+    t.assert_eq(resolved("nameserver 192.0.2.77", "203.0.113.5"), "203.0.113.5")
+    t.assert_eq(resolved("nameserver 192.0.2.77", "2001:DB8:0::1"), "2001:db8::1")
+}
+
+test "the hosts file is looked up before any name server" {
+    t.assert_eq(resolved("nameserver 192.0.2.77", "localhost"), "127.0.0.1")
+    t.assert_eq(resolved("nameserver 192.0.2.77", "PINNED.example.com"), "10.9.9.9")
+}
+
+test "a name that is not a host name is refused before anything is sent" {
+    t.assert_eq(resolved("nameserver 192.0.2.77", ""), "!invalid host name")
+    t.assert_eq(resolved("nameserver 192.0.2.77", "a b"), "!invalid host name")
+    t.assert_eq(resolved("nameserver 192.0.2.77", "a..b"), "!invalid host name")
+}
+
+test "a truncated answer is asked again over TCP" {
+    t.assert_eq(resolved("nameserver 192.0.2.1", "big.example.com"), "192.0.2.1 192.0.2.2")
+}
+
+test "a forged answer is skipped for the next name server" {
+    t.assert_eq(resolved("nameserver 192.0.2.66\nnameserver 192.0.2.1", "example.com"), "2606:2800:220:1:248:1893:25c8:1946 93.184.216.34 93.184.216.35")
+    t.assert_eq(resolved("nameserver 192.0.2.66", "example.com"), "!answer does not match the query")
+}
+
+test "a name server that does not answer is skipped for the next" {
+    t.assert_eq(resolved("nameserver 192.0.2.77\nnameserver 192.0.2.1", "example.com"), "2606:2800:220:1:248:1893:25c8:1946 93.184.216.34 93.184.216.35")
+    t.assert_eq(resolved("nameserver 192.0.2.77", "example.com"), "!timed out")
+}
+
+test "a transport failure says whether it timed out" {
+    t.assert_eq(resolved("nameserver 192.0.2.77", "example.com"), "!timed out")
+    t.assert_eq(resolved("nameserver 192.0.2.88", "big.example.com"), "!name server unreachable")
+}
+
+test "a name server that says there is no such host ends the search" {
+    t.assert_eq(resolved("nameserver 192.0.2.1", "nope.example.com"), "!host not found")
+}
+
+test "a failed TCP retry is a failure of the transport" {
+    t.assert_eq(resolved("nameserver 192.0.2.88", "big.example.com"), "!name server unreachable")
+}
+
+test "the search list is tried when the name is short" {
+    t.assert_eq(resolved("nameserver 192.0.2.1\nsearch corp.test", "www"), "10.1.2.3")
+}
