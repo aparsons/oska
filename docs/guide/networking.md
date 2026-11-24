@@ -50,7 +50,7 @@ Both backends look a name up with `std.dns`, the Oska stub resolver, reading the
 
 ## Listening, for a local test server
 
-`net.listen_only()` gives a `NetListen`, and `restrict_to_loopback(port)` on it gives a `LoopbackListen`. It accepts connections from this machine only: it listens on `127.0.0.1`, or on `::1` where that address is not available, not on both at once. Port 0 picks a free port, and `port()` says which. Nothing in Oska can listen on a public address yet.
+`net.listen_only()` gives a `NetListen`, and `restrict_to_loopback(port)` on it gives a `LoopbackListen`. It accepts connections from this machine only: it listens on `127.0.0.1` and on `::1` at the same port, so a client on either reaches it (a machine without IPv6 listens on `127.0.0.1` alone). Port 0 picks a free port, and `port()` says which. Nothing in Oska can listen on a public address yet.
 
 ```oska
 fn serve_once(listen: LoopbackListen) -> Result<(), IoError> {

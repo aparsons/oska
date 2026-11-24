@@ -7,7 +7,7 @@
 `Net`, `NetConnect` and `NetListen` grant no connection themselves. Their only methods are attenuations, as `Fs`'s are ([ADR 0008](0008-file-access-goes-through-confined-capabilities.md)):
 
 - `Net.restrict_to(host, port)` and `NetConnect.restrict_to(host, port)` return a **host capability**, `HostConnect`, confined to one host and one port. It alone can connect: `HostConnect.connect()` takes no destination. `NetConnect.connect` does not exist. `Net.connect_only()` and `Net.listen_only()` remain the way to `NetConnect` and `NetListen`.
-- `NetListen.restrict_to_loopback(port)` returns a `LoopbackListen`, which accepts connections on the loopback address only. It binds `127.0.0.1`, and `::1` only where that fails, so it listens on one of the two, not both. Port 0 chooses a free port, and `port()` reports it. Listening is loopback-only in this milestone, and the type name says so, so no program becomes a network-facing server by accident. It exists for the local test server.
+- `NetListen.restrict_to_loopback(port)` returns a `LoopbackListen`, which accepts connections on the loopback address only. It binds `127.0.0.1` and `::1` at the same port, so a client on either reaches it; a machine without an IPv6 loopback listens on `127.0.0.1` alone. Port 0 chooses a free port, and `port()` reports it. Listening is loopback-only in this milestone, and the type name says so, so no program becomes a network-facing server by accident. It exists for the local test server.
 
 Code that really reaches a host chosen at run time validates it and writes a trust assertion, which `oskac audit` lists.
 

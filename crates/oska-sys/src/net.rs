@@ -264,49 +264,94 @@ fn connect_any(
     Err(last)
 }
 
-/// A listening socket on the loopback address, `127.0.0.1` or `::1`, never
-/// on one that other machines can reach.
+/// A listener on the loopback addresses, `127.0.0.1` and `::1` when the
+/// machine has both, at one port; never on an address that other machines can
+/// reach. A machine without an IPv6 loopback listens on `127.0.0.1` alone.
 #[derive(Debug)]
 pub struct NetListener {
-    socket: TcpListener,
+    sockets: Vec<TcpListener>,
 }
 
 impl NetListener {
-    /// Listen on the loopback address at `port`, 0 to 65535: 0 chooses a
-    /// free one. `127.0.0.1` is tried first, then `::1`.
+    /// Listen on the loopback addresses at `port`, 0 to 65535: 0 chooses a
+    /// free one. `127.0.0.1` is bound first, then `::1` at the same port. A
+    /// failure to bind one of them leaves the other, and only when both fail
+    /// is it an error.
     pub fn bind_loopback(port: i128) -> io::Result<NetListener> {
         let port = check_port(port, 0)?;
-        let socket = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-            .or_else(|_| TcpListener::bind((Ipv6Addr::LOCALHOST, port)))
-            .map_err(|err| failure("listen", &err))?;
-        socket.set_nonblocking(true)?;
-        Ok(NetListener { socket })
+        // A chosen port may be free on one family and taken on the other, so
+        // ask again for another (a few times) rather than listen on one.
+        let tries = if port == 0 { 8 } else { 1 };
+        let mut sockets = Vec::new();
+        let mut last = None;
+        for _ in 0..tries {
+            sockets.clear();
+            let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, port));
+            let at = match &v4 {
+                Ok(socket) => socket.local_addr()?.port(),
+                Err(_) => port,
+            };
+            let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, at));
+            match (v4, v6) {
+                (Ok(a), Ok(b)) => {
+                    sockets.extend([a, b]);
+                    break;
+                }
+                (Ok(a), Err(err)) if port != 0 || !port_taken(&err) => {
+                    sockets.push(a);
+                    break;
+                }
+                (Err(_), Ok(b)) => {
+                    sockets.push(b);
+                    break;
+                }
+                (Ok(_), Err(err)) | (Err(_), Err(err)) => last = Some(err),
+            }
+        }
+        if sockets.is_empty() {
+            let err = last.unwrap_or_else(|| io::Error::from(io::ErrorKind::AddrInUse));
+            return Err(failure("listen", &err));
+        }
+        for socket in &sockets {
+            socket.set_nonblocking(true)?;
+        }
+        Ok(NetListener { sockets })
     }
 
     /// The port it listens on.
     pub fn port(&self) -> io::Result<u16> {
-        Ok(self.socket.local_addr()?.port())
+        Ok(self.sockets[0].local_addr()?.port())
     }
 
-    /// The next connection, waiting at most [`READ_TIMEOUT`] for one.
+    /// The next connection, on either address, waiting at most
+    /// [`READ_TIMEOUT`] for one.
     pub fn accept(&self) -> io::Result<NetStream> {
         let started = Instant::now();
         loop {
-            match self.socket.accept() {
-                Ok((socket, _)) => {
-                    socket.set_nonblocking(false)?;
-                    return NetStream::new(socket);
-                }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    if started.elapsed() >= READ_TIMEOUT {
-                        return Err(failure("accept", &err));
+            for socket in &self.sockets {
+                match socket.accept() {
+                    Ok((socket, _)) => {
+                        socket.set_nonblocking(false)?;
+                        return NetStream::new(socket);
                     }
-                    std::thread::sleep(Duration::from_millis(2));
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(err) => return Err(failure("accept", &err)),
                 }
-                Err(err) => return Err(failure("accept", &err)),
             }
+            if started.elapsed() >= READ_TIMEOUT {
+                return Err(failure(
+                    "accept",
+                    &io::Error::from(io::ErrorKind::WouldBlock),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
+}
+
+/// Whether `err` says the address is in use.
+fn port_taken(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::AddrInUse
 }
 
 /// The literals of the DNS servers of the adapters that are up, from the
@@ -846,6 +891,22 @@ mod tests {
         let err = connect_any(&[address], CONNECT_TIMEOUT, Duration::ZERO).expect_err("no time");
         assert_eq!(err.map(|e| describe(&e)), Some("timed out"));
         assert!(connect_any(&[address], CONNECT_TIMEOUT, CONNECT_TOTAL_TIMEOUT).is_ok());
+    }
+
+    #[test]
+    fn a_listener_accepts_on_both_loopback_addresses_the_machine_has() {
+        let listener = NetListener::bind_loopback(0).expect("listen");
+        let port = i128::from(listener.port().expect("port"));
+        let mut hosts = vec!["127.0.0.1"];
+        if TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).is_ok() {
+            hosts.push("::1");
+        }
+        for host in hosts {
+            let client = NetStream::connect(host, port).expect(host);
+            let server = listener.accept().expect(host);
+            client.send_all(b"hi").expect("send");
+            assert_eq!(server.receive(16).expect("receive"), b"hi", "{host}");
+        }
     }
 
     #[test]
