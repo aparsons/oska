@@ -78,6 +78,7 @@ use std.ed25519
 use std.chacha20poly1305
 use std.aes128gcm
 use std.x509
+use std.net_error
 
 // ---- Errors, events, configuration --------------------------------------------------
 
@@ -121,13 +122,7 @@ impl Display for TlsError {
 // table (a platform's own wording) is `other`, never copied: the message is
 // from outside the program and no trust assertion is made on it.
 fn io_reason(error: IoError) -> String {
-    let message = error.message
-    for known in ["host not found", "connection refused", "timed out", "network unreachable", "connection reset", "the connection is closed", "invalid host"] {
-        if message.contains(known) {
-            return known
-        }
-    }
-    "other"
+    net_error.classify(error).wording()
 }
 
 // What a TLS client trusts and offers: the roots a certificate chain must
@@ -1698,7 +1693,7 @@ impl TlsStream {
             None => {}
         }
         if self.closed {
-            return Err(TlsError.Io(IoError(message: "the connection is closed")))
+            return Err(TlsError.Io(net_error.NetFailure.Closed.io_error()))
         }
         let step = self.engine.send(data)
         let _ = self.absorb(step)?

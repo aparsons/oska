@@ -47,6 +47,8 @@
 // user code and run as Oska by both backends. The comment block directly
 // above a `pub` item is its description in the API reference.
 
+use std.net_error
+
 // The record type of an IPv4 address.
 pub const TYPE_A: Int = 1
 
@@ -332,10 +334,9 @@ fn ask<T: Exchange>(config: Config, transport: T, name: String, kind: Int) -> Re
 // transports word as `... timed out`, or any other failure to reach the
 // server.
 fn transport_failure(error: IoError) -> DnsError {
-    if error.message.ends_with("timed out") {
-        DnsError.Timeout
-    } else {
-        DnsError.Unreachable
+    match net_error.classify(error) {
+        net_error.NetFailure.TimedOut => DnsError.Timeout
+        _ => DnsError.Unreachable
     }
 }
 
@@ -1091,7 +1092,7 @@ pub fn resolve_system(fs: FsRead, net: NetConnect, random: Random, env: Env, nam
                 Some(text) => {
                     let number = digits_number(text)
                     if number < 1 || number > 65535 {
-                        return Err("host not found")
+                        return Err(net_error.NetFailure.NotFound.wording())
                     }
                     port = number
                 }
@@ -1179,7 +1180,7 @@ impl Exchange for NetExchange {
                 Ok(chunk) => {
                     if chunk.len() == 0 {
                         connection.close()
-                        return Err(IoError(message: "connection reset"))
+                        return Err(net_error.NetFailure.Reset.io_error())
                     }
                     received.append(chunk)
                     if received.len() >= 2 {
