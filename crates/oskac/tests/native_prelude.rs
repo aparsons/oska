@@ -1389,13 +1389,10 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
     (
         "Float.eq",
         Run::Main,
-        r#"fn same<T: Eq>(a: T, b: T) -> Bool {
-    a == b
-}
-
-fn main(io: Stdout) -> Result<(), IoError> {
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
     let zero = 0.0
-    io.println(shown(same(zero, -zero)))
+    let a = zero.eq(-zero)
+    io.println(shown(a))
 }"#,
     ),
     (
