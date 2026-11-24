@@ -16,11 +16,10 @@ use oska_check::{AuditKind, CheckReport};
 
 /// The public functions and methods of `std.tls`, as the authority report
 /// names them.
-const FUNCTIONS: [&str; 15] = [
+const FUNCTIONS: [&str; 14] = [
     "TlsConfig.default",
     "TlsConfig.with_trust",
     "TlsConfig.with_alpn",
-    "TlsConfig.with_rekey_after",
     "Engine.new",
     "Engine.is_connected",
     "Engine.selected_protocol",
@@ -204,6 +203,26 @@ fn what_is_sent_may_be_untrusted() {
          fn forward(stream: tls.TlsStream, body: Untrusted<Bytes>) -> Bool {\n    \
              var open = stream\n    \
              open.send(body).is_ok()\n}",
+    );
+}
+
+#[test]
+fn a_program_cannot_change_when_the_keys_change() {
+    // The rekey interval and the limit on records read under one key are
+    // fixed by RFC 8446, section 5.5: no function of the module lets a
+    // program choose them (the tests build a copy of the module with other
+    // constants, see `crates/oskac/tests/native_tls.rs`).
+    for call in ["with_rekey_after(1)", "with_read_limit(1)"] {
+        let src = format!(
+            "use std.tls\nfn f() -> tls.TlsConfig {{\n    tls.TlsConfig.default().{call}\n}}"
+        );
+        let report = check(&src);
+        assert!(!report.diagnostics.is_empty(), "`{call}` should not check");
+    }
+    let source = include_str!("../src/std/tls.osk");
+    assert!(
+        !source.contains("pub fn with_rekey_after"),
+        "the rekey hook is not public"
     );
 }
 
