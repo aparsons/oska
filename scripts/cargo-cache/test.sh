@@ -172,5 +172,17 @@ else
 old: $old"
 fi
 
+# 8. Build directories that only the `checks` group builds are never kept:
+# the list would vouch for them without the job having rebuilt them.
+staled="$work/staled"
+clone "$staled"
+mkdir -p "$staled/target/unsafe-guard" "$staled/target/x86_64-pc-windows-gnu" "$staled/target/debug"
+(cd "$staled" && "$mtimes" >/dev/null 2>&1)
+if [ ! -e "$staled/target/unsafe-guard" ] && [ ! -e "$staled/target/x86_64-pc-windows-gnu" ] && [ -d "$staled/target/debug" ]; then
+  ok "build directories of the checks group are dropped, the rest kept"
+else
+  bad "build directories of the checks group are dropped, the rest kept" "$(ls "$staled/target")"
+fi
+
 printf '\n%d passed, %d failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]
