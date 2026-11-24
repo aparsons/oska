@@ -151,8 +151,8 @@ impl NetStream {
 /// Send `message` as one UDP datagram to the address literal `host` at
 /// `port` (1 to 65535), and wait at most [`DATAGRAM_TIMEOUT`] for one
 /// datagram back, which is returned. The socket is connected, so a datagram
-/// from any other address or port is never delivered to it, and the system
-/// chooses the source port at random. A datagram whose first two bytes
+/// from any other address or port is never delivered to it, and the source
+/// port is random, from 49152 to 65535. A datagram whose first two bytes
 /// (a DNS transaction id) are not the message's own is skipped. `host` must be an IPv4 or IPv6
 /// literal: this resolves no name (the Oska stub resolver is what asks
 /// name servers, by address).
@@ -172,11 +172,11 @@ pub fn exchange_datagram(host: &str, port: i128, message: &[u8]) -> io::Result<V
     }
     let failed =
         |why: &str| io::Error::other(format!("cannot reach {}: {why}", shown_address(host, port)));
-    let local = match ip {
-        IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-        IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+    let any = match ip {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
     };
-    let socket = UdpSocket::bind(local).map_err(|err| failed(describe(&err)))?;
+    let socket = bind_random_port(any).map_err(|err| failed(describe(&err)))?;
     socket
         .connect(SocketAddr::new(ip, port))
         .map_err(|err| failed(describe(&err)))?;
@@ -205,6 +205,34 @@ pub fn exchange_datagram(host: &str, port: i128, message: &[u8]) -> io::Result<V
             return Ok(buffer);
         }
     }
+}
+
+/// The first port of the dynamic range, and how many ports it holds
+/// (49152 to 65535, a power of two so a random number maps evenly).
+const DYNAMIC_PORTS: u32 = 16384;
+const DYNAMIC_FIRST: u32 = 49152;
+
+/// How many random ports to try before giving up on a busy range.
+const BIND_TRIES: usize = 16;
+
+/// A UDP socket bound to `address` at a random port of the dynamic range,
+/// drawn from the system's secure random source, so an off-path attacker
+/// cannot guess where the answer must go (spec #228). A port in use is
+/// replaced by another draw.
+fn bind_random_port(address: IpAddr) -> io::Result<UdpSocket> {
+    let mut last = io::Error::new(io::ErrorKind::AddrInUse, "no free port");
+    for _ in 0..BIND_TRIES {
+        let mut word = [0u8; 4];
+        crate::fill_random(&mut word)?;
+        let port = DYNAMIC_FIRST + u32::from_le_bytes(word) % DYNAMIC_PORTS;
+        let port = u16::try_from(port).unwrap_or(u16::MAX);
+        match UdpSocket::bind(SocketAddr::new(address, port)) {
+            Ok(socket) => return Ok(socket),
+            Err(err) if err.kind() == io::ErrorKind::AddrInUse => last = err,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last)
 }
 
 /// The time one more address may take: `per_address`, cut down to what is
@@ -494,6 +522,28 @@ mod tests {
         let answer = exchange_datagram("127.0.0.1", port, b"query").expect("exchange");
         assert_eq!(answer, b"query");
         echo.join().expect("server");
+    }
+
+    #[test]
+    fn queries_leave_from_random_ports_in_the_dynamic_range() {
+        let server = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let port = i128::from(server.local_addr().expect("address").port());
+        let echo = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            let mut buffer = [0u8; 64];
+            for _ in 0..8 {
+                let (read, peer) = server.recv_from(&mut buffer).expect("receive");
+                seen.push(peer.port());
+                server.send_to(&buffer[..read], peer).expect("answer");
+            }
+            seen
+        });
+        for _ in 0..8 {
+            exchange_datagram("127.0.0.1", port, b"query").expect("exchange");
+        }
+        let seen = echo.join().expect("server");
+        assert!(seen.iter().all(|port| *port >= 49152), "{seen:?}");
+        assert!(seen.iter().any(|port| *port != seen[0]), "{seen:?}");
     }
 
     #[test]

@@ -25,7 +25,7 @@ mod differential;
 use std::net::{Ipv4Addr, UdpSocket};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::portable::Scratch;
@@ -216,6 +216,8 @@ fn std_dns_builds_for_every_target_the_same_twice() {
 /// `!` appended, until it is dropped. A silent one never answers.
 struct UdpServer {
     port: u16,
+    /// The source port of each query, in arrival order.
+    seen: Arc<Mutex<Vec<u16>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -229,12 +231,15 @@ impl UdpServer {
         let port = socket.local_addr().expect("an address").port();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
         let thread = std::thread::spawn(move || {
             let mut buffer = [0u8; 2048];
             while !flag.load(Ordering::Relaxed) {
                 let Ok((n, from)) = socket.recv_from(&mut buffer) else {
                     continue;
                 };
+                record.lock().expect("the record").push(from.port());
                 if silent {
                     continue;
                 }
@@ -248,6 +253,7 @@ impl UdpServer {
         });
         UdpServer {
             port,
+            seen,
             stop,
             thread: Some(thread),
         }
@@ -349,5 +355,29 @@ fn a_datagram_refuses_a_name_a_bad_port_and_a_long_message() {
         outcome.stdout, "error: the datagram is too long to send\n",
         "{:?}",
         outcome.exit_code
+    );
+}
+
+/// Each query leaves from a random port in the dynamic range (#693, spec
+/// #228), not the one the system would hand out in order: eight queries
+/// on each backend are never all from one port, and none is below 49152.
+#[test]
+fn queries_leave_from_random_source_ports_on_both_backends() {
+    let server = UdpServer::start(false);
+    for round in 0..4 {
+        let name = format!("dns_port_{round}");
+        let outcome = assert_same(&exchange(&name, "127.0.0.1", server.port, "1234010001"));
+        assert_eq!(outcome.stdout, "123401000121\n", "{outcome:#?}");
+    }
+    let seen = server.seen.lock().expect("the record").clone();
+    assert!(seen.len() >= 8, "every query was seen: {seen:?}");
+    assert!(
+        seen.iter().all(|port| *port >= 49152),
+        "ports from the dynamic range: {seen:?}"
+    );
+    let first = seen[0];
+    assert!(
+        seen.iter().any(|port| *port != first),
+        "not all from one port: {seen:?}"
     );
 }

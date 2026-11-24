@@ -6955,6 +6955,51 @@ fn datagram_max() -> Int {
     65507
 }
 
+// A random port of the dynamic range, 49152 to 65535, from the system's
+// secure random source (the generator's next word if that fails): the
+// source port of a datagram query (spec #228), as `bind_random_port` of
+// `oska-sys` draws it.
+fn datagram_random_port() -> Int {
+    let object = alloc(16)
+    var got = 0 - 1
+    if on_windows() {
+        got = rt_sys_process_prng(rt_mem_add(object, 8), 8)
+    } else {
+        got = rt_sys_random(rt_mem_add(object, 8), 8)
+    }
+    var word = rt_mem_load64(rt_mem_add(object, 8))
+    free(object)
+    if got < 0 {
+        word = random_next_word()
+    }
+    49152 + rt_mem_and(word, 16383)
+}
+
+// Bind the datagram socket `fd` to the wildcard address at a random port of
+// the dynamic range; a port that will not bind (in use) is replaced by
+// another draw, up to 16 times. Zero, or minus the last error.
+fn datagram_bind_random(fd: Int, v6: Bool) -> Int {
+    let ip = alloc(24)
+    rt_mem_store64(rt_mem_add(ip, 8), 0)
+    rt_mem_store64(rt_mem_add(ip, 16), 0)
+    var result = 0 - 1
+    var tries = 0
+    while tries < 16 {
+        let address = sockaddr_new(v6, rt_mem_add(ip, 8), datagram_random_port())
+        result = rt_sys_bind(fd, rt_mem_add(address, 8), sockaddr_size(v6))
+        free(address)
+        if result >= 0 {
+            break
+        }
+        tries = tries + 1
+    }
+    free(ip)
+    if result >= 0 {
+        return 0
+    }
+    result
+}
+
 // Send `count` bytes at `data` as one datagram to the address at `ip` and
 // return the first one that comes back whose first two bytes (a DNS
 // transaction id) are the message's own, in a new buffer the caller frees:
@@ -6966,6 +7011,11 @@ fn datagram_exchange(v6: Bool, ip: Int, port: Int, data: Int, count: Int) -> Res
     let fd = socket_open_kind(v6, 2)
     if fd < 0 {
         return Err(0 - fd)
+    }
+    let bound = datagram_bind_random(fd, v6)
+    if bound < 0 {
+        close_socket(fd)
+        return Err(0 - bound)
     }
     let address = sockaddr_new(v6, ip, port)
     let connected = rt_sys_connect(fd, rt_mem_add(address, 8), sockaddr_size(v6))
