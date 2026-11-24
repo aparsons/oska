@@ -48,6 +48,8 @@ Everything a connection reads is untrusted. `receive()` gives `Untrusted<String>
 
 Both backends look a name up with `std.dns`, the Oska stub resolver, reading the hosts file and `resolv.conf`. `std.dns` is also a module a program can call itself. `HostConnect.exchange_datagram` and `NetConnect.system_name_servers`, the two methods `std.dns` uses, run on both backends.
 
+The design text for this feature said there would be no public DNS API. That is superseded, and the names stay as they are in the code ([ADR 0026](../adr/0026-name-resolution-is-an-oska-stub-resolver-and-windows-asks-iphlpapi-for-its-servers.md)): `std.dns` can be imported, `exchange_datagram` sends only to the host and port its `HostConnect` names, and `system_name_servers` only reads the list of servers (empty off Windows). The trust names are the ones the [x509](x509.md) page uses, `x509.TrustConfig` and `x509.parse_pem`.
+
 ## Listening, for a local test server
 
 `net.listen_only()` gives a `NetListen`, and `restrict_to_loopback(port)` on it gives a `LoopbackListen`. It accepts connections from this machine only: it listens on `127.0.0.1` and on `::1` at the same port, so a client on either reaches it (a machine without IPv6 listens on `127.0.0.1` alone). Port 0 picks a free port, and `port()` says which. Nothing in Oska can listen on a public address yet.

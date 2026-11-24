@@ -30,6 +30,10 @@ A capability confined to a single file, such as `FileRead`. Using it takes no pa
 A capability confined to one host and one port, `HostConnect`. It alone can connect, and `connect()` takes no destination. `Net` and `NetConnect` only attenuate to one, with `restrict_to(host, port)` (ADR 0025). A loopback listener, `LoopbackListen`, is the listening counterpart, for a local test server.
 _Avoid_: restricted NetConnect, connect-to-any
 
+**Stub resolver**:
+`std.dns`, the name resolver written in Oska that `connect()` uses on both backends. It is a public module, and its two prelude methods, `HostConnect.exchange_datagram` and `NetConnect.system_name_servers`, are public (ADR 0026). The trust configuration for TLS is `x509.TrustConfig`, and a test's `t.net_attempts()` lists where code tried to connect.
+_Avoid_: system resolver, `RootStore`, `net_requests`
+
 **Budget**:
 The capability to spend model tokens and calls, which a model client such as `std.llm` takes. Its counters live in the runtime, so every copy of a budget draws from the same ones. `main`'s is unlimited, and `limit` attenuates it to a child budget that draws from its parent and never has more than the parent has left. It counts tokens, not money.
 _Avoid_: quota, allowance (for the capability), wallet
