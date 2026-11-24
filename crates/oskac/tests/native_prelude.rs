@@ -1363,6 +1363,42 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "Float.sqrt",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 2.25
+    io.println(shown(x.sqrt() == 1.5))
+}"#,
+    ),
+    (
+        "Float.to_bits",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 1.0
+    io.println(shown(x.to_bits() == 4607182418800017408))
+}"#,
+    ),
+    (
+        "Float.from_bits",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 4609434218613702656
+    io.println(shown(Float.from_bits(x) == 1.5))
+}"#,
+    ),
+    (
+        "Float.eq",
+        Run::Main,
+        r#"fn same<T: Eq>(a: T, b: T) -> Bool {
+    a == b
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let zero = 0.0
+    io.println(shown(same(zero, -zero)))
+}"#,
+    ),
+    (
         "Int.to_u8",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {
