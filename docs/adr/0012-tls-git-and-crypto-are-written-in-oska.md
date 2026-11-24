@@ -13,7 +13,7 @@ The scope is kept small:
 - **TLS:** a TLS 1.3 client only.
   - Ciphers: AES-128-GCM and ChaCha20-Poly1305 with SHA-256, and SHA-384 for P-384 certificates.
   - Key exchange: X25519, falling back to P-256.
-  - Certificate checks: ECDSA P-256 and P-384, and RSA (PKCS#1 v1.5 and PSS).
+  - Certificate checks: ECDSA P-256 and P-384, RSA (PKCS#1 v1.5 and PSS) and Ed25519. The client offers Ed25519 (0x0807) in `signature_algorithms`, first in its list, because `std.ed25519` verifies it for releases anyway (#697; spec #228 had said both).
   - Not included: 0-RTT, session resumption, client certificates, TLS 1.2 and a server.
 - **Root certificates:** a pinned copy of the Mozilla root store ships with oskac and is updated each release. Configuration can add a CA file.
 - **git:** the smart HTTP protocol, version 2, fetch only, shallow at the tag's commit. Not included: push, an index or working tree, and SSH.

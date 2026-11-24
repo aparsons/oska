@@ -536,12 +536,14 @@ fn the_server_signs_with_the_nonce_of_rfc_6979() {
 
 // ---- Recorded handshakes ------------------------------------------------------------
 
-const RECORDINGS: [&str; 5] = [
+const RECORDINGS: [&str; 6] = [
     "chacha_x25519_ecdsa_p256",
     "aes_x25519_ecdsa_p256",
     "hello_retry_request_p256",
     "rsa_pss",
     "ecdsa_p384",
+    // A leaf with an Ed25519 key: the CertificateVerify is Ed25519 (#697).
+    "ed25519",
 ];
 
 #[test]
