@@ -6607,11 +6607,8 @@ fn net_wording(code: Int) -> String {
     if code == platform.e_timed_out || code == platform.e_would_block {
         return "timed out"
     }
-    if code == platform.e_net_unreach {
+    if code == platform.e_net_unreach || code == platform.e_host_unreach {
         return "network unreachable"
-    }
-    if code == platform.e_host_unreach {
-        return "host unreachable"
     }
     "I/O error"
 }

@@ -267,6 +267,33 @@ fn main(io: Stdout, net: Net) -> Result<(), IoError> {
     );
 }
 
+/// A server that sends nothing: a `receive` waits the documented 60
+/// seconds of silence and fails with the spec's `timed out`, in the
+/// words of every other receive failure (spec #228, error table), the same
+/// on both backends. This test waits that long.
+#[test]
+fn a_read_from_a_silent_server_times_out_in_the_specs_words() {
+    prints(
+        "sockets_silent",
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.connect_only().restrict_to("127.0.0.1", listener.port()).connect()?
+    let silent = listener.accept()?
+    match client.receive() {
+        Ok(_) => io.println("received")?
+        Err(e) => {
+            let message = e.message
+            io.println(message)?
+        }
+    }
+    silent.close()
+    Ok(())
+}
+"#,
+        "receive failed: timed out\n",
+    );
+}
+
 /// An IPv6 literal, in any of its forms, is an address and not a name; an
 /// IPv4 address is four numbers without leading zeros. Whether the machine
 /// can reach `::1` is its own business, so this requires only that both

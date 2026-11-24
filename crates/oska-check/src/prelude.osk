@@ -253,7 +253,7 @@ impl NetConnect {
 // connect or read that gets no answer fails after a documented default
 // (10 seconds to connect, 60 to read). Failures read the same on every
 // platform: `host not found`, `connection refused`, `timed out`,
-// `network unreachable`, `host unreachable` and `connection reset`.
+// `network unreachable` and `connection reset`.
 #[capability]
 pub struct HostConnect { handle: Int }
 
