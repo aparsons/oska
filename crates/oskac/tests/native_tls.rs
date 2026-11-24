@@ -56,6 +56,35 @@ const SERVER: &str = include_str!("tls/server.osk");
 const CLIENT: &str = include_str!("tls/client.osk");
 const REPLAY: &str = include_str!("tls/replay.osk");
 const ROOT: &str = include_str!("tls/pki/root.hex");
+const TLS_MODULE: &str = include_str!("../../oska-check/src/std/tls.osk");
+
+/// The client built against a copy of `std.tls` whose limits are other
+/// numbers: a program cannot choose them (RFC 8446, section 5.5 fixes them),
+/// so the test changes the module's two constants, not the program. The copy
+/// is the package's own module `tls`, and the client imports it in place of
+/// `std.tls`.
+fn limited_client(name: &str, rekey_after: u32, read_limit: u32) -> Case {
+    let constant = |text: &str, name: &str, from: &str, to: u32| {
+        let old = format!("const {name}: Int = {from}\n");
+        assert!(text.contains(&old), "std.tls has no `{old}`");
+        text.replace(&old, &format!("const {name}: Int = {to}\n"))
+    };
+    let module = constant(TLS_MODULE, "REKEY_AFTER", "16777216", rekey_after);
+    let module = constant(&module, "READ_LIMIT", "23726566", read_limit);
+    let main = CLIENT.replace("use std.tls\n", "use pkg.tls\n");
+    assert_ne!(main, CLIENT);
+    Case::package(
+        name,
+        &[
+            (
+                "oska.toml",
+                "[package]\nname = \"client\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/main.osk", &main),
+            ("src/tls.osk", &module),
+        ],
+    )
+}
 
 fn pki(file: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -245,6 +274,15 @@ fn scenario_list() -> Vec<Scenario> {
             alert: Some(0),
             both: false,
         },
+        Scenario {
+            name: "the_client_refuses_a_record_past_its_read_limit",
+            server: "coalesced",
+            host: "127.0.0.1",
+            mode: "read_limit",
+            output: "connected\nerror protocol: protocol error: more records than one key may protect\n",
+            alert: Some(80),
+            both: false,
+        },
         ok("a_body_in_three_records", "large", "127.0.0.1", "large", "connected\nclosed after: 40000 bytes, checksum 549862\n"),
         ok("padded_records", "padded", "127.0.0.1", "echo", OPEN),
         ok("an_empty_application_record", "empty_records", "127.0.0.1", "echo", OPEN),
@@ -390,6 +428,23 @@ fn client_exe() -> &'static (PathBuf, PathBuf) {
     EXE.get_or_init(|| build_native(&Case::file("tls_client_native", CLIENT)))
 }
 
+/// The client for the modes that need other limits than the module's: the
+/// client rekeying after every record, and the client that accepts one
+/// record under a key.
+fn client_exe_for(mode: &str) -> &'static (PathBuf, PathBuf) {
+    static REKEY: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+    static READ: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+    match mode {
+        "rekey" => {
+            REKEY.get_or_init(|| build_native(&limited_client("tls_client_rekey", 1, 23726566)))
+        }
+        "read_limit" => {
+            READ.get_or_init(|| build_native(&limited_client("tls_client_read_limit", 16777216, 1)))
+        }
+        _ => client_exe(),
+    }
+}
+
 /// Run one scenario against its own server: natively, and on the
 /// interpreter too for the core set (the differential harness requires the
 /// same output, exit code and tree), and check what the client printed and
@@ -407,7 +462,7 @@ fn run_scenario(s: &Scenario) {
         let outcome = assert_same(&case);
         (outcome.stdout, outcome.exit_code, outcome.stderr)
     } else {
-        let (exe, dir) = client_exe();
+        let (exe, dir) = client_exe_for(s.mode);
         let output = Command::new(exe)
             .current_dir(dir)
             .args(args)
@@ -439,6 +494,8 @@ fn every_scenario_of_the_loopback_server_behaves_as_it_should() {
     // Build the programs before the threads race to.
     server_exe();
     client_exe();
+    client_exe_for("rekey");
+    client_exe_for("read_limit");
     let all = scenarios();
     let failures: Vec<String> = in_parallel(&all, |s| {
         std::panic::catch_unwind(|| run_scenario(s)).err().map(|e| {
