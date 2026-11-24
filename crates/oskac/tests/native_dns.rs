@@ -413,7 +413,13 @@ fn queries_leave_from_random_source_ports_on_both_backends() {
     let server = UdpServer::start(false);
     for round in 0..4 {
         let name = format!("dns_port_{round}");
-        let outcome = assert_same(&exchange(&name, "127.0.0.1", server.port, "1234010001"));
+        let outcome = assert_same(&exchange(
+            &name,
+            "127.0.0.1",
+            server.port,
+            "1234010001",
+            None,
+        ));
         assert_eq!(outcome.stdout, "123401000121\n", "{outcome:#?}");
     }
     let seen = server.seen.lock().expect("the record").clone();
