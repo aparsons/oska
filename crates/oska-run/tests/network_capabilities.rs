@@ -445,7 +445,10 @@ test "connect" {{
             t.assert(listener.accept().is_ok())
             client.close()
         }}
-        Err(_) => t.fail("connect failed")
+        Err(error) => {{
+            let why = error.message.assume_trusted()
+            t.fail("connect failed: {{why}}")
+        }}
     }}
 }}
 "#
