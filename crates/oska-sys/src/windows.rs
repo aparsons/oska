@@ -38,9 +38,10 @@ pub fn fill_random(buf: &mut [u8]) -> io::Result<()> {
 /// (`iphlpapi.dll`) reports, read by
 /// [`servers_from_adapter_addresses`](crate::net::servers_from_adapter_addresses).
 pub fn system_name_servers() -> io::Result<Vec<String>> {
-    // `GAA_FLAG_SKIP_UNICAST | SKIP_ANYCAST | SKIP_MULTICAST |
-    // SKIP_FRIENDLY_NAME`: only the DNS server lists are wanted.
-    const FLAGS: u32 = 0x1 | 0x2 | 0x4 | 0x8;
+    // `GAA_FLAG_SKIP_UNICAST` (0x1) `| SKIP_ANYCAST` (0x2) `|
+    // SKIP_MULTICAST` (0x4) `| SKIP_FRIENDLY_NAME` (0x20): only the DNS
+    // server lists are wanted. (0x8 is `SKIP_DNS_SERVER`.)
+    const FLAGS: u32 = 0x1 | 0x2 | 0x4 | 0x20;
     const AF_UNSPEC: u32 = 0;
     const ERROR_BUFFER_OVERFLOW: u32 = 111;
     let unreadable = || io::Error::other("the system's DNS servers cannot be read");

@@ -4123,11 +4123,11 @@ pub fn net_system_name_servers(net: NetConnect) -> Result<List<String>, IoError>
     }
     let cell = alloc(8)
     rt_mem_store64(cell, 0)
-    // Family 0 (both), flags 15 (skip unicast, anycast, multicast and the
-    // friendly name: only the DNS servers are wanted). A first call with
+    // Family 0 (both), flags 39 (skip unicast 1, anycast 2, multicast 4 and
+    // the friendly name 32: only the DNS servers are wanted). A first call with
     // no buffer says how big the buffer must be; the adapters can change
     // between calls, so a buffer too small is asked for again.
-    var result = rt_sys_get_adapters_addresses(0, 15, 0, 0, cell)
+    var result = rt_sys_get_adapters_addresses(0, 39, 0, 0, cell)
     var info = 0
     var size = 0
     var tries = 0
@@ -4137,7 +4137,7 @@ pub fn net_system_name_servers(net: NetConnect) -> Result<List<String>, IoError>
             return Err(io_error_text("the system's DNS servers cannot be read"))
         }
         info = alloc(size + 8)
-        result = rt_sys_get_adapters_addresses(0, 15, 0, info, cell)
+        result = rt_sys_get_adapters_addresses(0, 39, 0, info, cell)
         tries = tries + 1
     }
     // 232 is `ERROR_NO_DATA`: no adapter, so no servers.
