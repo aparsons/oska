@@ -478,9 +478,11 @@ test "the real network reaches the loopback" {
     }
 }
 
-/// Listening twice on one port is refused where the machine has no second
-/// loopback address to fall back on, and is not where `::1` is there, so
-/// what it gives is the machine's own business: both backends must agree.
+/// Listening twice on one port: a listener holds the port on both loopback
+/// addresses (`127.0.0.1` and `::1`, where the machine has `::1`), so a
+/// second listener finds the port taken on every address and is refused. On
+/// Windows the sharing rules differ, so there both backends only have to
+/// agree.
 #[test]
 fn listening_on_a_taken_port_gives_the_same_result_on_both_backends() {
     let outcome = assert_same(&case(
@@ -498,16 +500,8 @@ fn listening_on_a_taken_port_gives_the_same_result_on_both_backends() {
 "#,
     ));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
-    // Where the machine has no `::1`, the second bind has nowhere to fall
-    // back to and is refused on Linux and macOS, where the port is held
-    // without `SO_REUSEADDR` sharing. Windows' rules differ.
-    let has_ipv6_loopback = std::net::TcpListener::bind("[::1]:0").is_ok();
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        let expected = if has_ipv6_loopback {
-            "listening\n"
-        } else {
-            "refused\n"
-        };
+        let expected = "refused\n";
         assert_eq!(outcome.stdout, expected, "{outcome:#?}");
     }
 }
