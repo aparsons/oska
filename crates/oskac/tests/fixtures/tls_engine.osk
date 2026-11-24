@@ -7,6 +7,7 @@
 // cryptography many times.
 
 use std.tls
+use std.net_error
 
 fn engine(name: String, random: Secret<Bytes>) -> tls.Engine {
     tls.Engine.new(name, tls.TlsConfig.default(), random, 1750000000)
@@ -156,4 +157,15 @@ test "an i/o error prints its reason, so that a refusal and a timeout differ" {
     t.assert_eq("{refused}", "i/o error: connection refused")
     t.assert_eq("{slow}", "i/o error: timed out")
     t.assert_eq("{odd}", "i/o error: other")
+}
+
+test "an i/o error's kind does not depend on the words of its message" {
+    // The reason is the kind's own wording, whatever the message adds before it.
+    for kind in [net_error.NetFailure.NotFound, net_error.NetFailure.Refused, net_error.NetFailure.TimedOut, net_error.NetFailure.Unreachable, net_error.NetFailure.Reset, net_error.NetFailure.Closed, net_error.NetFailure.InvalidHost] {
+        let wording = kind.wording()
+        let error = tls.TlsError.Io(IoError(message: "cannot connect to 192.0.2.1:443: {wording}"))
+        t.assert_eq("{error}", "i/o error: {wording}")
+        t.assert_eq(net_error.classify(kind.io_error()).wording(), wording)
+    }
+    t.assert_eq(net_error.classify(IoError(message: "something else")).wording(), "other")
 }

@@ -319,3 +319,27 @@ fn the_crypto_modules_it_uses_have_no_audit_site() {
         assert!(report.audit.is_empty(), "{:#?}", report.audit);
     }
 }
+
+/// #699: `std.dns` and `std.tls` (and the runtime's `rt.osk`) never match an
+/// error by its message text. The one reading of an `IoError`'s text is
+/// `std.net_error`'s `classify`, so a change of wording cannot change what
+/// the modules do.
+#[test]
+fn no_module_matches_an_error_by_its_message_text() {
+    for (name, source) in [
+        ("tls.osk", include_str!("../src/std/tls.osk")),
+        ("dns.osk", include_str!("../src/std/dns.osk")),
+        ("rt.osk", include_str!("../src/std/rt.osk")),
+    ] {
+        for (n, line) in source.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            let reads_message = code.contains("error.message")
+                || code.contains("e.message.contains")
+                || code.contains("message.contains(")
+                || code.contains("message.ends_with(")
+                || code.contains("message.starts_with(")
+                || code.contains("message ==");
+            assert!(!reads_message, "{name}:{}: matches a message: {line}", n + 1);
+        }
+    }
+}
