@@ -122,7 +122,7 @@ fn a_private_helper_cannot_be_used() {
          fn main() {\n    let _ = rsa.mgf1(rsa.HashAlgorithm.Sha256, Bytes.new(), 1)\n}",
         &[("E0360", "mgf1")],
     );
-    assert_errors("use std.rsa.{make_field}", &[("E0360", "make_field")]);
+    assert_errors("use std.rsa.{number_from}", &[("E0360", "number_from")]);
 }
 
 #[test]

@@ -309,6 +309,7 @@ fn the_crypto_modules_it_uses_have_no_audit_site() {
         include_str!("../src/std/chacha20poly1305.osk"),
         include_str!("../src/std/aes128gcm.osk"),
         include_str!("../src/std/sha2.osk"),
+        include_str!("../src/std/montgomery.osk"),
         include_str!("../src/std/ecdsa.osk"),
         include_str!("../src/std/rsa.osk"),
         include_str!("../src/std/ed25519.osk"),
