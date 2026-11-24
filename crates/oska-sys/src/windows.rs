@@ -33,31 +33,60 @@ pub fn fill_random(buf: &mut [u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// The DNS servers Windows is configured with, in order, as IPv4
-/// literals: the list `GetNetworkParams` (`iphlpapi.dll`) reports in its
-/// `FIXED_INFO`.
+/// The DNS servers of the adapters that are up, in the order Windows
+/// asks them, as address literals: what `GetAdaptersAddresses`
+/// (`iphlpapi.dll`) reports, read by
+/// [`servers_from_adapter_addresses`](crate::net::servers_from_adapter_addresses).
 pub fn system_name_servers() -> io::Result<Vec<String>> {
-    // `FIXED_INFO` is about 1 KiB and the list's nodes follow it in the
-    // same buffer. A first call with no buffer says how much is needed.
+    // `GAA_FLAG_SKIP_UNICAST | SKIP_ANYCAST | SKIP_MULTICAST |
+    // SKIP_FRIENDLY_NAME`: only the DNS server lists are wanted.
+    const FLAGS: u32 = 0x1 | 0x2 | 0x4 | 0x8;
+    const AF_UNSPEC: u32 = 0;
+    const ERROR_BUFFER_OVERFLOW: u32 = 111;
+    let unreadable = || io::Error::other("the system's DNS servers cannot be read");
+    // A first call with no buffer says how much is needed; the adapters can
+    // change between calls, so a buffer that proves too small is asked for
+    // again, a few times.
     let mut size: u32 = 0;
     // SAFETY: a null buffer with `size` 0 is the documented way to ask for
     // the size: the function writes only `size`.
-    let first = unsafe { nt::get_network_params(std::ptr::null_mut(), &mut size) };
-    const ERROR_BUFFER_OVERFLOW: u32 = 111;
-    if first != ERROR_BUFFER_OVERFLOW || size == 0 || size > 65536 {
-        return Err(io::Error::other("the system's DNS servers cannot be read"));
+    let mut result = unsafe {
+        nt::get_adapters_addresses(
+            AF_UNSPEC,
+            FLAGS,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    for _ in 0..4 {
+        if result != ERROR_BUFFER_OVERFLOW || size == 0 || size > 1 << 20 {
+            break;
+        }
+        // 8-byte units, so the pointers inside are aligned.
+        let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+        // SAFETY: `buffer` is writable for at least `size` bytes, as the
+        // last call asked.
+        result = unsafe {
+            nt::get_adapters_addresses(
+                AF_UNSPEC,
+                FLAGS,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if result == 0 {
+            let base = buffer.as_ptr() as usize;
+            let bytes: Vec<u8> = buffer.iter().flat_map(|word| word.to_le_bytes()).collect();
+            return Ok(crate::net::servers_from_adapter_addresses(&bytes, base));
+        }
     }
-    // 8-byte units, so the pointers inside are aligned.
-    let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
-    // SAFETY: `buffer` is writable for at least `size` bytes, as the
-    // first call asked.
-    let second = unsafe { nt::get_network_params(buffer.as_mut_ptr().cast(), &mut size) };
-    if second != 0 {
-        return Err(io::Error::other("the system's DNS servers cannot be read"));
+    // No adapter at all is `ERROR_NO_DATA` (232): no servers, not a failure.
+    if result == 232 {
+        return Ok(Vec::new());
     }
-    let base = buffer.as_ptr() as usize;
-    let bytes: Vec<u8> = buffer.iter().flat_map(|word| word.to_le_bytes()).collect();
-    Ok(crate::net::servers_from_fixed_info(&bytes, base))
+    Err(unreadable())
 }
 
 /// The declarations from `ntdll` this crate uses, with their values from
@@ -188,15 +217,22 @@ mod nt {
         pub fn process_prng(buffer: *mut u8, length: usize) -> i32;
     }
 
-    // `GetNetworkParams` is in `iphlpapi.dll`, which every Windows process
-    // can load.
+    // `GetAdaptersAddresses` is in `iphlpapi.dll`, which every Windows
+    // process can load.
     #[link(name = "iphlpapi", kind = "raw-dylib")]
     extern "system" {
-        /// `GetNetworkParams(FIXED_INFO *info, ULONG *size)`: 0 on
-        /// success, `ERROR_BUFFER_OVERFLOW` (111) with the size needed in
-        /// `size` when the buffer is too small.
-        #[link_name = "GetNetworkParams"]
-        pub fn get_network_params(info: *mut u8, size: *mut u32) -> u32;
+        /// `GetAdaptersAddresses(family, flags, reserved, addresses,
+        /// size)`: 0 on success, `ERROR_BUFFER_OVERFLOW` (111) with the
+        /// size needed in `size` when the buffer is too small, and
+        /// `ERROR_NO_DATA` (232) when there is no adapter.
+        #[link_name = "GetAdaptersAddresses"]
+        pub fn get_adapters_addresses(
+            family: u32,
+            flags: u32,
+            reserved: *mut c_void,
+            addresses: *mut u8,
+            size: *mut u32,
+        ) -> u32;
     }
 
     // Access rights.
