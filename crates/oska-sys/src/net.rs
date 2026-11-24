@@ -394,7 +394,11 @@ pub(crate) fn servers_from_adapter_addresses(buffer: &[u8], base: usize) -> Vec<
         Some(u32::from_le_bytes(buffer.get(at..at + 4)?.try_into().ok()?))
     };
     // The offset in `buffer` of the structure at address `link`.
-    let offset = |link: usize| link.checked_sub(base).filter(|_| link != 0);
+    // Never past the buffer, so the arithmetic on it cannot overflow.
+    let offset = |link: usize| {
+        link.checked_sub(base)
+            .filter(|at| link != 0 && *at <= buffer.len())
+    };
     let mut found: Vec<(u32, String)> = Vec::new();
     let mut adapter = Some(0usize);
     let mut adapters = 0;
@@ -770,6 +774,19 @@ mod tests {
         let again = BASE + first;
         buffer[first + 8..first + 16].copy_from_slice(&again.to_le_bytes());
         assert_eq!(servers_from_adapter_addresses(&buffer, BASE), ["10.0.0.1"]);
+    }
+
+    #[test]
+    fn a_link_far_past_the_buffer_does_not_overflow() {
+        // A base of 1 makes the offset of a link near `usize::MAX` huge.
+        let mut buffer = adapters_buffer(1, &[adapter(true, 10, &[(4, "10.0.0.1")])]);
+        assert_eq!(servers_from_adapter_addresses(&buffer, 1), ["10.0.0.1"]);
+        let first = usize::from_le_bytes(buffer[48..56].try_into().expect("8 bytes")) - 1;
+        for link in [usize::MAX, usize::MAX - 50, usize::MAX - 100] {
+            buffer[8..16].copy_from_slice(&link.to_le_bytes());
+            buffer[first + 8..first + 16].copy_from_slice(&link.to_le_bytes());
+            assert_eq!(servers_from_adapter_addresses(&buffer, 1), ["10.0.0.1"]);
+        }
     }
 
     #[test]

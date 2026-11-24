@@ -182,10 +182,14 @@ fn the_systems_name_servers_are_listed_on_windows_only() {
         return;
     }
     // A hosted CI runner has a DNS server on an adapter that is up.
+    let on_ci = std::env::var_os("GITHUB_ACTIONS").is_some();
     assert!(
-        listed > 0 || std::env::var_os("GITHUB_ACTIONS").is_none(),
+        listed > 0 || !on_ci,
         "no server listed on a runner: {outcome:#?}"
     );
+    if listed == 0 {
+        eprintln!("SKIPPED: no DNS server listed, and this is not CI (GITHUB_ACTIONS unset), so the check that a server is listed is not enforced");
+    }
     let servers: Vec<&str> = lines.collect();
     assert_eq!(servers.len(), listed, "{outcome:#?}");
     for (i, server) in servers.iter().enumerate() {

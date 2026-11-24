@@ -7204,8 +7204,9 @@ fn datagram_max() -> Int {
 // A random port of the dynamic range, 49152 to 65535, from the system's
 // secure random source (the generator's next word if that fails): the
 // source port of a datagram query (spec #228), as `bind_random_port` of
-// `oska-sys` draws it.
-fn datagram_random_port() -> Int {
+// `oska-sys` draws it. When the source fails there is no fallback to the
+// generator (its words are guessable): the error is the source's, negated.
+fn datagram_random_port() -> Result<Int, Int> {
     let object = alloc(16)
     var got = 0 - 1
     if on_windows() {
@@ -7213,12 +7214,12 @@ fn datagram_random_port() -> Int {
     } else {
         got = rt_sys_random(rt_mem_add(object, 8), 8)
     }
-    var word = rt_mem_load64(rt_mem_add(object, 8))
+    let word = rt_mem_load64(rt_mem_add(object, 8))
     free(object)
     if got < 0 {
-        word = random_next_word()
+        return Err(0 - got)
     }
-    49152 + rt_mem_and(word, 16383)
+    Ok(49152 + rt_mem_and(word, 16383))
 }
 
 // Bind the datagram socket `fd` to the wildcard address at a random port of
@@ -7231,7 +7232,17 @@ fn datagram_bind_random(fd: Int, v6: Bool) -> Int {
     var result = 0 - 1
     var tries = 0
     while tries < 16 {
-        let address = sockaddr_new(v6, rt_mem_add(ip, 8), datagram_random_port())
+        let port = match datagram_random_port() {
+            Ok(drawn) => drawn
+            Err(error) => {
+                result = 0 - error
+                0 - 1
+            }
+        }
+        if port < 0 {
+            break
+        }
+        let address = sockaddr_new(v6, rt_mem_add(ip, 8), port)
         result = rt_sys_bind(fd, rt_mem_add(address, 8), sockaddr_size(v6))
         free(address)
         if result >= 0 {
