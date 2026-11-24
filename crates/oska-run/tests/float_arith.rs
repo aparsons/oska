@@ -221,6 +221,21 @@ impl Rng {
     }
 }
 
+/// The correctly rounded `a * b + c`, from the host's `mul_add`, with
+/// one repair. musl's `fma` returns `+0` when a product that is not zero
+/// underflows to zero and `c` is a zero, whatever the product's sign; the
+/// exact result is not zero, so IEEE 754 gives a zero of the product's
+/// sign (`-0` for a negative product), which glibc and the hardware give.
+fn reference_fma(a: f64, b: f64, c: f64) -> u64 {
+    let mut bits = canon(a.mul_add(b, c));
+    let product_is_nonzero = a != 0.0 && b != 0.0 && a.is_finite() && b.is_finite();
+    if product_is_nonzero && c == 0.0 && bits == 0 && (a.is_sign_negative() != b.is_sign_negative())
+    {
+        bits = 0x8000_0000_0000_0000;
+    }
+    bits
+}
+
 #[test]
 fn fma_rounds_once_on_the_edges_and_on_random_vectors() {
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
@@ -244,7 +259,7 @@ fn fma_rounds_once_on_the_edges_and_on_random_vectors() {
     );
     let expected: String = triples
         .iter()
-        .map(|&[a, b, c]| hex(canon(edge(a).mul_add(edge(b), edge(c)))))
+        .map(|&[a, b, c]| hex(reference_fma(edge(a), edge(b), edge(c))))
         .collect();
     assert_runs(&program, &[], &expected);
 }
