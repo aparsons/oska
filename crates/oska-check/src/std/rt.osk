@@ -6757,13 +6757,19 @@ fn wait_ready(fd: Int, events: Int, ms: Int) -> Int {
 // A new non-blocking socket of the IPv4 or IPv6 family: its descriptor, or
 // minus the error.
 fn socket_open(v6: Bool) -> Int {
+    socket_open_kind(v6, 1)
+}
+
+// A new non-blocking socket of `kind`: 1 for a stream (TCP), 2 for a
+// datagram (UDP).
+fn socket_open_kind(v6: Bool, kind: Int) -> Int {
     let platform = rt_mem_platform()
     socket_start()
     var domain = 2
     if v6 {
         domain = platform.af_inet6
     }
-    let fd = rt_sys_socket(domain, 1, 0)
+    let fd = rt_sys_socket(domain, kind, 0)
     if fd < 0 {
         return fd
     }
@@ -6933,6 +6939,133 @@ pub fn host_connect(host: Int) -> Result<Int, IoError> {
     match net_connect(name, port) {
         Ok(fd) => Ok(link_new(sock_new(fd, name, port, "")))
         Err(message) => Err(io_error_text(message))
+    }
+}
+
+// ---- Datagrams
+
+// How long `exchange_datagram` waits for the answer, in milliseconds:
+// `DATAGRAM_TIMEOUT` of `oska-sys`.
+fn datagram_wait() -> Int {
+    5000
+}
+
+// The longest datagram sent or accepted: `MAX_DATAGRAM` of `oska-sys`.
+fn datagram_max() -> Int {
+    65507
+}
+
+// Send `count` bytes at `data` as one datagram to the address at `ip` and
+// return the first one that comes back whose first two bytes (a DNS
+// transaction id) are the message's own, in a new buffer the caller frees:
+// the count is its word 0 and the bytes follow. A datagram from any other
+// address is never delivered (the socket is connected); one with another id
+// is skipped until the deadline. The error is the system's, negated.
+fn datagram_exchange(v6: Bool, ip: Int, port: Int, data: Int, count: Int) -> Result<Int, Int> {
+    let platform = rt_mem_platform()
+    let fd = socket_open_kind(v6, 2)
+    if fd < 0 {
+        return Err(0 - fd)
+    }
+    let address = sockaddr_new(v6, ip, port)
+    let connected = rt_sys_connect(fd, rt_mem_add(address, 8), sockaddr_size(v6))
+    free(address)
+    if connected < 0 {
+        close_socket(fd)
+        return Err(0 - connected)
+    }
+    let started = real_now_millis()
+    var sent = rt_sys_send(fd, data, count)
+    while interrupted(sent) {
+        sent = rt_sys_send(fd, data, count)
+    }
+    if sent < 0 {
+        close_socket(fd)
+        return Err(0 - sent)
+    }
+    let buffer = alloc(datagram_max() + 8)
+    var failure = 0
+    var got = 0
+    while true {
+        let left = datagram_wait() - (real_now_millis() - started)
+        if left <= 0 {
+            failure = platform.e_timed_out
+            break
+        }
+        let ready = wait_ready(fd, platform.poll_in, left)
+        if ready < 0 {
+            failure = 0 - ready
+            break
+        }
+        if ready == 0 {
+            failure = platform.e_timed_out
+            break
+        }
+        got = rt_sys_recv(fd, rt_mem_add(buffer, 8), datagram_max())
+        if interrupted(got) || got == 0 - platform.e_would_block {
+            continue
+        }
+        if got < 0 {
+            failure = 0 - got
+            break
+        }
+        if got >= 2 && count >= 2 && rt_mem_load8(rt_mem_add(buffer, 8)) == rt_mem_load8(data) && rt_mem_load8(rt_mem_add(buffer, 9)) == rt_mem_load8(rt_mem_add(data, 1)) {
+            break
+        }
+    }
+    close_socket(fd)
+    if failure != 0 {
+        free(buffer)
+        return Err(failure)
+    }
+    rt_mem_store64(buffer, got)
+    Ok(buffer)
+}
+
+// `HostConnect.exchange_datagram`: one UDP datagram to the host's address
+// literal, and the first matching one back, in at most 5 seconds, as
+// `oska_sys::exchange_datagram` does, with its words.
+pub fn host_exchange_datagram(host: Int, message: Bytes) -> Result<Bytes, IoError> {
+    let name = sock_text(host, 16)
+    let port = sock_port(host)
+    if faking() {
+        return Err(io_error_text(no_network()))
+    }
+    if port < 1 || port > 65535 {
+        return Err(io_error_text("port {port} is out of range: use 1 to 65535"))
+    }
+    let object = alloc(72)
+    let ip = rt_mem_add(object, 8)
+    let kind = ip_parse(name, ip)
+    if kind == 0 {
+        free(object)
+        if !is_dns_name(name) {
+            let shown = os_debug(name)
+            return Err(io_error_text("invalid host {shown}: it is not a DNS name or an IP address"))
+        }
+        let shown = os_debug(name)
+        return Err(io_error_text("invalid host {shown}: a datagram goes to an IP address"))
+    }
+    let held = rt_mem_bytes(message)
+    let count = bytes_length(held)
+    if count > datagram_max() {
+        free(object)
+        return Err(io_error_text("the datagram is too long to send"))
+    }
+    let result = datagram_exchange(kind == 16, ip, port, bytes_data(held), count)
+    free(object)
+    match result {
+        Ok(buffer) => {
+            let got = rt_mem_load64(buffer)
+            let bytes = bytes_copy_of(rt_mem_add(buffer, 8), got)
+            free(buffer)
+            Ok(rt_mem_as_bytes(bytes))
+        }
+        Err(code) => {
+            let why = net_wording(code)
+            let shown = shown_address(name, port)
+            Err(io_error_text("cannot reach {shown}: {why}"))
+        }
     }
 }
 

@@ -46,7 +46,7 @@ A connection waits at most 10 seconds for each address and 30 seconds in all, an
 
 Everything a connection reads is untrusted. `receive()` gives `Untrusted<String>` and fails on invalid UTF-8. `receive_bytes()` gives `Untrusted<Bytes>`: what is there, up to 64 KiB, and an empty `Bytes` at the end of the stream. `send(text)` and `send_bytes(bytes)` write. `host()` gives the name the capability was confined to, and `close()` closes the connection.
 
-The interpreter looks a name up with `std.dns`, the Oska stub resolver, reading the hosts file and `resolv.conf`. The native backend resolves only an IP address and `localhost`, and any other name fails with `host not found` (see [what works today](what-works-today.md)). `std.dns` is also a module a program can call itself; moving the native `connect()` to it is tracked in a follow-up issue. `HostConnect.exchange_datagram` and `NetConnect.system_name_servers`, the two methods `std.dns` uses, run on the interpreter only for now.
+The interpreter looks a name up with `std.dns`, the Oska stub resolver, reading the hosts file and `resolv.conf`. The native backend resolves only an IP address and `localhost`, and any other name fails with `host not found` (see [what works today](what-works-today.md)). `std.dns` is also a module a program can call itself; moving the native `connect()` to it is tracked in a follow-up issue. `HostConnect.exchange_datagram` and `NetConnect.system_name_servers`, the two methods `std.dns` uses, run on both backends.
 
 ## Listening, for a local test server
 
