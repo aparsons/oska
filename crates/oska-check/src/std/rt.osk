@@ -15,6 +15,8 @@
 // Every argument and result is an `Int` (a 64-bit word). A system call
 // returns the operating system's raw result: a negative value is `-errno`.
 
+use std.dns
+
 // ---- System calls ----------------------------------------------------------
 //
 // Most are the POSIX calls of their names, which every Unix Oska targets
@@ -232,6 +234,13 @@ pub fn rt_mem_as_bytes(object: Int) -> Bytes
 // The directory or file capability whose object is at `object`, as the
 // runtime's `Root` (the reference passes, as for text).
 pub fn rt_mem_as_root(object: Int) -> Root
+// The capability `FsRead`, `NetConnect`, `Random` or `Env` of the word 0,
+// which is every one of them natively (they keep their state in the
+// runtime's globals): for the resolver that `connect` calls (`std.dns`).
+pub fn rt_mem_as_fs_read(object: Int) -> FsRead
+pub fn rt_mem_as_net_connect(object: Int) -> NetConnect
+pub fn rt_mem_as_random(object: Int) -> Random
+pub fn rt_mem_as_env(object: Int) -> Env
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
@@ -6285,10 +6294,9 @@ fn raw_text_of(contents: Bytes) -> String {
 //   instead, for at most 10 seconds to connect to one address and 30 in all
 //   over the addresses of one `connect`, and 60 of silence to send, receive
 //   or accept, and fails with `timed out`.
-// - Name resolution is not here yet: `std.dns` is not wired into `connect`
-//   (tracked in a follow-up issue). A host is an IPv4 or IPv6 literal, or
-//   `localhost` (::1, then 127.0.0.1); any other well-formed name is
-//   `host not found`.
+// - A host is an IPv4 or IPv6 literal, or a DNS name, which `std.dns` (ADR
+//   0026) resolves as the interpreter does (`resolve_addresses`); each
+//   address it gives is tried in turn.
 // - A failure's words are `net_wording`'s, from the error's kind, never the
 //   system's own text.
 //
@@ -6860,10 +6868,41 @@ fn connect_to(v6: Bool, ip: Int, port: Int, wait: Int) -> Int {
     fd
 }
 
-// `localhost`, in any case, which the system's hosts file gives as ::1 and
-// 127.0.0.1, in that order on every platform Oska targets.
-fn is_localhost(host: String) -> Bool {
-    string_to_lowercase(host) == "localhost"
+// The addresses of the DNS name `host`, as `std.dns` resolves it with the
+// capabilities `main` could have been given (every one is the word 0), or
+// the wording of why not. The interpreter's `connect` calls the same
+// function (`oska-run/src/resolve.rs`).
+fn resolve_addresses(host: String) -> Result<List<String>, String> {
+    dns.resolve_system(rt_mem_as_fs_read(0), rt_mem_as_net_connect(0), rt_mem_as_random(0), rt_mem_as_env(0), host)
+}
+
+// What `connect_addresses` gives when no address was one to connect to.
+fn no_address() -> Int {
+    0 - 1000000
+}
+
+// Connect to `port` at each of `addresses` in turn, as `connect_any` of
+// `oska-sys`: the socket's descriptor of the first that answers, else the
+// last error, negated; `no_address` when there was none to try. `ip` is
+// room for an address (`ip_parse`), `started` when the clock of the
+// connect began.
+fn connect_addresses(addresses: List<String>, ip: Int, port: Int, started: Int) -> Int {
+    var last = no_address()
+    for address in addresses {
+        let kind = ip_parse(address, ip)
+        if kind != 0 {
+            let budget = connect_budget(real_now_millis() - started)
+            if budget == 0 {
+                return 0 - rt_mem_platform().e_timed_out
+            }
+            let fd = connect_to(kind == 16, ip, port, budget)
+            if fd >= 0 {
+                return fd
+            }
+            last = fd
+        }
+    }
+    last
 }
 
 // Connect to `host` at `port`, as `NetStream::connect`: the socket's
@@ -6882,28 +6921,23 @@ fn net_connect(host: String, port: Int) -> Result<Int, String> {
         return Err("invalid host {name}: it is not a DNS name or an IP address")
     }
     var fd = 0
-    let started = real_now_millis()
     if kind != 0 {
         fd = connect_to(kind == 16, ip, port, connect_budget(0))
-    } else if is_localhost(host) {
-        rt_mem_store8(rt_mem_add(ip, 15), 1)
-        fd = connect_to(true, ip, port, connect_budget(0))
-        if fd < 0 {
-            let budget = connect_budget(real_now_millis() - started)
-            if budget == 0 {
-                fd = 0 - rt_mem_platform().e_timed_out
-            } else {
-                rt_mem_store8(rt_mem_add(ip, 15), 0)
-                rt_mem_store8(ip, 127)
-                rt_mem_store8(rt_mem_add(ip, 3), 1)
-                fd = connect_to(false, ip, port, budget)
+    } else {
+        match resolve_addresses(host) {
+            Ok(addresses) => {
+                fd = connect_addresses(addresses, ip, port, real_now_millis())
+            }
+            Err(why) => {
+                free(object)
+                return Err("cannot connect to {shown}: {why}")
             }
         }
-    } else {
-        free(object)
-        return Err("cannot connect to {shown}: host not found")
     }
     free(object)
+    if fd == no_address() {
+        return Err("cannot connect to {shown}: host not found")
+    }
     if fd < 0 {
         let why = net_wording(0 - fd)
         return Err("cannot connect to {shown}: {why}")

@@ -871,6 +871,11 @@ pub(crate) fn check_parsed(
 /// other source.
 pub fn check_toolchain_rt() -> CheckReport {
     match oska_syntax::parse_prelude(toolchain::RT_SOURCE) {
+        // The `std` modules the runtime imports are checked with it, as
+        // one more module of the program (`link.rs`).
+        Ok(module) if !prelude::oska_std_imports(&module).is_empty() => {
+            package::check_toolchain_with_std(toolchain::RT_SOURCE)
+        }
         Ok(module) => check_source(
             toolchain::RT_SOURCE,
             &module,
@@ -883,6 +888,18 @@ pub fn check_toolchain_rt() -> CheckReport {
             ..CheckReport::default()
         },
     }
+}
+
+/// [`check_parsed`], or for the toolchain's own `std.rt` joined with the
+/// modules it imports (`toolchain`), which may name intrinsics.
+pub(crate) fn check_source_of(
+    src: &str,
+    module: &Module,
+    options: CheckOptions,
+    modules: link::Modules,
+    toolchain: bool,
+) -> CheckReport {
+    check_source(src, module, options, modules, toolchain)
 }
 
 fn check_source(

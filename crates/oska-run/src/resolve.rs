@@ -30,12 +30,8 @@ pub struct Files {
 
 const SOURCE: &str = "use std.dns
 
-pub fn system(fs: FsRead, net: NetConnect, random: Random, name: String) -> Result<List<String>, String> {
-    let config = dns.load_config(fs, net)
-    match dns.resolve(config, dns.NetExchange.new(net, random), name) {
-        Ok(found) => Ok(found)
-        Err(error) => Err(error.to_string())
-    }
+pub fn system(fs: FsRead, net: NetConnect, random: Random, env: Env, name: String) -> Result<List<String>, String> {
+    dns.resolve_system(fs, net, random, env, name)
 }
 
 pub fn given(net: NetConnect, random: Random, hosts: String, resolv_conf: String, port: Int, name: String) -> Result<List<String>, String> {
@@ -83,6 +79,7 @@ pub(crate) fn resolve(
                 cap("FsRead"),
                 cap("NetConnect"),
                 cap("Random"),
+                cap("Env"),
                 Value::str(name),
             ],
         ),
