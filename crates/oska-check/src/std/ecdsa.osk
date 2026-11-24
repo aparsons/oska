@@ -45,6 +45,8 @@
 // and 6, for a = -3), which hold for every pair of points, the identity
 // and equal points included, so no case needs its own path.
 
+use std.montgomery
+
 // Which curve a key is on.
 pub enum Curve {
     // NIST P-256, also called secp256r1 and prime256v1.
@@ -69,15 +71,15 @@ impl PublicKey {
         if bytes.len() != 1 + 2 * c.width || bytes.at(0) != 4 {
             return None
         }
-        let x = limbs_from_be(bytes, 1, c.limbs)
-        let y = limbs_from_be(bytes, 1 + c.width, c.limbs)
-        if !less(x, c.p.m) || !less(y, c.p.m) || !on_curve(x, y, c) {
+        let x = montgomery.limbs_from_be(bytes, 1, c.limbs)
+        let y = montgomery.limbs_from_be(bytes, 1 + c.width, c.limbs)
+        if !montgomery.less(x, c.p.m) || !montgomery.less(y, c.p.m) || !on_curve(x, y, c) {
             return None
         }
         var encoding = Bytes.new()
         encoding.push(4)
-        encoding.append(limbs_to_be(x))
-        encoding.append(limbs_to_be(y))
+        encoding.append(montgomery.limbs_to_be(x))
+        encoding.append(montgomery.limbs_to_be(y))
         Some(PublicKey(curve: curve, x: x, y: y, encoding: encoding))
     }
 
@@ -96,8 +98,8 @@ pub fn verify(key: PublicKey, digest: Untrusted<Bytes>, signature: Untrusted<Byt
     if signature.len() != 2 * c.width {
         return false
     }
-    let r = limbs_from_be(signature, 0, c.limbs)
-    let s = limbs_from_be(signature, c.width, c.limbs)
+    let r = montgomery.limbs_from_be(signature, 0, c.limbs)
+    let s = montgomery.limbs_from_be(signature, c.width, c.limbs)
     check(key, c, digest, r, s)
 }
 
@@ -128,7 +130,7 @@ pub fn verify_der(key: PublicKey, digest: Untrusted<Bytes>, signature: Untrusted
     let s_bytes = der_integer_value(signature, r_end, s_end, c.width)
     match r_bytes {
         Some(rb) => match s_bytes {
-            Some(sb) => check(key, c, digest, limbs_from_be(rb, 0, c.limbs), limbs_from_be(sb, 0, c.limbs))
+            Some(sb) => check(key, c, digest, montgomery.limbs_from_be(rb, 0, c.limbs), montgomery.limbs_from_be(sb, 0, c.limbs))
             None => false
         }
         None => false
@@ -185,7 +187,7 @@ fn der_integer_value(bytes: Untrusted<Bytes>, start: Int, end: Int, width: Int) 
 // section 6.4.2.
 fn check(key: PublicKey, c: Domain, digest: Untrusted<Bytes>, r: List<U64>, s: List<U64>) -> Bool {
     let n = c.n
-    if is_zero(r) || is_zero(s) || !less(r, n.m) || !less(s, n.m) {
+    if is_zero(r) || is_zero(s) || !montgomery.less(r, n.m) || !montgomery.less(s, n.m) {
         return false
     }
     // e: the leftmost `width` bytes of the digest, as an integer, mod n.
@@ -194,18 +196,18 @@ fn check(key: PublicKey, c: Domain, digest: Untrusted<Bytes>, r: List<U64>, s: L
     for i in 0..used {
         e_bytes.push(digest.at(i))
     }
-    var e = limbs_from_be(e_bytes, 0, c.limbs)
-    if !less(e, n.m) {
-        e = sub_limbs(e, n.m)
+    var e = montgomery.limbs_from_be(e_bytes, 0, c.limbs)
+    if !montgomery.less(e, n.m) {
+        e = montgomery.sub_limbs(e, n.m)
     }
     // w = s^-1 mod n, kept in Montgomery form, which makes `mont_mul` of a
     // plain number and `w` the plain product.
-    let w = mont_pow(mont_mul(s, n.r2, n), sub_limbs(n.m, small(2, c.limbs)), n)
-    let u1 = mont_mul(e, w, n)
-    let u2 = mont_mul(r, w, n)
+    let w = montgomery.mont_pow(montgomery.mont_mul(s, n.r2, n), montgomery.sub_limbs(n.m, montgomery.small(2, c.limbs)), n)
+    let u1 = montgomery.mont_mul(e, w, n)
+    let u2 = montgomery.mont_mul(r, w, n)
     let p = c.p
-    let q = Point(x: mont_mul(key.x, p.r2, p), y: mont_mul(key.y, p.r2, p), z: p.one)
-    let g = Point(x: mont_mul(c.gx, p.r2, p), y: mont_mul(c.gy, p.r2, p), z: p.one)
+    let q = Point(x: montgomery.mont_mul(key.x, p.r2, p), y: montgomery.mont_mul(key.y, p.r2, p), z: p.one)
+    let g = Point(x: montgomery.mont_mul(c.gx, p.r2, p), y: montgomery.mont_mul(c.gy, p.r2, p), z: p.one)
     let sum = add_points(g, q, c)
     // [u1]G + [u2]Q, both at once: one doubling a bit, from the top, and
     // an addition for each bit set.
@@ -213,8 +215,8 @@ fn check(key: PublicKey, c: Domain, digest: Untrusted<Bytes>, r: List<U64>, s: L
     var i = c.limbs * 32 - 1
     while i >= 0 {
         acc = double_point(acc, c)
-        let in_g = bit_of(u1, i)
-        let in_q = bit_of(u2, i)
+        let in_g = montgomery.bit_of(u1, i)
+        let in_q = montgomery.bit_of(u2, i)
         if in_g && in_q {
             acc = add_points(acc, sum, c)
         } else if in_g {
@@ -228,10 +230,10 @@ fn check(key: PublicKey, c: Domain, digest: Untrusted<Bytes>, r: List<U64>, s: L
         return false
     }
     // The affine x of the result, mod n, must be r.
-    let x_mont = mont_mul(acc.x, mont_pow(acc.z, sub_limbs(p.m, small(2, c.limbs)), p), p)
-    var x = mont_mul(x_mont, small(1, c.limbs), p)
-    if !less(x, n.m) {
-        x = sub_limbs(x, n.m)
+    let x_mont = montgomery.mont_mul(acc.x, montgomery.mont_pow(acc.z, montgomery.sub_limbs(p.m, montgomery.small(2, c.limbs)), p), p)
+    var x = montgomery.mont_mul(x_mont, montgomery.small(1, c.limbs), p)
+    if !montgomery.less(x, n.m) {
+        x = montgomery.sub_limbs(x, n.m)
     }
     equal(x, r)
 }
@@ -240,12 +242,12 @@ fn check(key: PublicKey, c: Domain, digest: Untrusted<Bytes>, r: List<U64>, s: L
 // y^2 = x^3 - 3x + b.
 fn on_curve(x: List<U64>, y: List<U64>, c: Domain) -> Bool {
     let p = c.p
-    let xm = mont_mul(x, p.r2, p)
-    let ym = mont_mul(y, p.r2, p)
-    let three = add_mod(p.one, add_mod(p.one, p.one, p.m), p.m)
-    let x2 = mont_mul(xm, xm, p)
-    let rhs = add_mod(mont_mul(xm, sub_mod(x2, three, p.m), p), mont_mul(c.b, p.r2, p), p.m)
-    equal(mont_mul(ym, ym, p), rhs)
+    let xm = montgomery.mont_mul(x, p.r2, p)
+    let ym = montgomery.mont_mul(y, p.r2, p)
+    let three = montgomery.add_mod(p.one, montgomery.add_mod(p.one, p.one, p.m), p.m)
+    let x2 = montgomery.mont_mul(xm, xm, p)
+    let rhs = montgomery.add_mod(montgomery.mont_mul(xm, sub_mod(x2, three, p.m), p), montgomery.mont_mul(c.b, p.r2, p), p.m)
+    equal(montgomery.mont_mul(ym, ym, p), rhs)
 }
 
 // ---- Points -------------------------------------------------------------------
@@ -257,105 +259,100 @@ struct Point { x: List<U64>, y: List<U64>, z: List<U64> }
 // P + Q (Renes, Costello and Batina, algorithm 4), for any two points.
 fn add_points(p1: Point, p2: Point, c: Domain) -> Point {
     let f = c.p
-    let b = mont_mul(c.b, f.r2, f)
-    var t0 = mont_mul(p1.x, p2.x, f)
-    var t1 = mont_mul(p1.y, p2.y, f)
-    var t2 = mont_mul(p1.z, p2.z, f)
-    var t3 = add_mod(p1.x, p1.y, f.m)
-    var t4 = add_mod(p2.x, p2.y, f.m)
-    t3 = mont_mul(t3, t4, f)
-    t4 = add_mod(t0, t1, f.m)
+    let b = montgomery.mont_mul(c.b, f.r2, f)
+    var t0 = montgomery.mont_mul(p1.x, p2.x, f)
+    var t1 = montgomery.mont_mul(p1.y, p2.y, f)
+    var t2 = montgomery.mont_mul(p1.z, p2.z, f)
+    var t3 = montgomery.add_mod(p1.x, p1.y, f.m)
+    var t4 = montgomery.add_mod(p2.x, p2.y, f.m)
+    t3 = montgomery.mont_mul(t3, t4, f)
+    t4 = montgomery.add_mod(t0, t1, f.m)
     t3 = sub_mod(t3, t4, f.m)
-    t4 = add_mod(p1.y, p1.z, f.m)
-    var x3 = add_mod(p2.y, p2.z, f.m)
-    t4 = mont_mul(t4, x3, f)
-    x3 = add_mod(t1, t2, f.m)
+    t4 = montgomery.add_mod(p1.y, p1.z, f.m)
+    var x3 = montgomery.add_mod(p2.y, p2.z, f.m)
+    t4 = montgomery.mont_mul(t4, x3, f)
+    x3 = montgomery.add_mod(t1, t2, f.m)
     t4 = sub_mod(t4, x3, f.m)
-    x3 = add_mod(p1.x, p1.z, f.m)
-    var y3 = add_mod(p2.x, p2.z, f.m)
-    x3 = mont_mul(x3, y3, f)
-    y3 = add_mod(t0, t2, f.m)
+    x3 = montgomery.add_mod(p1.x, p1.z, f.m)
+    var y3 = montgomery.add_mod(p2.x, p2.z, f.m)
+    x3 = montgomery.mont_mul(x3, y3, f)
+    y3 = montgomery.add_mod(t0, t2, f.m)
     y3 = sub_mod(x3, y3, f.m)
-    var z3 = mont_mul(b, t2, f)
+    var z3 = montgomery.mont_mul(b, t2, f)
     x3 = sub_mod(y3, z3, f.m)
-    z3 = add_mod(x3, x3, f.m)
-    x3 = add_mod(x3, z3, f.m)
+    z3 = montgomery.add_mod(x3, x3, f.m)
+    x3 = montgomery.add_mod(x3, z3, f.m)
     z3 = sub_mod(t1, x3, f.m)
-    x3 = add_mod(t1, x3, f.m)
-    y3 = mont_mul(b, y3, f)
-    t1 = add_mod(t2, t2, f.m)
-    t2 = add_mod(t1, t2, f.m)
+    x3 = montgomery.add_mod(t1, x3, f.m)
+    y3 = montgomery.mont_mul(b, y3, f)
+    t1 = montgomery.add_mod(t2, t2, f.m)
+    t2 = montgomery.add_mod(t1, t2, f.m)
     y3 = sub_mod(y3, t2, f.m)
     y3 = sub_mod(y3, t0, f.m)
-    t1 = add_mod(y3, y3, f.m)
-    y3 = add_mod(t1, y3, f.m)
-    t1 = add_mod(t0, t0, f.m)
-    t0 = add_mod(t1, t0, f.m)
+    t1 = montgomery.add_mod(y3, y3, f.m)
+    y3 = montgomery.add_mod(t1, y3, f.m)
+    t1 = montgomery.add_mod(t0, t0, f.m)
+    t0 = montgomery.add_mod(t1, t0, f.m)
     t0 = sub_mod(t0, t2, f.m)
-    t1 = mont_mul(t4, y3, f)
-    t2 = mont_mul(t0, y3, f)
-    y3 = mont_mul(x3, z3, f)
-    y3 = add_mod(y3, t2, f.m)
-    x3 = mont_mul(t3, x3, f)
+    t1 = montgomery.mont_mul(t4, y3, f)
+    t2 = montgomery.mont_mul(t0, y3, f)
+    y3 = montgomery.mont_mul(x3, z3, f)
+    y3 = montgomery.add_mod(y3, t2, f.m)
+    x3 = montgomery.mont_mul(t3, x3, f)
     x3 = sub_mod(x3, t1, f.m)
-    z3 = mont_mul(t4, z3, f)
-    t1 = mont_mul(t3, t0, f)
-    z3 = add_mod(z3, t1, f.m)
+    z3 = montgomery.mont_mul(t4, z3, f)
+    t1 = montgomery.mont_mul(t3, t0, f)
+    z3 = montgomery.add_mod(z3, t1, f.m)
     Point(x: x3, y: y3, z: z3)
 }
 
 // 2P (algorithm 6).
 fn double_point(pt: Point, c: Domain) -> Point {
     let f = c.p
-    let b = mont_mul(c.b, f.r2, f)
-    var t0 = mont_mul(pt.x, pt.x, f)
-    let t1 = mont_mul(pt.y, pt.y, f)
-    var t2 = mont_mul(pt.z, pt.z, f)
-    var t3 = mont_mul(pt.x, pt.y, f)
-    t3 = add_mod(t3, t3, f.m)
-    var z3 = mont_mul(pt.x, pt.z, f)
-    z3 = add_mod(z3, z3, f.m)
-    var y3 = mont_mul(b, t2, f)
+    let b = montgomery.mont_mul(c.b, f.r2, f)
+    var t0 = montgomery.mont_mul(pt.x, pt.x, f)
+    let t1 = montgomery.mont_mul(pt.y, pt.y, f)
+    var t2 = montgomery.mont_mul(pt.z, pt.z, f)
+    var t3 = montgomery.mont_mul(pt.x, pt.y, f)
+    t3 = montgomery.add_mod(t3, t3, f.m)
+    var z3 = montgomery.mont_mul(pt.x, pt.z, f)
+    z3 = montgomery.add_mod(z3, z3, f.m)
+    var y3 = montgomery.mont_mul(b, t2, f)
     y3 = sub_mod(y3, z3, f.m)
-    var x3 = add_mod(y3, y3, f.m)
-    y3 = add_mod(x3, y3, f.m)
+    var x3 = montgomery.add_mod(y3, y3, f.m)
+    y3 = montgomery.add_mod(x3, y3, f.m)
     x3 = sub_mod(t1, y3, f.m)
-    y3 = add_mod(t1, y3, f.m)
-    y3 = mont_mul(x3, y3, f)
-    x3 = mont_mul(x3, t3, f)
-    t3 = add_mod(t2, t2, f.m)
-    t2 = add_mod(t2, t3, f.m)
-    z3 = mont_mul(b, z3, f)
+    y3 = montgomery.add_mod(t1, y3, f.m)
+    y3 = montgomery.mont_mul(x3, y3, f)
+    x3 = montgomery.mont_mul(x3, t3, f)
+    t3 = montgomery.add_mod(t2, t2, f.m)
+    t2 = montgomery.add_mod(t2, t3, f.m)
+    z3 = montgomery.mont_mul(b, z3, f)
     z3 = sub_mod(z3, t2, f.m)
     z3 = sub_mod(z3, t0, f.m)
-    t3 = add_mod(z3, z3, f.m)
-    z3 = add_mod(z3, t3, f.m)
-    t3 = add_mod(t0, t0, f.m)
-    t0 = add_mod(t3, t0, f.m)
+    t3 = montgomery.add_mod(z3, z3, f.m)
+    z3 = montgomery.add_mod(z3, t3, f.m)
+    t3 = montgomery.add_mod(t0, t0, f.m)
+    t0 = montgomery.add_mod(t3, t0, f.m)
     t0 = sub_mod(t0, t2, f.m)
-    t0 = mont_mul(t0, z3, f)
-    y3 = add_mod(y3, t0, f.m)
-    t0 = mont_mul(pt.y, pt.z, f)
-    t0 = add_mod(t0, t0, f.m)
-    z3 = mont_mul(t0, z3, f)
+    t0 = montgomery.mont_mul(t0, z3, f)
+    y3 = montgomery.add_mod(y3, t0, f.m)
+    t0 = montgomery.mont_mul(pt.y, pt.z, f)
+    t0 = montgomery.add_mod(t0, t0, f.m)
+    z3 = montgomery.mont_mul(t0, z3, f)
     x3 = sub_mod(x3, z3, f.m)
-    z3 = mont_mul(t0, t1, f)
-    z3 = add_mod(z3, z3, f.m)
-    z3 = add_mod(z3, z3, f.m)
+    z3 = montgomery.mont_mul(t0, t1, f)
+    z3 = montgomery.add_mod(z3, z3, f.m)
+    z3 = montgomery.add_mod(z3, z3, f.m)
     Point(x: x3, y: y3, z: z3)
 }
 
 // ---- The curves -----------------------------------------------------------------
 
-// A prime modulus of `m.len()` limbs, with what Montgomery arithmetic
-// mod it needs: `n0` is -m^-1 mod 2^32, `r2` is R^2 mod m and `one` is R
-// mod m (the number 1 in Montgomery form).
-struct Field { m: List<U64>, n0: U64, r2: List<U64>, one: List<U64> }
-
 // A curve y^2 = x^3 - 3x + b over GF(p) with a base point (gx, gy) of
 // prime order n. `limbs` and `width` are the size of a number in limbs and
 // in bytes. `b`, `gx` and `gy` are plain numbers.
-struct Domain { limbs: Int, width: Int, p: Field, n: Field, b: List<U64>, gx: List<U64>, gy: List<U64> }
+struct Domain { limbs: Int, width: Int, p: montgomery.Field, n: montgomery.Field, b: List<U64>, gx: List<U64>, gy: List<U64> }
 
 fn params(curve: Curve) -> Domain {
     match curve {
@@ -382,8 +379,8 @@ fn curve_from(limbs: Int, p: String, n: String, b: String, gx: String, gy: Strin
     Domain(
         limbs: limbs,
         width: limbs * 4,
-        p: make_field(hex_limbs(p, limbs)),
-        n: make_field(hex_limbs(n, limbs)),
+        p: montgomery.make_field(hex_limbs(p, limbs)),
+        n: montgomery.make_field(hex_limbs(n, limbs)),
         b: hex_limbs(b, limbs),
         gx: hex_limbs(gx, limbs),
         gy: hex_limbs(gy, limbs)
@@ -391,70 +388,15 @@ fn curve_from(limbs: Int, p: String, n: String, b: String, gx: String, gy: Strin
 }
 
 fn hex_limbs(text: String, limbs: Int) -> List<U64> {
-    limbs_from_be(Bytes.from_hex(text).unwrap_or(Bytes.new()), 0, limbs)
-}
-
-// The Montgomery constants of the odd modulus `m`.
-fn make_field(m: List<U64>) -> Field {
-    let m0 = m.at(0)
-    // Newton's iteration for the inverse of m0 mod 2^32: each step doubles
-    // the bits right, and an odd m0 starts with 3.
-    let two: U64 = 2
-    var inverse = m0
-    for _ in 0..5 {
-        inverse = inverse.wrapping_mul(two.wrapping_sub(m0.wrapping_mul(inverse))) & MASK
-    }
-    let n0 = (4294967296 - inverse) & MASK
-    // R mod m and R^2 mod m, by doubling 1 for 32 k and then 64 k times.
-    var x = small(1, m.len())
-    var one = x
-    for i in 0..m.len() * 64 {
-        x = add_mod(x, x, m)
-        if i == m.len() * 32 - 1 {
-            one = x
-        }
-    }
-    Field(m: m, n0: n0, r2: x, one: one)
+    montgomery.limbs_from_be(Bytes.from_hex(text).unwrap_or(Bytes.new()), 0, limbs)
 }
 
 // ---- Numbers --------------------------------------------------------------------
 
 const MASK: U64 = 4294967295
 
-// The number `value` (below 2^32) in `limbs` limbs.
-fn small(value: U64, limbs: Int) -> List<U64> {
-    var out: List<U64> = [value]
-    for _ in 1..limbs {
-        out.push(0)
-    }
-    out
-}
-
 fn zero(limbs: Int) -> List<U64> {
-    small(0, limbs)
-}
-
-// The `limbs` limbs of the big-endian number of `4 * limbs` bytes at
-// `start` in `bytes`.
-fn limbs_from_be(bytes: Untrusted<Bytes>, start: Int, limbs: Int) -> List<U64> {
-    var out: List<U64> = List.new()
-    var i = limbs - 1
-    while i >= 0 {
-        out.push(bytes.read_u32_be(start + 4 * i).to_u64())
-        i = i - 1
-    }
-    out
-}
-
-// `x` as big-endian bytes, four to a limb.
-fn limbs_to_be(x: List<U64>) -> Bytes {
-    var out = Bytes.new()
-    var i = x.len() - 1
-    while i >= 0 {
-        out.push_u32_be(x.at(i).to_u32())
-        i = i - 1
-    }
-    out
+    montgomery.small(0, limbs)
 }
 
 fn is_zero(x: List<U64>) -> Bool {
@@ -475,51 +417,10 @@ fn equal(a: List<U64>, b: List<U64>) -> Bool {
     true
 }
 
-// Whether `a` < `b`.
-fn less(a: List<U64>, b: List<U64>) -> Bool {
-    var i = a.len() - 1
-    while i >= 0 {
-        if a.at(i) != b.at(i) {
-            return a.at(i) < b.at(i)
-        }
-        i = i - 1
-    }
-    false
-}
-
-// Bit `i` of `x`.
-fn bit_of(x: List<U64>, i: Int) -> Bool {
-    ((x.at(i / 32) >> (i % 32).to_u64()) & 1) == 1
-}
-
-// `a - b`, modulo 2^(32 k) for numbers of k limbs.
-fn sub_limbs(a: List<U64>, b: List<U64>) -> List<U64> {
-    var diff: List<U64> = List.new()
-    var borrow: U64 = 0
-    for i in 0..a.len() {
-        let limb = a.at(i) + 4294967296 - b.at(i) - borrow
-        diff.push(limb & MASK)
-        borrow = 1 - (limb >> 32)
-    }
-    diff
-}
-
-// `a + b` mod m, for `a` and `b` below `m`.
-fn add_mod(a: List<U64>, b: List<U64>, m: List<U64>) -> List<U64> {
-    var sum: List<U64> = List.new()
-    var carry: U64 = 0
-    for i in 0..a.len() {
-        let limb = a.at(i) + b.at(i) + carry
-        sum.push(limb & MASK)
-        carry = limb >> 32
-    }
-    if carry == 1 || !less(sum, m) { sub_limbs(sum, m) } else { sum }
-}
-
 // `a - b` mod m, for `a` and `b` below `m`.
 fn sub_mod(a: List<U64>, b: List<U64>, m: List<U64>) -> List<U64> {
-    let diff = sub_limbs(a, b)
-    if !less(a, b) {
+    let diff = montgomery.sub_limbs(a, b)
+    if !montgomery.less(a, b) {
         return diff
     }
     var out: List<U64> = List.new()
@@ -530,53 +431,4 @@ fn sub_mod(a: List<U64>, b: List<U64>, m: List<U64>) -> List<U64> {
         carry = limb >> 32
     }
     out
-}
-
-// The Montgomery product `a b R^-1` mod m of `a` and `b` below m: one
-// pass a limb of `b`, adding `a b_i`, then the multiple of m that clears
-// the lowest limb, and shifting down a limb.
-fn mont_mul(a: List<U64>, b: List<U64>, f: Field) -> List<U64> {
-    let k = f.m.len()
-    var t: List<U64> = List.new()
-    for _ in 0..k + 1 {
-        t.push(0)
-    }
-    for i in 0..k {
-        let bi = b.at(i)
-        let s0 = t.at(0) + a.at(0) * bi
-        let q = ((s0 & MASK) * f.n0) & MASK
-        var c1 = s0 >> 32
-        var c2 = ((s0 & MASK) + q * f.m.at(0)) >> 32
-        var next: List<U64> = List.new()
-        for j in 1..k {
-            let s = t.at(j) + a.at(j) * bi + c1
-            c1 = s >> 32
-            let s2 = (s & MASK) + q * f.m.at(j) + c2
-            c2 = s2 >> 32
-            next.push(s2 & MASK)
-        }
-        let top = t.at(k) + c1 + c2
-        next.push(top & MASK)
-        next.push(top >> 32)
-        t = next
-    }
-    var out: List<U64> = List.new()
-    for i in 0..k {
-        out.push(t.at(i))
-    }
-    if t.at(k) != 0 || !less(out, f.m) { sub_limbs(out, f.m) } else { out }
-}
-
-// `base` (in Montgomery form) to the power `exp`, in Montgomery form.
-fn mont_pow(base: List<U64>, exp: List<U64>, f: Field) -> List<U64> {
-    var acc = f.one
-    var i = exp.len() * 32 - 1
-    while i >= 0 {
-        acc = mont_mul(acc, acc, f)
-        if bit_of(exp, i) {
-            acc = mont_mul(acc, base, f)
-        }
-        i = i - 1
-    }
-    acc
 }

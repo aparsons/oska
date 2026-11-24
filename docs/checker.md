@@ -105,7 +105,7 @@ A `std.*` module is a file `crates/oska-check/src/std/<name>.osk`, registered in
 | `std.dns` | `resolve`, `Exchange` (`query_id`, `datagram`, `stream`), `NetExchange` (`new`, `on_port`), `Config` (`new`), `load_config`, `build_query`, `parse_response`, `Answer`, `DnsError`, `parse_ip`, `Ip`, `parse_hosts`, `lookup_hosts`, `HostsEntry`, `parse_resolv_conf`, `ResolvConf`, `candidates`, `valid_name`, and the constants `TYPE_A`, `TYPE_AAAA` and `MAX_CONFIG_BYTES` | None |
 | `std.hmac` | `sha256`, `verify_sha256` | None |
 | `std.ed25519` | `PublicKey` (`from_bytes`, `to_bytes`), `verify` | None |
-| `std.ecdsa` | `Curve` (`P256`, `P384`), `PublicKey` (`from_bytes`, `to_bytes`), `verify`, `verify_der` | None |
+| `std.ecdsa` | `Curve` (`P256`, `P384`), `PublicKey` (`from_bytes`, `to_bytes`), `verify`, `verify_der`; its arithmetic is in the hidden module `std.montgomery`, which `std.rsa` shares | None |
 | `std.rsa` | `HashAlgorithm` (`Sha256`, `Sha384`, `Sha512`), `PublicKey` (`from_components`, `bits`), `verify_pkcs1`, `verify_pss` | None |
 | `std.p256` | `public_key`, `shared_secret` | None |
 | `std.x509` | `Certificate` (`parse`, `to_der`, `subject`, `issuer`, `serial`, `not_before`, `not_after`, `signed_by`, `is_ca`, `dns_names`, `public_key`, `matches_host`), `TrustConfig` (`default`, `with_roots`, `only_roots`, `with_root_der`, `with_root_pem`, `with_root_distrusting_after`, `contains`, `len`), `parse_der`, `parse_pem`, `PublicKey`, `X509Error`, `verify_chain`, `verify_server`; the pinned roots are in the hidden module `std.x509_roots` | None |

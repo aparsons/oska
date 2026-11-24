@@ -91,6 +91,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.montgomery",
+        source: include_str!("std/montgomery.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.ecdsa",
         source: include_str!("std/ecdsa.osk"),
         sink_literal: None,
