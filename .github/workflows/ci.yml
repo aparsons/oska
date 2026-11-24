@@ -71,15 +71,20 @@ jobs:
       # build, so cargo never reuses a stale one. Only main saves: a pull
       # request reads main's cache and adds none of its own, which keeps
       # the repository under GitHub's 10 GB cache limit.
-      # The formal group runs no cargo step, so it needs no cache.
+      # Only the `tests` group: the formal, lint and scripts groups build
+      # units (clippy, the guard, the Windows type check) that the saving
+      # `rest` shard never rebuilds, yet mtimes.sh vouches for them in its
+      # list. A cached build of old sources then looked fresh and failed
+      # every `checks` job on main (2026-11-24, E0407: Host without
+      # `secure_bytes`). They build from scratch.
       - id: cargo-cache
-        if: matrix.group != 'formal'
+        if: matrix.group == 'tests'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
           key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
           restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
-      - if: matrix.group != 'formal'
+      - if: matrix.group == 'tests'
         run: scripts/cargo-cache/mtimes.sh
       # check.sh type-checks oskac for Windows (#323); only this job needs the
       # target, so it is not in rust-toolchain.toml (every job would download it).
