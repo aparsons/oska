@@ -846,7 +846,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         Ok(module) if !prelude::oska_std_imports(&module).is_empty() => {
             package::check_single_with_std(src, options)
         }
-        Ok(module) => check_parsed(src, &module, options, link::Modules::default()),
+        Ok(module) => check_parsed(src, &module, options, link::Modules::default(), false),
         Err(err) => CheckReport {
             diagnostics: vec![err],
             ..CheckReport::default()
@@ -857,13 +857,16 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
 /// Check `module`, parsed from `src`, whose spans are offsets into `src`:
 /// one source file, or the module that joins a package's modules
 /// (`link.rs`), whose `modules` say which module each part of `src` is.
+/// `toolchain` says it is the toolchain's own `std.rt`, joined with the
+/// modules it imports, which may name intrinsics.
 pub(crate) fn check_parsed(
     src: &str,
     module: &Module,
     options: CheckOptions,
     modules: link::Modules,
+    toolchain: bool,
 ) -> CheckReport {
-    check_source(src, module, options, modules, false)
+    check_source(src, module, options, modules, toolchain)
 }
 
 /// Check the toolchain's own `std.rt` source, the one text that may name
@@ -888,18 +891,6 @@ pub fn check_toolchain_rt() -> CheckReport {
             ..CheckReport::default()
         },
     }
-}
-
-/// [`check_parsed`], or for the toolchain's own `std.rt` joined with the
-/// modules it imports (`toolchain`), which may name intrinsics.
-pub(crate) fn check_source_of(
-    src: &str,
-    module: &Module,
-    options: CheckOptions,
-    modules: link::Modules,
-    toolchain: bool,
-) -> CheckReport {
-    check_source(src, module, options, modules, toolchain)
 }
 
 fn check_source(

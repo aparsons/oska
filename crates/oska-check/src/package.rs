@@ -14,7 +14,7 @@ use oska_syntax::{Diagnostic, Frame, LineIndex, Location, Span};
 
 use crate::manifest::is_snake_case;
 use crate::{
-    check_module_with, check_source_of, codes, hoist, link, parse_manifest, Attenuation, AuditSite,
+    check_module_with, check_parsed, codes, hoist, link, parse_manifest, Attenuation, AuditSite,
     CheckOptions, CheckReport,
 };
 
@@ -458,7 +458,7 @@ fn check_linked(
     } else {
         link::Modules::new(ranges)
     };
-    let mut report = check_source_of(&joined.text, &linked.module, options, modules, toolchain);
+    let mut report = check_parsed(&joined.text, &linked.module, options, modules, toolchain);
     report.diagnostics = report
         .diagnostics
         .into_iter()

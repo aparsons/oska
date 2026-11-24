@@ -1073,7 +1073,8 @@ pub fn load_config(fs: FsRead, net: NetConnect) -> Config {
 // `load_config`'s and the name servers listen on port 53, unless the
 // environment variable `OSKA_DNS_HOSTS` is set: then its value is the
 // hosts file, `OSKA_DNS_RESOLV_CONF` (if set) the `resolv.conf`, and
-// `OSKA_DNS_PORT` (if set) the port the name servers listen on, and no file
+// `OSKA_DNS_PORT` (if set) the port the name servers listen on (a value
+// that is not 1 to 65535 makes every lookup `host not found`), and no file
 // is read. That is how a test points a program at a name server and a
 // hosts file of its own, with no root and no network.
 pub fn resolve_system(fs: FsRead, net: NetConnect, random: Random, env: Env, name: String) -> Result<List<String>, String> {
@@ -1089,9 +1090,10 @@ pub fn resolve_system(fs: FsRead, net: NetConnect, random: Random, env: Env, nam
             match env.get("OSKA_DNS_PORT") {
                 Some(text) => {
                     let number = digits_number(text)
-                    if number >= 1 && number <= 65535 {
-                        port = number
+                    if number < 1 || number > 65535 {
+                        return Err("host not found")
                     }
+                    port = number
                 }
                 None => {}
             }
