@@ -217,8 +217,9 @@ const BIND_TRIES: usize = 16;
 
 /// A UDP socket bound to `address` at a random port of the dynamic range,
 /// drawn from the system's secure random source, so an off-path attacker
-/// cannot guess where the answer must go (spec #228). A port in use is
-/// replaced by another draw.
+/// cannot guess where the answer must go (spec #228). A port that will not
+/// bind (in use, reserved, or held by another program) is replaced by
+/// another draw.
 fn bind_random_port(address: IpAddr) -> io::Result<UdpSocket> {
     let mut last = io::Error::new(io::ErrorKind::AddrInUse, "no free port");
     for _ in 0..BIND_TRIES {
@@ -228,8 +229,11 @@ fn bind_random_port(address: IpAddr) -> io::Result<UdpSocket> {
         let port = u16::try_from(port).unwrap_or(u16::MAX);
         match UdpSocket::bind(SocketAddr::new(address, port)) {
             Ok(socket) => return Ok(socket),
-            Err(err) if err.kind() == io::ErrorKind::AddrInUse => last = err,
-            Err(err) => return Err(err),
+            // Any refusal draws another port, as the native runtime does: a
+            // port in use is `AddrInUse`, but Windows also refuses with
+            // "access denied" a port that is reserved (an excluded range) or
+            // held exclusively by another program.
+            Err(err) => last = err,
         }
     }
     Err(last)
