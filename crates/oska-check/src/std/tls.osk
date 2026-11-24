@@ -120,7 +120,7 @@ impl Display for TlsError {
 // from outside the program and no trust assertion is made on it.
 fn io_reason(error: IoError) -> String {
     let message = error.message
-    for known in ["host not found", "connection refused", "timed out", "network unreachable", "host unreachable", "connection reset", "the connection is closed", "invalid host"] {
+    for known in ["host not found", "connection refused", "timed out", "network unreachable", "connection reset", "the connection is closed", "invalid host"] {
         if message.contains(known) {
             return known
         }

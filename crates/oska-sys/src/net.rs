@@ -494,17 +494,15 @@ pub fn describe(err: &io::Error) -> &'static str {
         TimedOut | WouldBlock => "timed out",
         _ => match err.raw_os_error() {
             Some(code) if NETWORK_UNREACHABLE.contains(&code) => "network unreachable",
-            Some(code) if HOST_UNREACHABLE.contains(&code) => "host unreachable",
             _ => crate::OTHER_WORDING,
         },
     }
 }
 
-/// `ENETUNREACH` on Linux and macOS, `WSAENETUNREACH` on Windows.
-const NETWORK_UNREACHABLE: &[i32] = &[101, 51, 10051];
-
-/// `EHOSTUNREACH` on Linux and macOS, `WSAEHOSTUNREACH` on Windows.
-const HOST_UNREACHABLE: &[i32] = &[113, 65, 10065];
+/// `ENETUNREACH` and `EHOSTUNREACH` on Linux and macOS, `WSAENETUNREACH` and
+/// `WSAEHOSTUNREACH` on Windows. The spec's error table (#228) has one
+/// wording for both, `network unreachable`.
+const NETWORK_UNREACHABLE: &[i32] = &[101, 113, 51, 65, 10051, 10065];
 
 #[cfg(test)]
 mod tests {
@@ -828,6 +826,16 @@ mod tests {
             CONNECT_TOTAL_TIMEOUT.as_millis()
         );
         assert_eq!(runtime_constant("read_wait"), READ_TIMEOUT.as_millis());
+    }
+
+    /// The spec's error table (#228) has `network unreachable` and no
+    /// `host unreachable`: a host the system cannot route to reads the same.
+    #[test]
+    fn every_unreachable_code_reads_network_unreachable() {
+        for code in [101, 113, 51, 65, 10051, 10065] {
+            let err = io::Error::from_raw_os_error(code);
+            assert_eq!(describe(&err), "network unreachable", "code {code}");
+        }
     }
 
     #[test]
