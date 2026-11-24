@@ -12,8 +12,8 @@
 //!
 //! The same cases run on aarch64 and x86_64 Linux and macOS (system calls
 //! and `libSystem`) and on x86_64 Windows (Winsock), which is what the
-//! messages having one wording is for. Name resolution is not tested
-//! beyond `localhost`: the Oska stub resolver is a later ticket.
+//! messages having one wording is for. Name resolution is tested in
+//! `native_dns.rs`; `localhost` here comes from the machine's hosts file.
 
 #![cfg(any(
     all(

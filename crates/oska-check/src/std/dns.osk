@@ -1027,7 +1027,12 @@ fn option_number(option: String) -> Int {
     if parts.len() != 2 {
         return -1
     }
-    let bytes = parts.at(1).to_bytes()
+    digits_number(parts.at(1))
+}
+
+// `text` as a number, or -1 when it is not 1 to 6 digits.
+fn digits_number(text: Untrusted<String>) -> Int {
+    let bytes = text.to_bytes()
     if bytes.len() == 0 || bytes.len() > 6 {
         return -1
     }
@@ -1060,6 +1065,46 @@ pub fn load_config(fs: FsRead, net: NetConnect) -> Config {
         Err(_) => {}
     }
     Config.new(hosts, resolv, system)
+}
+
+// The addresses of `name` as this machine resolves it, or the wording of
+// why not: what `HostConnect.connect` calls on both backends (ADR 0026),
+// with the capabilities the runtime grants it. The configuration is
+// `load_config`'s and the name servers listen on port 53, unless the
+// environment variable `OSKA_DNS_HOSTS` is set: then its value is the
+// hosts file, `OSKA_DNS_RESOLV_CONF` (if set) the `resolv.conf`, and
+// `OSKA_DNS_PORT` (if set) the port the name servers listen on (a value
+// that is not 1 to 65535 makes every lookup `host not found`), and no file
+// is read. That is how a test points a program at a name server and a
+// hosts file of its own, with no root and no network.
+pub fn resolve_system(fs: FsRead, net: NetConnect, random: Random, env: Env, name: String) -> Result<List<String>, String> {
+    var config = Config.new("", "", [])
+    var port = 53
+    match env.get("OSKA_DNS_HOSTS") {
+        Some(hosts) => {
+            var resolv: Untrusted<String> = ""
+            match env.get("OSKA_DNS_RESOLV_CONF") {
+                Some(text) => { resolv = text }
+                None => {}
+            }
+            match env.get("OSKA_DNS_PORT") {
+                Some(text) => {
+                    let number = digits_number(text)
+                    if number < 1 || number > 65535 {
+                        return Err("host not found")
+                    }
+                    port = number
+                }
+                None => {}
+            }
+            config = Config.new(hosts, resolv, [])
+        }
+        None => { config = load_config(fs, net) }
+    }
+    match resolve(config, NetExchange.on_port(net, random, port), name) {
+        Ok(found) => Ok(found)
+        Err(error) => Err(error.to_string())
+    }
 }
 
 // The file at `path`, or empty text when it cannot be read.
