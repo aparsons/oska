@@ -154,23 +154,55 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }
 
 /// `NetConnect.system_name_servers` runs on both backends, which connect
-/// nowhere: Windows' DNS servers come from `GetNetworkParams` (ADR 0026),
-/// and every other platform keeps them in `resolv.conf`, so it lists none.
-/// A test host lists none either, whatever the platform.
+/// nowhere: Windows' DNS servers come from `GetAdaptersAddresses` (ADR
+/// 0026), those of the adapters that are up, and every other platform
+/// keeps them in `resolv.conf`, so it lists none. A test host lists none
+/// either, whatever the platform. The servers of the real machine, where
+/// the test runs on Windows, are address literals, each once, none of
+/// them unspecified, link-local or site-local.
 #[test]
 fn the_systems_name_servers_are_listed_on_windows_only() {
     let src = r#"fn main(io: Stdout, net: NetConnect) -> Result<(), IoError> {
     let servers = net.system_name_servers()?
     let count = servers.len()
-    io.println("{count}")
+    io.println("{count}")?
+    for server in servers {
+        io.println(server)?
+    }
+    Ok(())
 }
 "#;
     let outcome = differential::run_native(&Case::file("dns_system_servers", src));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
-    let listed: usize = outcome.stdout.trim().parse().expect("a count");
+    let mut lines = outcome.stdout.lines();
+    let listed: usize = lines.next().and_then(|n| n.parse().ok()).expect("a count");
     assert!(listed <= 16, "{outcome:#?}");
     if !cfg!(windows) {
         assert_eq!(outcome.stdout, "0\n", "{outcome:#?}");
+        return;
+    }
+    // A hosted CI runner has a DNS server on an adapter that is up.
+    assert!(
+        listed > 0 || std::env::var_os("GITHUB_ACTIONS").is_none(),
+        "no server listed on a runner: {outcome:#?}"
+    );
+    let servers: Vec<&str> = lines.collect();
+    assert_eq!(servers.len(), listed, "{outcome:#?}");
+    for (i, server) in servers.iter().enumerate() {
+        let ip: std::net::IpAddr = server
+            .parse()
+            .unwrap_or_else(|_| panic!("{server:?}: {outcome:#?}"));
+        let usable = match ip {
+            std::net::IpAddr::V4(ip) => !ip.is_unspecified(),
+            std::net::IpAddr::V6(ip) => {
+                !ip.is_unspecified() && !matches!(ip.segments()[0] & 0xffc0, 0xfe80 | 0xfec0)
+            }
+        };
+        assert!(usable, "{server:?} should have been left out: {outcome:#?}");
+        assert!(
+            !servers[..i].contains(server),
+            "{server:?} twice: {outcome:#?}"
+        );
     }
 }
 

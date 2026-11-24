@@ -309,43 +309,116 @@ impl NetListener {
     }
 }
 
-/// The IPv4 literals of the DNS servers a `FIXED_INFO` lists (what
-/// `GetNetworkParams` writes on Windows x64), in order. `buffer` holds the
-/// structure and the nodes that follow it, and `base` is the address the
-/// buffer was at when it was filled, since the nodes link by address. A
-/// link that leaves the buffer ends the list, and a node that is not an
-/// IPv4 literal is skipped, so a damaged buffer gives fewer servers and
-/// never a fault.
+/// The literals of the DNS servers of the adapters that are up, from the
+/// `IP_ADAPTER_ADDRESSES` list `GetAdaptersAddresses` writes on Windows
+/// x64, in the order Windows asks them: by the adapter's interface metric
+/// for the server's family (lowest first), and in list order among equal
+/// metrics. A server is listed once, at its lowest metric.
 ///
-/// `FIXED_INFO` has `HostName[132]` and `DomainName[132]`, then
-/// `CurrentDnsServer` (a pointer, at 264), then `DnsServerList` at 272: an
-/// `IP_ADDR_STRING`, which is `Next` (a pointer), `IpAddress[16]`,
-/// `IpMask[16]` and `Context` (a `DWORD`), 48 bytes.
+/// `buffer` holds the structures and everything they point to, and `base`
+/// is the address the buffer was at when it was filled, since the
+/// structures link by address. A link that leaves the buffer ends its
+/// list, and an entry that cannot be read is skipped, so a damaged buffer
+/// gives fewer servers and never a fault.
+///
+/// Left out: an adapter that is not `IfOperStatusUp`, a loopback adapter,
+/// an unspecified address, and an IPv6 address that is link-local
+/// (`fe80::/10`, which needs the interface's scope, which a literal cannot
+/// carry) or site-local (`fec0::/10`, deprecated, which Windows lists as
+/// placeholders on an adapter with no IPv6 name server). IPv6 literals are
+/// written as eight groups of four hex digits, as `std.rt` writes them.
+///
+/// Offsets, for x64: `IP_ADAPTER_ADDRESSES` has `Next` at 8,
+/// `FirstDnsServerAddress` at 48, `IfType` at 100, `OperStatus` at 104,
+/// `Ipv4Metric` at 216 and `Ipv6Metric` at 220, 224 bytes in all up to
+/// there. `IP_ADAPTER_DNS_SERVER_ADDRESS` has `Next` at 8, then a
+/// `SOCKET_ADDRESS` (`lpSockaddr` at 16, `iSockaddrLength` at 24), 32
+/// bytes.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn servers_from_fixed_info(buffer: &[u8], base: usize) -> Vec<String> {
-    const LIST: usize = 272;
-    const NODE: usize = 48;
-    let mut servers = Vec::new();
-    let mut at = LIST;
-    for _ in 0..16 {
-        let Some(node) = buffer.get(at..at + NODE) else {
+pub(crate) fn servers_from_adapter_addresses(buffer: &[u8], base: usize) -> Vec<String> {
+    const ADAPTER: usize = 224;
+    const NODE: usize = 32;
+    const IF_OPER_STATUS_UP: u32 = 1;
+    const IF_TYPE_LOOPBACK: u32 = 24;
+    let word = |at: usize| -> Option<usize> {
+        Some(usize::from_le_bytes(
+            buffer.get(at..at + 8)?.try_into().ok()?,
+        ))
+    };
+    let half = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(buffer.get(at..at + 4)?.try_into().ok()?))
+    };
+    // The offset in `buffer` of the structure at address `link`.
+    let offset = |link: usize| link.checked_sub(base).filter(|_| link != 0);
+    let mut found: Vec<(u32, String)> = Vec::new();
+    let mut adapter = Some(0usize);
+    let mut adapters = 0;
+    while let Some(at) = adapter.take().filter(|_| adapters < 128) {
+        adapters += 1;
+        let (Some(status), Some(kind), Some(v4), Some(v6)) = (
+            half(at + 104),
+            half(at + 100),
+            half(at + 216),
+            half(at + 220),
+        ) else {
             break;
         };
-        let address = &node[8..24];
-        let end = address.iter().position(|b| *b == 0).unwrap_or(16);
-        if let Some(ip) = std::str::from_utf8(&address[..end])
-            .ok()
-            .and_then(|text| text.parse::<Ipv4Addr>().ok())
-        {
-            servers.push(ip.to_string());
+        if at + ADAPTER <= buffer.len() && status == IF_OPER_STATUS_UP && kind != IF_TYPE_LOOPBACK {
+            let mut node = word(at + 48).and_then(offset);
+            let mut count = 0;
+            while let Some(n) = node.take().filter(|_| count < 16) {
+                count += 1;
+                if let Some((family, text)) = server_literal(buffer, offset, n, NODE) {
+                    let metric = if family == 2 { v4 } else { v6 };
+                    found.push((metric, text));
+                }
+                node = word(n + 8).and_then(offset);
+            }
         }
-        let next = usize::from_le_bytes(node[..8].try_into().unwrap_or([0; 8]));
-        match next.checked_sub(base) {
-            Some(offset) if next != 0 => at = offset,
-            _ => break,
+        adapter = word(at + 8).and_then(offset);
+    }
+    // Stable: equal metrics keep the order of the adapters.
+    found.sort_by_key(|(metric, _)| *metric);
+    // A server listed twice keeps its place at the lowest metric.
+    let mut servers: Vec<String> = Vec::new();
+    for (_, text) in found {
+        if !servers.contains(&text) {
+            servers.push(text);
         }
     }
     servers
+}
+
+/// The family and literal of the server in the `IP_ADAPTER_DNS_SERVER_ADDRESS`
+/// at `at`, or `None` when its address cannot be read or is left out.
+fn server_literal(
+    buffer: &[u8],
+    offset: impl Fn(usize) -> Option<usize>,
+    at: usize,
+    size: usize,
+) -> Option<(u16, String)> {
+    let node = buffer.get(at..at + size)?;
+    let sockaddr = offset(usize::from_le_bytes(node[16..24].try_into().ok()?))?;
+    let length = i32::from_le_bytes(node[24..28].try_into().ok()?);
+    let family = u16::from_le_bytes(buffer.get(sockaddr..sockaddr + 2)?.try_into().ok()?);
+    match family {
+        2 if length >= 16 => {
+            let octets: [u8; 4] = buffer.get(sockaddr + 4..sockaddr + 8)?.try_into().ok()?;
+            let ip = Ipv4Addr::from(octets);
+            (!ip.is_unspecified()).then(|| (2, ip.to_string()))
+        }
+        23 if length >= 28 => {
+            let octets: [u8; 16] = buffer.get(sockaddr + 8..sockaddr + 24)?.try_into().ok()?;
+            let ip = Ipv6Addr::from(octets);
+            let top = ip.segments()[0] & 0xffc0;
+            if ip.is_unspecified() || top == 0xfe80 || top == 0xfec0 {
+                return None;
+            }
+            let groups: Vec<String> = ip.segments().iter().map(|g| format!("{g:04x}")).collect();
+            Some((23, groups.join(":")))
+        }
+        _ => None,
+    }
 }
 
 /// `port` as the port number it names, or why it names none: a port is
@@ -463,46 +536,197 @@ mod tests {
         }
     }
 
-    /// A `FIXED_INFO` buffer at `base` listing `servers`, the first node
-    /// inline and the rest after the structure, as Windows lays it out.
-    fn fixed_info(base: usize, servers: &[&str]) -> Vec<u8> {
-        let mut buffer = vec![0u8; 272 + 48 * servers.len().max(1)];
-        for (i, server) in servers.iter().enumerate() {
-            let at = 272 + 48 * i;
-            let next = if i + 1 < servers.len() {
-                base + 272 + 48 * (i + 1)
-            } else {
-                0
-            };
-            buffer[at..at + 8].copy_from_slice(&next.to_le_bytes());
-            buffer[at + 8..at + 8 + server.len()].copy_from_slice(server.as_bytes());
+    /// One adapter for `adapters_buffer`: its link status, type, metrics
+    /// and DNS servers (`4` or `6` and the address text).
+    struct Adapter {
+        up: bool,
+        kind: u32,
+        metrics: (u32, u32),
+        servers: Vec<(u8, &'static str)>,
+    }
+
+    fn adapter(up: bool, metric: u32, servers: &[(u8, &'static str)]) -> Adapter {
+        Adapter {
+            up,
+            kind: 6,
+            metrics: (metric, metric),
+            servers: servers.to_vec(),
+        }
+    }
+
+    /// A buffer at `base` laid out as `GetAdaptersAddresses` does: every
+    /// adapter 224 bytes, linked by address, then the 32-byte server nodes
+    /// and their socket addresses.
+    fn adapters_buffer(base: usize, adapters: &[Adapter]) -> Vec<u8> {
+        let mut buffer = vec![0u8; 224 * adapters.len().max(1)];
+        let mut tail = buffer.len();
+        for (i, a) in adapters.iter().enumerate() {
+            let at = 224 * i;
+            if i + 1 < adapters.len() {
+                buffer[at + 8..at + 16].copy_from_slice(&(base + at + 224).to_le_bytes());
+            }
+            buffer[at + 100..at + 104].copy_from_slice(&a.kind.to_le_bytes());
+            let status: u32 = if a.up { 1 } else { 2 };
+            buffer[at + 104..at + 108].copy_from_slice(&status.to_le_bytes());
+            buffer[at + 216..at + 220].copy_from_slice(&a.metrics.0.to_le_bytes());
+            buffer[at + 220..at + 224].copy_from_slice(&a.metrics.1.to_le_bytes());
+            let mut previous: Option<usize> = None;
+            for (family, text) in &a.servers {
+                let node = tail;
+                let sockaddr = node + 32;
+                let (bytes, length) = if *family == 4 {
+                    let ip: Ipv4Addr = text.parse().expect("an IPv4 literal");
+                    let mut s = vec![0u8; 16];
+                    s[..2].copy_from_slice(&2u16.to_le_bytes());
+                    s[4..8].copy_from_slice(&ip.octets());
+                    (s, 16i32)
+                } else {
+                    let ip: Ipv6Addr = text.parse().expect("an IPv6 literal");
+                    let mut s = vec![0u8; 32];
+                    s[..2].copy_from_slice(&23u16.to_le_bytes());
+                    s[8..24].copy_from_slice(&ip.octets());
+                    (s, 28)
+                };
+                buffer.resize(sockaddr + bytes.len(), 0);
+                buffer[sockaddr..].copy_from_slice(&bytes);
+                buffer[node..node + 4].copy_from_slice(&32u32.to_le_bytes());
+                buffer[node + 16..node + 24].copy_from_slice(&(base + sockaddr).to_le_bytes());
+                buffer[node + 24..node + 28].copy_from_slice(&length.to_le_bytes());
+                match previous {
+                    None => buffer[at + 48..at + 56].copy_from_slice(&(base + node).to_le_bytes()),
+                    Some(p) => buffer[p + 8..p + 16].copy_from_slice(&(base + node).to_le_bytes()),
+                }
+                previous = Some(node);
+                tail = buffer.len();
+            }
         }
         buffer
     }
 
+    const BASE: usize = 0x10_0000;
+
     #[test]
-    fn the_servers_of_a_fixed_info_come_in_order() {
-        let buffer = fixed_info(0x1000, &["192.168.1.1", "8.8.8.8", "1.1.1.1"]);
+    fn the_servers_of_an_adapter_come_in_order() {
+        let buffer = adapters_buffer(
+            BASE,
+            &[adapter(
+                true,
+                25,
+                &[(4, "192.168.1.1"), (4, "8.8.8.8"), (4, "1.1.1.1")],
+            )],
+        );
         assert_eq!(
-            servers_from_fixed_info(&buffer, 0x1000),
+            servers_from_adapter_addresses(&buffer, BASE),
             ["192.168.1.1", "8.8.8.8", "1.1.1.1"]
         );
-        assert!(servers_from_fixed_info(&fixed_info(0x1000, &[]), 0x1000).is_empty());
+        assert!(servers_from_adapter_addresses(&adapters_buffer(BASE, &[]), BASE).is_empty());
     }
 
     #[test]
-    fn a_damaged_fixed_info_gives_fewer_servers_and_no_fault() {
-        let mut buffer = fixed_info(0x1000, &["10.0.0.1", "10.0.0.2"]);
-        // The first node's link points outside the buffer.
-        buffer[272..280].copy_from_slice(&0x9000usize.to_le_bytes());
-        assert_eq!(servers_from_fixed_info(&buffer, 0x1000), ["10.0.0.1"]);
-        // The link points before the buffer, and the buffer is cut short.
-        buffer[272..280].copy_from_slice(&0x10usize.to_le_bytes());
-        assert_eq!(servers_from_fixed_info(&buffer, 0x1000), ["10.0.0.1"]);
-        assert!(servers_from_fixed_info(&buffer[..100], 0x1000).is_empty());
-        // A link back to the first node would loop for ever.
-        buffer[272..280].copy_from_slice(&0x1000usize.wrapping_add(272).to_le_bytes());
-        assert_eq!(servers_from_fixed_info(&buffer, 0x1000).len(), 16);
+    fn a_disconnected_adapters_servers_are_not_listed() {
+        let buffer = adapters_buffer(
+            BASE,
+            &[
+                adapter(false, 5, &[(4, "10.9.9.9")]),
+                adapter(true, 25, &[(4, "192.168.1.1")]),
+            ],
+        );
+        assert_eq!(
+            servers_from_adapter_addresses(&buffer, BASE),
+            ["192.168.1.1"]
+        );
+    }
+
+    #[test]
+    fn servers_come_in_metric_order_and_equal_metrics_keep_list_order() {
+        let buffer = adapters_buffer(
+            BASE,
+            &[
+                adapter(true, 50, &[(4, "10.0.0.50")]),
+                adapter(true, 10, &[(4, "10.0.0.10"), (4, "10.0.0.11")]),
+                adapter(true, 50, &[(4, "10.0.0.51")]),
+                adapter(true, 5, &[(4, "10.0.0.50")]),
+            ],
+        );
+        // The duplicate keeps its place at the lowest metric (5).
+        assert_eq!(
+            servers_from_adapter_addresses(&buffer, BASE),
+            ["10.0.0.50", "10.0.0.10", "10.0.0.11", "10.0.0.51"]
+        );
+    }
+
+    #[test]
+    fn a_servers_metric_is_its_familys() {
+        let mut wifi = adapter(true, 0, &[(4, "10.0.0.2"), (6, "2001:db8::2")]);
+        wifi.metrics = (40, 10);
+        let mut wired = adapter(true, 0, &[(4, "10.0.0.1")]);
+        wired.metrics = (20, 99);
+        let buffer = adapters_buffer(BASE, &[wifi, wired]);
+        assert_eq!(
+            servers_from_adapter_addresses(&buffer, BASE),
+            [
+                "2001:0db8:0000:0000:0000:0000:0000:0002",
+                "10.0.0.1",
+                "10.0.0.2"
+            ]
+        );
+    }
+
+    #[test]
+    fn ipv6_servers_are_listed_but_link_local_site_local_and_loopback_are_not() {
+        let mut loopback = adapter(true, 1, &[(4, "10.1.1.1")]);
+        loopback.kind = 24;
+        let buffer = adapters_buffer(
+            BASE,
+            &[
+                loopback,
+                adapter(
+                    true,
+                    10,
+                    &[
+                        (6, "fe80::1"),
+                        (6, "fec0:0:0:ffff::1"),
+                        (6, "::"),
+                        (4, "0.0.0.0"),
+                        (6, "2606:4700:4700::1111"),
+                        (6, "fd00::53"),
+                    ],
+                ),
+            ],
+        );
+        assert_eq!(
+            servers_from_adapter_addresses(&buffer, BASE),
+            [
+                "2606:4700:4700:0000:0000:0000:0000:1111",
+                "fd00:0000:0000:0000:0000:0000:0000:0053"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_damaged_adapter_list_gives_fewer_servers_and_no_fault() {
+        let mut buffer = adapters_buffer(
+            BASE,
+            &[
+                adapter(true, 10, &[(4, "10.0.0.1"), (4, "10.0.0.2")]),
+                adapter(true, 20, &[(4, "10.0.0.3")]),
+            ],
+        );
+        // The first server's link points outside the buffer.
+        let first = usize::from_le_bytes(buffer[48..56].try_into().expect("8 bytes")) - BASE;
+        buffer[first + 8..first + 16].copy_from_slice(&0x9000_0000usize.to_le_bytes());
+        // The second adapter's link points before the buffer.
+        buffer[8..16].copy_from_slice(&0x10usize.to_le_bytes());
+        assert_eq!(servers_from_adapter_addresses(&buffer, BASE), ["10.0.0.1"]);
+        // The buffer is cut short.
+        assert!(servers_from_adapter_addresses(&buffer[..100], BASE).is_empty());
+        // An adapter that links to itself ends, and lists its servers once.
+        buffer[8..16].copy_from_slice(&BASE.to_le_bytes());
+        assert_eq!(servers_from_adapter_addresses(&buffer, BASE), ["10.0.0.1"]);
+        // A server that links to itself ends the list too.
+        let again = BASE + first;
+        buffer[first + 8..first + 16].copy_from_slice(&again.to_le_bytes());
+        assert_eq!(servers_from_adapter_addresses(&buffer, BASE), ["10.0.0.1"]);
     }
 
     #[test]
