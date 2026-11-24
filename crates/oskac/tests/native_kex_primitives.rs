@@ -273,6 +273,13 @@ fn native_only_tests_pass(file: &str, least: usize) {
 /// takes about a second each to run.
 #[test]
 fn every_wycheproof_x25519_vector_passes_natively() {
+    // The 13 test blocks each hold many vectors, so a count of blocks
+    // would not notice a lost vector: count the vectors in the fixture.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/native_only/x25519_wycheproof_full.osk");
+    let source = std::fs::read_to_string(&path).expect("the fixture reads");
+    let vectors = source.matches("t.assert(agrees(").count();
+    assert_eq!(vectors, 518, "the fixture holds every Wycheproof vector");
     native_only_tests_pass("x25519_wycheproof_full.osk", 13);
 }
 

@@ -94,5 +94,14 @@ else
   printf 'cargo-cache: no cached build; no file times changed\n'
 fi
 
+# The list says every unit in the cache was built from the tree as checked
+# out. Two build directories break that: the unsafe guard's own target and
+# the Windows cross check build only in the `checks` group, which never
+# saves the cache. The saving shard restores them unchanged and stamps its
+# list over them, so a later run reuses a build of old sources as fresh
+# (2026-11-24: a Host trait without `secure_bytes` in the guard's build
+# failed every `checks` job on main). They are rebuilt in each job.
+rm -rf "$target/unsafe-guard" "$target/x86_64-pc-windows-gnu"
+
 mkdir -p "$target"
 cp "$current" "$list"
