@@ -132,6 +132,18 @@ _Avoid_: tainted, dirty, unsafe input
 The prelude's buffer of raw bytes, for binary data that is not text. It is a value, like every Oska value, and it carries the same trust flag as text.
 _Avoid_: byte array, blob, binary string
 
+**Map**:
+The prelude's `Map<K, V>`: a value that holds entries and finds one by its key. Keys need `Eq` and `Hash`; `Float` and secret values are refused as keys (ADR 0027). Like a list, it is copied on write.
+_Avoid_: dictionary, hash table, hash map
+
+**Entry**:
+One key and its value in a map. `entries()` gives them in insertion order.
+_Avoid_: pair, item, member (a `std.json` member is a different type)
+
+**Insertion order**:
+The order in which a map's keys were first added. Iteration always follows it, on every platform and both backends. Updating a key keeps its place; removing it and adding it again moves it to the end.
+_Avoid_: hash order, sorted order
+
 **Validator**:
 A function that inspects an untrusted value and, only if the value passes its checks, returns a trusted value of a validated type, such as an `Email`.
 _Avoid_: sanitizer
