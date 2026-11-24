@@ -939,7 +939,13 @@ impl Session {
         while at < bytes.len() {
             let stop = if at + piece > bytes.len() { bytes.len() } else { at + piece }
             self.put_record(23, bytes.slice(at, stop))?
-            if piece < 16384 {
+            // Each piece but the last goes out on its own. The last leaves
+            // with `close_notify`, in one write: sent apart, it can arrive
+            // after the client has read the whole response and closed, and
+            // a write to a closed socket resets the connection, where
+            // Windows throws away the client's alert the server has not
+            // yet read.
+            if piece < 16384 && stop < bytes.len() {
                 self.flush()?
             }
             at = stop
