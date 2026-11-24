@@ -154,6 +154,8 @@ impl Cap {
 
 pub const BOOL: &str = "Bool";
 pub const INT: &str = "Int";
+/// IEEE 754 binary64 (ADR 0027).
+pub const FLOAT: &str = "Float";
 pub const STRING: &str = "String";
 /// The syntax for untrusted text, as in `Untrusted<String>`.
 pub const UNTRUSTED: &str = "Untrusted";
@@ -204,6 +206,15 @@ impl Ty {
 
     pub fn bool() -> Ty {
         Ty::named(BOOL)
+    }
+
+    pub fn float() -> Ty {
+        Ty::named(FLOAT)
+    }
+
+    /// `Float`.
+    pub fn is_float(&self) -> bool {
+        matches!(self, Ty::Named(name, _, _) if name == FLOAT)
     }
 
     /// Trusted `String`.

@@ -25,6 +25,9 @@ pub struct Expr {
 pub enum ExprKind {
     /// Integer literal, kept as written (digits and `_` separators).
     Int(String),
+    /// Float literal, kept as written (digits, `_` separators, a
+    /// fraction, an exponent).
+    Float(String),
     /// String literal, split into text and interpolation holes.
     Str(Vec<StrPart>),
     /// Sink literal such as `sql"..."`. It never contains holes.

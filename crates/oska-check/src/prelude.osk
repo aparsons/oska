@@ -2,8 +2,8 @@
 // The prelude: what every module sees without `use`. It has the built-in
 // capabilities, `Option`, `Result`, `List` and the methods of `String`,
 // the types tests and structured concurrency use, and the core traits.
-// The primitive types (`Int`, the sized integers `I8` to `U64`, `Bool`,
-// `String`) and `()` are built into the language.
+// The primitive types (`Int`, the sized integers `I8` to `U64`, `Float`,
+// `Bool`, `String`) and `()` are built into the language.
 //
 // A capability is a value that grants authority, such as `Stdout` or
 // `FsRead`. Only `main` receives the built-in ones, as parameters, and no
@@ -985,6 +985,29 @@ impl Display for IoError {
     fn to_string(self) -> String
 }
 
+// ---- Float ---------------------------------------------------------------
+
+// `Float` is IEEE 754 binary64, and every result of an operation on it is
+// pinned down to the bits (ADR 0027): the same on the interpreter and on
+// every native platform. `+ - * /` and `sqrt` round to nearest, ties to
+// even. The compiler never fuses `a * b + c` into one operation. There is
+// one NaN, the canonical NaN, bits `0x7FF8000000000000`: every operation
+// that makes a NaN makes it. `==`, `!=`, `<`, `<=`, `>` and `>=` follow
+// IEEE 754, so a NaN is equal to nothing, itself included, and `0.0 ==
+// -0.0`. There is no implicit conversion between `Int` and `Float`, and no
+// `%`.
+impl Float {
+    // The square root, correctly rounded. The square root of `-0.0` is
+    // `-0.0`, and of a negative number the canonical NaN.
+    pub fn sqrt(self) -> Float
+    // The 64 bits of the value as a `U64`. A NaN gives the canonical
+    // pattern.
+    pub fn to_bits(self) -> U64
+    // The `Float` with these 64 bits. Any NaN pattern gives the canonical
+    // NaN.
+    pub fn from_bits(bits: U64) -> Float
+}
+
 // ---- Fixed-width integers -----------------------------------------------
 
 // `U8`, `U32` and `U64` have the bitwise and shift operators
@@ -1147,6 +1170,7 @@ impl Eq for U8 { fn eq(self, other: U8) -> Bool }
 impl Eq for U16 { fn eq(self, other: U16) -> Bool }
 impl Eq for U32 { fn eq(self, other: U32) -> Bool }
 impl Eq for U64 { fn eq(self, other: U64) -> Bool }
+impl Eq for Float { fn eq(self, other: Float) -> Bool }
 impl Eq for Bool { fn eq(self, other: Bool) -> Bool }
 impl Eq for String { fn eq(self, other: String) -> Bool }
 impl Eq for Path { fn eq(self, other: Path) -> Bool }

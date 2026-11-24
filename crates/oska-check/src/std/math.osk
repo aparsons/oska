@@ -1,0 +1,302 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.math`: functions on `Float`, written in Oska so that they give the
+// same bits on every platform and on both backends (ADR 0027). A module
+// sees it only after `use std.math`. Every function here is a pure
+// function.
+//
+// `math.fma(a, b, c)` is the fused multiply-add: `a * b + c` rounded once,
+// to nearest with ties to even, where `a * b + c` as two operators rounds
+// twice, and the compiler never fuses them for you. A NaN result is the
+// canonical NaN, as for every `Float` operation.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends, so `fma` gives one answer
+// whether or not the processor has a fused instruction. The comment block
+// directly above a `pub` item is its description in the API reference.
+//
+// `fma` works on the bits. There is no 128-bit integer, so a `Wide` is a
+// pair of `U64`s, high and low. The exact product of two 53-bit
+// significands has 106 bits. The exact sum is rounded once, by one
+// routine, `round`, which also makes a subnormal result and an overflow.
+// The smaller addend, shifted right to the position the larger one's top
+// bit sets, keeps a lost bit as a sticky bit, which is enough because the
+// register holds 125 bits below the larger addend's top bit and the final
+// precision is 53.
+
+// The bits of a `Float` that hold its fraction, its hidden bit, its sign
+// and its infinity (and NaN) pattern.
+const FRACTION: U64 = 4503599627370495
+const HIDDEN: U64 = 4503599627370496
+const SIGN: U64 = 9223372036854775808
+const INFINITY: U64 = 9218868437227405312
+const QUIET_NAN: U64 = 9221120237041090560
+// 2^53, one past the largest 53-bit significand.
+const CARRIED: U64 = 9007199254740992
+
+// An unsigned 128-bit integer.
+struct Wide { hi: U64, lo: U64 }
+
+// `a * b + c` with one rounding, to nearest, ties to even. A NaN in any
+// argument, or an infinity times a zero, gives the canonical NaN, and so
+// does an infinity added to its opposite. A product that overflows gives
+// an infinity, and one that underflows a subnormal or a zero, as if
+// computed exactly and then rounded.
+pub fn fma(a: Float, b: Float, c: Float) -> Float {
+    Float.from_bits(fma_bits(a.to_bits(), b.to_bits(), c.to_bits()))
+}
+
+fn exponent_field(x: U64) -> Int {
+    ((x >> 52) & 2047).to_int()
+}
+
+// The significand of a finite `x` as an integer: its fraction, and the
+// hidden bit unless it is subnormal.
+fn significand(x: U64) -> U64 {
+    let fraction = x & FRACTION
+    if exponent_field(x) == 0 {
+        fraction
+    } else {
+        fraction | HIDDEN
+    }
+}
+
+// The exponent of the significand's last bit, so that a finite `x` is its
+// significand times 2 to this power.
+fn scale(x: U64) -> Int {
+    let field = exponent_field(x)
+    if field == 0 {
+        -1074
+    } else {
+        field - 1075
+    }
+}
+
+fn fma_bits(a: U64, b: U64, c: U64) -> U64 {
+    let a_field = exponent_field(a)
+    let b_field = exponent_field(b)
+    let c_field = exponent_field(c)
+    let a_special = a_field == 2047
+    let b_special = b_field == 2047
+    let c_special = c_field == 2047
+    let a_zero = a_field == 0 && (a & FRACTION) == 0
+    let b_zero = b_field == 0 && (b & FRACTION) == 0
+    let c_zero = c_field == 0 && (c & FRACTION) == 0
+    if (a_special && (a & FRACTION) != 0) || (b_special && (b & FRACTION) != 0) {
+        return QUIET_NAN
+    }
+    if c_special && (c & FRACTION) != 0 {
+        return QUIET_NAN
+    }
+    let product_sign = (a ^ b) >> 63
+    let c_sign = c >> 63
+    if a_special || b_special {
+        if a_zero || b_zero {
+            return QUIET_NAN
+        }
+        if c_special && c_sign != product_sign {
+            return QUIET_NAN
+        }
+        return (product_sign << 63) | INFINITY
+    }
+    if c_special {
+        return c
+    }
+    if a_zero || b_zero {
+        if c_zero {
+            // Two zeros add to a zero of their common sign, or to +0.
+            if product_sign == c_sign {
+                return c
+            }
+            return 0
+        }
+        return c
+    }
+    let product = multiply(significand(a), significand(b))
+    let product_scale = scale(a) + scale(b)
+    if c_zero {
+        return round(product_sign, product, product_scale)
+    }
+    let addend = Wide(hi: 0, lo: significand(c))
+    let addend_scale = scale(c)
+    // The exponent of each addend's top bit; `x` has the larger.
+    let product_top = product_scale + bit_length(product) - 1
+    let addend_top = addend_scale + bit_length(addend) - 1
+    let product_larger = product_top >= addend_top
+    let x = if product_larger { product } else { addend }
+    let y = if product_larger { addend } else { product }
+    let x_sign = if product_larger { product_sign } else { c_sign }
+    let y_sign = if product_larger { c_sign } else { product_sign }
+    let x_top = if product_larger { product_top } else { addend_top }
+    let y_top = if product_larger { addend_top } else { product_top }
+    // `x` with its top bit at bit 125, and `y` where its top sits below
+    // that, the bits it loses on the right kept as one sticky bit.
+    let gap = x_top - y_top
+    let big = shift_left(x, 125 - (bit_length(x) - 1))
+    let from_top = (125 - (bit_length(y) - 1)) - gap
+    let small = if from_top >= 0 {
+        shift_left(y, from_top)
+    } else {
+        shift_right_sticky(y, 0 - from_top)
+    }
+    var sum = Wide(hi: 0, lo: 0)
+    var sign = x_sign
+    if x_sign == y_sign {
+        sum = add(big, small)
+    } else if at_least(big, small) {
+        sum = subtract(big, small)
+    } else {
+        sum = subtract(small, big)
+        sign = y_sign
+    }
+    if sum.hi == 0 && sum.lo == 0 {
+        // Equal and opposite: +0, as round-to-nearest says.
+        return 0
+    }
+    // Bit `k` of `sum` is worth 2 to the power `x_top - 125 + k`.
+    round(sign, sum, x_top - 125)
+}
+
+// The `Float` bits of the exact value `m` times 2 to the power `e`, with
+// sign bit `sign` (0 or 1), rounded to nearest, ties to even: a normal
+// number, a subnormal or zero, or an infinity. `m` is not zero.
+fn round(sign: U64, m: Wide, e: Int) -> U64 {
+    let top = e + bit_length(m) - 1
+    // The exponent of the last bit that is kept: 52 below the top, or the
+    // subnormal range's -1074.
+    let last = if top < -1022 { -1074 } else { top - 52 }
+    let drop = last - e
+    var q: U64 = 0
+    if drop <= 0 {
+        q = shift_left(m, 0 - drop).lo
+    } else if drop < 128 {
+        let kept = shift_right(m, drop).lo
+        // The bits dropped, moved to the top of a `Wide`: half is 2^127.
+        let rest = shift_left(m, 128 - drop)
+        let more = rest.hi > SIGN || (rest.hi == SIGN && rest.lo != 0)
+        let tie = rest.hi == SIGN && rest.lo == 0
+        if more || (tie && (kept & 1) == 1) {
+            q = kept + 1
+        } else {
+            q = kept
+        }
+    }
+    var last_bit = last
+    if q == CARRIED {
+        q = HIDDEN
+        last_bit = last_bit + 1
+    }
+    let sign_bit = sign << 63
+    if q < HIDDEN {
+        // Subnormal or zero: the significand is the whole fraction.
+        return sign_bit | q
+    }
+    let field = last_bit + 1075
+    if field >= 2047 {
+        return sign_bit | INFINITY
+    }
+    sign_bit | (field.to_u64() << 52) | (q - HIDDEN)
+}
+
+// The exact product of two significands, each below 2^53.
+fn multiply(a: U64, b: U64) -> Wide {
+    let low: U64 = 134217727
+    let a_low = a & low
+    let a_high = a >> 27
+    let b_low = b & low
+    let b_high = b >> 27
+    let lows = a_low * b_low
+    let middle = a_low * b_high + a_high * b_low
+    let highs = a_high * b_high
+    let sum = add(Wide(hi: 0, lo: lows), shift_left(Wide(hi: 0, lo: middle), 27))
+    add(sum, shift_left(Wide(hi: 0, lo: highs), 54))
+}
+
+// The number of bits in `w`: 0 for zero.
+fn bit_length(w: Wide) -> Int {
+    if w.hi != 0 {
+        64 + word_length(w.hi)
+    } else {
+        word_length(w.lo)
+    }
+}
+
+fn word_length(x: U64) -> Int {
+    var length = 0
+    var rest = x
+    var step = 32
+    while step > 0 {
+        let amount = step.to_u64()
+        if (rest >> amount) != 0 {
+            rest = rest >> amount
+            length = length + step
+        }
+        step = step / 2
+    }
+    if rest != 0 {
+        length + 1
+    } else {
+        length
+    }
+}
+
+fn add(a: Wide, b: Wide) -> Wide {
+    let lo = a.lo.wrapping_add(b.lo)
+    var carry: U64 = 0
+    if lo < a.lo {
+        carry = 1
+    }
+    Wide(hi: a.hi.wrapping_add(b.hi).wrapping_add(carry), lo: lo)
+}
+
+// `a - b`, for `a` at least `b`.
+fn subtract(a: Wide, b: Wide) -> Wide {
+    var borrow: U64 = 0
+    if a.lo < b.lo {
+        borrow = 1
+    }
+    Wide(hi: a.hi.wrapping_sub(b.hi).wrapping_sub(borrow), lo: a.lo.wrapping_sub(b.lo))
+}
+
+fn at_least(a: Wide, b: Wide) -> Bool {
+    a.hi > b.hi || (a.hi == b.hi && a.lo >= b.lo)
+}
+
+// `w` shifted left by `n` bits, from 0 to 127, the bits shifted out lost.
+fn shift_left(w: Wide, n: Int) -> Wide {
+    if n == 0 {
+        return w
+    }
+    if n >= 64 {
+        return Wide(hi: w.lo << (n - 64).to_u64(), lo: 0)
+    }
+    let amount = n.to_u64()
+    let back = (64 - n).to_u64()
+    Wide(hi: (w.hi << amount) | (w.lo >> back), lo: w.lo << amount)
+}
+
+// `w` shifted right by `n` bits, from 0 to 127.
+fn shift_right(w: Wide, n: Int) -> Wide {
+    if n == 0 {
+        return w
+    }
+    if n >= 64 {
+        return Wide(hi: 0, lo: w.hi >> (n - 64).to_u64())
+    }
+    let amount = n.to_u64()
+    let back = (64 - n).to_u64()
+    Wide(hi: w.hi >> amount, lo: (w.lo >> amount) | (w.hi << back))
+}
+
+// `w`, which is not zero, shifted right by `n` bits, from 1 up, with the
+// lowest bit set when any bit shifted out was set.
+fn shift_right_sticky(w: Wide, n: Int) -> Wide {
+    if n >= 128 {
+        return Wide(hi: 0, lo: 1)
+    }
+    let lost = shift_left(w, 128 - n)
+    let shifted = shift_right(w, n)
+    if lost.hi != 0 || lost.lo != 0 {
+        return Wide(hi: shifted.hi, lo: shifted.lo | 1)
+    }
+    shifted
+}

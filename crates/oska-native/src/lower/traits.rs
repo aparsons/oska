@@ -36,14 +36,14 @@ use oska_check::program::{trait_method, Callee, Expr, Function, Place, Type};
 use oska_syntax::{Diagnostic, Span};
 
 use super::{Body, Instance};
-use crate::ir::{Cond, Inst, Temp};
+use crate::ir::{Cond, FloatCond, Inst, Temp};
 use crate::layout::{self, Fields};
 use crate::NOWHERE;
 
 /// The types whose `Eq` impl is the prelude's, by type tag.
 const PRELUDE_EQ: &[&str] = &[
-    "()", "Bool", "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "String", "Path",
-    "IoError", "Option", "Result", "List", "Bytes",
+    "()", "Bool", "Int", "Float", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "String",
+    "Path", "IoError", "Option", "Result", "List", "Bytes",
 ];
 
 /// The interpreter's type tag of values of the concrete type `ty`, which
@@ -53,6 +53,7 @@ fn type_tag(ty: &Type) -> Option<&str> {
         Type::Unit => Some("()"),
         Type::Bool => Some(builtins::BOOL),
         Type::Int(int) => Some(int.name()),
+        Type::Float => Some(builtins::FLOAT),
         Type::String => Some(builtins::STRING),
         Type::Named { name, .. } => Some(name),
         _ => None,
@@ -180,6 +181,7 @@ impl Body<'_, '_> {
                 });
                 Ok(dst)
             }
+            Type::Float => Ok(self.float_compare(FloatCond::Eq, a, b)),
             Type::String => self.call_runtime("string_eq", vec![a, b], NOWHERE),
             Type::Named { name, .. } if name == builtins::PATH => {
                 self.call_runtime("path_eq", vec![a, b], NOWHERE)

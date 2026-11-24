@@ -38,6 +38,8 @@ impl Body<'_, '_> {
                 let unsigned = self.constant(i64::from(*int == IntType::U64));
                 self.call_runtime("debug_int", vec![value, unsigned], span)
             }
+            // The text of a `Float` is the conversions ticket's (#594).
+            Type::Float => Ok(self.text("<float>")),
             Type::String => self.call_runtime("debug_string", vec![value], span),
             Type::Named { name, .. } if name == builtins::SECRET => Ok(self.text("<redacted>")),
             Type::Named { name, .. } if name == layout::TASK => Ok(self.text("<task>")),

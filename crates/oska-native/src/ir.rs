@@ -109,6 +109,38 @@ pub enum Arith {
     Rem,
 }
 
+/// An IEEE 754 binary64 operation on words that hold the bits of a
+/// `Float` (ADR 0027): each is one hardware instruction, correctly
+/// rounded to nearest with ties to even, and the result that is a NaN is
+/// the canonical NaN, [`CANONICAL_NAN`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    /// The square root of the left operand. The right is ignored.
+    Sqrt,
+    /// The left operand, with a NaN made the canonical one. The right is
+    /// ignored.
+    Canonical,
+}
+
+/// An IEEE 754 comparison, in which a NaN is unordered: every comparison
+/// with one is false but `Ne`. `a > b` is `b < a`, and `a >= b` is
+/// `b <= a`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatCond {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+}
+
+/// The bits of the canonical NaN: the quiet NaN with a zero payload and a
+/// clear sign.
+pub const CANONICAL_NAN: u64 = 0x7ff8_0000_0000_0000;
+
 /// The width of a memory access. A load zero-extends into the word; a
 /// store writes the low bits of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +242,21 @@ pub enum Inst {
     /// `dst = lhs op rhs`.
     Binary {
         op: BinOp,
+        dst: Temp,
+        lhs: Temp,
+        rhs: Temp,
+    },
+    /// `dst = lhs op rhs` on the bits of two `Float`s.
+    Float {
+        op: FloatOp,
+        dst: Temp,
+        lhs: Temp,
+        rhs: Temp,
+    },
+    /// `dst = 1` if the `Float` `lhs` `cond` the `Float` `rhs` holds, else
+    /// 0.
+    FloatCompare {
+        cond: FloatCond,
         dst: Temp,
         lhs: Temp,
         rhs: Temp,
@@ -403,6 +450,8 @@ impl Inst {
             | Inst::Expose { dst, .. }
             | Inst::Addr { dst, .. }
             | Inst::Binary { dst, .. }
+            | Inst::Float { dst, .. }
+            | Inst::FloatCompare { dst, .. }
             | Inst::BinaryImm { dst, .. }
             | Inst::CompareImm { dst, .. }
             | Inst::ArithImm { dst, .. }
@@ -434,6 +483,8 @@ impl Inst {
                 each(src);
             }
             Inst::Binary { dst, lhs, rhs, .. }
+            | Inst::Float { dst, lhs, rhs, .. }
+            | Inst::FloatCompare { dst, lhs, rhs, .. }
             | Inst::Compare { dst, lhs, rhs, .. }
             | Inst::Arith { dst, lhs, rhs, .. } => {
                 each(dst);
@@ -488,6 +539,8 @@ impl Inst {
                 vec![*src]
             }
             Inst::Binary { lhs, rhs, .. }
+            | Inst::Float { lhs, rhs, .. }
+            | Inst::FloatCompare { lhs, rhs, .. }
             | Inst::Compare { lhs, rhs, .. }
             | Inst::Arith { lhs, rhs, .. }
             | Inst::Branch { lhs, rhs, .. } => vec![*lhs, *rhs],

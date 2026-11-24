@@ -76,6 +76,7 @@ mod bytes;
 mod closures;
 mod data;
 mod debug;
+mod float;
 mod html;
 mod int_methods;
 mod lists;
@@ -99,7 +100,7 @@ use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Frame, Span, MAX_FRAMES};
 
 use crate::intrinsics::{self, Check, ErrorRead, Fails, Import, OsCall, Prelude, Runtime, Start};
-use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
+use crate::ir::{self, Arith, BinOp, Cond, FloatOp, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
 use crate::optimize;
 use crate::{codes, Locate, Target, NOWHERE};
@@ -2571,6 +2572,16 @@ impl<'l, 'p> Body<'l, 'p> {
             ExprKind::Bool(value) => Ok(self.constant(i64::from(*value))),
             // The bit pattern: a `U64` above `i64::MAX` wraps to negative.
             ExprKind::Int(value, _) => Ok(self.constant(*value as i64)),
+            // The bits of the `Float`, in a word.
+            ExprKind::Float(bits) => Ok(self.constant(*bits as i64)),
+            ExprKind::FloatBinary { op, lhs, rhs } => self.float_binary(*op, lhs, rhs),
+            ExprKind::FloatNeg(operand) => {
+                // `-0.0 - x` is `-x` for every `x`, and a NaN made
+                // canonical, which flipping the sign bit would not.
+                let zero = self.constant(i64::MIN);
+                let value = self.expr(operand)?;
+                Ok(self.float_op(FloatOp::Sub, zero, value))
+            }
             ExprKind::Str(text) => Ok(self.text(text)),
             ExprKind::Local(slot) => match self.slots.get(*slot) {
                 Some(&Slot { temp, .. }) => Ok(self.read(temp, &expr.ty)),
@@ -2687,6 +2698,9 @@ impl<'l, 'p> Body<'l, 'p> {
                         return Ok(value);
                     }
                     if let Some(value) = self.int_method_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.float_intrinsic(name, &values) {
                         return Ok(value);
                     }
                     if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {

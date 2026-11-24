@@ -456,6 +456,7 @@ fn expr(e: &Expr) -> Json {
     let span = e.span;
     match &e.kind {
         ExprKind::Int(digits) => Node::new("IntExpr", span).field("value", str_json(digits)),
+        ExprKind::Float(text) => Node::new("FloatExpr", span).field("value", str_json(text)),
         ExprKind::Str(parts) => Node::new("StrExpr", span).field("parts", list(parts, str_part)),
         ExprKind::SinkStr { tag, value } => Node::new("SinkStrExpr", span)
             .field("tag", str_json(tag))
