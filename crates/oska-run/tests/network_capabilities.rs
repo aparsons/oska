@@ -132,6 +132,44 @@ fn passes_on_the_real_network(src: &str) {
     passed(&report);
 }
 
+/// Whether this machine has an IPv6 loopback address.
+fn has_ipv6_loopback() -> bool {
+    TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_ok()
+}
+
+#[test]
+fn a_loopback_listener_accepts_on_every_loopback_address_the_machine_has() {
+    let mut hosts = vec!["127.0.0.1"];
+    if has_ipv6_loopback() {
+        hosts.push("::1");
+    }
+    let calls: String = hosts
+        .iter()
+        .map(|host| format!("    reach(t, listener, \"{host}\")\n"))
+        .collect();
+    passes_on_the_real_network(&format!(
+        r#"
+#[integration]
+test "both" {{
+    let listener = t.net.listen_only().restrict_to_loopback(0)
+{calls}}}
+
+fn reach(t: TestContext, listener: LoopbackListen, address: String) {{
+    match t.net.restrict_to(address, listener.port()).connect() {{
+        Ok(client) => match listener.accept() {{
+            Ok(server) => {{
+                t.assert(client.send("hi").is_ok())
+                t.assert_eq(server.receive().unwrap_or("none"), "hi")
+            }}
+            Err(_) => t.fail("accept {{address}}")
+        }}
+        Err(_) => t.fail("connect {{address}}")
+    }}
+}}
+"#
+    ));
+}
+
 #[test]
 fn a_loopback_server_and_a_client_talk_through_host_and_listener_capabilities() {
     passes_on_the_real_network(

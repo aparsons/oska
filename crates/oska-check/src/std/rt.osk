@@ -6466,6 +6466,9 @@ fn raw_text_of(contents: Bytes) -> String {
 //   (a text object) and port; and `why`, the text of why a listener could
 //   not listen, which every `accept` on it then fails with, or "". The
 //   backend releases one with `sock_drop`, which closes the socket. A
+//   `LoopbackListen` on a machine with both loopback addresses has a sixth
+//   word, `other`, the handle of its IPv6 (`::1`) socket at the port of the
+//   first, or -1 when it has none, which `sock_drop` also closes. A
 //   `Connection` is `[count][sock]`: the one field `host` of the prelude's
 //   struct, a `Sock` whose handle is the open socket, as the interpreter's
 //   `Connection` holds its `HostCap` with the stream in it.
@@ -6532,7 +6535,7 @@ fn no_network() -> String {
 
 // A new `Sock`: its address, whose count is 1.
 fn sock_new(handle: Int, host: String, port: Int, why: String) -> Int {
-    let object = alloc(40)
+    let object = alloc(48)
     let host_object = rt_mem_text(host)
     retain(host_object)
     let why_object = rt_mem_text(why)
@@ -6541,11 +6544,17 @@ fn sock_new(handle: Int, host: String, port: Int, why: String) -> Int {
     rt_mem_store64(rt_mem_add(object, 16), host_object)
     rt_mem_store64(rt_mem_add(object, 24), port)
     rt_mem_store64(rt_mem_add(object, 32), why_object)
+    rt_mem_store64(rt_mem_add(object, 40), -1)
     object
 }
 
 fn sock_handle(sock: Int) -> Int {
     rt_mem_load64(rt_mem_add(sock, 8))
+}
+
+// The second socket of a listener, or -1.
+fn sock_other(sock: Int) -> Int {
+    rt_mem_load64(rt_mem_add(sock, 40))
 }
 
 fn sock_port(sock: Int) -> Int {
@@ -6575,6 +6584,10 @@ pub fn sock_drop(object: Int) {
     let handle = sock_handle(object)
     if handle >= 0 {
         close_socket(handle)
+    }
+    let other = sock_other(object)
+    if other >= 0 {
+        close_socket(other)
     }
     let host = rt_mem_as_text(rt_mem_load64(rt_mem_add(object, 16)))
     let why = rt_mem_as_text(rt_mem_load64(rt_mem_add(object, 32)))
@@ -6914,28 +6927,51 @@ fn socket_start() {
 // have passed: 1 when it does, 0 when they have, and minus the error when
 // the wait fails.
 fn wait_ready(fd: Int, events: Int, ms: Int) -> Int {
+    wait_ready_any(fd, -1, events, ms)
+}
+
+// As `wait_ready`, for the socket `fd` and also for `other` when it is not
+// negative: the result says only that one of them is ready.
+fn wait_ready_any(fd: Int, other: Int, events: Int, ms: Int) -> Int {
     let platform = rt_mem_platform()
-    let object = alloc(48)
+    let object = alloc(72)
     let entry = rt_mem_add(object, 8)
-    rt_mem_store64(entry, 0)
-    rt_mem_store64(rt_mem_add(entry, 8), 0)
+    var stride = 8
     if on_windows() {
-        rt_mem_store64(entry, fd)
-        rt_mem_store16(rt_mem_add(entry, 8), events)
-    } else {
-        rt_mem_store32(entry, fd)
-        rt_mem_store16(rt_mem_add(entry, 4), events)
+        stride = 16
+    }
+    var count = 1
+    if other >= 0 {
+        count = 2
+    }
+    var at = 0
+    while at < count {
+        let item = rt_mem_add(entry, at * stride)
+        var handle = fd
+        if at == 1 {
+            handle = other
+        }
+        rt_mem_store64(item, 0)
+        rt_mem_store64(rt_mem_add(item, 8), 0)
+        if on_windows() {
+            rt_mem_store64(item, handle)
+            rt_mem_store16(rt_mem_add(item, 8), events)
+        } else {
+            rt_mem_store32(item, handle)
+            rt_mem_store16(rt_mem_add(item, 4), events)
+        }
+        at = at + 1
     }
     var wait = ms
     if platform.poll_timespec {
-        let spec = rt_mem_add(object, 24)
+        let spec = rt_mem_add(object, 48)
         rt_mem_store64(spec, ms / 1000)
         rt_mem_store64(rt_mem_add(spec, 8), (ms % 1000) * 1000000)
         wait = spec
     }
-    var ready = rt_sys_poll(entry, 1, wait)
+    var ready = rt_sys_poll(entry, count, wait)
     while interrupted(ready) {
-        ready = rt_sys_poll(entry, 1, wait)
+        ready = rt_sys_poll(entry, count, wait)
     }
     free(object)
     ready
@@ -7395,15 +7431,41 @@ pub fn net_restrict_to_loopback(net: Int, port: Int) -> Int {
     if faking() {
         return sock_new(-1, "loopback", 0, no_network())
     }
-    var fd = listen_on(false, port)
-    if fd < 0 {
-        fd = listen_on(true, port)
+    // Both loopback addresses at one port, as `oska-sys` does: a chosen port
+    // may be taken on the other family, so ask again (a few times). A machine
+    // with no IPv6 loopback listens on `127.0.0.1` alone, and one with no
+    // IPv4 on `::1` alone.
+    var tries = 1
+    if port == 0 {
+        tries = 8
     }
-    if fd < 0 {
-        let why = net_wording(0 - fd)
-        return sock_new(-1, "loopback", 0, "listen failed: {why}")
+    var failure = 0
+    var attempt = 0
+    while attempt < tries {
+        attempt = attempt + 1
+        let first = listen_on(false, port)
+        if first >= 0 {
+            let at = socket_port(first)
+            let second = listen_on(true, at)
+            if second >= 0 || attempt == tries || port != 0 {
+                let listener = sock_new(first, "loopback", at, "")
+                if second >= 0 {
+                    rt_mem_store64(rt_mem_add(listener, 40), second)
+                }
+                return listener
+            }
+            close_socket(first)
+        } else {
+            let second = listen_on(true, port)
+            if second >= 0 {
+                return sock_new(second, "loopback", socket_port(second), "")
+            }
+            failure = second
+            attempt = tries
+        }
     }
-    sock_new(fd, "loopback", socket_port(fd), "")
+    let why = net_wording(0 - failure)
+    sock_new(-1, "loopback", 0, "listen failed: {why}")
 }
 
 // `LoopbackListen.port`: the port, or 0 when it could not listen.
@@ -7419,8 +7481,9 @@ pub fn loopback_accept(listener: Int) -> Result<Int, IoError> {
     }
     let platform = rt_mem_platform()
     let fd = sock_handle(listener)
+    let other = sock_other(listener)
     while true {
-        let ready = wait_ready(fd, platform.poll_in, read_wait())
+        let ready = wait_ready_any(fd, other, platform.poll_in, read_wait())
         if ready < 0 {
             let words = net_wording(0 - ready)
             return Err(io_error_text("accept failed: {words}"))
@@ -7429,7 +7492,10 @@ pub fn loopback_accept(listener: Int) -> Result<Int, IoError> {
             let words = net_wording(platform.e_timed_out)
             return Err(io_error_text("accept failed: {words}"))
         }
-        let accepted = rt_sys_accept(fd, 0, 0)
+        var accepted = rt_sys_accept(fd, 0, 0)
+        if other >= 0 && (accepted == 0 - platform.e_would_block || interrupted(accepted)) {
+            accepted = rt_sys_accept(other, 0, 0)
+        }
         if accepted == 0 - platform.e_would_block || interrupted(accepted) {
             continue
         }

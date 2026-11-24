@@ -74,6 +74,35 @@ fn a_connection_carries_text_and_bytes_both_ways() {
 }
 
 #[test]
+fn a_loopback_listener_accepts_on_every_loopback_address_the_machine_has() {
+    let mut hosts = vec!["127.0.0.1"];
+    if std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_ok() {
+        hosts.push("::1");
+    }
+    let calls: String = hosts
+        .iter()
+        .map(|host| format!("    reach(io, net, listener, \"{host}\")?\n"))
+        .collect();
+    let expected: String = hosts.iter().map(|host| format!("{host}: hi\n")).collect();
+    let src = format!(
+        r#"fn reach(io: Stdout, net: Net, listener: LoopbackListen, address: String) -> Result<(), IoError> {{
+    let client = net.connect_only().restrict_to(address, listener.port()).connect()?
+    let server = listener.accept()?
+    client.send("hi")?
+    let heard = server.receive()?
+    io.println("{{address}}: {{heard}}")
+}}
+
+fn main(io: Stdout, net: Net) -> Result<(), IoError> {{
+    let listener = net.listen_only().restrict_to_loopback(0)
+{calls}    Ok(())
+}}
+"#
+    );
+    prints("sockets_both_loopbacks", &src, &expected);
+}
+
+#[test]
 fn the_end_of_the_stream_is_an_empty_read_and_a_closed_connection_fails() {
     prints(
         "sockets_close",
