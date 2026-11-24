@@ -376,7 +376,7 @@ fn main(spawn: Spawn) -> Result<(), IoError> {
 main.osk:1:46: error[E0370]: `oskac run` cannot grant `Spawn` yet: the capability has no runtime (bytes 45..59)
 ```
 
-`Net` has a runtime, on both backends. A program that connects goes through a host capability. Natively the host is an IP address or `localhost`; any other name fails with `host not found` natively, because `connect()` does not use `std.dns` yet (tracked in a follow-up issue), so run such a program with `oskac run --interpret`, which resolves names with the operating system's resolver:
+`Net` has a runtime, on both backends. A program that connects goes through a host capability. Natively the host is an IP address or `localhost`; any other name fails with `host not found` natively, because the native `connect()` does not use `std.dns` yet (tracked in a follow-up issue), so run such a program with `oskac run --interpret`, which resolves names with `std.dns`:
 
 ```oska fragment
 fn main(io: Stdout, net: Net) -> Result<(), IoError> {
