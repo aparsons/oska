@@ -551,7 +551,7 @@ mod tests {
                     let mut s = vec![0u8; 16];
                     s[..2].copy_from_slice(&2u16.to_le_bytes());
                     s[4..8].copy_from_slice(&ip.octets());
-                    (s, 16)
+                    (s, 16i32)
                 } else {
                     let ip: Ipv6Addr = text.parse().expect("an IPv6 literal");
                     let mut s = vec![0u8; 32];
@@ -563,7 +563,7 @@ mod tests {
                 buffer[sockaddr..].copy_from_slice(&bytes);
                 buffer[node..node + 4].copy_from_slice(&32u32.to_le_bytes());
                 buffer[node + 16..node + 24].copy_from_slice(&(base + sockaddr).to_le_bytes());
-                buffer[node + 24..node + 28].copy_from_slice(&(length as i32).to_le_bytes());
+                buffer[node + 24..node + 28].copy_from_slice(&length.to_le_bytes());
                 match previous {
                     None => buffer[at + 48..at + 56].copy_from_slice(&(base + node).to_le_bytes()),
                     Some(p) => buffer[p + 8..p + 16].copy_from_slice(&(base + node).to_le_bytes()),
@@ -685,7 +685,7 @@ mod tests {
             ],
         );
         // The first server's link points outside the buffer.
-        let first = usize::from_le_bytes(buffer[48..56].try_into().unwrap()) - BASE;
+        let first = usize::from_le_bytes(buffer[48..56].try_into().expect("8 bytes")) - BASE;
         buffer[first + 8..first + 16].copy_from_slice(&0x9000_0000usize.to_le_bytes());
         // The second adapter's link points before the buffer.
         buffer[8..16].copy_from_slice(&0x10usize.to_le_bytes());
