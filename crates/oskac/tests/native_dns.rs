@@ -6,9 +6,10 @@
 //! the native test corpus runs on both backends; this file runs whole
 //! programs through the differential harness, with an answer from the
 //! command line and files from stdin, and builds one for every target.
-//! The resolver over real sockets is the interpreter's
-//! (`crates/oska-run/tests/dns_loopback.rs`): the native backend has no
-//! networking yet.
+//! `HostConnect.exchange_datagram` runs natively too (#690): the tests
+//! near the end send a datagram to a local UDP server and read the reply
+//! on both backends. The resolver over real sockets is the interpreter's
+//! (`crates/oska-run/tests/dns_loopback.rs`).
 
 #![cfg(any(
     all(
@@ -21,7 +22,11 @@
 mod common;
 mod differential;
 
+use std::net::{Ipv4Addr, UdpSocket};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use common::portable::Scratch;
 use differential::{assert_same, Case};
@@ -204,4 +209,145 @@ fn std_dns_builds_for_every_target_the_same_twice() {
     }
     assert_eq!(builds[0].len(), 5, "one executable per target");
     assert!(builds[0] == builds[1], "two builds differ");
+}
+
+/// A local UDP server on the loopback address that answers every datagram
+/// with a forged one (another transaction id) and then the message with
+/// `!` appended, until it is dropped. A silent one never answers.
+struct UdpServer {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl UdpServer {
+    fn start(silent: bool) -> UdpServer {
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a UDP port");
+        socket
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .expect("a read timeout");
+        let port = socket.local_addr().expect("an address").port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let mut buffer = [0u8; 2048];
+            while !flag.load(Ordering::Relaxed) {
+                let Ok((n, from)) = socket.recv_from(&mut buffer) else {
+                    continue;
+                };
+                if silent {
+                    continue;
+                }
+                let mut forged = buffer[..n].to_vec();
+                forged[0] ^= 0xff;
+                let mut answer = buffer[..n].to_vec();
+                answer.push(b'!');
+                let _ = socket.send_to(&forged, from);
+                let _ = socket.send_to(&answer, from);
+            }
+        });
+        UdpServer {
+            port,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for UdpServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// A program that sends the hex in argument 2 to `host` at the port in
+/// argument 1 and prints the answer's hex, or the error's wording. A
+/// Windows process needs `SYSTEMROOT` to start Winsock.
+fn exchange(name: &str, host: &str, port: u16, hex: &str) -> Case {
+    let src = format!(
+        r#"fn main(io: Stdout, net: Net, args: Args) -> Result<(), IoError> {{
+    let port = match args.get(1) {{
+        Some(text) => text.assume_trusted().parse_int().unwrap_or(0)
+        None => 0
+    }}
+    let message = match args.get(2) {{
+        Some(text) => Bytes.from_hex(text.assume_trusted()).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }}
+    match net.restrict_to("{host}", port).exchange_datagram(message) {{
+        Ok(answer) => io.println(answer.assume_trusted().to_hex())
+        Err(e) => io.println("error: {{e.message}}")
+    }}
+}}
+"#
+    );
+    let case = Case::file(name, &src).with_args(&[&port.to_string(), hex]);
+    match std::env::var("SYSTEMROOT") {
+        Ok(root) => case.with_env("SYSTEMROOT", &root),
+        Err(_) => case,
+    }
+}
+
+/// The first datagram whose first two bytes are the message's own comes
+/// back, the forged one before it skipped, the same on both backends.
+#[test]
+fn a_datagram_gets_the_matching_answer_on_both_backends() {
+    let server = UdpServer::start(false);
+    let outcome = assert_same(&exchange(
+        "dns_datagram",
+        "127.0.0.1",
+        server.port,
+        "1234010001",
+    ));
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    assert_eq!(outcome.stdout, "123401000121\n", "{outcome:#?}");
+}
+
+#[test]
+fn a_datagram_nobody_answers_times_out_on_both_backends() {
+    let server = UdpServer::start(true);
+    let outcome = assert_same(&exchange("dns_silent", "127.0.0.1", server.port, "1234"));
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    let expected = format!("error: cannot reach 127.0.0.1:{}: timed out\n", server.port);
+    assert_eq!(outcome.stdout, expected, "{outcome:#?}");
+}
+
+#[test]
+fn a_datagram_refuses_a_name_a_bad_port_and_a_long_message() {
+    for (name, host, port, hex, expected) in [
+        (
+            "dns_name",
+            "example.com",
+            53,
+            "1234",
+            "error: invalid host \"example.com\": a datagram goes to an IP address\n",
+        ),
+        (
+            "dns_bad_host",
+            "not a host",
+            53,
+            "1234",
+            "error: invalid host \"not a host\": it is not a DNS name or an IP address\n",
+        ),
+        (
+            "dns_port",
+            "127.0.0.1",
+            0,
+            "1234",
+            "error: port 0 is out of range: use 1 to 65535\n",
+        ),
+    ] {
+        let outcome = assert_same(&exchange(name, host, port, hex));
+        assert_eq!(outcome.stdout, expected, "{name}: {outcome:#?}");
+    }
+    let long = "ab".repeat(65508);
+    let outcome = assert_same(&exchange("dns_long", "127.0.0.1", 53, &long));
+    assert_eq!(
+        outcome.stdout, "error: the datagram is too long to send\n",
+        "{:?}",
+        outcome.exit_code
+    );
 }

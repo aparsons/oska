@@ -255,6 +255,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::Runtime("net_restrict_to_loopback"),
     ),
     ("HostConnect.connect", Prelude::Runtime("host_connect")),
+    (
+        "HostConnect.exchange_datagram",
+        Prelude::Runtime("host_exchange_datagram"),
+    ),
     ("HostConnect.name", Prelude::Runtime("host_name")),
     ("HostConnect.port", Prelude::Runtime("host_port")),
     ("LoopbackListen.accept", Prelude::Runtime("loopback_accept")),
