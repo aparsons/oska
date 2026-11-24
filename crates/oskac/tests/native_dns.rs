@@ -266,16 +266,22 @@ impl Drop for UdpServer {
 /// A program that sends the hex in argument 2 to `host` at the port in
 /// argument 1 and prints the answer's hex, or the error's wording. A
 /// Windows process needs `SYSTEMROOT` to start Winsock.
-fn exchange(name: &str, host: &str, port: u16, hex: &str) -> Case {
+fn exchange(name: &str, host: &str, port: u16, hex: &str, size: Option<usize>) -> Case {
     let src = format!(
         r#"fn main(io: Stdout, net: Net, args: Args) -> Result<(), IoError> {{
     let port = match args.get(1) {{
         Some(text) => text.assume_trusted().parse_int().unwrap_or(0)
         None => 0
     }}
-    let message = match args.get(2) {{
+    let hex = match args.get(2) {{
         Some(text) => Bytes.from_hex(text.assume_trusted()).unwrap_or(Bytes.new())
         None => Bytes.new()
+    }}
+    // Argument 3, when given, is the size of a zeroed message built here: a
+    // long one on the command line would be too long for Windows.
+    let message = match args.get(3) {{
+        Some(text) => Bytes.zeroed(text.assume_trusted().parse_int().unwrap_or(0))
+        None => hex
     }}
     match net.restrict_to("{host}", port).exchange_datagram(message) {{
         Ok(answer) => io.println(answer.assume_trusted().to_hex())
@@ -284,7 +290,10 @@ fn exchange(name: &str, host: &str, port: u16, hex: &str) -> Case {
 }}
 "#
     );
-    let case = Case::file(name, &src).with_args(&[&port.to_string(), hex]);
+    let mut args = vec![port.to_string(), hex.to_string()];
+    args.extend(size.map(|size| size.to_string()));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let case = Case::file(name, &src).with_args(&args);
     match std::env::var("SYSTEMROOT") {
         Ok(root) => case.with_env("SYSTEMROOT", &root),
         Err(_) => case,
@@ -301,6 +310,7 @@ fn a_datagram_gets_the_matching_answer_on_both_backends() {
         "127.0.0.1",
         server.port,
         "1234010001",
+        None,
     ));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
     assert_eq!(outcome.stdout, "123401000121\n", "{outcome:#?}");
@@ -309,7 +319,13 @@ fn a_datagram_gets_the_matching_answer_on_both_backends() {
 #[test]
 fn a_datagram_nobody_answers_times_out_on_both_backends() {
     let server = UdpServer::start(true);
-    let outcome = assert_same(&exchange("dns_silent", "127.0.0.1", server.port, "1234"));
+    let outcome = assert_same(&exchange(
+        "dns_silent",
+        "127.0.0.1",
+        server.port,
+        "1234",
+        None,
+    ));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
     let expected = format!("error: cannot reach 127.0.0.1:{}: timed out\n", server.port);
     assert_eq!(outcome.stdout, expected, "{outcome:#?}");
@@ -340,11 +356,10 @@ fn a_datagram_refuses_a_name_a_bad_port_and_a_long_message() {
             "error: port 0 is out of range: use 1 to 65535\n",
         ),
     ] {
-        let outcome = assert_same(&exchange(name, host, port, hex));
+        let outcome = assert_same(&exchange(name, host, port, hex, None));
         assert_eq!(outcome.stdout, expected, "{name}: {outcome:#?}");
     }
-    let long = "ab".repeat(65508);
-    let outcome = assert_same(&exchange("dns_long", "127.0.0.1", 53, &long));
+    let outcome = assert_same(&exchange("dns_long", "127.0.0.1", 53, "", Some(65508)));
     assert_eq!(
         outcome.stdout, "error: the datagram is too long to send\n",
         "{:?}",
