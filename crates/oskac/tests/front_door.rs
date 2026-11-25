@@ -220,6 +220,19 @@ const PROBES: &[(&str, Probe)] = &[
         ),
     ),
     (
+        "`std.map`: `Map<K, V>`, an insertion-ordered table",
+        Probe::Program(
+            "use std.map\n\n\
+             fn main(io: Stdout) -> Result<(), IoError> {\n    \
+             var m: map.Map<String, Int> = map.Map.new()\n    \
+             m.put(\"b\", 1)\n    \
+             m.put(\"a\", 2)\n    \
+             for e in m.entries() {\n        \
+             io.println(e.key)?\n    }\n    \
+             Ok(())\n}\n",
+        ),
+    ),
+    (
         "`std.mcp`: `Toolset`, `ToolSpec` and `ToolResult`",
         Probe::Program(
             "use std.json\nuse std.mcp\n\n\
