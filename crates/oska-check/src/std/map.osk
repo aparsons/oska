@@ -1,0 +1,293 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.map`: `Map<K, V>`, a table that finds a value by its key and keeps
+// its entries in insertion order (ADR 0028). `use std.map`, then write
+// `map.Map.new()`, `m.put(key, value)` and `m.get(key)`.
+//
+// - A map is a value, like a `List`: it is copied on write, and a method
+//   that changes it needs a `var`.
+// - `entries()`, `keys()` and `values()` give the entries in insertion
+//   order. `put` on a key the map holds keeps the key's place. `remove`
+//   then `put` of the same key puts it last. Two maps are equal when they
+//   hold the same entries in the same order.
+// - A key type needs `Eq` and `Hash`. The hash is the fixed 64-bit
+//   function of the prelude's `Hash`, with no seed, so every platform and
+//   both backends find the same entries in the same order. `get` of a
+//   missing key is `None`, never a panic.
+//
+// Not yet here, and left to later tickets of spec #591: the refusals of a
+// `Float` or a secret key (`E` codes), the flood defence (a probe limit
+// and a second hash) and the entry limit.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+//
+// The layout is the dense array and the index table of ADR 0028, with one
+// change that a `List` forces: it has no `set`, so an entry cannot change
+// in place. `log` is the array of entries, only ever added to. `order`
+// holds, for each entry of the map in insertion order (its ordinal), the
+// place of its current entry in `log` plus 1, or 0 once it is removed, as
+// 4-byte little-endian words. An update adds a new entry to `log` and
+// points the ordinal at it, so the key keeps its place. `table` is the
+// index: open addressing with linear probing, 4-byte words that are 0 for
+// an empty slot, `TOMBSTONE` for a removed key and otherwise the ordinal
+// plus 1. Iteration walks `order`, so it never depends on the hash. When
+// `log` holds more than twice the live entries, or the table is half full
+// of keys and tombstones, `rebuilt` makes a fresh map of the live entries
+// in the same order.
+
+// A removed key's slot in the table.
+const TOMBSTONE: Int = 4294967295
+
+// The fewest slots a table has.
+const MIN_SLOTS: Int = 8
+
+// One key and its value.
+pub struct Entry<K, V> { pub key: K, pub value: V }
+
+// A table of values by key, in insertion order.
+pub struct Map<K, V> {
+    log: List<Entry<K, V>>,
+    order: Bytes,
+    table: Bytes,
+    live: Int,
+    used: Int,
+}
+
+impl<K: Eq + Hash, V> Map<K, V> {
+    // An empty map.
+    pub fn new() -> Map<K, V> {
+        let empty = Map(log: [], order: Bytes.new(), table: Bytes.new(), live: 0, used: 0)
+        empty
+    }
+
+    // The number of entries.
+    pub fn len(self) -> Int {
+        self.live
+    }
+
+    // Whether it holds no entry.
+    pub fn is_empty(self) -> Bool {
+        self.live == 0
+    }
+
+    // Whether it holds an entry for `key`.
+    pub fn contains_key(self, key: K) -> Bool {
+        self.find(key) >= 0
+    }
+
+    // The value of `key`, or `None` when the map has no such key.
+    pub fn get(self, key: K) -> Option<V> {
+        let slot = self.find(key)
+        if slot < 0 {
+            return None
+        }
+        Some(self.entry_at(self.ordinal_of(slot)).value)
+    }
+
+    // Set the value of `key`. A key the map holds keeps its place; a new
+    // key goes last. The map must be a `var`.
+    pub fn put(var self, key: K, value: V) {
+        let slot = self.find(key)
+        if slot >= 0 {
+            self.log.push(Entry(key: key, value: value))
+            let ordinal = self.ordinal_of(slot)
+            self.set_order(ordinal, self.log.len())
+            self.compact_if_sparse()
+            return
+        }
+        if (self.used + 1) * 2 > self.table.len() / 4 {
+            self.rebuild_with(self.live + 1)
+        }
+        self.insert_new(key, value)
+    }
+
+    // Take the entry of `key` out and give its value, or `None` when the
+    // map has no such key. The entries left keep their order. The map
+    // must be a `var`.
+    pub fn remove(var self, key: K) -> Option<V> {
+        let slot = self.find(key)
+        if slot < 0 {
+            return None
+        }
+        let ordinal = self.ordinal_of(slot)
+        let value = self.entry_at(ordinal).value
+        self.set_slot(slot, TOMBSTONE)
+        self.set_order(ordinal, 0)
+        self.live = self.live - 1
+        self.compact_if_sparse()
+        Some(value)
+    }
+
+    // Every entry, in insertion order.
+    pub fn entries(self) -> List<Entry<K, V>> {
+        var found: List<Entry<K, V>> = []
+        var ordinal = 0
+        let total = self.order.len() / 4
+        while ordinal < total {
+            if self.word(self.order, ordinal) != 0 {
+                found.push(self.entry_at(ordinal))
+            }
+            ordinal = ordinal + 1
+        }
+        found
+    }
+
+    // Every key, in insertion order.
+    pub fn keys(self) -> List<K> {
+        var found: List<K> = []
+        for entry in self.entries() {
+            found.push(entry.key)
+        }
+        found
+    }
+
+    // Every value, in insertion order.
+    pub fn values(self) -> List<V> {
+        var found: List<V> = []
+        for entry in self.entries() {
+            found.push(entry.value)
+        }
+        found
+    }
+
+    // The 4-byte word at index `at` of `words`.
+    fn word(self, words: Bytes, at: Int) -> Int {
+        words.read_u32_le(at * 4).to_int()
+    }
+
+    // Set the word of ordinal `at` in `order` to `value`.
+    fn set_order(var self, at: Int, value: Int) {
+        self.order = with_word(self.order, at, value)
+    }
+
+    // Set the word of slot `at` in `table` to `value`.
+    fn set_slot(var self, at: Int, value: Int) {
+        self.table = with_word(self.table, at, value)
+    }
+
+    // The entry the ordinal `ordinal` points at.
+    fn entry_at(self, ordinal: Int) -> Entry<K, V> {
+        self.log.at(self.word(self.order, ordinal) - 1)
+    }
+
+    // The ordinal the table slot `slot` holds.
+    fn ordinal_of(self, slot: Int) -> Int {
+        self.word(self.table, slot) - 1
+    }
+
+    // The slot of `key` in the table, or -1.
+    fn find(self, key: K) -> Int {
+        let capacity = self.table.len() / 4
+        if capacity == 0 {
+            return -1
+        }
+        var slot = slot_of(key.hash(), capacity)
+        var probes = 0
+        while probes < capacity {
+            let held = self.word(self.table, slot)
+            if held == 0 {
+                return -1
+            }
+            if held != TOMBSTONE {
+                if self.entry_at(held - 1).key == key {
+                    return slot
+                }
+            }
+            slot = (slot + 1) % capacity
+            probes = probes + 1
+        }
+        -1
+    }
+
+    // Add an entry for a key the map does not hold, last, in a table with
+    // room.
+    fn insert_new(var self, key: K, value: V) {
+        let capacity = self.table.len() / 4
+        var slot = slot_of(key.hash(), capacity)
+        while true {
+            let held = self.word(self.table, slot)
+            if held == 0 {
+                self.used = self.used + 1
+                break
+            }
+            if held == TOMBSTONE {
+                break
+            }
+            slot = (slot + 1) % capacity
+        }
+        self.log.push(Entry(key: key, value: value))
+        let ordinal = self.order.len() / 4
+        self.order.push_u32_le(self.log.len().to_u32())
+        self.set_slot(slot, ordinal + 1)
+        self.live = self.live + 1
+    }
+
+    // Make the table sparse and the log short again when removals and
+    // updates left them mostly dead.
+    fn compact_if_sparse(var self) {
+        if self.log.len() > 2 * self.live + MIN_SLOTS {
+            self.rebuild_with(self.live)
+        }
+    }
+
+    // Replace the log, `order` and `table` with those of the live
+    // entries, in order, in a table with room for `wanted` entries.
+    fn rebuild_with(var self, wanted: Int) {
+        let items = self.entries()
+        var capacity = MIN_SLOTS
+        while capacity < wanted * 4 {
+            capacity = capacity * 2
+        }
+        self.log = []
+        self.order = Bytes.new()
+        self.table = Bytes.zeroed(capacity * 4)
+        self.live = 0
+        self.used = 0
+        for item in items {
+            self.insert_new(item.key, item.value)
+        }
+    }
+}
+
+impl<K: Eq + Hash, V: Eq> Eq for Map<K, V> {
+    fn eq(self, other: Map<K, V>) -> Bool {
+        if self.live != other.live {
+            return false
+        }
+        let mine = self.entries()
+        let theirs = other.entries()
+        var i = 0
+        while i < mine.len() {
+            let a = mine.at(i)
+            let b = theirs.at(i)
+            if a.key != b.key || a.value != b.value {
+                return false
+            }
+            i = i + 1
+        }
+        true
+    }
+}
+
+// `words` with the 4-byte word at index `at` set to `value`.
+fn with_word(words: Bytes, at: Int, value: Int) -> Bytes {
+    var copy = words
+    let base = at * 4
+    copy.set(base, (value % 256).to_u8())
+    copy.set(base + 1, (value / 256 % 256).to_u8())
+    copy.set(base + 2, (value / 65536 % 256).to_u8())
+    copy.set(base + 3, (value / 16777216 % 256).to_u8())
+    copy
+}
+
+// The table slot a hash starts at: the hash taken as a non-negative
+// number below `capacity`.
+fn slot_of(hash: Int, capacity: Int) -> Int {
+    let rest = hash % capacity
+    if rest < 0 {
+        rest + capacity
+    } else {
+        rest
+    }
+}

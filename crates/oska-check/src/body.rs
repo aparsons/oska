@@ -1777,7 +1777,17 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let mut trial = self.infer.clone();
         let ty = trial.resolve(ty);
         let (imp, instance) = self.impl_in(&mut trial, &ty, trait_name, args, 0)?;
-        let instance: Vec<Ty> = instance.iter().map(|t| trial.resolve(t)).collect();
+        // A trust flag the trial made is nothing the body knows: settled
+        // trusted, as an unreached flag reads.
+        let instance: Vec<Ty> = instance
+            .iter()
+            .map(|t| {
+                trial.resolve(t).map_trust(&mut |trust| match trust {
+                    Trust::Var(v) if !self.infer.knows_trust(v) => Trust::Trusted,
+                    other => other,
+                })
+            })
+            .collect();
         let known = instance.iter().all(|t| self.infer.knows(t));
         Some((imp, known.then_some(instance)))
     }
