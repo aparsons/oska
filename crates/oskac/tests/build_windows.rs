@@ -59,7 +59,7 @@ const IMPORTS: [(&str, &[&str]); 5] = [
         ],
     ),
     ("bcryptprimitives.dll", &["ProcessPrng"]),
-    ("IPHLPAPI.DLL", &["GetNetworkParams"]),
+    ("IPHLPAPI.DLL", &["GetAdaptersAddresses"]),
     (
         "WS2_32.dll",
         &[

@@ -15,7 +15,7 @@ import ipaddress
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 DER = serialization.Encoding.DER
@@ -104,7 +104,11 @@ def build():
     p384_key = ec_key(1005, ec.SECP384R1)
     rsa_leaf = certificate(name("localhost"), rsa_key, intermediate.subject, intermediate_key, 14, sans=hosts)
     p384_leaf = certificate(name("localhost"), p384_key, intermediate.subject, intermediate_key, 15, sans=hosts)
+    ed_key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    ed_leaf = certificate(name("localhost"), ed_key, intermediate.subject, intermediate_key, 16, sans=hosts)
     return {
+        "ed25519_key": ed_key,
+        "ed25519_leaf": ed_leaf,
         "rsa_key": rsa_key,
         "rsa_leaf": rsa_leaf,
         "p384_key": p384_key,

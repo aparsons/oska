@@ -107,6 +107,8 @@ def main():
     record(oskac, outdir, made, "hello_retry_request_p256", ec_leaf, ec_key, ["-groups", "P-256"])
     record(oskac, outdir, made, "rsa_pss", made["rsa_leaf"], made["rsa_key"], [])
     record(oskac, outdir, made, "ecdsa_p384", made["p384_leaf"], made["p384_key"], [])
+    # The CertificateVerify is Ed25519 (0x0807), which the client offers (#697).
+    record(oskac, outdir, made, "ed25519", made["ed25519_leaf"], made["ed25519_key"], [])
 
 
 main()

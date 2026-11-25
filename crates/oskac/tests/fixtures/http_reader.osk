@@ -259,6 +259,11 @@ test "the headers the client sets itself cannot be set, in any case" {
     }
 }
 
+test "a maximum body over the ceiling is refused" {
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/").with_max_body(http.MAX_BODY + 1)), "invalid request: the maximum body is over 16777216")
+    t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/").with_max_body(http.MAX_BODY)), "tls: i/o error: other")
+}
+
 test "a negative maximum body is refused" {
     t.assert_eq(asked(t.net, t.random, t.clock, http.Request.get("/").with_max_body(-1)), "invalid request: the maximum body is below 0")
 }

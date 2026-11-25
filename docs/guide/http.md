@@ -51,7 +51,7 @@ fn main(io: Stdout, args: Args) -> Result<(), IoError> {
 
 ## Limits
 
-The body is at most 16 MiB unless `with_max_body(bytes)` says less. The head of the response is at most 64 KiB and 100 fields. A larger one is `TooLarge`. A connection waits at most 60 seconds for the next bytes.
+The body is at most 16 MiB unless `with_max_body(bytes)` says less. A setting over 16 MiB (`http.MAX_BODY`) is `InvalidRequest`, before anything connects. The head of the response is at most 64 KiB and 100 fields. A larger one is `TooLarge`. A connection waits at most 60 seconds for the next bytes.
 
 The reader frames a body by `Content-Length`, by chunked encoding, or by the end of the connection, which it accepts only after `close_notify`. It refuses a response with both lengths, with different lengths, with obsolete line folding or with a bare line feed, so a smuggled response cannot confuse it (`Malformed`).
 

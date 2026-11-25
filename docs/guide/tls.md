@@ -38,6 +38,7 @@ To trust other roots, build a configuration. `tls.TlsConfig.default().with_trust
 
 - It offers TLS 1.3 only, and refuses a server that answers with an older version or sets the downgrade marker.
 - It offers `TLS_CHACHA20_POLY1305_SHA256` and `TLS_AES_128_GCM_SHA256`, and key exchange with x25519 (and P-256 after a `HelloRetryRequest`).
+- It offers these signature algorithms, in this order: Ed25519, ECDSA P-256 and P-384, and RSA-PSS with SHA-256, SHA-384 and SHA-512. A server whose key is Ed25519 is accepted; the other signature kinds are refused.
 - It checks the CertificateVerify signature (Ed25519, ECDSA P-256 and P-384, RSA-PSS), the Finished message in constant time, and every record's tag before it uses the plaintext.
 - It bounds the size of records, handshake messages and the certificate chain.
 - It ignores `NewSessionTicket`, handles `KeyUpdate`, and sends the alert RFC 8446 names before it fails.

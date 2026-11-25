@@ -160,8 +160,14 @@ impl<'p> Joined<'p> {
     /// The join of `modules`, which is not empty, and of the `std`
     /// modules written in Oska that they import, which come last.
     fn new(modules: Vec<&'p ModuleSource>) -> Joined<'p> {
+        Joined::joining(modules, false)
+    }
+
+    /// [`Joined::new`], where `toolchain` says the entry is the
+    /// toolchain's `std.rt`, which has functions without bodies.
+    fn joining(modules: Vec<&'p ModuleSource>, toolchain: bool) -> Joined<'p> {
         let mut modules = modules;
-        modules.extend(std_sources(&modules));
+        modules.extend(std_sources(&modules, toolchain));
         let entry_first = modules
             .iter()
             .copied()
@@ -303,11 +309,16 @@ static NO_MODULE: ModuleSource = ModuleSource {
 /// those import in turn, as modules of the program: each once, and none
 /// that is among `modules` already. A module that does not parse imports
 /// nothing here; checking it reports why.
-fn std_sources(modules: &[&ModuleSource]) -> Vec<&'static ModuleSource> {
+fn std_sources(modules: &[&ModuleSource], toolchain: bool) -> Vec<&'static ModuleSource> {
     let mut found: Vec<&'static ModuleSource> = Vec::new();
     let mut pending: Vec<&str> = modules.iter().map(|m| m.source.as_str()).collect();
     while let Some(source) = pending.pop() {
-        let Ok(ast) = oska_syntax::parse_module(source) else {
+        let parsed = if toolchain {
+            oska_syntax::parse_prelude(source)
+        } else {
+            oska_syntax::parse_module(source)
+        };
+        let Ok(ast) = parsed else {
             continue;
         };
         for std in crate::prelude::oska_std_imports(&ast) {
@@ -355,14 +366,27 @@ pub(crate) fn check_single_with_std(source: &str, options: CheckOptions) -> Chec
         path: String::new(),
         source: source.to_string(),
     };
-    let (report, _) = check_linked(vec![&file], options, true);
+    let (report, _) = check_linked(vec![&file], options, true, false);
+    report
+}
+
+/// [`check_single_with_std`] for the toolchain's own `std.rt`, which may
+/// name the intrinsics it declares, has functions without bodies, and
+/// imports the `std` modules the runtime calls (`std.dns`).
+pub(crate) fn check_toolchain_with_std(source: &str) -> CheckReport {
+    let file = ModuleSource {
+        module: ENTRY_MODULE.to_string(),
+        path: String::new(),
+        source: source.to_string(),
+    };
+    let (report, _) = check_linked(vec![&file], CheckOptions::default(), true, true);
     report
 }
 
 /// Parse every module at its offset in the joined text, link them, and
 /// check the joined module.
 fn check_joined(modules: Vec<&ModuleSource>, options: CheckOptions) -> CheckReport {
-    let (report, joined) = check_linked(modules, options, false);
+    let (report, joined) = check_linked(modules, options, false, false);
     locate(report, &joined)
 }
 
@@ -373,13 +397,19 @@ fn check_linked(
     modules: Vec<&ModuleSource>,
     options: CheckOptions,
     plain_entry: bool,
+    toolchain: bool,
 ) -> (CheckReport, Joined<'_>) {
-    let joined = Joined::new(modules);
+    let joined = Joined::joining(modules, toolchain);
     let mut parsed = Vec::new();
     let mut parse_errors = Vec::new();
     for (module, start) in &joined.modules {
         let end = start + module.source.len();
-        match oska_syntax::parse_module_at(&joined.text[..end], *start) {
+        let attempt = if toolchain {
+            oska_syntax::parse_prelude_at(&joined.text[..end], *start)
+        } else {
+            oska_syntax::parse_module_at(&joined.text[..end], *start)
+        };
+        match attempt {
             Ok(ast) => parsed.push(link::Parsed {
                 module: module.module.clone(),
                 ast,
@@ -428,7 +458,7 @@ fn check_linked(
     } else {
         link::Modules::new(ranges)
     };
-    let mut report = check_parsed(&joined.text, &linked.module, options, modules);
+    let mut report = check_parsed(&joined.text, &linked.module, options, modules, toolchain);
     report.diagnostics = report
         .diagnostics
         .into_iter()

@@ -227,7 +227,7 @@ Nothing in the repo can check these settings, so verify them before a release.
   printf 'oska-release %s\n' "$(cat site/oska-release.pub)" > allowed
   ssh-keygen -Y verify -f allowed -I oska-release -n oska-release -s SHA256SUMS.sig < SHA256SUMS
   ```
-- Check the build provenance (from v0.7.0). Download a binary and run `gh attestation verify <binary> -R aparsons/oska`. It must print `Verification succeeded!` and name `release.yml` at the tag. Then download `SHA256SUMS` and run the same command on it. The release must hold `oskac.intoto.jsonl`, listed in `SHA256SUMS`, and `SHA256SUMS.intoto.jsonl`, which the list cannot name (`verify.sh` allows it by name). Threads cannot push tags, so after the first tag with attestations the maintainer runs this once by hand.
+- Check the build provenance (from v0.7.0). Download a binary and run `gh attestation verify <binary> -R aparsons/oska`. It must print `Verification succeeded!` and name `release.yml` at the tag. Then download `SHA256SUMS` and run the same command on it. The release must hold `oskac.intoto.jsonl`, listed in `SHA256SUMS`, and `SHA256SUMS.intoto.jsonl`, which the list cannot name (`verify.sh` allows it by name). The attest job runs the same check on every binary and on `SHA256SUMS` (step "Verify the attestations") before `sign` and `publish`, so a failure there leaves no GitHub Release: delete the tag, fix, and tag again. Threads cannot push tags, so that step has not run live; watch it on the first tag with attestations, and run the check by hand once from outside the workflow.
 - Run a real install into a scratch home:
   ```
   curl -fsSL https://oskalang.dev/install.sh | OSKA_HOME=$(mktemp -d) sh -s -- --json

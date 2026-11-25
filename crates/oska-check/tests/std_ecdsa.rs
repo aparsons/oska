@@ -110,10 +110,10 @@ fn it_imports_beside_sha2_which_hashes_the_message() {
 fn a_private_helper_cannot_be_used() {
     assert_errors(
         "use std.ecdsa\n\
-         fn main() {\n    let _ = ecdsa.limbs_to_be([1])\n}",
-        &[("E0360", "limbs_to_be")],
+         fn main() {\n    let _ = ecdsa.is_zero([1])\n}",
+        &[("E0360", "is_zero")],
     );
-    assert_errors("use std.ecdsa.{mont_mul}", &[("E0360", "mont_mul")]);
+    assert_errors("use std.ecdsa.{sub_mod}", &[("E0360", "sub_mod")]);
 }
 
 #[test]

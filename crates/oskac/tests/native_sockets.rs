@@ -12,8 +12,8 @@
 //!
 //! The same cases run on aarch64 and x86_64 Linux and macOS (system calls
 //! and `libSystem`) and on x86_64 Windows (Winsock), which is what the
-//! messages having one wording is for. Name resolution is not tested
-//! beyond `localhost`: the Oska stub resolver is a later ticket.
+//! messages having one wording is for. Name resolution is tested in
+//! `native_dns.rs`; `localhost` here comes from the machine's hosts file.
 
 #![cfg(any(
     all(
@@ -71,6 +71,35 @@ fn a_connection_carries_text_and_bytes_both_ways() {
 "#,
         "127.0.0.1\n127.0.0.1\nloopback\nping\n706f6e67\n00ff7f80\n",
     );
+}
+
+#[test]
+fn a_loopback_listener_accepts_on_every_loopback_address_the_machine_has() {
+    let mut hosts = vec!["127.0.0.1"];
+    if std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_ok() {
+        hosts.push("::1");
+    }
+    let calls: String = hosts
+        .iter()
+        .map(|host| format!("    reach(io, net, listener, \"{host}\")?\n"))
+        .collect();
+    let expected: String = hosts.iter().map(|host| format!("{host}: hi\n")).collect();
+    let src = format!(
+        r#"fn reach(io: Stdout, net: Net, listener: LoopbackListen, address: String) -> Result<(), IoError> {{
+    let client = net.connect_only().restrict_to(address, listener.port()).connect()?
+    let server = listener.accept()?
+    client.send("hi")?
+    let heard = server.receive()?
+    io.println("{{address}}: {{heard}}")
+}}
+
+fn main(io: Stdout, net: Net) -> Result<(), IoError> {{
+    let listener = net.listen_only().restrict_to_loopback(0)
+{calls}    Ok(())
+}}
+"#
+    );
+    prints("sockets_both_loopbacks", &src, &expected);
 }
 
 #[test]
@@ -267,6 +296,33 @@ fn main(io: Stdout, net: Net) -> Result<(), IoError> {
     );
 }
 
+/// A server that sends nothing: a `receive` waits the documented 60
+/// seconds of silence and fails with the spec's `timed out`, in the
+/// words of every other receive failure (spec #228, error table), the same
+/// on both backends. This test waits that long.
+#[test]
+fn a_read_from_a_silent_server_times_out_in_the_specs_words() {
+    prints(
+        "sockets_silent",
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let listener = net.listen_only().restrict_to_loopback(0)
+    let client = net.connect_only().restrict_to("127.0.0.1", listener.port()).connect()?
+    let silent = listener.accept()?
+    match client.receive() {
+        Ok(_) => io.println("received")?
+        Err(e) => {
+            let message = e.message
+            io.println(message)?
+        }
+    }
+    silent.close()
+    Ok(())
+}
+"#,
+        "receive failed: timed out\n",
+    );
+}
+
 /// An IPv6 literal, in any of its forms, is an address and not a name; an
 /// IPv4 address is four numbers without leading zeros. Whether the machine
 /// can reach `::1` is its own business, so this requires only that both
@@ -422,9 +478,11 @@ test "the real network reaches the loopback" {
     }
 }
 
-/// Listening twice on one port is refused where the machine has no second
-/// loopback address to fall back on, and is not where `::1` is there, so
-/// what it gives is the machine's own business: both backends must agree.
+/// Listening twice on one port: a listener holds the port on both loopback
+/// addresses (`127.0.0.1` and `::1`, where the machine has `::1`), so a
+/// second listener finds the port taken on every address and is refused. On
+/// Windows the sharing rules differ, so there both backends only have to
+/// agree.
 #[test]
 fn listening_on_a_taken_port_gives_the_same_result_on_both_backends() {
     let outcome = assert_same(&case(
@@ -442,16 +500,8 @@ fn listening_on_a_taken_port_gives_the_same_result_on_both_backends() {
 "#,
     ));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
-    // Where the machine has no `::1`, the second bind has nowhere to fall
-    // back to and is refused on Linux and macOS, where the port is held
-    // without `SO_REUSEADDR` sharing. Windows' rules differ.
-    let has_ipv6_loopback = std::net::TcpListener::bind("[::1]:0").is_ok();
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        let expected = if has_ipv6_loopback {
-            "listening\n"
-        } else {
-            "refused\n"
-        };
+        let expected = "refused\n";
         assert_eq!(outcome.stdout, expected, "{outcome:#?}");
     }
 }

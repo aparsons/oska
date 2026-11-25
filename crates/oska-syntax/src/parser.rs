@@ -115,6 +115,21 @@ pub fn parse_module_at(src: &str, start: usize) -> Result<Module, Diagnostic> {
     })
 }
 
+/// [`parse_module_at`] for the source of the toolchain's own `std.rt`,
+/// which, like the prelude, has functions without bodies.
+pub fn parse_prelude_at(src: &str, start: usize) -> Result<Module, Diagnostic> {
+    let mut parser = Parser::new_at(src, start)?;
+    parser.mode = Mode::Prelude;
+    let items = parser.items()?;
+    Ok(Module {
+        items,
+        span: Span {
+            start,
+            end: src.len(),
+        },
+    })
+}
+
 fn module(src: &str, mode: Mode) -> Result<Module, Diagnostic> {
     let mut parser = Parser::new(src)?;
     parser.mode = mode;
