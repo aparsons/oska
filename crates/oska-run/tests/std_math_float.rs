@@ -80,14 +80,15 @@ fn load(name: &str) -> (Vec<String>, Vec<Row>) {
 fn save(name: &str, header: &[String], rows: &[Row], got: &[u64]) {
     let mut out = String::new();
     for line in header {
-        writeln!(out, "{line}").unwrap();
+        writeln!(out, "{line}").expect("write to a String");
     }
     for (row, bits) in rows.iter().zip(got) {
         for i in &row.inputs {
-            write!(out, "{i:016x} ").unwrap();
+            write!(out, "{i:016x} ").expect("write to a String");
         }
         let kind = if row.exact_bits { 'x' } else { 'u' };
-        writeln!(out, "{:016x} {:016x} {kind} {bits:016x}", row.hi, row.lo).unwrap();
+        writeln!(out, "{:016x} {:016x} {kind} {bits:016x}", row.hi, row.lo)
+            .expect("write to a String");
     }
     std::fs::write(path(name), out).expect("write the vectors");
 }
@@ -114,13 +115,14 @@ fn program(name: &str, rows: &[Row]) -> String {
     src.push_str("\nfn main(io: Stdout) -> Result<(), IoError> {\n");
     for k in 0..arity {
         let items: Vec<String> = rows.iter().map(|r| r.inputs[k].to_string()).collect();
-        writeln!(src, "    let in{k}: List<U64> = [{}]", items.join(", ")).unwrap();
+        writeln!(src, "    let in{k}: List<U64> = [{}]", items.join(", "))
+            .expect("write to a String");
     }
-    writeln!(src, "    for i in 0..in0.len() {{").unwrap();
+    writeln!(src, "    for i in 0..in0.len() {{").expect("write to a String");
     let args: Vec<String> = (0..arity)
         .map(|k| format!("Float.from_bits(in{k}.at(i))"))
         .collect();
-    writeln!(src, "        let r = math.{name}({})", args.join(", ")).unwrap();
+    writeln!(src, "        let r = math.{name}({})", args.join(", ")).expect("write to a String");
     src.push_str(
         "        let line = hex(r.to_bits())\n        io.println(line)?\n    }\n    Ok(())\n}\n",
     );
