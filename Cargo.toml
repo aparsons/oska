@@ -35,6 +35,10 @@ codegen-units = 1
 [profile.dist]
 inherits = "release"
 panic = "abort"
+# Not `debug = "line-tables-only"`: measured on 2026-11-25 (spec #737), it
+# grew the x86_64 glibc oskac from 4.9 MB to 20.6 MB, far over the 5% limit.
+# A backtrace from this profile still names functions (the symbols stay) but
+# not files and lines.
 
 # Test steps are dominated by running the interpreter and compiler these
 # crates hold, so build them optimised in dev and test builds (`test`
