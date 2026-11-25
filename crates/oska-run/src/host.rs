@@ -369,7 +369,7 @@ impl RealHost {
     /// 0026), which a test uses to redirect lookups. Off by default: only
     /// the embedder decides, and `oskac` turns it on in debug builds
     /// alone, so that whoever starts a process of a release build cannot
-    /// redirect its lookups. A program and its environment cannot set it.
+    /// redirect its lookups. `connect`'s flag comes only from here.
     pub fn with_dns_test_hooks(mut self, on: bool) -> Self {
         self.dns_test_hooks = on;
         self

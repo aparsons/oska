@@ -22,8 +22,8 @@ macro_rules! outln {
 /// Whether this `oskac` is a debug build, the only kind whose programs
 /// honor the DNS test variables `OSKA_DNS_HOSTS`, `OSKA_DNS_RESOLV_CONF` and
 /// `OSKA_DNS_PORT` (ADR 0026). The interpreter's host is told it, and the
-/// native compiler bakes it into each executable; a program and its
-/// environment cannot change it.
+/// native compiler bakes it into each executable; `oskac release` always
+/// builds without it.
 pub(crate) const DNS_TEST_HOOKS: bool = cfg!(debug_assertions);
 
 mod authority_gate;

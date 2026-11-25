@@ -204,8 +204,8 @@ pub fn build_limited(
 /// [`build_limited`], and `dns_test_hooks` says whether the executable's
 /// name resolution honors the environment variables `OSKA_DNS_HOSTS`,
 /// `OSKA_DNS_RESOLV_CONF` and `OSKA_DNS_PORT` (ADR 0026). It is a constant
-/// written into the executable: only the compiler's caller sets it, a
-/// program and its environment cannot. [`build`] and [`build_limited`]
+/// written into the executable: only the compiler's caller sets it, and
+/// `connect`'s flag never comes from a program or its environment. [`build`] and [`build_limited`]
 /// leave the hooks off; `oskac` turns them on in debug builds alone.
 pub fn build_hooked(
     program: &Program,

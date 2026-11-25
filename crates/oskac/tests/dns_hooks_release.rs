@@ -192,6 +192,44 @@ fn oskac_honors_the_hooks_exactly_when_it_is_a_debug_build() {
         want,
         "interpreter: {interpreted:?}"
     );
+    // `oskac run` (native) builds with the flag too.
+    let ran = oskac()
+        .args(["run", "main.osk"])
+        .output()
+        .expect("oskac runs");
+    assert_eq!(ran.status.code(), want, "native run: {ran:?}");
+    // So does `oskac test`, on both backends.
+    std::fs::write(
+        dir.join("hook_test.osk"),
+        r#"#[integration]
+test "connects by name" {
+    let listener = t.net.listen_only().restrict_to_loopback(0)
+    match t.net.restrict_to("printer.invalid", listener.port()).connect() {
+        Ok(client) => client.close()
+        Err(error) => t.fail("no connect")
+    }
+}
+"#,
+    )
+    .expect("the test file is written");
+    let want_test = if cfg!(debug_assertions) {
+        Some(0)
+    } else {
+        Some(1)
+    };
+    for backend in [&["--interpret"][..], &[][..]] {
+        let tested = oskac()
+            .args(["test", "--integration"])
+            .args(backend)
+            .arg("hook_test.osk")
+            .output()
+            .expect("oskac tests");
+        assert_eq!(
+            tested.status.code(),
+            want_test,
+            "test {backend:?}: {tested:?}"
+        );
+    }
     let built = oskac()
         .args(["build", "main.osk", "-o"])
         .arg(&exe)

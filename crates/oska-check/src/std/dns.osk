@@ -1072,15 +1072,17 @@ pub fn load_config(fs: FsRead, net: NetConnect) -> Config {
 // why not: what `HostConnect.connect` calls on both backends (ADR 0026),
 // with the capabilities the runtime grants it. The configuration is
 // `load_config`'s and the name servers listen on port 53, unless the
-// environment variable `OSKA_DNS_HOSTS` is set and `hooks` is true: then its value is the
-// hosts file, `OSKA_DNS_RESOLV_CONF` (if set) the `resolv.conf`, and
+// environment variable `OSKA_DNS_HOSTS` is set and `hooks` is true: then
+// its value is the hosts file, `OSKA_DNS_RESOLV_CONF` (if set) the
+// `resolv.conf`, and
 // `OSKA_DNS_PORT` (if set) the port the name servers listen on (a value
 // that is not 1 to 65535 makes every lookup `host not found`), and no file
 // is read. That is how a test points a program at a name server and a
-// hosts file of its own, with no root and no network. `hooks` is the
-// runtime's, never the program's: the host (interpreter) or the compiler
-// (native) says whether this is a debug build of Oska, and in a release
-// build no variable is read at all (ADR 0026).
+// hosts file of its own, with no root and no network. For `connect` the
+// `hooks` flag comes only from the host (interpreter) or the compiler
+// (native), which say whether this is a debug build of Oska; in a release
+// build no variable is read. This function is public, so a program that
+// holds all four capabilities may pass `true` for its own call (ADR 0026).
 pub fn resolve_system(fs: FsRead, net: NetConnect, random: Random, env: Env, hooks: Bool, name: String) -> Result<List<String>, String> {
     var config = Config.new("", "", [])
     var port = 53
