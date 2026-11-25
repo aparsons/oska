@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# exp(x): inputs whose result is within 2^-18 ulp of a tie, and two near-ties of tiny x
+# columns: inputs, reference hi, reference lo, kind (u), pinned (-: none)
+c07dbdb4747d31f7 15066126e9ae3173 11afffff69c5e2b3 u -
+c068caf02c792610 2e0ce7a8270c575a 2aafffff1214ba81 u -
+4055a29de25deb10 47bce1d6993c0e00 445ffffe3407acc4 u -
+c0804e10097fd5da 10e3319a0d8dde20 8d8ffffdbb156342 u -
+40857f41393bab56 7df5b3defdac667e 7a9ffffd21f95aba u -
+c083d3fe03176c6b 06b8719d28a8ed31 835ffffcaa9384aa u -
+c06e8bec47edb126 29e5c772c6466e6c 268ffffbeee52273 u -
+4068b7766a1ab138 51c34696b2f40c6b 4e6ffffa3d10cb8e u -
+407af984cac9f664 66d94759426d098e e37ffff72951b3ee u -
+c043f0d3eb092090 3c560ebff684ddc4 38fffff389e4c2e0 u -
+401267fa09410c80 4058e8cead6131d3 3cfffff341da8165 u -
+407c18cd60395324 6877a65bdbd9215f 651ffff2905a6de5 u -
+c085017cc7e94d49 0352e7ad275f0cec 8007fffc8b6698b3 u -
+407d68f90e4b626c 6a5d5bf298fea7b1 e6fffff090ad85fe u -
+3ca0000000000000 3ff0000000000001 bc9fffffffffffff u -
+bc90000000000000 3ff0000000000000 bc90000000000000 u -
