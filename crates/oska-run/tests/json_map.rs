@@ -135,6 +135,21 @@ fn a_key_from_untrusted_text_stays_untrusted_in_the_map() {
             }\n    \
             \"\"\n}\n\n\
         fn main(io: Stdout) -> Result<(), IoError> {\n    \
-            io.println(first_key(\"\\{\\}\"))\n}\n";
+            io.println(first_key(\"\\{\\\"k1\\\":1,\\\"k2\\\":2\\}\"))\n}\n";
     assert_refused(src, "E0300");
+}
+
+#[test]
+fn a_parsed_object_gives_its_untrusted_keys_back_from_the_map() {
+    let src = "use std.json\nuse std.map\n\n\
+        fn main(io: Stdout) -> Result<(), IoError> {\n    \
+            let raw: Untrusted<String> = \"\\{\\\"k1\\\":1,\\\"k2\\\":2\\}\"\n    \
+            let value = json.parse(raw).unwrap_or(json.Value.Null)\n    \
+            let m = value.as_map().unwrap_or(map.Map.new())\n    \
+            for e in m.entries() {\n        \
+                let text = json.encode(e.value)\n        \
+                io.println(\"{e.key}={text}\")?\n    \
+            }\n    \
+            Ok(())\n}\n";
+    assert_runs(src, &[], "k1=1\nk2=2\n");
 }
