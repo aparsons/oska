@@ -23,11 +23,14 @@
 ))]
 
 mod common;
+mod differential;
 mod executable;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use differential::in_parallel;
 
 /// What one `oskac test` run showed.
 #[derive(Debug, PartialEq, Eq)]
@@ -689,22 +692,22 @@ fn test_packages() -> Vec<PathBuf> {
 fn every_test_bearing_package_in_the_corpus_reports_the_same() {
     let packages = test_packages();
     assert!(packages.len() >= 7, "{packages:?}");
-    for dir in packages {
+    in_parallel(&packages, |dir| {
         let name = dir
             .file_name()
             .expect("a name")
             .to_string_lossy()
             .into_owned();
         let mut files = Vec::new();
-        files_under(&dir, &format!("{name}/"), &mut files);
+        files_under(dir, &format!("{name}/"), &mut files);
         assert_same_corpus(&format!("package-{name}"), &files, &name);
-    }
+    });
 }
 
 #[test]
 fn every_test_bearing_single_file_in_the_corpus_reports_the_same() {
     let root = repo_root();
-    let mut count = 0;
+    let mut cases = Vec::new();
     for dir in ["crates/oskac/tests/fixtures", "examples"] {
         let mut paths: Vec<PathBuf> = std::fs::read_dir(root.join(dir))
             .expect("should list the directory")
@@ -722,11 +725,17 @@ fn every_test_bearing_single_file_in_the_corpus_reports_the_same() {
                 .expect("a name")
                 .to_string_lossy()
                 .into_owned();
-            assert_same_corpus(&format!("file-{name}"), &[(name.clone(), src)], &name);
-            count += 1;
+            cases.push((name, src));
         }
     }
-    assert!(count >= 1);
+    assert!(!cases.is_empty());
+    in_parallel(&cases, |(name, src)| {
+        assert_same_corpus(
+            &format!("file-{name}"),
+            &[(name.clone(), src.clone())],
+            name,
+        );
+    });
 }
 
 /// Every complete Oska program in the guides (`docs/guide`, which
@@ -788,13 +797,13 @@ fn doc_programs() -> Vec<(String, String)> {
 fn every_test_bearing_program_in_the_guides_reports_the_same() {
     let programs = doc_programs();
     assert!(programs.len() >= 5, "{}", programs.len());
-    for (name, src) in programs {
+    in_parallel(&programs, |(name, src)| {
         assert_same_corpus(
             &format!("doc-{name}"),
-            &[("main.osk".to_string(), src)],
+            &[("main.osk".to_string(), src.clone())],
             "main.osk",
         );
-    }
+    });
 }
 
 // ---- The test executable and the host it runs on -------------------------------
