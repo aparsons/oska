@@ -60,6 +60,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# A failing test or a panic in a test prints its stack trace in the log: the
+# job's log is often all there is to read, and a rerun may not fail again.
+env:
+  RUST_BACKTRACE: 1
+
 jobs:
   # The tests run as four parallel shards (scripts/test-shard.sh windows), so
   # the job stays well inside its limit: native_tests, the slowest test binary,
