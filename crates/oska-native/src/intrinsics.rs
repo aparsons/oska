@@ -444,6 +444,9 @@ pub enum Runtime {
     /// `std.rt`'s table of what differs between target platforms, the
     /// target platform's ([`Platform::table`]).
     PlatformTable,
+    /// 1 when the executable was built with the DNS test hooks (a debug
+    /// build of Oska built it), else 0: a constant of the build.
+    DnsTestHooks,
     /// Its one argument, marked secret (`Inst::Secret`): a byte read from
     /// secret bytes, which no branch or address may then depend on
     /// (`constant_time.rs`).
@@ -1587,6 +1590,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_globals", Runtime::Globals),
     ("rt_mem_depth", Runtime::Depth),
     ("rt_mem_test_host", Runtime::TestHost),
+    ("rt_mem_dns_test_hooks", Runtime::DnsTestHooks),
     ("rt_mem_platform", Runtime::PlatformTable),
 ];
 
@@ -1788,6 +1792,7 @@ mod tests {
             crate::lower::Entry::Main,
             target,
             oska_check::limits::Limits::NONE,
+            false,
         )
         .expect("the program should lower");
         let calls: std::collections::BTreeSet<(u16, usize)> = module
@@ -2090,6 +2095,7 @@ mod tests {
                 crate::lower::Entry::Main,
                 target,
                 oska_check::limits::Limits::NONE,
+                false,
             )
             .expect("the program should lower");
             let mut imports = std::collections::BTreeSet::new();
@@ -2480,6 +2486,7 @@ mod tests {
             crate::lower::Entry::Main,
             crate::Target::WindowsX86_64,
             oska_check::limits::Limits::NONE,
+            false,
         )
         .expect("the program should lower");
         assert!(module.callback.is_some());

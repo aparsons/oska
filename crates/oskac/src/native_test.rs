@@ -57,7 +57,7 @@ pub fn test_program(
 ) -> Tested {
     // The test executable reports unplaced, whatever the format.
     let bytes = match cached.native("test", target, false, &[], || {
-        oska_native::build_tests(program, target)
+        oska_native::build_tests_hooked(program, target, crate::DNS_TEST_HOOKS)
     }) {
         Ok(bytes) => bytes,
         Err(refusal) => return Tested::Refused(refusal),

@@ -198,7 +198,30 @@ pub fn build_limited(
     locate: &dyn Locate,
     limits: Limits,
 ) -> Result<Vec<u8>, Diagnostic> {
-    compile(program, target, locate, lower::Entry::Main, limits)
+    build_hooked(program, target, locate, limits, false)
+}
+
+/// [`build_limited`], and `dns_test_hooks` says whether the executable's
+/// name resolution honors the environment variables `OSKA_DNS_HOSTS`,
+/// `OSKA_DNS_RESOLV_CONF` and `OSKA_DNS_PORT` (ADR 0026). It is a constant
+/// written into the executable: only the compiler's caller sets it, a
+/// program and its environment cannot. [`build`] and [`build_limited`]
+/// leave the hooks off; `oskac` turns them on in debug builds alone.
+pub fn build_hooked(
+    program: &Program,
+    target: Target,
+    locate: &dyn Locate,
+    limits: Limits,
+    dns_test_hooks: bool,
+) -> Result<Vec<u8>, Diagnostic> {
+    compile(
+        program,
+        target,
+        locate,
+        lower::Entry::Main,
+        limits,
+        dns_test_hooks,
+    )
 }
 
 /// Compile the `test` blocks of `program`, which checked with no
@@ -225,12 +248,23 @@ pub fn build_limited(
 /// [`test_failure`] reads back. The caller places it in the source, as it
 /// places the interpreter's.
 pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnostic> {
+    build_tests_hooked(program, target, false)
+}
+
+/// [`build_tests`], with the DNS test hooks on or off as for
+/// [`build_hooked`].
+pub fn build_tests_hooked(
+    program: &Program,
+    target: Target,
+    dns_test_hooks: bool,
+) -> Result<Vec<u8>, Diagnostic> {
     compile(
         program,
         target,
         &Unplaced,
         lower::Entry::Tests,
         Limits::NONE,
+        dns_test_hooks,
     )
 }
 
@@ -402,6 +436,7 @@ fn compile(
     locate: &dyn Locate,
     entry: lower::Entry,
     limits: Limits,
+    dns_test_hooks: bool,
 ) -> Result<Vec<u8>, Diagnostic> {
     if let Some(refusal) = unimplemented_module(program) {
         return Err(refusal);
@@ -414,7 +449,7 @@ fn compile(
             NOWHERE,
         ));
     };
-    let module = lower::program(program, &rt, locate, entry, target, limits)?;
+    let module = lower::program(program, &rt, locate, entry, target, limits, dns_test_hooks)?;
     let text = target.emit(&module).map_err(|why| {
         Diagnostic::new(
             codes::UNSUPPORTED,

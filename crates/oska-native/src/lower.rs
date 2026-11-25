@@ -274,6 +274,7 @@ pub fn program(
     kind: Entry,
     target: Target,
     limits: Limits,
+    dns_test_hooks: bool,
 ) -> Result<ir::Module, Diagnostic> {
     let mut lowering = Lowering {
         user,
@@ -282,6 +283,7 @@ pub fn program(
         kind,
         target,
         limits,
+        dns_test_hooks,
         uncounted: false,
         human: locate.places(),
         frame: "main".to_string(),
@@ -380,6 +382,9 @@ struct Lowering<'p> {
     /// The run limits the program is built under (`oskac run`): none for
     /// `oskac build` and test executables.
     limits: Limits,
+    /// Whether `std.dns` in the executable honors the `OSKA_DNS_*` test
+    /// variables (`rt_mem_dns_test_hooks`).
+    dns_test_hooks: bool,
     /// Whether the function being lowered is one of `std.rt`'s counting
     /// allocator functions ([`COUNTED_MEMORY`]), whose own calls of the
     /// allocator are not redirected.
@@ -2464,6 +2469,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 dst
             }
             Runtime::TestHost => self.test_host(),
+            Runtime::DnsTestHooks => self.constant(i64::from(self.lowering.dns_test_hooks)),
             // A call of the target platform's table, a static object.
             Runtime::PlatformTable => {
                 let table = self.lowering.target.platform().table;
@@ -3576,6 +3582,7 @@ fn main(io: Stdout) {
             super::Entry::Main,
             target,
             limits,
+            false,
         )
         .expect("the program should lower")
     }

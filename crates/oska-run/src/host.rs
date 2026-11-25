@@ -337,6 +337,9 @@ pub struct RealHost {
     /// The hosts file, `resolv.conf` and name server port `std.dns` uses
     /// in place of this machine's (see [`RealHost::with_name_files`]).
     name_files: Option<crate::resolve::Files>,
+    /// Whether `std.dns` honors the `OSKA_DNS_*` test variables
+    /// ([`RealHost::with_dns_test_hooks`]); off unless the embedder says.
+    dns_test_hooks: bool,
 }
 
 impl Default for RealHost {
@@ -357,7 +360,19 @@ impl RealHost {
             stdin_closed: false,
             lines: None,
             name_files: None,
+            dns_test_hooks: false,
         }
+    }
+
+    /// Whether name resolution honors the environment variables
+    /// `OSKA_DNS_HOSTS`, `OSKA_DNS_RESOLV_CONF` and `OSKA_DNS_PORT` (ADR
+    /// 0026), which a test uses to redirect lookups. Off by default: only
+    /// the embedder decides, and `oskac` turns it on in debug builds
+    /// alone, so that whoever starts a process of a release build cannot
+    /// redirect its lookups. A program and its environment cannot set it.
+    pub fn with_dns_test_hooks(mut self, on: bool) -> Self {
+        self.dns_test_hooks = on;
+        self
     }
 
     /// A real host whose name resolution reads `files` (the hosts file and
@@ -564,7 +579,8 @@ impl Host for RealHost {
             return oska_sys::NetStream::connect(host, port);
         }
         let files = self.name_files.clone();
-        match crate::resolve::resolve(self, files.as_ref(), host) {
+        let hooks = self.dns_test_hooks;
+        match crate::resolve::resolve(self, files.as_ref(), hooks, host) {
             Ok(addresses) => oska_sys::NetStream::connect_resolved(host, &addresses, port),
             Err(err) => Err(io::Error::other(format!(
                 "cannot connect to {host}:{port}: {err}"
