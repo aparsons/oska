@@ -106,7 +106,15 @@ fn isqrt_is_exact_for_every_small_value_and_around_each_square() {
         "use std.math\n\nfn main(io: Stdout) -> Result<(), IoError> {{\n    for n in 0..{n} {{\n        let r = math.isqrt(n)\n        io.println(\"{{r}}\")?\n    }}\n    Ok(())\n}}\n"
     );
     let expected: String = (0..n as i64)
-        .map(|n| format!("{}\n", (0..).take_while(|r| r * r <= n).last().unwrap()))
+        .map(|n| {
+            format!(
+                "{}\n",
+                (0..)
+                    .take_while(|r| r * r <= n)
+                    .last()
+                    .expect("0 is a root")
+            )
+        })
         .collect();
     assert_runs(&src, &[], &expected);
     let big: Vec<(i64, i64)> = [
@@ -144,7 +152,7 @@ fn pow_is_exact_when_it_fits() {
         for exp in [0, 1, 2, 3, 5, 40, 62, 63, 64] {
             let fits = (base as i128)
                 .checked_pow(exp as u32)
-                .map_or(false, |v| i64::try_from(v).is_ok());
+                .is_some_and(|v| i64::try_from(v).is_ok());
             if fits {
                 pairs.push((base, exp));
             }
@@ -220,10 +228,9 @@ fn a_broken_precondition_is_p0006_spanning_the_call() {
 
 #[test]
 fn the_one_quotient_that_overflows_panics_with_p0001() {
-    for call in ["math.floor_div(-9223372036854775807 - 1, -1)"] {
-        let outcome = run_fake(&one(call), &[]);
-        assert_eq!(outcome.panic.expect("a panic").code, "P0001", "{call}");
-    }
+    let call = "math.floor_div(-9223372036854775807 - 1, -1)";
+    let outcome = run_fake(&one(call), &[]);
+    assert_eq!(outcome.panic.expect("a panic").code, "P0001", "{call}");
 }
 
 #[test]
