@@ -144,6 +144,7 @@ pub(crate) mod codes {
     pub const NOT_A_VALUE: &str = "E0234";
     pub const NOT_ITERABLE: &str = "E0235";
     pub const CONST_CYCLE: &str = "E0236";
+    pub const IMPLICIT_INT_TO_FLOAT: &str = "E0237";
     pub const IGNORED_RESULT: &str = "E0240";
     pub const TRY_OPERAND: &str = "E0241";
     pub const TRY_ERROR_TYPE: &str = "E0242";
@@ -189,6 +190,7 @@ pub(crate) mod codes {
     pub const SECRET_ADDRESS: &str = "E0354";
     pub const SECRET_VARIABLE_TIME: &str = "E0355";
     pub const SECRET_ORDERED: &str = "E0356";
+    pub const SECRET_FLOAT: &str = "E0357";
     pub const PRIVATE_TO_MODULE: &str = "E0360";
     pub const MANIFEST_SYNTAX: &str = "E0400";
     pub const MANIFEST_UNSUPPORTED: &str = "E0401";

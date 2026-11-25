@@ -14,6 +14,9 @@
 //! - It cannot decide a variable-time instruction or a panic (`E0355`):
 //!   an operand of `/` or `%`, or a shift or rotation amount.
 //! - It cannot be ordered (`E0356`): `<`, `<=`, `>` and `>=`.
+//! - It cannot hold a `Float` (`E0357`): `Secret<Float>` is refused, as a
+//!   written type and as `Secret.new` of a float, because float arithmetic
+//!   is not constant-time on common hardware (ADR 0027).
 //!
 //! A secret integer (`Secret<U8>`, `Secret<U32>`, `Secret<U64>`) has the
 //! wrapping arithmetic and bitwise operators, and a public operand of its
@@ -39,6 +42,12 @@ struct Refused {
 /// The message of `E0351`, wherever a secret is compared.
 const COMPARED: &str = "a `Secret` is not `Eq`, because comparing one can leak timing \
                         information; use `constant_time_eq`, or `ct_eq` on a secret integer";
+
+/// The message of `E0357`, wherever a `Secret<Float>` is written or made.
+pub(crate) const SECRET_FLOAT: &str = "`Secret<Float>` is refused: float arithmetic is not \
+     constant-time on common hardware (a subnormal operand is slower), so a secret \
+     must not flow through it; keep the secret as a secret integer or `Secret<Bytes>`, \
+     or read the value with `.expose()` where it may be public";
 
 /// The traits a secret deliberately lacks.
 const REFUSED: &[Refused] = &[
@@ -543,6 +552,10 @@ impl Body<'_, '_, '_> {
                  environment",
                 span,
             );
+            return;
+        }
+        if inner.is_float() {
+            self.error(codes::SECRET_FLOAT, SECRET_FLOAT, span);
             return;
         }
         if inner.head().is_some_and(|h| SECRET_TYPES.contains(&h)) {
