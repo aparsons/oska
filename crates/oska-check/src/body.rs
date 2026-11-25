@@ -76,6 +76,7 @@ mod purity;
 mod removed;
 mod results;
 mod secrets;
+pub(crate) use secrets::SECRET_FLOAT;
 mod sinks;
 
 use secrets::Operands;
@@ -808,8 +809,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
     /// the `cap` rule stops it, `E0300` when only the trust rule does,
-    /// `E0341` for text where a sink literal is required, `E0220`
-    /// otherwise.
+    /// `E0341` for text where a sink literal is required, `E0237`
+    /// for an integer where a `Float` is required, `E0220` otherwise.
     pub(super) fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
@@ -865,6 +866,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     span,
                 )
             }
+            Mismatch::Types if expected.is_float() && actual.is_integer() => self.error(
+                codes::IMPLICIT_INT_TO_FLOAT,
+                format!(
+                    "expected `Float`, found `{actual}`: there is no implicit conversion from \
+                     an integer to a `Float`, which would round a large value silently; write \
+                     the literal with a decimal point, as `2.0`, or convert a value with \
+                     `.to_float()`, or `.to_float_rounded()` above 2^53"
+                ),
+                span,
+            ),
             Mismatch::Types => self.error(
                 codes::MISMATCH,
                 format!("expected `{expected}`, found `{actual}`"),

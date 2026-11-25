@@ -45,6 +45,23 @@ pub fn untrusted_without_trust_flag(ty: &Type, known: &dyn Fn(&str) -> bool) -> 
     ))
 }
 
+/// Whether `ty` is written `Secret<Float>`. Float arithmetic is not
+/// constant-time on common hardware, so no secret holds one (`E0357`).
+fn is_secret_float(ty: &Type) -> bool {
+    let TypeKind::Path { segments, args } = &ty.kind else {
+        return false;
+    };
+    let ([ident], [arg]) = (segments.as_slice(), args.as_slice()) else {
+        return false;
+    };
+    let TypeKind::Path { segments, args } = &arg.kind else {
+        return false;
+    };
+    ident.name == ty::SECRET
+        && args.is_empty()
+        && matches!(segments.as_slice(), [name] if name.name == ty::FLOAT)
+}
+
 /// Report every unresolved or misused type and trait name in the user
 /// module `module`.
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
@@ -209,6 +226,13 @@ impl Resolver<'_, '_> {
                     |name: &str| self.is_type_variable(name) || self.decls.get(name).is_some();
                 if let Some(diagnostic) = untrusted_without_trust_flag(ty, &known) {
                     self.diagnostics.push(diagnostic);
+                }
+                if is_secret_float(ty) {
+                    self.diagnostics.push(Diagnostic::new(
+                        codes::SECRET_FLOAT,
+                        crate::body::SECRET_FLOAT,
+                        ty.span,
+                    ));
                 }
                 for arg in args {
                     self.ty(arg);

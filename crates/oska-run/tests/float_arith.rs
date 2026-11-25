@@ -282,7 +282,7 @@ fn an_explicit_fma_differs_from_a_multiplication_and_an_addition() {
 fn a_float_does_not_mix_with_an_int_or_take_a_remainder() {
     assert_refused(
         "fn main(io: Stdout) -> Result<(), IoError> {\n    let x = 1.5 + 1\n    Ok(())\n}\n",
-        "E0220",
+        "E0237",
     );
     assert_refused(
         "fn main(io: Stdout) -> Result<(), IoError> {\n    let x = 1.5 % 2.0\n    Ok(())\n}\n",

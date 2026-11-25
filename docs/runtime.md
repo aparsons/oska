@@ -155,12 +155,14 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0042` | A `Bytes` range out of bounds: `slice(start, end)` with `start` below 0, `end` past the length, or `start` past `end`; an endian read (`read_u16_be` and the rest) whose bytes do not all lie inside the buffer; `Bytes.zeroed` with a negative length; or `ct_select` between two `Secret<Bytes>` of different lengths. The message names the range or offset and the length, or both lengths. Spans the call. An index out of bounds in `at` or `set` is `P0002`, as in `List.at`. |
 | `P0043` | A `Bytes` would grow past 256 MiB: `push`, `append` or an endian push whose result would be longer, or `Bytes.zeroed` with a longer length. The runtime panics instead of running out of memory, and the buffer is not changed. The message names the length it would have had. Spans the call. Not yet checked where a whole buffer is made at once from outside: `String.to_bytes` and the capabilities' `read_bytes` (`DirRead`, `FileRead`) give a buffer of any length without this panic, and a file no memory holds is an `IoError` ("out of memory"). |
 | `P0044` | `Float.to_int()` of a NaN, an infinity or a value that does not fit `Int` (below -2^63 or at 2^63 or above). The value is truncated toward zero, so `-0.9` is `0`. The message names the value as `to_string` prints it. Spans the call. |
+| `P0045` | A NaN reached a function that has no answer for NaN and so needs a number (ADR 0027), where returning a NaN would hide the bug. The message names the function. Spans the call. No function raises it yet, so it has no example. |
+| `P0046` | A statistic of no input: a mean, a minimum or a maximum of an empty list, which has no value. The message names the function. Spans the call. No function raises it yet, so it has no example. |
 | `P0047` | `Int.to_float()` of a value above 2^53 or below -2^53, which a `Float` could not hold exactly. The runtime refuses instead of rounding; `to_float_rounded()` names the rounding and converts any `Int`. The message names the value. Spans the call. |
 | `P0048` | `Float.fmt(digits)` with `digits` below 0 or above 340. The message names the count. Spans the call. |
 
 ### Panic examples
 
-Each panic has a program that stops with exactly that code and the same program fixed. The `P001x` examples are tests, because only a `test` block can fail an assertion, and run under `oskac test`. `P0005` has no example: the checker (`E0292`) stops a program from keeping a scope handle past its block, so no checked program can reach it.
+Each panic has a program that stops with exactly that code and the same program fixed. The `P001x` examples are tests, because only a `test` block can fail an assertion, and run under `oskac test`. `P0005` has no example: the checker (`E0292`) stops a program from keeping a scope handle past its block, so no checked program can reach it. `P0045` has no example: no function that needs a number is in the language yet. `P0046` has no example: no statistic is in the language yet. ADR 0027 fixes the two codes ahead of those functions.
 
 #### `P0001`
 
