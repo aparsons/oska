@@ -142,6 +142,18 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("String.to_string", Prelude::Identity),
     ("String.eq", Prelude::Runtime("string_eq")),
     ("Int.to_string", Prelude::Runtime("int_to_string")),
+    ("Float.to_string", Prelude::Runtime("float_to_string")),
+    ("Float.total_cmp", Prelude::Runtime("float_total_cmp")),
+    ("Float.approx_eq", Prelude::Runtime("float_approx_eq")),
+    ("String.parse_float", Prelude::Runtime("string_parse_float")),
+    (
+        "String.parse_float_lenient",
+        Prelude::Runtime("string_parse_float_lenient"),
+    ),
+    (
+        "Int.to_float_rounded",
+        Prelude::Runtime("int_to_float_rounded"),
+    ),
     ("IoError.to_string", Prelude::Field(0)),
     ("String.len", Prelude::Runtime("string_len")),
     ("String.byte_len", Prelude::Runtime("string_byte_len")),

@@ -168,6 +168,9 @@ mod panics {
     pub const TEXT_TOO_LONG: &str = "P0037";
     pub const BYTES_OUT_OF_RANGE: &str = "P0042";
     pub const BYTES_TOO_LONG: &str = "P0043";
+    pub const FLOAT_TO_INT: &str = "P0044";
+    pub const INT_TO_FLOAT: &str = "P0047";
+    pub const FMT_DIGITS: &str = "P0048";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
@@ -2700,7 +2703,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     if let Some(value) = self.int_method_intrinsic(name, args, &values, span)? {
                         return Ok(value);
                     }
-                    if let Some(value) = self.float_intrinsic(name, &values) {
+                    if let Some(value) = self.float_intrinsic(name, &values, span)? {
                         return Ok(value);
                     }
                     if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {

@@ -73,15 +73,19 @@ pub mod codes {
     pub const BYTES_OUT_OF_RANGE: &str = "P0042";
     /// A `Bytes` would grow longer than the runtime allows (256 MiB).
     pub const BYTES_TOO_LONG: &str = "P0043";
-    /// A `Float` was converted to an integer and was NaN, infinite or out
-    /// of the integer type's range (ADR 0027).
-    pub const FLOAT_OUT_OF_RANGE: &str = "P0044";
+    /// `Float.to_int` of a NaN, an infinity or a value `Int` cannot hold.
+    pub const FLOAT_TO_INT: &str = "P0044";
     /// A NaN reached a function that needs a number: an operation with no
     /// answer for NaN (ADR 0027).
     pub const NAN_OPERAND: &str = "P0045";
     /// A statistic was asked of an empty list: a mean, a minimum or a
     /// maximum has no value for no input.
     pub const EMPTY_INPUT: &str = "P0046";
+    /// `Int.to_float` of a value above 2^53 in magnitude, which it would
+    /// round.
+    pub const INT_TO_FLOAT: &str = "P0047";
+    /// `Float.fmt` with a number of digits outside 0 to 340.
+    pub const FMT_DIGITS: &str = "P0048";
     /// The program would have taken more than `--max-steps` steps
     /// (`oska_check::limits`).
     pub const STEP_LIMIT: &str = oska_check::limits::codes::STEP_LIMIT;
@@ -124,9 +128,11 @@ pub mod codes {
         OUTPUT_LIMIT,
         BYTES_OUT_OF_RANGE,
         BYTES_TOO_LONG,
-        FLOAT_OUT_OF_RANGE,
+        FLOAT_TO_INT,
         NAN_OPERAND,
         EMPTY_INPUT,
+        INT_TO_FLOAT,
+        FMT_DIGITS,
     ];
 }
 

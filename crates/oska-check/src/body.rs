@@ -872,7 +872,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     "expected `Float`, found `{actual}`: there is no implicit conversion from \
                      an integer to a `Float`, which would round a large value silently; write \
                      the literal with a decimal point, as `2.0`, or convert a value with \
-                     `.to_float()`"
+                     `.to_float()`, or `.to_float_rounded()` above 2^53"
                 ),
                 span,
             ),
