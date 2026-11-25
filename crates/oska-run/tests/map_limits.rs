@@ -334,3 +334,23 @@ fn main(io: Stdout) -> Result<(), IoError> {
     assert!(outcome.panic.is_none(), "{outcome:#?}");
     assert_eq!(outcome.stdout, "4000\n");
 }
+
+/// A negative limit is 0: the map takes no entry, and says so with
+/// `P0044` on the first new key, not by a wrong count or a crash.
+#[test]
+fn a_negative_limit_is_zero() {
+    let src = r#"use std.map
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    var m: map.Map<Int, Int> = map.Map.with_max_entries(-5)
+    let n = m.len()
+    io.println("{n}")?
+    m.put(1, 1)
+    io.println("unreachable")
+}
+"#;
+    let outcome = run_on(FakeHost::new(), src, &[]);
+    let panic = outcome.panic.as_ref().expect("the first put panics");
+    assert_eq!(panic.code, "P0044", "{outcome:#?}");
+    assert_eq!(outcome.stdout, "0\n");
+}

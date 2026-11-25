@@ -83,11 +83,14 @@ impl<K: Eq + Hash, V> Map<K, V> {
     }
 
     // An empty map that holds at most `limit` entries (never more than
-    // `new()` allows): a `put` of a new key past it panics with `P0044`.
+    // `new()` allows, and a negative number is 0): a `put` of a new key past it panics with `P0044`.
     pub fn with_max_entries(limit: Int) -> Map<K, V> {
         var most = limit
         if most > DEFAULT_MAX_ENTRIES {
             most = DEFAULT_MAX_ENTRIES
+        }
+        if most < 0 {
+            most = 0
         }
         let empty = Map(
             log: [],
