@@ -1396,6 +1396,82 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "Float.to_string",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 0.1
+    io.println(x.to_string())
+}"#,
+    ),
+    (
+        "Float.to_int",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 2.9
+    let n = x.to_int()
+    io.println(n.to_string())
+}"#,
+    ),
+    (
+        "Float.fmt",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 2.675
+    io.println(x.fmt(2))
+}"#,
+    ),
+    (
+        "Float.total_cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 1.0
+    let order = x.total_cmp(2.0)
+    io.println(order.to_string())
+}"#,
+    ),
+    (
+        "Float.approx_eq",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 1.0
+    io.println(shown(x.approx_eq(1.0000001, 1e-6, 0.0)))
+}"#,
+    ),
+    (
+        "Int.to_float",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let n = 3
+    let x = n.to_float()
+    io.println(x.to_string())
+}"#,
+    ),
+    (
+        "Int.to_float_rounded",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let n = 9007199254740993
+    let x = n.to_float_rounded()
+    io.println(x.to_string())
+}"#,
+    ),
+    (
+        "String.parse_float",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = "1.5e3".parse_float().unwrap_or(0.0)
+    io.println(x.to_string())
+}"#,
+    ),
+    (
+        "String.parse_float_lenient",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = "+inf".parse_float_lenient().unwrap_or(0.0)
+    io.println(x.to_string())
+}"#,
+    ),
+    (
         "Int.to_u8",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {

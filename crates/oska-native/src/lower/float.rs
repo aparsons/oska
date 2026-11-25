@@ -10,10 +10,10 @@
 
 use oska_check::program::Expr;
 use oska_syntax::ast::BinaryOp;
-use oska_syntax::Diagnostic;
+use oska_syntax::{Diagnostic, Span};
 
-use super::Body;
-use crate::ir::{FloatCond, FloatOp, Inst, Temp};
+use super::{panics, Body};
+use crate::ir::{Cond, FloatCond, FloatOp, Inst, Temp};
 
 impl Body<'_, '_> {
     /// `lhs op rhs` for the float operators: a `Float` for `+ - * /`, a
@@ -60,18 +60,58 @@ impl Body<'_, '_> {
         dst
     }
 
-    /// A call of a `Float` method, whose arguments were evaluated to
-    /// `values`. `None` for any other intrinsic.
-    pub(super) fn float_intrinsic(&mut self, name: &str, values: &[Temp]) -> Option<Temp> {
-        let (op, &[x]) = (name.strip_prefix("Float.")?, values) else {
-            return None;
-        };
-        Some(match op {
-            "sqrt" => self.float_op(FloatOp::Sqrt, x, x),
+    /// A call of a `Float` method, or a conversion between `Int` and
+    /// `Float`, whose arguments were evaluated to `values`. `None` for
+    /// any other intrinsic.
+    pub(super) fn float_intrinsic(
+        &mut self,
+        name: &str,
+        values: &[Temp],
+        span: Span,
+    ) -> Result<Option<Temp>, Diagnostic> {
+        let value = match (name, values) {
+            ("Float.sqrt", &[x]) => self.float_op(FloatOp::Sqrt, x, x),
             // A `Float`'s bits are already canonical.
-            "to_bits" => self.copy(x),
-            "from_bits" => self.float_op(FloatOp::Canonical, x, x),
-            _ => return None,
-        })
+            ("Float.to_bits", &[x]) => self.copy(x),
+            ("Float.from_bits", &[x]) => self.float_op(FloatOp::Canonical, x, x),
+            // NaN, an infinity or a value out of range panics (`P0044`).
+            ("Float.to_int", &[x]) => {
+                let fits = self.call_runtime("float_fits_int", vec![x], span)?;
+                let label =
+                    self.panic_text(panics::FLOAT_TO_INT, "panic_float_to_int", &[x], span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: fits,
+                    target: label,
+                });
+                self.call_runtime("float_to_int", vec![x], span)?
+            }
+            // A value that would round panics (`P0045`).
+            ("Int.to_float", &[n]) => {
+                let exact = self.call_runtime("int_fits_float", vec![n], span)?;
+                let label =
+                    self.panic_text(panics::INT_TO_FLOAT, "panic_int_to_float", &[n], span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: exact,
+                    target: label,
+                });
+                self.call_runtime("int_to_float_rounded", vec![n], span)?
+            }
+            // A count of digits outside 0 to 340 panics (`P0046`): above,
+            // unsigned, is also below 0.
+            ("Float.fmt", &[x, digits]) => {
+                let label =
+                    self.panic_text(panics::FMT_DIGITS, "panic_float_fmt", &[digits], span)?;
+                let limit = self.constant(340);
+                self.push(Inst::Branch {
+                    cond: Cond::Above,
+                    lhs: digits,
+                    rhs: limit,
+                    target: label,
+                });
+                self.call_runtime("float_fmt", vec![x, digits], span)?
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
     }
 }
