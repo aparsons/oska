@@ -1830,7 +1830,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let bound = Ty::generic(trait_name, args.to_vec()).to_string();
         let message =
             format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
-        if map_key && !matches!(ty, Ty::Param(_)) {
+        if map_key && !ty.has_param() {
             let message = format!(
                 "`{ty}` cannot be a `Map` key: it does not implement `{bound}`. A key type needs `Eq` and `Hash`: an integer, `Bool`, `String`, `Bytes`, `Path`, an `Option` or `List` of a key type, or a struct or enum with `impl Eq` whose fields are all keys"
             );

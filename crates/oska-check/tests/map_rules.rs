@@ -130,3 +130,22 @@ fn a_generic_function_over_a_key_type_is_told_the_bounds() {
     );
     assert!(!report.diagnostics.is_empty());
 }
+
+#[test]
+fn a_type_that_holds_a_type_parameter_keeps_e0265() {
+    let src = "use std.map\nfn count<K>(k: List<K>) -> Int {\n    var m: map.Map<List<K>, Int> = map.Map.new()\n    m.put(k, 1)\n    m.len()\n}\nfn main() {}";
+    let report = check(src);
+    assert!(!report.diagnostics.is_empty());
+    assert!(
+        report.diagnostics.iter().all(|d| d.code == "E0265"),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn a_map_type_that_is_only_written_is_accepted() {
+    assert_ok(
+        "use std.map\nstruct Point { x: Int }\nfn f(m: map.Map<Point, Int>) {}\nfn main() {}",
+    );
+}
