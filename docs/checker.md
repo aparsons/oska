@@ -114,7 +114,6 @@ A `std.*` module is a file `crates/oska-check/src/std/<name>.osk`, registered in
 | `std.sshsig` | `PublicKey` (`parse`, `comment`, `fingerprint`, `ed25519`), `Signature` (`parse`, `public_key`, `namespace`, `hash_algorithm`), `verify`, `SshsigError` | None |
 | `std.mcp` | `Toolset` (`specs`, `call`, and `reached`, which the toolchain fills in), `ToolSpec` (`new`, `with_title`, `name`, `title`, `description`, `input`), `ToolResult` (`text`, `json`, `error`, `content`, `structured`, `is_error`), `ServerInfo` (`new`, `with_instructions`), `McpError`, `Session` (`new`, `is_legacy`), `Step`, `validate`, `serve`, `handle`, and the constants `MAX_LINE`, `MODERN_VERSION` and `LEGACY_VERSION` | None |
 | `std.json` | `Value`, `Member`, `Number` (`from_int`, `parse`, `to_int`, `text`), `Error`, `Violation`, `DecodeError`, `parse`, `encode`, `decode`, `Schema` (`string`, `integer`, `number`, `boolean`, `one_of`, `list`, `object`, `describe`, `to_value`, `validate`), `Field` (`required`, `optional`), and the constants `MAX_LENGTH` and `MAX_DEPTH` | None |
-
 | `std.map` | `Map<K, V>` (`new`, `put`, `get`, `remove`, `contains_key`, `len`, `is_empty`, `entries`, `keys`, `values`), `Entry` | None |
 
 `std.map` is written in Oska like `std.json`: an insertion-ordered table (ADR 0028) over a `List` of entries and two `Bytes` tables of positions, so it runs on both backends as the program's own code, and its probes count as steps. A key type needs `Eq` and `Hash`.

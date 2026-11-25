@@ -14,6 +14,10 @@
 //   both backends find the same entries in the same order. `get` of a
 //   missing key is `None`, never a panic.
 //
+// Cost: each `put` on a key the map holds and each `remove` copies the
+// whole `order` or `table` `Bytes` (O(table size)), because a write to a
+// shared field copies it. #603 owns that cost and the step charging.
+//
 // Not yet here, and left to later tickets of spec #591: the refusals of a
 // `Float` or a secret key (`E` codes), the flood defence (a probe limit
 // and a second hash) and the entry limit.
@@ -201,7 +205,9 @@ impl<K: Eq + Hash, V> Map<K, V> {
     }
 
     // Add an entry for a key the map does not hold, last, in a table with
-    // room.
+    // room. The probe below ends because `put` keeps the table at most half
+    // full of keys and tombstones (`used * 2 <= slots`) and rebuilds it
+    // otherwise, so there is always an empty slot or a tombstone to reach.
     fn insert_new(var self, key: K, value: V) {
         let capacity = self.table.len() / 4
         var slot = slot_of(key.hash(), capacity)
@@ -234,7 +240,7 @@ impl<K: Eq + Hash, V> Map<K, V> {
     // Replace the log, `order` and `table` with those of the live
     // entries, in order, in a table with room for `wanted` entries.
     fn rebuild_with(var self, wanted: Int) {
-        let items = self.entries()
+        let kept = self.entries()
         var capacity = MIN_SLOTS
         while capacity < wanted * 4 {
             capacity = capacity * 2
@@ -244,8 +250,8 @@ impl<K: Eq + Hash, V> Map<K, V> {
         self.table = Bytes.zeroed(capacity * 4)
         self.live = 0
         self.used = 0
-        for item in items {
-            self.insert_new(item.key, item.value)
+        for entry in kept {
+            self.insert_new(entry.key, entry.value)
         }
     }
 }
