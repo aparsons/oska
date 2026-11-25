@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.net_error`: the one classification of a network `IoError`, shared by
+// `std.dns` and `std.tls` (spec #659). It is hidden, like `std.x509_roots`:
+// a program does not import it.
+//
+// The runtime words a network failure from a fixed table (`docs/runtime.md`,
+// `IoError` wording). `NetFailure` is that table as an enum, and `wording` is
+// the only place its text is written. A module that makes or reads such an
+// error goes through `NetFailure`, so it never spells a message out and
+// never compares one: a change of wording changes `wording` alone, and the
+// classification follows it. `classify` is the one place that reads an
+// `IoError`'s text, because an `IoError` carries no kind of its own.
+
+// The kind of a network failure, as the runtime's table words it.
+pub enum NetFailure {
+    // The host name did not resolve.
+    NotFound,
+    // The server refused the connection.
+    Refused,
+    // The operation timed out.
+    TimedOut,
+    // No route to the network or host.
+    Unreachable,
+    // The peer reset or aborted the connection.
+    Reset,
+    // The program closed the connection.
+    Closed,
+    // The host is neither a DNS name nor an IP address.
+    InvalidHost,
+    // Any other failure: a platform's own wording, never copied.
+    Other,
+}
+
+impl NetFailure {
+    // The runtime's wording of this kind, which is also what `std.tls`
+    // shows as the reason of an i/o error.
+    pub fn wording(self) -> String {
+        match self {
+            NetFailure.NotFound => "host not found"
+            NetFailure.Refused => "connection refused"
+            NetFailure.TimedOut => "timed out"
+            NetFailure.Unreachable => "network unreachable"
+            NetFailure.Reset => "connection reset"
+            NetFailure.Closed => "the connection is closed"
+            NetFailure.InvalidHost => "invalid host"
+            NetFailure.Other => "other"
+        }
+    }
+
+    // The error a module makes for this kind, with the runtime's wording.
+    pub fn io_error(self) -> IoError {
+        IoError(message: self.wording())
+    }
+}
+
+// The kinds the runtime words, in the order they are tried.
+fn known() -> List<NetFailure> {
+    [NetFailure.NotFound, NetFailure.Refused, NetFailure.TimedOut, NetFailure.Unreachable, NetFailure.Reset, NetFailure.Closed, NetFailure.InvalidHost]
+}
+
+// The kind of `error`. Its message, with a path or an address before the
+// words, holds the wording of its kind; a message that holds none (a
+// platform's own wording) is `Other`.
+pub fn classify(error: IoError) -> NetFailure {
+    let message = error.message
+    for kind in known() {
+        if message.contains(kind.wording()) {
+            return kind
+        }
+    }
+    NetFailure.Other
+}

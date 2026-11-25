@@ -48,9 +48,12 @@ for set in musl linux macos windows; do
 done
 
 # Every test file of oska-sys, oska-run and oskac (macos, linux) is in a plan.
+# The plan is read once into a variable: `grep -q` quitting early on a pipe
+# would end the plan script with SIGPIPE, and `pipefail` would call that a miss.
+linux_plan=$(scripts/test-shard.sh linux all --plan)
 for f in crates/oska-run/tests/*.rs crates/oska-sys/tests/*.rs crates/oskac/tests/*.rs; do
   n=$(basename "$f" .rs)
-  if ! scripts/test-shard.sh linux all --plan | grep -q " test $n\$"; then
+  if ! grep -q " test $n\$" <<<"$linux_plan"; then
     bad "linux: every test file is a target" "$n is in no plan"
   fi
 done

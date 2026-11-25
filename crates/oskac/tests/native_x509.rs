@@ -276,7 +276,7 @@ fn every_crafted_chain_natively() {
         .expect("oskac runs");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{output:?}");
-    assert!(stdout.contains("38 tests: 38 passed, 0 failed"), "{stdout}");
+    assert!(stdout.contains("41 tests: 41 passed, 0 failed"), "{stdout}");
 }
 
 /// Every real root of Mozilla's store in `vectors/x509_mozilla_roots.osk`,
