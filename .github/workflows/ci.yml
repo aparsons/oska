@@ -26,17 +26,20 @@ jobs:
     # must do what the interpreter does.
     #
     # The job runs as parallel parts, so a pull request waits for the
-    # slowest, not for all (spec #631): one x86_64 part runs every step of
-    # check.sh but the cargo tests (`--group checks`: formal, lint, script
-    # suites), and three shards of the cargo tests (`--group tests`) run on
-    # each processor. scripts/test-shard.sh names the shards, and its test
+    # slowest, not for all (spec #631, #712): three x86_64 parts run every
+    # step of check.sh but the cargo tests, one per group (`--group formal`:
+    # Lean and TLC; `--group lint`: the static checks; `--group scripts`: the
+    # script suites), and three shards of the cargo tests (`--group tests`)
+    # run on each processor. scripts/test-shard.sh names the shards, and its test
     # checks that every test runs in exactly one.
     # shards linux: site native rest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-latest, group: checks, shard: ""}
+          - {os: ubuntu-latest, group: formal, shard: ""}
+          - {os: ubuntu-latest, group: lint, shard: ""}
+          - {os: ubuntu-latest, group: scripts, shard: ""}
           - {os: ubuntu-latest, group: tests, shard: site}
           - {os: ubuntu-latest, group: tests, shard: native}
           - {os: ubuntu-latest, group: tests, shard: rest}
@@ -68,22 +71,24 @@ jobs:
       # build, so cargo never reuses a stale one. Only main saves: a pull
       # request reads main's cache and adds none of its own, which keeps
       # the repository under GitHub's 10 GB cache limit.
-      # Not for the `checks` group: it builds units (clippy, the guard, the
-      # Windows type check) that the saving `rest` shard never rebuilds, yet
-      # mtimes.sh vouches for them in its list. A cached build of old sources
-      # then looked fresh and failed every `checks` job on main (2026-11-24,
-      # E0407: Host without `secure_bytes`). `checks` builds from scratch.
+      # Only the `tests` group: the formal, lint and scripts groups build
+      # units (clippy, the guard, the Windows type check) that the saving
+      # `rest` shard never rebuilds, yet mtimes.sh vouches for them in its
+      # list. A cached build of old sources then looked fresh and failed
+      # every `checks` job on main (2026-11-24, E0407: Host without
+      # `secure_bytes`). They build from scratch.
       - id: cargo-cache
-        if: matrix.group != 'checks'
+        if: matrix.group == 'tests'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
           key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
           restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
-      - run: scripts/cargo-cache/mtimes.sh
+      - if: matrix.group == 'tests'
+        run: scripts/cargo-cache/mtimes.sh
       # check.sh type-checks oskac for Windows (#323); only this job needs the
       # target, so it is not in rust-toolchain.toml (every job would download it).
-      - if: matrix.group == 'checks'
+      - if: matrix.group == 'lint'
         run: rustup target add x86_64-pc-windows-gnu
       # The differential suite is compiled only where a backend runs: a
       # label that moves to other hardware must fail, not skip it.
@@ -93,7 +98,7 @@ jobs:
         run: test "$(uname -m)" = x86_64
       # The pinned ShellCheck check.sh's shellcheck step verifies; runner
       # images ship different releases.
-      - if: matrix.group == 'checks'
+      - if: matrix.group == 'lint'
         run: scripts/shellcheck/install.sh "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       # Claude Code, for check.sh's `claude plugin validate` step (spec #206):
       # its official install script, at a pinned version so the validator's
@@ -101,16 +106,16 @@ jobs:
       # already on PATH above. Without it the step fails here, never skips.
       # DISABLE_AUTOUPDATER stays set for the later steps, so check.sh runs
       # the pinned version.
-      - if: matrix.group == 'checks'
+      - if: matrix.group == 'lint'
         run: |
           echo "DISABLE_AUTOUPDATER=1" >> "$GITHUB_ENV"
           curl -fsSL https://claude.ai/install.sh | DISABLE_AUTOUPDATER=1 bash -s 2.1.330
       # The pinned Lean and TLC check.sh's formal step runs (ADRs 0018,
       # 0019), checked against their pinned checksums; the runner's Java runs
-      # TLC. Without them the step fails here, never skips. The checks part
+      # TLC. Without them the step fails here, never skips. The formal part
       # runs the formal step; the shard that holds oska-run's lean_reference
       # test needs Lean (check.sh makes that test fail without it, ADR 0018).
-      - if: matrix.group == 'checks' || matrix.shard == 'rest'
+      - if: matrix.group == 'formal' || matrix.shard == 'rest'
         run: |
           scripts/formal/install.sh "$HOME/.local/formal"
           echo "$HOME/.local/formal/lean/bin" >> "$GITHUB_PATH"
