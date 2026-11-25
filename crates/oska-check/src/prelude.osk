@@ -1129,6 +1129,13 @@ pub fn dbg<T>(value: T) -> T
 // of each arm it adds.
 pub fn todo<T>() -> T
 
+// For `std.map` only (ADR 0028): a map that would pass its entry limit
+// panics with `P0044`, and a map whose probes pass the limit under every
+// hash of its list panics with `P0045`. They have a prelude name because
+// a panic with a code of its own is a built-in.
+pub fn map_entry_limit()
+pub fn map_probe_limit()
+
 // ---- Core traits -------------------------------------------------------
 
 // Equality: `==` and `!=` need `Eq`. `()` is `Eq` without an impl.

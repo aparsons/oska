@@ -167,6 +167,13 @@ mod panics {
     pub const TEXT_TOO_LONG: &str = "P0037";
     pub const BYTES_OUT_OF_RANGE: &str = "P0042";
     pub const BYTES_TOO_LONG: &str = "P0043";
+    pub const MAP_ENTRY_LIMIT: &str = "P0044";
+    /// The interpreter's message for `P0044`.
+    pub const MAP_ENTRY_LIMIT_MESSAGE: &str = "the map holds as many entries as its limit allows";
+    pub const MAP_PROBE_LIMIT: &str = "P0045";
+    /// The interpreter's message for `P0045`.
+    pub const MAP_PROBE_LIMIT_MESSAGE: &str =
+        "the map's keys collide under every hash it tries: they look chosen to flood it";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
@@ -2720,6 +2727,20 @@ impl<'l, 'p> Body<'l, 'p> {
                         let todo = self.panic_static(panics::TODO, panics::NOT_WRITTEN, span)?;
                         self.push(Inst::Jump(todo));
                         // Never reached: a value of no type, holding nothing.
+                        return Ok(self.constant(0));
+                    }
+                    let map_panic = match name.as_str() {
+                        "map_entry_limit" => {
+                            Some((panics::MAP_ENTRY_LIMIT, panics::MAP_ENTRY_LIMIT_MESSAGE))
+                        }
+                        "map_probe_limit" => {
+                            Some((panics::MAP_PROBE_LIMIT, panics::MAP_PROBE_LIMIT_MESSAGE))
+                        }
+                        _ => None,
+                    };
+                    if let Some((code, message)) = map_panic {
+                        let label = self.panic_static(code, message, span)?;
+                        self.push(Inst::Jump(label));
                         return Ok(self.constant(0));
                     }
                 }

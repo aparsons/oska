@@ -14,13 +14,18 @@
 //   both backends find the same entries in the same order. `get` of a
 //   missing key is `None`, never a panic.
 //
-// Cost: each `put` on a key the map holds and each `remove` copies the
-// whole `order` or `table` `Bytes` (O(table size)), because a write to a
-// shared field copies it. #603 owns that cost and the step charging.
+// Limits (ADR 0028). A map holds at most `DEFAULT_MAX_ENTRIES` entries;
+// `Map.with_max_entries(n)` sets a lower limit. A `put` of a new key past
+// the limit panics with `P0044`. A lookup looks at no more than
+// `PROBE_LIMIT` slots, and a `put` that cannot place its key within
+// `PROBE_LIMIT` slots of where it hashes rebuilds the table under the next
+// of three fixed hashes (the key's own `Hash`, then two mixes of it,
+// below); when the last also fails it panics with `P0045`. Every probe is
+// a loop back-edge, so it is a step of `--max-steps` on both backends
+// (ADR 0021).
 //
-// Not yet here, and left to later tickets of spec #591: the refusals of a
-// `Float` or a secret key (`E` codes), the flood defence (a probe limit
-// and a second hash) and the entry limit.
+// Not yet here, and left to a later ticket of spec #591: the refusals of a
+// `Float` or a secret key (`E` codes).
 
 // For maintainers: this file is Oska source, checked under the rules for
 // user code and run as Oska by both backends. The comment block directly
@@ -40,6 +45,17 @@
 // of keys and tombstones, `rebuilt` makes a fresh map of the live entries
 // in the same order.
 
+// The most slots a lookup or an insert looks at.
+const PROBE_LIMIT: Int = 64
+
+// How many hashes a map tries before it panics: the key's `Hash`, then
+// `mixed` with `variant` 1 and 2.
+const HASHES: Int = 3
+
+// The entry limit a map starts with, and the most it can be given. Its
+// table then has 16,777,216 slots: 64 MiB, under the 256 MiB of a `Bytes`.
+const DEFAULT_MAX_ENTRIES: Int = 4194304
+
 // A removed key's slot in the table.
 const TOMBSTONE: Int = 4294967295
 
@@ -56,12 +72,32 @@ pub struct Map<K, V> {
     table: Bytes,
     live: Int,
     used: Int,
+    limit: Int,
+    variant: Int,
 }
 
 impl<K: Eq + Hash, V> Map<K, V> {
     // An empty map.
     pub fn new() -> Map<K, V> {
-        let empty = Map(log: [], order: Bytes.new(), table: Bytes.new(), live: 0, used: 0)
+        Map.with_max_entries(DEFAULT_MAX_ENTRIES)
+    }
+
+    // An empty map that holds at most `limit` entries (never more than
+    // `new()` allows): a `put` of a new key past it panics with `P0044`.
+    pub fn with_max_entries(limit: Int) -> Map<K, V> {
+        var most = limit
+        if most > DEFAULT_MAX_ENTRIES {
+            most = DEFAULT_MAX_ENTRIES
+        }
+        let empty = Map(
+            log: [],
+            order: Bytes.new(),
+            table: Bytes.new(),
+            live: 0,
+            used: 0,
+            limit: most,
+            variant: 0,
+        )
         empty
     }
 
@@ -100,10 +136,18 @@ impl<K: Eq + Hash, V> Map<K, V> {
             self.compact_if_sparse()
             return
         }
+        if self.live >= self.limit {
+            map_entry_limit()
+            return
+        }
         if (self.used + 1) * 2 > self.table.len() / 4 {
             self.rebuild_with(self.live + 1)
         }
-        self.insert_new(key, value)
+        if !self.insert_new(key, value) {
+            var kept = self.entries()
+            kept.push(Entry(key: key, value: value))
+            self.rebuild_entries(kept, self.variant + 1, kept.len())
+        }
     }
 
     // Take the entry of `key` out and give its value, or `None` when the
@@ -162,12 +206,20 @@ impl<K: Eq + Hash, V> Map<K, V> {
 
     // Set the word of ordinal `at` in `order` to `value`.
     fn set_order(var self, at: Int, value: Int) {
-        self.order = with_word(self.order, at, value)
+        let base = at * 4
+        self.order.set(base, (value % 256).to_u8())
+        self.order.set(base + 1, (value / 256 % 256).to_u8())
+        self.order.set(base + 2, (value / 65536 % 256).to_u8())
+        self.order.set(base + 3, (value / 16777216 % 256).to_u8())
     }
 
     // Set the word of slot `at` in `table` to `value`.
     fn set_slot(var self, at: Int, value: Int) {
-        self.table = with_word(self.table, at, value)
+        let base = at * 4
+        self.table.set(base, (value % 256).to_u8())
+        self.table.set(base + 1, (value / 256 % 256).to_u8())
+        self.table.set(base + 2, (value / 65536 % 256).to_u8())
+        self.table.set(base + 3, (value / 16777216 % 256).to_u8())
     }
 
     // The entry the ordinal `ordinal` points at.
@@ -180,15 +232,17 @@ impl<K: Eq + Hash, V> Map<K, V> {
         self.word(self.table, slot) - 1
     }
 
-    // The slot of `key` in the table, or -1.
+    // The slot of `key` in the table, or -1. Every key the table holds is
+    // within `PROBE_LIMIT` slots of where it hashes (`insert_new` keeps
+    // it so), so a key not found by then is not there.
     fn find(self, key: K) -> Int {
         let capacity = self.table.len() / 4
         if capacity == 0 {
             return -1
         }
-        var slot = slot_of(key.hash(), capacity)
+        var slot = slot_of(key.hash(), self.variant, capacity)
         var probes = 0
-        while probes < capacity {
+        while probes < PROBE_LIMIT {
             let held = self.word(self.table, slot)
             if held == 0 {
                 return -1
@@ -205,28 +259,40 @@ impl<K: Eq + Hash, V> Map<K, V> {
     }
 
     // Add an entry for a key the map does not hold, last, in a table with
-    // room. The probe below ends because `put` keeps the table at most half
-    // full of keys and tombstones (`used * 2 <= slots`) and rebuilds it
-    // otherwise, so there is always an empty slot or a tombstone to reach.
-    fn insert_new(var self, key: K, value: V) {
+    // room, and say whether it did: `false`, with the map unchanged, when
+    // no slot within `PROBE_LIMIT` of where the key hashes is free.
+    fn insert_new(var self, key: K, value: V) -> Bool {
         let capacity = self.table.len() / 4
-        var slot = slot_of(key.hash(), capacity)
-        while true {
+        var slot = slot_of(key.hash(), self.variant, capacity)
+        var probes = 0
+        var found = false
+        var fresh = false
+        while probes < PROBE_LIMIT {
             let held = self.word(self.table, slot)
             if held == 0 {
-                self.used = self.used + 1
+                fresh = true
+                found = true
                 break
             }
             if held == TOMBSTONE {
+                found = true
                 break
             }
             slot = (slot + 1) % capacity
+            probes = probes + 1
+        }
+        if !found {
+            return false
+        }
+        if fresh {
+            self.used = self.used + 1
         }
         self.log.push(Entry(key: key, value: value))
         let ordinal = self.order.len() / 4
         self.order.push_u32_le(self.log.len().to_u32())
         self.set_slot(slot, ordinal + 1)
         self.live = self.live + 1
+        true
     }
 
     // Make the table sparse and the log short again when removals and
@@ -240,19 +306,39 @@ impl<K: Eq + Hash, V> Map<K, V> {
     // Replace the log, `order` and `table` with those of the live
     // entries, in order, in a table with room for `wanted` entries.
     fn rebuild_with(var self, wanted: Int) {
-        let kept = self.entries()
+        self.rebuild_entries(self.entries(), self.variant, wanted)
+    }
+
+    // Replace the log, `order` and `table` with `kept`, in order, in a
+    // table with room for `wanted` entries, under the hash `first` or the
+    // next that places every key within `PROBE_LIMIT` slots. When none of
+    // them does, the keys flood the map: `P0045`.
+    fn rebuild_entries(var self, kept: List<Entry<K, V>>, first: Int, wanted: Int) {
         var capacity = MIN_SLOTS
         while capacity < wanted * 4 {
             capacity = capacity * 2
         }
-        self.log = []
-        self.order = Bytes.new()
-        self.table = Bytes.zeroed(capacity * 4)
-        self.live = 0
-        self.used = 0
-        for entry in kept {
-            self.insert_new(entry.key, entry.value)
+        var variant = first
+        while variant < HASHES {
+            self.variant = variant
+            self.log = []
+            self.order = Bytes.new()
+            self.table = Bytes.zeroed(capacity * 4)
+            self.live = 0
+            self.used = 0
+            var placed = true
+            for entry in kept {
+                if !self.insert_new(entry.key, entry.value) {
+                    placed = false
+                    break
+                }
+            }
+            if placed {
+                return
+            }
+            variant = variant + 1
         }
+        map_probe_limit()
     }
 }
 
@@ -276,24 +362,55 @@ impl<K: Eq + Hash, V: Eq> Eq for Map<K, V> {
     }
 }
 
-// `words` with the 4-byte word at index `at` set to `value`.
-fn with_word(words: Bytes, at: Int, value: Int) -> Bytes {
-    var copy = words
-    let base = at * 4
-    copy.set(base, (value % 256).to_u8())
-    copy.set(base + 1, (value / 256 % 256).to_u8())
-    copy.set(base + 2, (value / 65536 % 256).to_u8())
-    copy.set(base + 3, (value / 16777216 % 256).to_u8())
-    copy
-}
-
-// The table slot a hash starts at: the hash taken as a non-negative
-// number below `capacity`.
-fn slot_of(hash: Int, capacity: Int) -> Int {
-    let rest = hash % capacity
+// The table slot a hash starts at, under the hash `variant` of the list:
+// 0 is the key's own hash taken as a non-negative number below
+// `capacity`; 1 and 2 are `mixed`.
+fn slot_of(hash: Int, variant: Int, capacity: Int) -> Int {
+    var number = hash
+    if variant > 0 {
+        number = mixed(hash, variant)
+    }
+    let rest = number % capacity
     if rest < 0 {
         rest + capacity
     } else {
         rest
     }
+}
+
+// The low 32 bits of `number`, as a `U32`.
+fn low32(number: Int) -> U32 {
+    let rest = number % 4294967296
+    if rest < 0 {
+        (rest + 4294967296).to_u32()
+    } else {
+        rest.to_u32()
+    }
+}
+
+// The second and third hash of the list (ADR 0028): the 64-bit `hash`
+// taken as two 32-bit halves and mixed by a finalizer in the manner of
+// Murmur3, with its own constants for each `variant`, to a number from 0
+// up to 2^32. Keys that agree where the first hash puts them but not in
+// all 64 bits land far apart; keys with the same 64-bit hash stay
+// together, and a flood of those ends in `P0045`.
+fn mixed(hash: Int, variant: Int) -> Int {
+    var m1: U32 = 2654435761
+    var m2: U32 = 2246822507
+    var m3: U32 = 3266489909
+    if variant == 2 {
+        m1 = 668265263
+        m2 = 374761393
+        m3 = 3550635116
+    }
+    let low = low32(hash)
+    let low_int = low.to_int()
+    let high = low32((hash - low_int) / 4294967296)
+    var a = low ^ high.wrapping_mul(m1)
+    a = a ^ (a >> 16)
+    a = a.wrapping_mul(m2)
+    a = a ^ (a >> 13)
+    a = a.wrapping_mul(m3)
+    a = a ^ (a >> 16)
+    a.to_int()
 }
