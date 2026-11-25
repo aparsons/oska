@@ -183,18 +183,28 @@ fn scenarios() -> Vec<Scenario> {
             "echo",
             "status 200\nx-test none\nlocation none\nbody [GET /a%20b?q=1 HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nConnection: close\r\nAccept-Encoding: identity\r\nX-One: 1\r\nX-Two: two\r\nUser-Agent: oska\r\n\r\n]\n",
         ),
-        ok("a_chunked_body", "http_chunked", "get", "status 200\nx-test a\nlocation none\nbody [hello world]\n"),
+        on_both(ok("a_chunked_body", "http_chunked", "get", "status 200\nx-test a\nlocation none\nbody [hello world]\n")),
         ok("a_response_in_small_records", "http_split", "get", "status 200\nx-test none\nlocation none\nbody [hello]\n"),
         ok("a_body_that_ends_with_close_notify", "http_close", "get", "status 200\nx-test a\nlocation none\nbody [until the end]\n"),
-        ok(
+        on_both(ok(
             "a_redirect_is_returned_not_followed",
             "http_redirect",
             "get",
             "status 302\nx-test none\nlocation https://elsewhere.test/\nbody [moved]\n",
-        ),
+        )),
+        Scenario {
+            name: "a_maximum_body_over_the_ceiling_is_refused_before_connecting",
+            server: "http_ok",
+            mode: "ceiling",
+            extra: &[],
+            output: "error invalid request: the maximum body is over 16777216\n",
+            alert: None,
+            connections: 0,
+            both: true,
+        },
         ok("a_100_continue_is_skipped", "http_continue", "get", "status 404\nx-test none\nlocation none\nbody [nope]\n"),
-        ok("a_body_in_three_records", "http_large", "large", "status 200\nx-test none\nlocation none\nbody 40000 bytes, checksum 549862\n"),
-        ok("a_body_past_the_maximum", "http_large", "limit", "error the response is too large\n"),
+        on_both(ok("a_body_in_three_records", "http_large", "large", "status 200\nx-test none\nlocation none\nbody 40000 bytes, checksum 549862\n")),
+        on_both(ok("a_body_past_the_maximum", "http_large", "limit", "error the response is too large\n")),
         ok(
             "a_body_with_two_framings",
             "http_both",
@@ -209,12 +219,12 @@ fn scenarios() -> Vec<Scenario> {
         ),
         ok("obsolete_line_folding", "http_fold", "get", "error malformed response: obsolete line folding\n"),
         ok("a_bare_line_feed", "http_bare_lf", "get", "error malformed response: a bare line feed\n"),
-        ok(
+        on_both(ok(
             "a_body_that_ends_early",
             "http_short",
             "get",
             "error malformed response: the response ended before it was complete\n",
-        ),
+        )),
         ok(
             "a_chunk_size_that_overflows",
             "http_overflow",
@@ -293,7 +303,11 @@ fn client_exe() -> &'static (PathBuf, PathBuf) {
 /// same output, exit code and tree), and check what the client printed and
 /// the alert the server saw from each run.
 fn run_scenario(s: &Scenario) {
-    let runs = if s.both { 2 } else { s.connections };
+    let runs = if s.both {
+        2 * s.connections.min(1)
+    } else {
+        s.connections
+    };
     let server = Server::start(s.server, runs);
     let port = server.port.to_string();
     let mut args = vec![port.as_str(), "127.0.0.1", s.mode, ROOT.trim()];

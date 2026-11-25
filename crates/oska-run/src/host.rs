@@ -334,6 +334,9 @@ pub struct RealHost {
     /// thread of its own reads from standard input, so that a read can
     /// stop waiting at the deadline ([`Host::read_line_before`]).
     lines: Option<mpsc::Receiver<io::Result<Option<String>>>>,
+    /// The hosts file, `resolv.conf` and name server port `std.dns` uses
+    /// in place of this machine's (see [`RealHost::with_name_files`]).
+    name_files: Option<crate::resolve::Files>,
 }
 
 impl Default for RealHost {
@@ -353,7 +356,17 @@ impl RealHost {
             random: SplitMix64::new(seed),
             stdin_closed: false,
             lines: None,
+            name_files: None,
         }
+    }
+
+    /// A real host whose name resolution reads `files` (the hosts file and
+    /// `resolv.conf` as text, and the name servers' port) instead of this
+    /// machine's, so a test can point `std.dns` at a name server of its
+    /// own. The resolver is the same.
+    pub fn with_name_files(mut self, files: crate::resolve::Files) -> Self {
+        self.name_files = Some(files);
+        self
     }
 
     /// A real host whose standard input is closed: every read is end of
@@ -546,7 +559,17 @@ impl Host for RealHost {
     }
 
     fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
-        oska_sys::NetStream::connect(host, port)
+        // A DNS name is resolved by `std.dns`, never by the system.
+        if !oska_sys::NetStream::needs_resolving(host, port)? {
+            return oska_sys::NetStream::connect(host, port);
+        }
+        let files = self.name_files.clone();
+        match crate::resolve::resolve(self, files.as_ref(), host) {
+            Ok(addresses) => oska_sys::NetStream::connect_resolved(host, &addresses, port),
+            Err(err) => Err(io::Error::other(format!(
+                "cannot connect to {host}:{port}: {err}"
+            ))),
+        }
     }
 
     fn net_listen_loopback(&mut self, port: i128) -> io::Result<oska_sys::NetListener> {
