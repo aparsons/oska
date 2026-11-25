@@ -623,13 +623,39 @@ fn has_tests(text: &str) -> bool {
     text.contains("test \"")
 }
 
+/// TRIAL (#717, not for merge): the seconds each corpus case took.
+static TIMINGS: std::sync::Mutex<Vec<(String, f32)>> = std::sync::Mutex::new(Vec::new());
+
+/// TRIAL: on CI macOS, fail with the timings so the log shows them.
+fn show_timings(which: &str) {
+    if std::env::var_os("GITHUB_ACTIONS").is_none() || !cfg!(target_os = "macos") {
+        return;
+    }
+    let mut all = TIMINGS
+        .lock()
+        .expect("no thread panics holding the lock")
+        .clone();
+    all.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let total: f32 = all.iter().map(|t| t.1).sum();
+    let lines: Vec<String> = all.iter().map(|(n, t)| format!("{t:8.1}s {n}")).collect();
+    panic!(
+        "TRIAL timings for {which} (cpu total {total:.0}s):\n{}",
+        lines.join("\n")
+    );
+}
+
 /// Run a corpus program on both backends.
 fn assert_same_corpus(name: &str, files: &[(String, String)], target: &str) {
     let files: Vec<(&str, &str)> = files
         .iter()
         .map(|(path, text)| (path.as_str(), text.as_str()))
         .collect();
+    let started = std::time::Instant::now();
     let outcome = assert_same_tests(name, &files, target);
+    TIMINGS
+        .lock()
+        .expect("no thread panics holding the lock")
+        .push((name.to_string(), started.elapsed().as_secs_f32()));
     // A real report, not two refusals that happen to agree.
     assert!(
         outcome.stdout.contains(" tests: "),
@@ -702,6 +728,7 @@ fn every_test_bearing_package_in_the_corpus_reports_the_same() {
         files_under(dir, &format!("{name}/"), &mut files);
         assert_same_corpus(&format!("package-{name}"), &files, &name);
     });
+    show_timings("packages");
 }
 
 #[test]
@@ -736,6 +763,7 @@ fn every_test_bearing_single_file_in_the_corpus_reports_the_same() {
             name,
         );
     });
+    show_timings("single files");
 }
 
 /// Every complete Oska program in the guides (`docs/guide`, which
@@ -804,6 +832,7 @@ fn every_test_bearing_program_in_the_guides_reports_the_same() {
             "main.osk",
         );
     });
+    show_timings("guides");
 }
 
 // ---- The test executable and the host it runs on -------------------------------
