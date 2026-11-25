@@ -27,6 +27,8 @@
 // booleans, string enumerations and lists. `Schema.validate` checks a
 // `Value` against it.
 
+use std.map
+
 // For maintainers: unlike the other `std` modules, this file is Oska
 // source with bodies, checked and run with each program that imports it
 // as one more module of the program. The comment block directly above a
@@ -235,6 +237,31 @@ impl Value {
         match self {
             Value.Object(members) => Some(members)
             _ => None
+        }
+    }
+
+    // The members as a `Map` from key to value, in the order they were
+    // written, if the value is an object. A key that occurs twice is an
+    // error with the reason `duplicate key`, as `parse` reports it; as a
+    // value no longer knows its byte offsets, the offset is the place of
+    // the later member in the object, from 0. A value that is not an
+    // object is an error with the reason `not an object`, at offset 0.
+    // Keys keep their trust, so a key `parse` read stays untrusted.
+    pub fn as_map(self) -> Result<map.Map<Untrusted<String>, Value>, Error> {
+        match self {
+            Value.Object(members) => {
+                var table: map.Map<Untrusted<String>, Value> = map.Map.new()
+                var place = 0
+                for member in members {
+                    if table.contains_key(member.key) {
+                        return Err(Error(offset: place, reason: "duplicate key"))
+                    }
+                    table.put(member.key, member.value)
+                    place = place + 1
+                }
+                Ok(table)
+            }
+            _ => Err(Error(offset: 0, reason: "not an object"))
         }
     }
 
