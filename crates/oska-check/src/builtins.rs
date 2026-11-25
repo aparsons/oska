@@ -17,7 +17,7 @@ use crate::collect::field_types;
 use crate::prelude;
 
 pub use crate::ty::{
-    ARGS, BOOL, DISPLAY, EQ, FROM, INT, LIST, OPTION, RANGE, RESULT, SCOPE, SECRET, STRING,
+    ARGS, BOOL, DISPLAY, EQ, FLOAT, FROM, INT, LIST, OPTION, RANGE, RESULT, SCOPE, SECRET, STRING,
     TEST_CONTEXT,
 };
 
