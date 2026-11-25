@@ -1464,8 +1464,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Some(program::TypeDeclKind::Enum(variants)) => variants
                 .iter()
                 .position(|v| v.name == variant)
-                .unwrap_or_default(),
-            _ => 0,
+                .unwrap_or_else(|| unreachable!("the enum `{ty}` has no variant `{variant}`")),
+            other => unreachable!("the checker guarantees an enum for `{ty}`, found {other:?}"),
         }
     }
 

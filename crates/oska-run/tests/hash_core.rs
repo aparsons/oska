@@ -67,6 +67,36 @@ fn integers_and_bool_have_golden_hashes() {
 }
 
 #[test]
+fn every_sized_integer_hashes_as_its_64_bit_value() {
+    let src = program(
+        "",
+        &format!(
+            "    let a: U16 = 60000\n    let b: U32 = 4000000000\n    let c: I16 = -3\n    \
+             let d: I32 = -3\n    let e: I64 = -3\n    let f = -3\n{}",
+            printing(&["a.hash()", "b.hash()", "c.hash()", "d.hash()", "e.hash()", "f.hash()",])
+        ),
+    );
+    assert_runs(
+        &src,
+        &[],
+        "2771187526451399223\n2147725408780729596\n-742179784301483393\n\
+         -742179784301483393\n-742179784301483393\n-742179784301483393\n",
+    );
+}
+
+#[test]
+fn bytes_hash_their_bytes_apart_from_text() {
+    let src = program(
+        "",
+        &format!(
+            "    let b = Bytes.from_hex(\"0102a0ff\").unwrap_or(Bytes.new())\n    let e = Bytes.new()\n{}",
+            printing(&["b.hash()", "e.hash()"])
+        ),
+    );
+    assert_runs(&src, &[], "-4628570706010076877\n-3750763034362895579\n");
+}
+
+#[test]
 fn text_and_path_hash_their_bytes() {
     let src = program(
         "",
@@ -217,18 +247,20 @@ fn count(n: Int) -> Int {
 }
 
 #[test]
-fn a_hash_of_untrusted_text_cannot_become_trusted_text() {
-    // The hash `Int` carries no flag, but text built from it with an
-    // untrusted part stays untrusted: the receiver's trust joins in.
+fn the_hash_of_untrusted_text_is_a_plain_trusted_int() {
+    // What `follows_trust` gives `Hash.hash` is that untrusted text may be
+    // the receiver (the test above). The result is an `Int`, which carries
+    // no trust flag, so text made only from the hash is trusted text: this
+    // shows the hash does not drag the receiver's trust into an `Int`.
     let src = program(
         "fn trusted(text: String) -> String {
     text
 }",
         "    let line: Untrusted<String> = \"a\"\n    \
-         let h = line.hash()\n    let shown = \"{line}:{h}\"\n    \
+         let h = line.hash()\n    let shown = \"{h}\"\n    \
          io.println(trusted(shown))?\n    Ok(())",
     );
-    assert_refused(&src, "E0300");
+    assert_runs(&src, &[], "-5808556873153909620\n");
 }
 
 #[test]
