@@ -242,7 +242,7 @@ fn fmt(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
 fn to_int(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let x = args[0].as_float();
     // Both bounds are exact doubles: -2^63 and 2^63.
-    if x >= -9_223_372_036_854_775_808.0 && x < 9_223_372_036_854_775_808.0 {
+    if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&x) {
         return Ok(Value::int(i128::from(x as i64)));
     }
     Err(Panic::new(
