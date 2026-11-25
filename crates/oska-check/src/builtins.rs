@@ -17,7 +17,7 @@ use crate::collect::field_types;
 use crate::prelude;
 
 pub use crate::ty::{
-    ARGS, BOOL, DISPLAY, EQ, FROM, INT, LIST, OPTION, RANGE, RESULT, SCOPE, SECRET, STRING,
+    ARGS, BOOL, DISPLAY, EQ, FROM, HASH, INT, LIST, OPTION, RANGE, RESULT, SCOPE, SECRET, STRING,
     TEST_CONTEXT,
 };
 
@@ -62,6 +62,13 @@ pub struct TraitMethod {
 pub const EQ_EQ: TraitMethod = TraitMethod {
     trait_name: EQ,
     method: "eq",
+};
+
+/// `Hash.hash`: what a derived `Hash`, and the `Hash` of an `Option` or a
+/// `List`, call on each field or item.
+pub const HASH_HASH: TraitMethod = TraitMethod {
+    trait_name: HASH,
+    method: "hash",
 };
 
 /// `Display.to_string`: interpolation, and `main`'s error on failure.

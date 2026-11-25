@@ -625,7 +625,11 @@ impl Body<'_, '_, '_> {
         }
         let found = self.items.trait_methods_named(type_name, &name.name);
         match found.as_slice() {
-            [] => {}
+            [] => {
+                if let Some(sig) = self.derived_hash_method(receiver, name) {
+                    return Some(sig);
+                }
+            }
             [sig] => return Some((*sig).clone()),
             _ => {
                 self.ambiguous_method(name, &found);

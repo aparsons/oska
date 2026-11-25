@@ -32,11 +32,12 @@
 //! values pending in the expression around the `?` included.
 
 use oska_check::builtins;
+use oska_check::hashing;
 use oska_check::program::{trait_method, Callee, Expr, Function, Place, Type};
 use oska_syntax::{Diagnostic, Span};
 
 use super::{Body, Instance};
-use crate::ir::{Cond, Inst, Temp};
+use crate::ir::{BinOp, Cond, Inst, Temp};
 use crate::layout::{self, Fields};
 use crate::NOWHERE;
 
@@ -45,6 +46,15 @@ const PRELUDE_EQ: &[&str] = &[
     "()", "Bool", "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "String", "Path",
     "IoError", "Option", "Result", "List", "Bytes",
 ];
+
+/// The types whose `Hash` impl is the prelude's, by type tag.
+const PRELUDE_HASH: &[&str] = &[
+    "Bool", "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "String", "Path",
+    "Option", "List", "Bytes",
+];
+
+/// The intrinsic a struct or enum that derives `Hash` is hashed by.
+const DERIVED_HASH: &str = "(derived).hash";
 
 /// The interpreter's type tag of values of the concrete type `ty`, which
 /// names the impls that apply to them.
@@ -109,6 +119,10 @@ impl Body<'_, '_> {
             Some(function) => {
                 let type_args = impl_type_args(function, &ty, own);
                 (Callee::Function(name), type_args)
+            }
+            // A struct or enum without an `impl Hash` derives it.
+            None if *trait_name == builtins::HASH && !PRELUDE_HASH.contains(&tag) => {
+                (Callee::intrinsic(DERIVED_HASH), Vec::new())
             }
             None => (Callee::intrinsic(format!("{tag}.{method}")), Vec::new()),
         })
@@ -258,6 +272,185 @@ impl Body<'_, '_> {
         });
         self.push(Inst::Label(end));
         self.push(Inst::Return(result));
+        Ok(())
+    }
+
+    // ---- Hash -------------------------------------------------------------
+
+    /// `hash(self)` of an `Option`, a `List`, or a struct or enum that
+    /// derives `Hash`, called as the intrinsic `name`, evaluated from
+    /// `args`: the hash, with the receiver released. `None` for any other
+    /// intrinsic.
+    pub(super) fn hash_intrinsic(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        values: &[Temp],
+        span: Span,
+    ) -> Result<Option<Temp>, Diagnostic> {
+        let Some(tag) = name.strip_suffix(".hash") else {
+            return Ok(None);
+        };
+        let (true, [receiver], &[a]) = (
+            matches!(tag, "Option" | "List") || name == DERIVED_HASH,
+            args,
+            values,
+        ) else {
+            return Ok(None);
+        };
+        let ty = self.ty(&receiver.ty);
+        let hash = self.hash_of(&ty, a, span)?;
+        self.consume(a)?;
+        Ok(Some(hash))
+    }
+
+    /// The hash of `a`, a borrowed value of the concrete type `ty`,
+    /// through `Hash` for `ty`: the program's impl, the prelude's, or the
+    /// derived one.
+    pub(super) fn hash_of(&mut self, ty: &Type, a: Temp, span: Span) -> Result<Temp, Diagnostic> {
+        let Some(tag) = type_tag(ty) else {
+            return Err(self.refuse(span, &format!("hashing values of `{ty}`")));
+        };
+        let user = trait_method(tag, builtins::HASH, "hash");
+        if let Some(function) = self.program().functions.get(&user) {
+            let type_args = impl_type_args(function, ty, Vec::new());
+            return self.call_program(&user, type_args, vec![a], span);
+        }
+        match ty {
+            Type::Bool | Type::Int(_) => self.call_runtime("int_hash", vec![a], NOWHERE),
+            Type::String => self.call_runtime("string_hash", vec![a], NOWHERE),
+            Type::Named { name, .. } if name == builtins::PATH => {
+                self.call_runtime("path_hash", vec![a], NOWHERE)
+            }
+            Type::Named { name, .. } if name == builtins::BYTES => {
+                self.call_runtime("bytes_hash", vec![a], NOWHERE)
+            }
+            Type::Named { .. } => {
+                let hash = Instance::Hash(self.source, ty.clone(), self.step_site(span));
+                let id = self.lowering.request(hash, self.origin.unwrap_or(span));
+                self.call_id(id, vec![a], span)
+            }
+            _ => Err(self.refuse(span, &format!("`{tag}.hash`"))),
+        }
+    }
+
+    /// The state `state` after it takes the hash of the field or item `a`
+    /// of the concrete type `ty`.
+    fn hash_mixed(
+        &mut self,
+        ty: &Type,
+        a: Temp,
+        state: Temp,
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let hash = self.hash_of(ty, a, span)?;
+        self.call_runtime("hash_mix", vec![state, hash], NOWHERE)
+    }
+
+    /// The body of [`Instance::Hash`] for `ty`: the state of the variant's
+    /// index (a struct is variant 0, a list's is its length), then the
+    /// hash of each field or item in order (`oska_check::hashing`).
+    pub(super) fn hash_function(&mut self, ty: &Type, span: Span) -> Result<(), Diagnostic> {
+        let a = self.temp();
+        let state = self.temp();
+        match self.fields_of(ty) {
+            Some(Fields::Struct(fields)) => {
+                self.push(Inst::Const {
+                    dst: state,
+                    value: hashing::word(0) as i64,
+                });
+                for (at, field) in fields.iter().enumerate() {
+                    let x = self.load(a, layout::struct_field(at));
+                    let next = self.hash_mixed(field, x, state, span)?;
+                    self.push(Inst::Copy {
+                        dst: state,
+                        src: next,
+                    });
+                }
+            }
+            Some(Fields::Enum(variants)) if variants.iter().all(Vec::is_empty) => {
+                // A fieldless enum is its variant's index.
+                let hash = self.call_runtime("int_hash", vec![a], NOWHERE)?;
+                self.push(Inst::Copy {
+                    dst: state,
+                    src: hash,
+                });
+            }
+            Some(Fields::Enum(variants)) => {
+                let tag = self.load(a, layout::ENUM_TAG);
+                let hash = self.call_runtime("int_hash", vec![tag], NOWHERE)?;
+                self.push(Inst::Copy {
+                    dst: state,
+                    src: hash,
+                });
+                let end = self.label();
+                for (index, fields) in variants.iter().enumerate() {
+                    if fields.is_empty() {
+                        continue;
+                    }
+                    let next = self.label();
+                    let want = self.constant(index as i64);
+                    self.push(Inst::Branch {
+                        cond: Cond::Ne,
+                        lhs: tag,
+                        rhs: want,
+                        target: next,
+                    });
+                    for (at, field) in fields.iter().enumerate() {
+                        let x = self.load(a, layout::enum_field(at));
+                        let mixed = self.hash_mixed(field, x, state, span)?;
+                        self.push(Inst::Copy {
+                            dst: state,
+                            src: mixed,
+                        });
+                    }
+                    self.push(Inst::Jump(end));
+                    self.push(Inst::Label(next));
+                }
+                self.push(Inst::Label(end));
+            }
+            None => {
+                let Type::Named { name, args } = ty else {
+                    return Err(self.refuse(span, &format!("hashing values of `{ty}`")));
+                };
+                if name != builtins::LIST {
+                    return Err(self.refuse(span, &format!("hashing values of `{ty}`")));
+                }
+                let item_ty = args.first().cloned().unwrap_or(Type::Unit);
+                let length = self.load(a, layout::LIST_LEN);
+                let seed = self.call_runtime("int_hash", vec![length], NOWHERE)?;
+                self.push(Inst::Copy {
+                    dst: state,
+                    src: seed,
+                });
+                let zero = self.constant(0);
+                let at = self.copy(zero);
+                let (head, done) = (self.label(), self.label());
+                self.push(Inst::Label(head));
+                self.push(Inst::Branch {
+                    cond: Cond::Ge,
+                    lhs: at,
+                    rhs: length,
+                    target: done,
+                });
+                let x = self.item(a, at);
+                let mixed = self.hash_mixed(&item_ty, x, state, span)?;
+                self.push(Inst::Copy {
+                    dst: state,
+                    src: mixed,
+                });
+                let one = self.constant(1);
+                self.push(Inst::Binary {
+                    op: BinOp::Add,
+                    dst: at,
+                    lhs: at,
+                    rhs: one,
+                });
+                self.push(Inst::Jump(head));
+                self.push(Inst::Label(done));
+            }
+        }
+        self.push(Inst::Return(state));
         Ok(())
     }
 

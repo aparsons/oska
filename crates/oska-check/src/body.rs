@@ -70,6 +70,7 @@ use crate::{Attenuation, AuditSite, FnOrTest, TestName};
 pub(crate) mod attenuation;
 mod audit;
 mod calls;
+mod derived;
 mod patterns;
 mod privacy;
 mod purity;
@@ -398,6 +399,9 @@ pub struct Body<'c, 'd, 'a> {
     /// instantiates others, and what its contracts reach, settled once its
     /// types are solved (`body/purity.rs`).
     uses: purity::Uses,
+    /// The types whose derived `Hash` is being decided, so that a recursive
+    /// type does not decide itself forever.
+    deriving: std::cell::RefCell<Vec<Ty>>,
 }
 
 /// A closure whose capability flag waits for its captures' types.
@@ -478,6 +482,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             typed_args: Vec::new(),
             open_closures: Vec::new(),
             uses: purity::Uses::default(),
+            deriving: std::cell::RefCell::default(),
         }
     }
 
@@ -616,6 +621,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }),
             Ty::Named(head, _, _) if in_prelude(head) && in_prelude(trait_name) => {
                 Some(Callee::intrinsic(format!("{head}.{method}")))
+            }
+            // A derived `Hash` has no impl to call: it is reached by the type's
+            // runtime tag, as a generic parameter's is.
+            Ty::Named(_, _, _) if trait_name == ty::HASH && self.hash_is_derived(ty) => {
+                Some(Callee::Trait {
+                    trait_name: trait_name.to_string(),
+                    method: method.to_string(),
+                })
             }
             Ty::Named(head, _, _) => Some(Callee::Function(program::trait_method(
                 head, trait_name, method,
@@ -1697,7 +1710,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     && b.args.len() == args.len()
                     && b.args.iter().zip(args).all(|(x, y)| infer.unify(x, y))
             }),
-            ty @ Ty::Named(..) => self.impl_in(infer, &ty, trait_name, args, depth).is_some(),
+            ty @ Ty::Named(..) => {
+                self.impl_in(infer, &ty, trait_name, args, depth).is_some()
+                    || (trait_name == ty::HASH && self.derives_hash(infer, &ty, depth))
+            }
         }
     }
 

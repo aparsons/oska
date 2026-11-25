@@ -55,6 +55,7 @@ mod collect;
 mod const_cycles;
 pub mod core_ir;
 mod decl_rules;
+pub mod hashing;
 mod hoist;
 mod infer;
 mod instantiation;
