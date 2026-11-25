@@ -8,8 +8,9 @@
 // assertion (an `.assume_trusted()` that `oskac audit` lists). Modes:
 // `echo` sends `hello` and prints everything the server sends until it
 // closes; `twice` sends `one`, prints the reply, sends `two` and prints
-// that (a KeyUpdate in between); `rekey` is `twice` with the client
-// updating its own keys after every record; `large` sends `go` and prints the length
+// that (a KeyUpdate in between); `rekey` is `twice`, built against a copy of
+// `std.tls` that updates its own keys after every record; `read_limit` is
+// `echo`, built against a copy that accepts one record under a key; `large` sends `go` and prints the length
 // and a checksum of what comes back; `alpn` offers two protocols and
 // prints the chosen one; `default_roots` trusts only Mozilla's roots.
 
@@ -121,9 +122,6 @@ fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Resul
             Ok(trust) => { config = config.with_trust(trust) }
             Err(_) => { return say(io, "the root is malformed") }
         }
-    }
-    if mode == "rekey" {
-        config = config.with_rekey_after(1)
     }
     if mode == "alpn" {
         config = config.with_alpn(["h2", "http/1.1"])

@@ -26,8 +26,9 @@
 //!     `Root`, `[count][handle][path][name][why]`, which `std.rt`'s
 //!     `root_drop` releases, closing its handle;
 //!   - a host capability or loopback listener ([`is_socket`]): `std.rt`'s
-//!     `Sock`, `[count][handle][host][port][why]`, which `sock_drop`
-//!     releases, closing its socket. A `Connection` is the prelude's
+//!     `Sock`, `[count][handle][host][port][why][other]`, which
+//!     `sock_drop` releases, closing its socket (and `other`, a listener's
+//!     second, IPv6 socket, or -1). A `Connection` is the prelude's
 //!     struct with the one field `host`, a `Sock` whose handle is the
 //!     open socket;
 //!   - a function value (a closure, or a named function used as a value):

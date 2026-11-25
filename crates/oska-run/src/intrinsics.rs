@@ -593,22 +593,7 @@ fn random_next_int(host: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, 
 /// `Bytes.zeroed` does. A host with no secure source ends the program,
 /// as the native runtime does, rather than fall back to a guessable one.
 fn random_secure_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
-    let len = args[1].as_int();
-    if len < 0 {
-        return Err(Panic::new(
-            codes::BYTES_OUT_OF_RANGE,
-            format!("cannot make a buffer of {len} bytes"),
-            span,
-        ));
-    }
-    if len > bytes::MAX_BYTES as i128 {
-        return Err(Panic::new(
-            codes::BYTES_TOO_LONG,
-            format!("a buffer of {len} bytes is too long"),
-            span,
-        ));
-    }
-    let len = len as usize;
+    let len = bytes::checked_len(args[1].as_int(), span)?;
     let Ok(data) = host.secure_bytes(len) else {
         eprintln!("the operating system has no secure random source");
         std::process::exit(101);
