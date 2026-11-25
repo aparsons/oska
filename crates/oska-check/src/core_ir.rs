@@ -849,7 +849,7 @@ impl Core<'_> {
                 return refuse(format!("the integer type `{}`", int.name()), span)
             }
             ExprKind::Float(_) | ExprKind::FloatBinary { .. } | ExprKind::FloatNeg(_) => {
-                return refuse("a `Float` (the Lean model has none yet)", span)
+                return refuse("a `Float` (core IR has no Float yet; the Lean model of Float is checked on its own)", span)
             }
             ExprKind::Bool(value) => node("Bool", vec![("value", Json::Bool(*value))]),
             ExprKind::Local(slot) => {
