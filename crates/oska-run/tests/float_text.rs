@@ -455,7 +455,7 @@ fn fmt_digits_out_of_range_panics() {
         let src = main_of(&format!(
             "    let x = 1.5\n    io.println(x.fmt({digits}))?\n"
         ));
-        assert_panics(&src, "P0046", &format!("x.fmt({digits})"));
+        assert_panics(&src, "P0048", &format!("x.fmt({digits})"));
     }
 }
 
@@ -535,12 +535,12 @@ fn int_to_float_refuses_what_it_would_round() {
         let src = main_of(&format!(
             "    let n = {n}\n    let x = n.to_float()\n    io.println(x.to_string())?\n"
         ));
-        assert_panics(&src, "P0045", "n.to_float()");
+        assert_panics(&src, "P0047", "n.to_float()");
     }
     let src = main_of(
         "    let n = -9223372036854775807 - 1\n    let x = n.to_float()\n    io.println(x.to_string())?\n",
     );
-    assert_panics(&src, "P0045", "n.to_float()");
+    assert_panics(&src, "P0047", "n.to_float()");
 }
 
 #[test]

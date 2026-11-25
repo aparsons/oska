@@ -85,7 +85,7 @@ impl Body<'_, '_> {
                 });
                 self.call_runtime("float_to_int", vec![x], span)?
             }
-            // A value that would round panics (`P0045`).
+            // A value that would round panics (`P0047`).
             ("Int.to_float", &[n]) => {
                 let exact = self.call_runtime("int_fits_float", vec![n], span)?;
                 let label =
@@ -96,7 +96,7 @@ impl Body<'_, '_> {
                 });
                 self.call_runtime("int_to_float_rounded", vec![n], span)?
             }
-            // A count of digits outside 0 to 340 panics (`P0046`): above,
+            // A count of digits outside 0 to 340 panics (`P0048`): above,
             // unsigned, is also below 0.
             ("Float.fmt", &[x, digits]) => {
                 let label =

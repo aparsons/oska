@@ -77,9 +77,9 @@ pub mod codes {
     pub const FLOAT_TO_INT: &str = "P0044";
     /// `Int.to_float` of a value above 2^53 in magnitude, which it would
     /// round.
-    pub const INT_TO_FLOAT: &str = "P0045";
+    pub const INT_TO_FLOAT: &str = "P0047";
     /// `Float.fmt` with a number of digits outside 0 to 340.
-    pub const FMT_DIGITS: &str = "P0046";
+    pub const FMT_DIGITS: &str = "P0048";
     /// The program would have taken more than `--max-steps` steps
     /// (`oska_check::limits`).
     pub const STEP_LIMIT: &str = oska_check::limits::codes::STEP_LIMIT;

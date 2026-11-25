@@ -155,8 +155,8 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0042` | A `Bytes` range out of bounds: `slice(start, end)` with `start` below 0, `end` past the length, or `start` past `end`; an endian read (`read_u16_be` and the rest) whose bytes do not all lie inside the buffer; `Bytes.zeroed` with a negative length; or `ct_select` between two `Secret<Bytes>` of different lengths. The message names the range or offset and the length, or both lengths. Spans the call. An index out of bounds in `at` or `set` is `P0002`, as in `List.at`. |
 | `P0043` | A `Bytes` would grow past 256 MiB: `push`, `append` or an endian push whose result would be longer, or `Bytes.zeroed` with a longer length. The runtime panics instead of running out of memory, and the buffer is not changed. The message names the length it would have had. Spans the call. Not yet checked where a whole buffer is made at once from outside: `String.to_bytes` and the capabilities' `read_bytes` (`DirRead`, `FileRead`) give a buffer of any length without this panic, and a file no memory holds is an `IoError` ("out of memory"). |
 | `P0044` | `Float.to_int()` of a NaN, an infinity or a value that does not fit `Int` (below -2^63 or at 2^63 or above). The value is truncated toward zero, so `-0.9` is `0`. The message names the value as `to_string` prints it. Spans the call. |
-| `P0045` | `Int.to_float()` of a value above 2^53 or below -2^53, which a `Float` could not hold exactly. The runtime refuses instead of rounding; `to_float_rounded()` names the rounding and converts any `Int`. The message names the value. Spans the call. |
-| `P0046` | `Float.fmt(digits)` with `digits` below 0 or above 340. The message names the count. Spans the call. |
+| `P0047` | `Int.to_float()` of a value above 2^53 or below -2^53, which a `Float` could not hold exactly. The runtime refuses instead of rounding; `to_float_rounded()` names the rounding and converts any `Int`. The message names the value. Spans the call. |
+| `P0048` | `Float.fmt(digits)` with `digits` below 0 or above 340. The message names the count. Spans the call. |
 
 ### Panic examples
 
@@ -597,32 +597,32 @@ fn main() {
 }
 ```
 
-#### `P0045`
+#### `P0047`
 
-```oska error=P0045
+```oska error=P0047
 fn main() {
     let id = 9007199254740993
     let x = id.to_float()
 }
 ```
 
-```oska fixed=P0045
+```oska fixed=P0047
 fn main() {
     let id = 9007199254740993
     let x = id.to_float_rounded()
 }
 ```
 
-#### `P0046`
+#### `P0048`
 
-```oska error=P0046
+```oska error=P0048
 fn main() {
     let price = 2.5
     let text = price.fmt(400)
 }
 ```
 
-```oska fixed=P0046
+```oska fixed=P0048
 fn main() {
     let price = 2.5
     let text = price.fmt(2)

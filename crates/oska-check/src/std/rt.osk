@@ -9492,7 +9492,7 @@ pub fn float_to_int_message(head: String, x: Float) -> String {
     "{head}`to_int()` of {shown} does not fit `Int`, which ranges from -9223372036854775808 to 9223372036854775807"
 }
 
-// Panic (`P0045`): `to_float()` of a value that would round.
+// Panic (`P0047`): `to_float()` of a value that would round.
 pub fn panic_int_to_float(start: String, end: String, n: Int) {
     panic_message(start, end, int_to_float_message("", n))
 }
@@ -9502,7 +9502,7 @@ pub fn int_to_float_message(head: String, n: Int) -> String {
     "{head}`to_float()` of {shown} would round: it is beyond 2^53 (9007199254740992); `to_float_rounded()` rounds it"
 }
 
-// Panic (`P0046`): `fmt` with a count of digits outside 0 to 340.
+// Panic (`P0048`): `fmt` with a count of digits outside 0 to 340.
 pub fn panic_float_fmt(start: String, end: String, digits: Int) {
     panic_message(start, end, float_fmt_message("", digits))
 }
