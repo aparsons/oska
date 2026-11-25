@@ -7,6 +7,7 @@
 // cryptography many times.
 
 use std.tls
+use std.net_error
 
 fn engine(name: String, random: Secret<Bytes>) -> tls.Engine {
     tls.Engine.new(name, tls.TlsConfig.default(), random, 1750000000)
@@ -56,6 +57,17 @@ test "the ClientHello is a handshake record offering TLS 1.3 and the two suites,
     t.assert_eq(sent.contains("000413031301"), true)
     t.assert_eq(sent.contains("002b0003020304"), true)
     t.assert_eq(sent.contains("000a00060004001d0017"), true)
+}
+
+test "the ClientHello offers exactly these signature algorithms, Ed25519 first" {
+    let sent = hello("example.test", Secret.new(Bytes.zeroed(64)))
+    // signature_algorithms (13): ed25519 (0x0807), ecdsa_secp256r1_sha256,
+    // ecdsa_secp384r1_sha384, rsa_pss_rsae_sha256, sha384 and sha512.
+    // signature_algorithms_cert (50): those, then RSA PKCS#1 v1.5 with
+    // SHA-256, SHA-384 and SHA-512. Ed25519 is offered (#697): `std.ed25519`
+    // verifies it, so a server may sign with it.
+    t.assert_eq(sent.contains("000d000e000c080704030503080408050806"), true)
+    t.assert_eq(sent.contains("003200140012080704030503080408050806040105010601"), true)
 }
 
 test "the name is sent for a DNS name and left out for an IP address" {
@@ -156,4 +168,15 @@ test "an i/o error prints its reason, so that a refusal and a timeout differ" {
     t.assert_eq("{refused}", "i/o error: connection refused")
     t.assert_eq("{slow}", "i/o error: timed out")
     t.assert_eq("{odd}", "i/o error: other")
+}
+
+test "an i/o error's kind does not depend on the words of its message" {
+    // The reason is the kind's own wording, whatever the message adds before it.
+    for kind in [net_error.NetFailure.NotFound, net_error.NetFailure.Refused, net_error.NetFailure.TimedOut, net_error.NetFailure.Unreachable, net_error.NetFailure.Reset, net_error.NetFailure.Closed, net_error.NetFailure.InvalidHost] {
+        let wording = kind.wording()
+        let error = tls.TlsError.Io(IoError(message: "cannot connect to 192.0.2.1:443: {wording}"))
+        t.assert_eq("{error}", "i/o error: {wording}")
+        t.assert_eq(net_error.classify(kind.io_error()).wording(), wording)
+    }
+    t.assert_eq(net_error.classify(IoError(message: "something else")).wording(), "other")
 }

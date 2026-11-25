@@ -705,29 +705,102 @@ else
   bad "an unknown argument exits 2 and runs nothing" "exit $status, ran: $log"
 fi
 
-# --- --group splits the steps in two, with none lost ------------------------
+# --- --group splits the steps in four, with none lost -----------------------
 check --list
 all_steps=$(printf '%s\n' "$out" | sort)
-check --list --group tests
-tests_steps=$out
-check --list --group checks
-checks_steps=$out
-both=$(printf '%s\n%s\n' "$tests_steps" "$checks_steps" | sed '/^$/d' | sort)
+group_steps() { # GROUP: the steps of that group, in order
+  check --list --group "$1"
+  printf '%s\n' "$out"
+}
+tests_steps=$(group_steps tests)
+formal_steps=$(group_steps formal)
+lint_steps=$(group_steps lint)
+scripts_steps=$(group_steps scripts)
+checks_steps=$(group_steps checks)
+both=$(printf '%s\n%s\n%s\n%s\n' "$tests_steps" "$formal_steps" "$lint_steps" "$scripts_steps" | sed '/^$/d' | sort)
 if [ "$both" = "$all_steps" ]; then
-  ok "--group tests and --group checks together list every step, each once"
+  ok "--group tests, formal, lint and scripts together list every step, each once"
 else
-  bad "--group tests and --group checks together list every step, each once" "all: $all_steps; groups: $both"
+  bad "--group tests, formal, lint and scripts together list every step, each once" "all: $all_steps; groups: $both"
 fi
 if [ "$tests_steps" = "cargo test (private temporary directory)" ]; then
   ok "--group tests is the cargo test step"
 else
   bad "--group tests is the cargo test step" "got: $tests_steps"
 fi
+if [ "$formal_steps" = $'formal\nformal step tests' ]; then
+  ok "--group formal is the formal step and its tests"
+else
+  bad "--group formal is the formal step and its tests" "got: $formal_steps"
+fi
+for step_name in "cargo fmt" "cargo clippy" "oskac type-checks for Windows" "shellcheck" "claude plugin validate" "workflow validation"; do
+  if printf '%s\n' "$lint_steps" | grep -qxF "$step_name"; then
+    ok "--group lint has the $step_name step"
+  else
+    bad "--group lint has the $step_name step" "got: $lint_steps"
+  fi
+done
+for step_name in "installer tests" "release script tests" "test shard tests" "eval task set"; do
+  if printf '%s\n' "$scripts_steps" | grep -qxF "$step_name"; then
+    ok "--group scripts has the $step_name step"
+  else
+    bad "--group scripts has the $step_name step" "got: $scripts_steps"
+  fi
+done
+union=$(printf '%s\n%s\n%s\n' "$formal_steps" "$lint_steps" "$scripts_steps" | sed '/^$/d' | sort)
+if [ "$(printf '%s\n' "$checks_steps" | sort)" = "$union" ]; then
+  ok "--group checks is formal, lint and scripts together"
+else
+  bad "--group checks is formal, lint and scripts together" "got: $checks_steps"
+fi
+# A group run is not the full check: it writes no pass stamp.
+for group in formal lint scripts checks; do
+  check --group "$group"
+  if [ "$status" -eq 0 ] && ! printf '%s\n' "$out" | grep -q '^\[stamp write' &&
+    printf '%s\n' "$out" | grep -q "Group $group passed. This was NOT the full check"; then
+    ok "--group $group writes no pass stamp"
+  else
+    bad "--group $group writes no pass stamp" "exit $status: $out"
+  fi
+done
+# The formal step may skip a missing Lean or TLC (run.sh exits 3) outside CI,
+# and must fail in CI, also through --group formal (ADRs 0018, 0019).
+formal_run=$tree/scripts/formal/run.sh
+cp "$formal_run" "$work/formal-run.sh.orig"
+printf '#!/usr/bin/env bash\nexit 3\n' >"$formal_run"
+set +e
+out=$(cd "$tree" && env -u CI -u GITHUB_ACTIONS PATH="$tree/bin:$PATH" STUB_LOG="$work/log" scripts/check.sh --group formal 2>&1)
+status=$?
+set -e
+if [ "$status" -eq 0 ]; then
+  ok "--group formal skips a missing Lean or TLC outside CI"
+else
+  bad "--group formal skips a missing Lean or TLC outside CI" "exit $status: $out"
+fi
+set +e
+out=$(cd "$tree" && env -u CI -u GITHUB_ACTIONS GITHUB_ACTIONS=true PATH="$tree/bin:$PATH" STUB_LOG="$work/log" scripts/check.sh --group formal 2>&1)
+status=$?
+set -e
+if [ "$status" -ne 0 ] && printf '%s\n' "$out" | grep -q 'CI must run the formal step'; then
+  ok "--group formal fails, never skips, a missing Lean or TLC in CI"
+else
+  bad "--group formal fails, never skips, a missing Lean or TLC in CI" "exit $status: $out"
+fi
+cp "$work/formal-run.sh.orig" "$formal_run"
 check --group nonsense
 if [ "$status" -eq 2 ] && [ -z "$log" ]; then
   ok "an unknown group exits 2 and runs nothing"
 else
   bad "an unknown group exits 2 and runs nothing" "exit $status, ran: $log"
+fi
+
+# ci.yml's test matrix names exactly the groups check.sh has, so a row cannot
+# name a group that does not exist and no group goes unrun in CI (spec #712).
+have=$(sed -n 's/^ *- {os: [^,]*, group: \([a-z]*\),.*/\1/p' "$repo_root/.github/workflows/ci.yml" | sort -u | tr '\n' ' ')
+if [ "$have" = "formal lint scripts tests " ]; then
+  ok "ci.yml's test matrix runs the groups formal, lint, scripts and tests"
+else
+  bad "ci.yml's test matrix runs the groups formal, lint, scripts and tests" "matrix groups: $have"
 fi
 
 printf '\n%d passed, %d failed\n' "$passed" "$failures"

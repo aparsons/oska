@@ -383,6 +383,33 @@ jobs:
         env:
           BUNDLE: ${{ steps.sums.outputs.bundle-path }}
         run: cp "$BUNDLE" "release/$TAG/SHA256SUMS.intoto.jsonl"
+      # The same check a user runs by hand (docs/agents/release.md), made
+      # here so a bad attestation stops the release before sign and publish
+      # run: no GitHub Release exists yet, so nothing public needs undoing.
+      # The bundles are the ones just made, not a lookup by digest, so the
+      # attestation API's delay cannot fail it. Each file must verify against
+      # this repository, this workflow, and this tag.
+      - name: Verify the attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BINARIES_BUNDLE: ${{ steps.binaries.outputs.bundle-path }}
+          SUMS_BUNDLE: ${{ steps.sums.outputs.bundle-path }}
+        run: |
+          verify() {
+            gh attestation verify "$1" --bundle "$2" -R "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
+          }
+          n=0
+          for f in "release/$TAG"/oskac-*; do
+            verify "$f" "$BINARIES_BUNDLE"
+            n=$((n + 1))
+          done
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no binary to verify in release/$TAG"
+            exit 1
+          fi
+          verify "release/$TAG/SHA256SUMS" "$SUMS_BUNDLE"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: attested-${{ needs.assemble.outputs.tag }}

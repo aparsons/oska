@@ -9,10 +9,14 @@
 //! `crates/oskac/tests/native_sockets.rs`. The real-network tests use only
 //! the loopback address.
 
-use std::net::TcpListener;
+use std::net::{Ipv4Addr, TcpListener, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use oska_run::{
-    run, test, FakeHost, Host, RealHost, RunOutcome, TestOptions, TestReport, TestStatus,
+    run, test, FakeHost, Host, NameFiles, RealHost, RunOutcome, TestOptions, TestReport, TestStatus,
 };
 
 const PROGRAM: &[&str] = &["prog.osk"];
@@ -126,6 +130,44 @@ fn passes_on_the_real_network(src: &str) {
     let report = run_tests(src, &mut RealHost::new(), true);
     assert_eq!(report.tests.len(), 1, "{report:#?}");
     passed(&report);
+}
+
+/// Whether this machine has an IPv6 loopback address.
+fn has_ipv6_loopback() -> bool {
+    TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_ok()
+}
+
+#[test]
+fn a_loopback_listener_accepts_on_every_loopback_address_the_machine_has() {
+    let mut hosts = vec!["127.0.0.1"];
+    if has_ipv6_loopback() {
+        hosts.push("::1");
+    }
+    let calls: String = hosts
+        .iter()
+        .map(|host| format!("    reach(t, listener, \"{host}\")\n"))
+        .collect();
+    passes_on_the_real_network(&format!(
+        r#"
+#[integration]
+test "both" {{
+    let listener = t.net.listen_only().restrict_to_loopback(0)
+{calls}}}
+
+fn reach(t: TestContext, listener: LoopbackListen, address: String) {{
+    match t.net.restrict_to(address, listener.port()).connect() {{
+        Ok(client) => match listener.accept() {{
+            Ok(server) => {{
+                t.assert(client.send("hi").is_ok())
+                t.assert_eq(server.receive().unwrap_or("none"), "hi")
+            }}
+            Err(_) => t.fail("accept {{address}}")
+        }}
+        Err(_) => t.fail("connect {{address}}")
+    }}
+}}
+"#
+    ));
 }
 
 #[test]
@@ -287,4 +329,212 @@ test "reaches nowhere in a skipped run" {
 "#;
     let report = run_tests(src, &mut RealHost::new(), false);
     assert_eq!(report.tests[0].status, TestStatus::Skipped, "{report:#?}");
+}
+
+// ---- `connect()` resolves names with `std.dns` ----------------------------------------------
+
+/// A name server on `127.0.0.1` (UDP only) that answers every `A` query
+/// with what `answer` makes of it, until dropped.
+struct NameServer {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl NameServer {
+    fn start(answer: fn(&[u8]) -> Vec<u8>) -> NameServer {
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("udp");
+        let port = socket.local_addr().expect("address").port();
+        socket
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .expect("timeout");
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut buffer = [0u8; 512];
+            while !flag.load(Ordering::Relaxed) {
+                if let Ok((read, peer)) = socket.recv_from(&mut buffer) {
+                    let _ = socket.send_to(&answer(&buffer[..read]), peer);
+                }
+            }
+        });
+        NameServer {
+            port,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn files(&self, hosts: &str) -> NameFiles {
+        NameFiles {
+            hosts: hosts.to_string(),
+            resolv_conf: "nameserver 127.0.0.1\noptions attempts:1\n".to_string(),
+            port: i128::from(self.port),
+        }
+    }
+}
+
+impl Drop for NameServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// The end of the question of `query` (its name, type and class).
+fn question_end(query: &[u8]) -> usize {
+    let mut at = 12;
+    while query[at] != 0 {
+        at += 1 + query[at] as usize;
+    }
+    at + 5
+}
+
+/// A reply to `query`: `id` and `question` as given, one `A` record for
+/// 127.0.0.1 whose name is `owner`, for an `A` query; no answer otherwise.
+fn reply(query: &[u8], id: [u8; 2], question: &[u8], owner: &[u8]) -> Vec<u8> {
+    let kind = u16::from_be_bytes([
+        query[question_end(query) - 4],
+        query[question_end(query) - 3],
+    ]);
+    let mut out = vec![id[0], id[1], 0x81, 0x80, 0, 1];
+    out.extend_from_slice(&u16::from(kind == 1).to_be_bytes());
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out.extend_from_slice(question);
+    if kind == 1 {
+        out.extend_from_slice(owner);
+        out.extend_from_slice(&[0, 1, 0, 1, 0, 0, 1, 0x2c, 0, 4, 127, 0, 0, 1]);
+    }
+    out
+}
+
+fn honest(query: &[u8]) -> Vec<u8> {
+    let question = &query[12..question_end(query)];
+    reply(query, [query[0], query[1]], question, &[0xc0, 0x0c])
+}
+
+fn wrong_id(query: &[u8]) -> Vec<u8> {
+    let question = &query[12..question_end(query)];
+    reply(query, [query[0] ^ 1, query[1]], question, &[0xc0, 0x0c])
+}
+
+fn wrong_question(query: &[u8]) -> Vec<u8> {
+    let question = [&[5u8][..], b"other", &[4], b"test", &[0, 0, 1, 0, 1]].concat();
+    reply(query, [query[0], query[1]], &question, &[0xc0, 0x0c])
+}
+
+fn bad_compression_pointer(query: &[u8]) -> Vec<u8> {
+    let question = &query[12..question_end(query)];
+    // The name of the record points forward, past the end of the message.
+    reply(query, [query[0], query[1]], question, &[0xc0, 0xff])
+}
+
+/// Connect to `name` on the loopback listener, on a real host whose name
+/// resolution reads `files`, and say what happened: `connected` or the
+/// error's text.
+fn connect_by_name(name: &str, files: NameFiles) -> String {
+    let src = format!(
+        r#"
+#[integration]
+test "connect" {{
+    let listener = t.net.listen_only().restrict_to_loopback(0)
+    match t.net.restrict_to("{name}", listener.port()).connect() {{
+        Ok(client) => {{
+            t.assert(listener.accept().is_ok())
+            client.close()
+        }}
+        Err(error) => {{
+            let why = error.message.assume_trusted()
+            t.fail("connect failed: {{why}}")
+        }}
+    }}
+}}
+"#
+    );
+    let report = run_tests(&src, &mut RealHost::new().with_name_files(files), true);
+    assert_eq!(report.tests.len(), 1, "{report:#?}");
+    match &report.tests[0].status {
+        TestStatus::Passed => "connected".to_string(),
+        _ => format!("{report:#?}"),
+    }
+}
+
+#[test]
+fn localhost_and_a_name_in_the_hosts_file_connect_through_std_dns() {
+    // `printer.invalid` is a name no operating system resolver knows, and
+    // nothing listens for a name server: only the hosts file can answer.
+    let silent = NameServer::start(honest);
+    let hosts = "127.0.0.1 localhost\n127.0.0.1 printer.invalid\n";
+    for name in ["localhost", "printer.invalid"] {
+        assert_eq!(connect_by_name(name, silent.files(hosts)), "connected");
+    }
+}
+
+#[test]
+fn a_name_from_a_test_name_server_connects_through_std_dns() {
+    let server = NameServer::start(honest);
+    assert_eq!(
+        connect_by_name("svc.invalid", server.files("")),
+        "connected"
+    );
+}
+
+/// Connect to `name`, which must fail with an `IoError` whose text starts
+/// `cannot connect to {name}:` and ends `: {why}`; true when it did.
+fn fails_with(name: &str, why: &str, files: NameFiles) -> bool {
+    let src = format!(
+        r#"
+#[integration]
+test "connect" {{
+    let listener = t.net.listen_only().restrict_to_loopback(0)
+    match t.net.restrict_to("{name}", listener.port()).connect() {{
+        Ok(_) => t.fail("connected")
+        Err(error) => {{
+            let text = "{{error}}"
+            t.assert(text.starts_with("cannot connect to {name}:"))
+            t.assert(text.ends_with(": {why}"))
+        }}
+    }}
+}}
+"#
+    );
+    let report = run_tests(&src, &mut RealHost::new().with_name_files(files), true);
+    report.diagnostics.is_empty()
+        && report.tests.len() == 1
+        && report.tests[0].status == TestStatus::Passed
+}
+
+#[test]
+fn a_hostile_answer_makes_connect_fail_with_an_io_error() {
+    for (answer, why) in [
+        (
+            bad_compression_pointer as fn(&[u8]) -> Vec<u8>,
+            "malformed answer",
+        ),
+        (wrong_question, "answer does not match the query"),
+        (wrong_id, "timed out"),
+    ] {
+        let server = NameServer::start(answer);
+        assert!(
+            fails_with("hostile.invalid", why, server.files("")),
+            "{why}"
+        );
+    }
+}
+
+#[test]
+fn connect_to_a_name_the_hosts_file_and_name_server_lack_is_host_not_found() {
+    fn nothing(query: &[u8]) -> Vec<u8> {
+        let mut out = vec![query[0], query[1], 0x81, 0x83, 0, 1, 0, 0, 0, 0, 0, 0];
+        out.extend_from_slice(&query[12..question_end(query)]);
+        out
+    }
+    let server = NameServer::start(nothing);
+    assert!(fails_with(
+        "absent.invalid",
+        "host not found",
+        server.files("")
+    ));
 }

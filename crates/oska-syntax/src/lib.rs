@@ -17,7 +17,8 @@ mod parser;
 pub use export::{module_to_json, module_to_tree, AST_VERSION};
 pub use json::{parse_json, parse_json_at, JsonError, JsonValue};
 pub use parser::{
-    parse_expr, parse_module, parse_module_at, parse_prelude, parse_stmts, parse_type,
+    parse_expr, parse_module, parse_module_at, parse_prelude, parse_prelude_at, parse_stmts,
+    parse_type,
 };
 
 /// A half-open byte range `start..end` in the source text.

@@ -47,7 +47,7 @@
 // disagrees, with another transfer coding, with a length or chunk size that
 // is not plain digits or overflows, or whose body ends early, is
 // `Malformed`. A body past the request's maximum (16 MiB unless
-// `with_max_body` says) is `TooLarge`, as soon as the length says so.
+// `with_max_body` says) is `TooLarge`, as soon as the length says so. A maximum above `MAX_BODY` is `InvalidRequest`.
 //
 // Timeouts are the connection's (docs/runtime.md): connect 10 s per
 // address, 30 s overall, read 60 s of silence.
@@ -153,7 +153,8 @@ impl Request {
         Request(path: self.path, fields: fields, max_body: self.max_body)
     }
 
-    // The request with its largest accepted body, in bytes (not below 0).
+    // The request with its largest accepted body, in bytes (from 0 to
+    // `MAX_BODY`; `http.get` refuses a setting outside that).
     pub fn with_max_body(self, bytes: Int) -> Request {
         Request(path: self.path, fields: self.fields, max_body: bytes)
     }
@@ -250,6 +251,9 @@ fn check_request(request: Request) -> Result<(), HttpError> {
     }
     if request.max_body < 0 {
         return invalid("the maximum body is below 0")
+    }
+    if request.max_body > MAX_BODY {
+        return invalid("the maximum body is over 16777216")
     }
     for field in request.fields {
         let name = field.name.to_bytes()

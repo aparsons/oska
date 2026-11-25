@@ -13,7 +13,7 @@ The scope is kept small:
 - **TLS:** a TLS 1.3 client only.
   - Ciphers: AES-128-GCM and ChaCha20-Poly1305 with SHA-256, and SHA-384 for P-384 certificates.
   - Key exchange: X25519, falling back to P-256.
-  - Certificate checks: ECDSA P-256 and P-384, and RSA (PKCS#1 v1.5 and PSS).
+  - Certificate checks: ECDSA P-256 and P-384, RSA (PKCS#1 v1.5 and PSS) and Ed25519. The client offers Ed25519 (0x0807) in `signature_algorithms`, first in its list, because `std.ed25519` verifies it for releases anyway (#697; spec #228 had said both).
   - Not included: 0-RTT, session resumption, client certificates, TLS 1.2 and a server.
 - **Root certificates:** a pinned copy of the Mozilla root store ships with oskac and is updated each release. Configuration can add a CA file.
 - **git:** the smart HTTP protocol, version 2, fetch only, shallow at the tag's commit. Not included: push, an index or working tree, and SSH.
@@ -42,3 +42,4 @@ Rust is no stronger on constant time: nothing in its semantics guarantees it. In
 - The crypto is hand-written and has not been audited. Its assurance is test vectors and interoperability, so a subtle bug that no vector covers can go unnoticed.
 - Timing safety rests on the checker's rules and on the native backend not adding secret-dependent branches. Nothing measures it.
 - Secret integers wrap with plain operators, while public integers need `wrapping_*` methods to wrap.
+- `std.x509` decides two path rules as follows. Among candidate issuers of one name, the authority key identifier of a certificate and the subject key identifier of a candidate pick the issuer when both are present, and rule out a candidate without a signature check; a certificate with no key identifier falls back to the name alone. A server's certificate with no extended key usage extension is refused (`ExtendedKeyUsage`), because RFC 5280 leaves it unrestricted but the TLS server use needs `serverAuth`; a CA with no such extension is accepted, as it restricts nothing. A malformed key identifier or extended key usage extension is `Malformed`.

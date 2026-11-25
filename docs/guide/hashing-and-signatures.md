@@ -227,7 +227,7 @@ The release signature of the Oska toolchain itself is made in the namespace `osk
 - `std.rsa` loads a key with `rsa.PublicKey.from_components(modulus, exponent)` (2048 to 8192 bits) and checks `rsa.verify_pkcs1` or `rsa.verify_pss` with a `rsa.HashAlgorithm` of `Sha256`, `Sha384` or `Sha512`.
 - You hash the message yourself and pass the digest, with the hash the signature names.
 
-`std.p256` is Diffie-Hellman on P-256: `p256.public_key(scalar)` and `p256.shared_secret(scalar, peer)` take a 32-byte `Secret<Bytes>` scalar and return `Secret<Bytes>`, computed over secret integers so no branch or memory address depends on the scalar. Exposing a result, such as a TLS key share, is your audit site; the module has none. A scalar that is zero or not below the group order cannot be refused, since refusing would branch on the secret: it gives zeros or the result for the scalar mod the order, so pick scalars from 1 to n - 1.
+`std.p256` is Diffie-Hellman on P-256: `p256.public_key(scalar)` and `p256.shared_secret(scalar, peer)` take a 32-byte `Secret<Bytes>` scalar and return `Secret<Bytes>`, computed over secret integers so no branch or memory address depends on the scalar. Exposing a result, such as a TLS key share, is your audit site; the module has none. Both give `None` for a scalar that is not 32 bytes, is zero, or is not below the group order n: the module computes whether the scalar is in 1 to n - 1 in constant time and reveals that verdict and nothing else about it.
 
 ## Key exchange and encryption
 
