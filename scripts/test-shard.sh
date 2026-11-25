@@ -21,7 +21,8 @@
 # oska-run's tests/site.rs, the slowest test binary, by position in its sorted
 # test list). The shard `rest` of a set holds, by exclusion, every target that
 # no other shard names, so a new test file lands in `rest` with no change
-# here. `all` runs the whole set in one shard (the macOS arm64 job).
+# here. A set may name `rest-1`, `rest-2` instead (REST_SPLIT of them, Windows):
+# each takes every REST_SPLIT-th of those leftover targets, by position. `all` runs the whole set in one shard (the macOS arm64 job).
 # ci.yml's matrices name the same shards as `--sets`;
 # scripts/test-shard/test.sh checks that every target runs exactly once.
 
@@ -30,6 +31,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SITE_SPLIT=3
+# Windows: the leftover targets are split into this many `rest-K` shards.
+REST_SPLIT=2
 
 # The shards of each set, then each shard's heavy targets, "PACKAGE:NAME".
 shards_of() {
@@ -37,7 +40,7 @@ shards_of() {
     musl) echo "site-0 site-1 site-2 sites-1 sites-2 rest all" ;;
     linux) echo "site native rest all" ;;
     macos) echo "native-1 native-2 rest all" ;;
-    windows) echo "native rest all" ;;
+    windows) echo "native heavy rest-1 rest-2 all" ;;
     *) return 1 ;;
   esac
 }
@@ -48,6 +51,7 @@ heavy_of() { # SET SHARD
     "linux site") echo "oska-run:site oska-run:site_api oska-run:site_links oska-run:site_corpus oska-run:site_compliance oska-run:site_home oska-run:site_meta" ;;
     "linux native") echo "oskac:native_tests oskac:native_prelude oskac:build_cache oskac:run_limits oskac:native_corpus oskac:run_limits_steps_native oskac:native_sshsig" ;;
     "windows native") echo "oskac:native_tests" ;;
+    "windows heavy") echo "oskac:native_prelude oskac:native_corpus oskac:native_tls oskac:native_ints" ;;
     "macos native-1") echo "oskac:native_prelude oskac:native_data oskac:native_system_calls" ;;
     "macos native-2") echo "oskac:native_tests oskac:run_limits oskac:run_limits_steps_native" ;;
   esac
@@ -83,10 +87,11 @@ plan() { # SET SHARD
       return
       ;;
   esac
-  if [ "$shard" = all ] || [ "$shard" = rest ]; then
-    local all s heavy=" "
+  case $shard in all | rest | rest-[0-9]*) is_rest=1 ;; *) is_rest= ;; esac
+  if [ -n "$is_rest" ]; then
+    local all s heavy=" " n=0
     for s in $(shards_of "$set"); do
-      [ "$s" = all ] || [ "$s" = rest ] && continue
+      case $s in all | rest | rest-[0-9]*) continue ;; esac
       for h in $(heavy_of "$set" "$s"); do heavy="$heavy$h "; done
     done
     for h in $(split_of "$set"); do heavy="$heavy$h "; done
@@ -97,8 +102,13 @@ plan() { # SET SHARD
     fi
     while read -r pkg kind name; do
       [ -n "$pkg" ] || continue
-      if [ "$kind" = test ] && [ "$shard" = rest ]; then
+      if [ "$kind" = test ] && [ "$shard" != all ]; then
         case "$heavy" in *" $pkg:$name "*) continue ;; esac
+      fi
+      if [ "$shard" != all ] && [ "$shard" != rest ]; then
+        # rest-K: the K-th of the N slices of what is left, by position.
+        n=$((n + 1))
+        [ $(((n - 1) % REST_SPLIT)) -eq $((${shard#rest-} - 1)) ] || continue
       fi
       echo "$pkg $kind${name:+ $name}"
     done <<<"$all"

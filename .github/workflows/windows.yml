@@ -61,18 +61,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The tests run as two parallel shards (scripts/test-shard.sh windows), so
-  # the job stays well inside its limit: the slowest test binary, native_tests,
-  # is one shard and every other test is the other. A dispatch runs one job
+  # The tests run as four parallel shards (scripts/test-shard.sh windows), so
+  # the job stays well inside its limit: native_tests, the slowest test binary,
+  # is one shard, four other slow binaries are another (`heavy`), and every
+  # other test is split in two (`rest-1`, `rest-2`). A dispatch runs one job
   # with the inputs below.
-  # shards windows: native rest
+  # shards windows: native heavy rest-1 rest-2
   test:
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["dispatch"]') || fromJSON('["native","rest"]') }}
+        shard: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["dispatch"]') || fromJSON('["native","heavy","rest-1","rest-2"]') }}
     name: test (${{ matrix.shard }})
     steps:
       # The golden files are compared byte for byte, so check them out
