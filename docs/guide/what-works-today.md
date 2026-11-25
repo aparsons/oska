@@ -28,6 +28,7 @@ A **No** names the code `oskac` refuses the program with, before any of it runs.
 | `Untrusted` text and `assume_trusted` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.html` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.json` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
+| `std.map`: `Map<K, V>`, an insertion-ordered table | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.mcp`: `Toolset`, `ToolSpec` and `ToolResult` | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.mcp`: `serve` and `handle`, an MCP server over standard input and output | Yes | Yes | Yes | Every host; native on Linux, macOS and Windows |
 | `std.sql` | Yes | No (`E0371`) | No (`E0371`) | None yet: checks only |

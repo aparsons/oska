@@ -169,6 +169,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.map",
+        source: include_str!("std/map.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.mcp",
         source: include_str!("std/mcp.osk"),
         sink_literal: None,

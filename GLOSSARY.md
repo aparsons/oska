@@ -133,7 +133,7 @@ The prelude's buffer of raw bytes, for binary data that is not text. It is a val
 _Avoid_: byte array, blob, binary string
 
 **Map**:
-The prelude's `Map<K, V>`: a value that holds entries and finds one by its key. Keys need `Eq` and `Hash`; `Float` and secret values are refused as keys (ADR 0028). Like a list, it is copied on write.
+`Map<K, V>`, imported with `use std.map`: a value that holds entries and finds one by its key. Keys need `Eq` and `Hash`; ADR 0028 refuses `Float` and secret values as keys, but the refusal codes are not in yet, so for now they are accepted or fail only where `Hash` is missing. Like a list, it is copied on write.
 _Avoid_: dictionary, hash table, hash map
 
 **Entry**:
