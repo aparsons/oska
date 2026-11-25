@@ -9222,3 +9222,1040 @@ pub fn counted_free(object: Int) {
     }
     free(object)
 }
+
+// ---- Float: conversions and text (ADR 0027) ---------------------------------
+//
+// `Float` is one word, its bits. Everything here works on the bits and on
+// big integers, so the text and the conversions are the same on every
+// platform and need no C library. The interpreter has Rust's `{:e}` and
+// `str::parse` for the same results; `float_text.rs` holds the two
+// together.
+//
+// A big integer is a `List<Int>` of limbs in base 2^30, least significant
+// first, with no zero limb at the top: zero is the empty list. An operation
+// makes a new list.
+
+const BN_BASE: Int = 1073741824
+
+fn bn_pow2_small(k: Int) -> Int {
+    var p = 1
+    var i = 0
+    while i < k {
+        p = p * 2
+        i = i + 1
+    }
+    p
+}
+
+fn bn_trim(a: List<Int>) -> List<Int> {
+    var n = a.len()
+    while n > 0 && a.at(n - 1) == 0 {
+        n = n - 1
+    }
+    if n == a.len() {
+        return a
+    }
+    var out: List<Int> = []
+    var i = 0
+    while i < n {
+        out.push(a.at(i))
+        i = i + 1
+    }
+    out
+}
+
+// The big integer of `n >= 0`.
+fn bn_from(n: Int) -> List<Int> {
+    var out: List<Int> = []
+    var rest = n
+    while rest > 0 {
+        out.push(rest % BN_BASE)
+        rest = rest / BN_BASE
+    }
+    out
+}
+
+// The value of a big integer below 2^62.
+fn bn_to_int(a: List<Int>) -> Int {
+    var value = 0
+    var i = a.len() - 1
+    while i >= 0 {
+        value = value * BN_BASE + a.at(i)
+        i = i - 1
+    }
+    value
+}
+
+fn bn_cmp(a: List<Int>, b: List<Int>) -> Int {
+    if a.len() != b.len() {
+        if a.len() < b.len() {
+            return -1
+        }
+        return 1
+    }
+    var i = a.len() - 1
+    while i >= 0 {
+        let x = a.at(i)
+        let y = b.at(i)
+        if x != y {
+            if x < y {
+                return -1
+            }
+            return 1
+        }
+        i = i - 1
+    }
+    0
+}
+
+fn bn_add(a: List<Int>, b: List<Int>) -> List<Int> {
+    var out: List<Int> = []
+    var carry = 0
+    var i = 0
+    let n = if a.len() > b.len() { a.len() } else { b.len() }
+    while i < n {
+        var sum = carry
+        if i < a.len() {
+            sum = sum + a.at(i)
+        }
+        if i < b.len() {
+            sum = sum + b.at(i)
+        }
+        out.push(sum % BN_BASE)
+        carry = sum / BN_BASE
+        i = i + 1
+    }
+    if carry > 0 {
+        out.push(carry)
+    }
+    out
+}
+
+// `a - b`, for `a >= b`.
+fn bn_sub(a: List<Int>, b: List<Int>) -> List<Int> {
+    var out: List<Int> = []
+    var borrow = 0
+    var i = 0
+    while i < a.len() {
+        var diff = a.at(i) - borrow
+        if i < b.len() {
+            diff = diff - b.at(i)
+        }
+        if diff < 0 {
+            diff = diff + BN_BASE
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        out.push(diff)
+        i = i + 1
+    }
+    bn_trim(out)
+}
+
+// `a * m + c` for `m` and `c` below 2^30.
+fn bn_mul_add_small(a: List<Int>, m: Int, c: Int) -> List<Int> {
+    var out: List<Int> = []
+    var carry = c
+    var i = 0
+    while i < a.len() {
+        let t = a.at(i) * m + carry
+        out.push(t % BN_BASE)
+        carry = t / BN_BASE
+        i = i + 1
+    }
+    if carry > 0 {
+        out.push(carry)
+    }
+    bn_trim(out)
+}
+
+fn bn_mul_pow10(a: List<Int>, n: Int) -> List<Int> {
+    var out = a
+    var left = n
+    while left >= 9 {
+        out = bn_mul_add_small(out, 1000000000, 0)
+        left = left - 9
+    }
+    var scale = 1
+    var i = 0
+    while i < left {
+        scale = scale * 10
+        i = i + 1
+    }
+    bn_mul_add_small(out, scale, 0)
+}
+
+fn bn_shl(a: List<Int>, k: Int) -> List<Int> {
+    if a.len() == 0 {
+        return a
+    }
+    let p = bn_pow2_small(k % 30)
+    var out: List<Int> = []
+    var i = 0
+    while i < k / 30 {
+        out.push(0)
+        i = i + 1
+    }
+    var carry = 0
+    i = 0
+    while i < a.len() {
+        let v = a.at(i) * p + carry
+        out.push(v % BN_BASE)
+        carry = v / BN_BASE
+        i = i + 1
+    }
+    if carry > 0 {
+        out.push(carry)
+    }
+    out
+}
+
+fn bn_shr(a: List<Int>, k: Int) -> List<Int> {
+    let skip = k / 30
+    if skip >= a.len() {
+        return []
+    }
+    let p = bn_pow2_small(k % 30)
+    var out: List<Int> = []
+    var i = skip
+    while i < a.len() {
+        var v = a.at(i) / p
+        if i + 1 < a.len() {
+            v = v + (a.at(i + 1) % p) * (BN_BASE / p)
+        }
+        out.push(v)
+        i = i + 1
+    }
+    bn_trim(out)
+}
+
+fn bn_bit(a: List<Int>, i: Int) -> Int {
+    let limb = i / 30
+    if limb >= a.len() {
+        return 0
+    }
+    (a.at(limb) / bn_pow2_small(i % 30)) % 2
+}
+
+// Whether any bit below bit `i` is set.
+fn bn_any_below(a: List<Int>, i: Int) -> Bool {
+    var l = 0
+    while l < i / 30 && l < a.len() {
+        if a.at(l) != 0 {
+            return true
+        }
+        l = l + 1
+    }
+    let limb = i / 30
+    if i % 30 > 0 && limb < a.len() {
+        return a.at(limb) % bn_pow2_small(i % 30) != 0
+    }
+    false
+}
+
+fn int_bit_length(n: Int) -> Int {
+    var count = 0
+    var rest = n
+    while rest > 0 {
+        count = count + 1
+        rest = rest / 2
+    }
+    count
+}
+
+fn bn_bit_length(a: List<Int>) -> Int {
+    if a.len() == 0 {
+        return 0
+    }
+    (a.len() - 1) * 30 + int_bit_length(a.at(a.len() - 1))
+}
+
+struct Quotient { quotient: List<Int>, remainder: Int }
+
+// `a / d` and `a % d`, for `d` below 2^30.
+fn bn_divmod_small(a: List<Int>, d: Int) -> Quotient {
+    var high_first: List<Int> = []
+    var rest = 0
+    var i = a.len() - 1
+    while i >= 0 {
+        let current = rest * BN_BASE + a.at(i)
+        high_first.push(current / d)
+        rest = current % d
+        i = i - 1
+    }
+    var out: List<Int> = []
+    i = high_first.len() - 1
+    while i >= 0 {
+        out.push(high_first.at(i))
+        i = i - 1
+    }
+    Quotient(quotient: bn_trim(out), remainder: rest)
+}
+
+// The decimal digits of `a`, most significant first.
+fn bn_digits(a: List<Int>) -> List<Int> {
+    if a.len() == 0 {
+        return [0]
+    }
+    var chunks: List<Int> = []
+    var rest = a
+    while rest.len() > 0 {
+        let step = bn_divmod_small(rest, 1000000000)
+        chunks.push(step.remainder)
+        rest = step.quotient
+    }
+    var digits: List<Int> = []
+    var i = chunks.len() - 1
+    while i >= 0 {
+        var chunk = chunks.at(i)
+        var nine: List<Int> = []
+        var j = 0
+        while j < 9 {
+            nine.push(chunk % 10)
+            chunk = chunk / 10
+            j = j + 1
+        }
+        j = 8
+        while j >= 0 {
+            digits.push(nine.at(j))
+            j = j - 1
+        }
+        i = i - 1
+    }
+    var first = 0
+    while first < digits.len() - 1 && digits.at(first) == 0 {
+        first = first + 1
+    }
+    var out: List<Int> = []
+    i = first
+    while i < digits.len() {
+        out.push(digits.at(i))
+        i = i + 1
+    }
+    out
+}
+
+fn float_fraction(x: Float) -> Int {
+    (x.to_bits() & 4503599627370495).to_int()
+}
+
+fn float_exponent_field(x: Float) -> Int {
+    ((x.to_bits() >> 52) & 2047).to_int()
+}
+
+fn float_negative(x: Float) -> Bool {
+    (x.to_bits() >> 63) == 1
+}
+
+// The text made of `bytes`.
+fn bytes_text(bytes: List<Int>) -> String {
+    let n = bytes.len()
+    let object = text_new(n)
+    var i = 0
+    while i < n {
+        rt_mem_store8(rt_mem_add(object, 16 + i), bytes.at(i))
+        i = i + 1
+    }
+    rt_mem_as_text(object)
+}
+
+fn push_text(bytes: List<Int>, text: String) -> List<Int> {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    var out = bytes
+    var i = 0
+    while i < text_length(object) {
+        out.push(rt_mem_load8(rt_mem_add(data, i)))
+        i = i + 1
+    }
+    out
+}
+
+struct Shortest { digits: List<Int>, point: Int }
+
+// The shortest digits that parse back to `f * 2^e` (`f` below 2^53, not
+// zero), as Burger and Dybvig's free-format algorithm gives them with
+// big integers, and the decimal point's place: the value is 0.DIGITS times
+// 10 to the `point`.
+fn float_shortest(f: Int, e: Int) -> Shortest {
+    let even = f % 2 == 0
+    var r: List<Int> = []
+    var s: List<Int> = []
+    var plus: List<Int> = []
+    var minus: List<Int> = []
+    let boundary = f == 4503599627370496 && e != -1074
+    if e >= 0 {
+        let scale = bn_shl([1], e)
+        if boundary {
+            r = bn_mul_add_small(bn_shl(bn_from(f), e), 4, 0)
+            s = [4]
+            plus = bn_shl(scale, 1)
+        } else {
+            r = bn_mul_add_small(bn_shl(bn_from(f), e), 2, 0)
+            s = [2]
+            plus = scale
+        }
+        minus = scale
+    } else {
+        if boundary {
+            r = bn_mul_add_small(bn_from(f), 4, 0)
+            s = bn_shl([1], 2 - e)
+            plus = [2]
+        } else {
+            r = bn_mul_add_small(bn_from(f), 2, 0)
+            s = bn_shl([1], 1 - e)
+            plus = [1]
+        }
+        minus = [1]
+    }
+    // An estimate of the decimal exponent that is never too high.
+    let top = e + int_bit_length(f) - 1
+    var estimate = 0
+    if top >= 0 {
+        estimate = top * 30103 / 100000
+    } else {
+        estimate = 0 - ((0 - top) * 30103 + 99999) / 100000
+    }
+    var point = estimate
+    if estimate >= 0 {
+        s = bn_mul_pow10(s, estimate)
+    } else {
+        r = bn_mul_pow10(r, 0 - estimate)
+        plus = bn_mul_pow10(plus, 0 - estimate)
+        minus = bn_mul_pow10(minus, 0 - estimate)
+    }
+    var too_low = true
+    while too_low {
+        let reach = bn_cmp(bn_add(r, plus), s)
+        too_low = if even { reach >= 0 } else { reach > 0 }
+        if too_low {
+            s = bn_mul_add_small(s, 10, 0)
+            point = point + 1
+        }
+    }
+    r = bn_mul_add_small(r, 10, 0)
+    plus = bn_mul_add_small(plus, 10, 0)
+    minus = bn_mul_add_small(minus, 10, 0)
+    var digits: List<Int> = []
+    var done = false
+    while !done {
+        var d = 0
+        while bn_cmp(r, s) >= 0 {
+            r = bn_sub(r, s)
+            d = d + 1
+        }
+        let below = bn_cmp(r, minus)
+        let low = if even { below <= 0 } else { below < 0 }
+        let above = bn_cmp(bn_add(r, plus), s)
+        let high = if even { above >= 0 } else { above > 0 }
+        if !low && !high {
+            digits.push(d)
+            r = bn_mul_add_small(r, 10, 0)
+            plus = bn_mul_add_small(plus, 10, 0)
+            minus = bn_mul_add_small(minus, 10, 0)
+        } else {
+            if low && !high {
+                digits.push(d)
+            } else {
+                if !low && high {
+                    digits.push(d + 1)
+                } else {
+                    if bn_cmp(bn_mul_add_small(r, 2, 0), s) < 0 {
+                        digits.push(d)
+                    } else {
+                        digits.push(d + 1)
+                    }
+                }
+            }
+            done = true
+        }
+    }
+    Shortest(digits: digits, point: point)
+}
+
+// The significand and the exponent of its last bit, of a finite `x`.
+fn float_significand(x: Float) -> Int {
+    let field = float_exponent_field(x)
+    if field == 0 {
+        return float_fraction(x)
+    }
+    float_fraction(x) + 4503599627370496
+}
+
+fn float_scale(x: Float) -> Int {
+    let field = float_exponent_field(x)
+    if field == 0 {
+        return -1074
+    }
+    field - 1075
+}
+
+// `Float.to_string`.
+pub fn float_to_string(x: Float) -> String {
+    let field = float_exponent_field(x)
+    let negative = float_negative(x)
+    var bytes: List<Int> = []
+    if field == 2047 {
+        if float_fraction(x) != 0 {
+            return "NaN"
+        }
+        if negative {
+            return "-inf"
+        }
+        return "inf"
+    }
+    if negative {
+        bytes.push(45)
+    }
+    if field == 0 && float_fraction(x) == 0 {
+        bytes = push_text(bytes, "0.0")
+        return bytes_text(bytes)
+    }
+    let shortest = float_shortest(float_significand(x), float_scale(x))
+    let digits = shortest.digits
+    let n = digits.len()
+    let exponent = shortest.point - 1
+    if exponent >= -5 && exponent < 16 {
+        if exponent >= 0 {
+            var i = 0
+            while i < exponent + 1 {
+                if i < n {
+                    bytes.push(48 + digits.at(i))
+                } else {
+                    bytes.push(48)
+                }
+                i = i + 1
+            }
+            bytes.push(46)
+            if n > exponent + 1 {
+                i = exponent + 1
+                while i < n {
+                    bytes.push(48 + digits.at(i))
+                    i = i + 1
+                }
+            } else {
+                bytes.push(48)
+            }
+        } else {
+            bytes.push(48)
+            bytes.push(46)
+            var i = 0
+            while i < 0 - exponent - 1 {
+                bytes.push(48)
+                i = i + 1
+            }
+            i = 0
+            while i < n {
+                bytes.push(48 + digits.at(i))
+                i = i + 1
+            }
+        }
+    } else {
+        bytes.push(48 + digits.at(0))
+        if n > 1 {
+            bytes.push(46)
+            var i = 1
+            while i < n {
+                bytes.push(48 + digits.at(i))
+                i = i + 1
+            }
+        }
+        bytes.push(101)
+        var magnitude = exponent
+        if exponent < 0 {
+            bytes.push(45)
+            magnitude = 0 - exponent
+        }
+        var place = 1
+        while place * 10 <= magnitude {
+            place = place * 10
+        }
+        while place > 0 {
+            bytes.push(48 + (magnitude / place) % 10)
+            place = place / 10
+        }
+    }
+    bytes_text(bytes)
+}
+
+// `Float.fmt`: `digits` decimals of the exact value, a tie going to the
+// even digit. The count is 0 to 340 (the generated code checks it).
+pub fn float_fmt(x: Float, digits: Int) -> String {
+    let field = float_exponent_field(x)
+    if field == 2047 {
+        return float_to_string(x)
+    }
+    // The value times 10^digits, rounded to an integer.
+    let scaled = bn_mul_pow10(bn_from(float_significand(x)), digits)
+    let exponent = float_scale(x)
+    var whole = scaled
+    if exponent >= 0 {
+        whole = bn_shl(scaled, exponent)
+    } else {
+        let shift = 0 - exponent
+        whole = bn_shr(scaled, shift)
+        let half = bn_bit(scaled, shift - 1) == 1
+        let rest = bn_any_below(scaled, shift - 1)
+        let odd = bn_bit(scaled, shift) == 1
+        if half && (rest || odd) {
+            whole = bn_add(whole, [1])
+        }
+    }
+    let all = bn_digits(whole)
+    var bytes: List<Int> = []
+    if float_negative(x) {
+        bytes.push(45)
+    }
+    // At least one digit before the point.
+    var count = all.len()
+    var lead = 0
+    if count <= digits {
+        lead = digits + 1 - count
+        count = digits + 1
+    }
+    var i = 0
+    while i < count {
+        if i == count - digits && digits > 0 {
+            bytes.push(46)
+        }
+        if i < lead {
+            bytes.push(48)
+        } else {
+            bytes.push(48 + all.at(i - lead))
+        }
+        i = i + 1
+    }
+    bytes_text(bytes)
+}
+
+// Whether `x` is a number that `Float.to_int` can truncate to an `Int`.
+pub fn float_fits_int(x: Float) -> Bool {
+    let field = float_exponent_field(x)
+    if field == 2047 {
+        return false
+    }
+    if field < 1023 + 63 {
+        return true
+    }
+    // -2^63 is the one value at 2^63 or beyond that fits.
+    field == 1023 + 63 && float_negative(x) && float_fraction(x) == 0
+}
+
+// `Float.to_int`, for an `x` that fits.
+pub fn float_to_int(x: Float) -> Int {
+    let field = float_exponent_field(x)
+    if field < 1023 {
+        return 0
+    }
+    let significand = float_significand(x).to_u64()
+    let shift = field - 1075
+    var magnitude = significand
+    if shift >= 0 {
+        magnitude = significand << shift.to_u64()
+    } else {
+        magnitude = significand >> (0 - shift).to_u64()
+    }
+    if float_negative(x) {
+        if magnitude == 9223372036854775808 {
+            return -9223372036854775807 - 1
+        }
+        return 0 - magnitude.to_int()
+    }
+    magnitude.to_int()
+}
+
+// Whether `Int.to_float` converts `n` without rounding it.
+pub fn int_fits_float(n: Int) -> Bool {
+    n >= -9007199254740992 && n <= 9007199254740992
+}
+
+// `Int.to_float_rounded`, and `Int.to_float` for an `n` it accepts: the
+// nearest `Float`, a tie going to the even significand.
+pub fn int_to_float_rounded(n: Int) -> Float {
+    if n == 0 {
+        return Float.from_bits(0)
+    }
+    var magnitude: U64 = 9223372036854775808
+    var sign: U64 = 0
+    if n < 0 {
+        sign = 9223372036854775808
+        if n != -9223372036854775807 - 1 {
+            magnitude = (0 - n).to_u64()
+        }
+    } else {
+        magnitude = n.to_u64()
+    }
+    var length = 0
+    var rest = magnitude
+    while rest != 0 {
+        length = length + 1
+        rest = rest >> 1
+    }
+    var significand = magnitude
+    if length <= 53 {
+        significand = magnitude << (53 - length).to_u64()
+    } else {
+        let shift = (length - 53).to_u64()
+        significand = magnitude >> shift
+        let lost = magnitude & ((1 << shift) - 1)
+        let half = 1 << (shift - 1)
+        if lost > half || (lost == half && (significand & 1) == 1) {
+            significand = significand + 1
+        }
+        if significand == 9007199254740992 {
+            significand = 4503599627370496
+            length = length + 1
+        }
+    }
+    let exponent = (length + 1022).to_u64()
+    Float.from_bits(sign | (exponent << 52) | (significand & 4503599627370495))
+}
+
+// `Float.total_cmp`: -1, 0 or 1 in the total order.
+fn total_key(x: Float) -> U64 {
+    let bits = x.to_bits()
+    if (bits >> 63) == 1 {
+        return 18446744073709551615 ^ bits
+    }
+    bits | 9223372036854775808
+}
+
+pub fn float_total_cmp(a: Float, b: Float) -> Int {
+    let x = total_key(a)
+    let y = total_key(b)
+    if x < y {
+        return -1
+    }
+    if x > y {
+        return 1
+    }
+    0
+}
+
+fn float_abs(x: Float) -> Float {
+    Float.from_bits(x.to_bits() & 9223372036854775807)
+}
+
+// `Float.approx_eq`.
+pub fn float_approx_eq(a: Float, b: Float, relative: Float, absolute: Float) -> Bool {
+    if a == b {
+        return true
+    }
+    if float_exponent_field(a) == 2047 || float_exponent_field(b) == 2047 {
+        return false
+    }
+    let gap = float_abs(a - b)
+    let x = float_abs(a)
+    let y = float_abs(b)
+    let larger = if x > y { x } else { y }
+    gap <= relative * larger || gap <= absolute
+}
+
+// Panic (`P0044`): `to_int()` of a NaN, an infinity or a value out of range.
+pub fn panic_float_to_int(start: String, end: String, x: Float) {
+    panic_message(start, end, float_to_int_message("", x))
+}
+
+pub fn float_to_int_message(head: String, x: Float) -> String {
+    let shown = float_to_string(x)
+    "{head}`to_int()` of {shown} does not fit `Int`, which ranges from -9223372036854775808 to 9223372036854775807"
+}
+
+// Panic (`P0047`): `to_float()` of a value that would round.
+pub fn panic_int_to_float(start: String, end: String, n: Int) {
+    panic_message(start, end, int_to_float_message("", n))
+}
+
+pub fn int_to_float_message(head: String, n: Int) -> String {
+    let shown = int_text(n, false)
+    "{head}`to_float()` of {shown} would round: it is beyond 2^53 (9007199254740992); `to_float_rounded()` rounds it"
+}
+
+// Panic (`P0048`): `fmt` with a count of digits outside 0 to 340.
+pub fn panic_float_fmt(start: String, end: String, digits: Int) {
+    panic_message(start, end, float_fmt_message("", digits))
+}
+
+pub fn float_fmt_message(head: String, digits: Int) -> String {
+    let shown = int_text(digits, false)
+    "{head}`fmt` was asked for {shown} digits, and takes from 0 to 340"
+}
+
+// ---- Float: text in -----------------------------------------------------------
+
+fn lower_ascii(byte: Int) -> Int {
+    if byte >= 65 && byte <= 90 {
+        return byte + 32
+    }
+    byte
+}
+
+// Whether the bytes from `at` to `end` are `word`, in any case.
+fn bytes_are_word(data: Int, at: Int, end: Int, word: String) -> Bool {
+    let object = rt_mem_text(word)
+    let length = text_length(object)
+    if end - at != length {
+        return false
+    }
+    var i = 0
+    while i < length {
+        let have = lower_ascii(rt_mem_load8(rt_mem_add(data, at + i)))
+        if have != rt_mem_load8(rt_mem_add(text_data(object), i)) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+// The bits of the double nearest `q * 2^x`, or beyond when `sticky` says
+// the value is a little above `q * 2^x`, for `q` below 2^60: a tie going to
+// the even significand. -1 when it is beyond the largest double.
+fn float_round_bits(q: Int, x: Int, sticky: Bool) -> Int {
+    let length = int_bit_length(q)
+    var shift = length - 53
+    if -1074 - x > shift {
+        shift = -1074 - x
+    }
+    if shift < 0 {
+        shift = 0
+    }
+    var mantissa = 0
+    if shift < 62 {
+        mantissa = q / bn_pow2_small(shift)
+        let unit = bn_pow2_small(shift)
+        let lost = q - mantissa * unit
+        if shift > 0 {
+            let half = unit / 2
+            if lost > half || (lost == half && (sticky || mantissa % 2 == 1)) {
+                mantissa = mantissa + 1
+            }
+        }
+    }
+    var exponent = x + shift
+    if mantissa == 9007199254740992 {
+        mantissa = 4503599627370496
+        exponent = exponent + 1
+    }
+    if mantissa == 0 {
+        return 0
+    }
+    // A short significand that is not subnormal: make it 53 bits.
+    while mantissa < 4503599627370496 && exponent > -1074 {
+        mantissa = mantissa * 2
+        exponent = exponent - 1
+    }
+    if mantissa < 4503599627370496 {
+        return mantissa
+    }
+    let biased = exponent + 1075
+    if biased >= 2047 {
+        return -1
+    }
+    biased * 4503599627370496 + (mantissa - 4503599627370496)
+}
+
+// `String.parse_float` and `parse_float_lenient`.
+pub fn string_parse_float(text: String) -> Option<Float> {
+    parse_float_text(text, false)
+}
+
+pub fn string_parse_float_lenient(text: String) -> Option<Float> {
+    parse_float_text(text, true)
+}
+
+fn parse_float_text(text: String, lenient: Bool) -> Option<Float> {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let end = text_length(object)
+    var limit = 400
+    if lenient {
+        limit = 65536
+    }
+    if end > limit || end == 0 {
+        return None
+    }
+    var at = 0
+    let first = rt_mem_load8(data)
+    var sign: U64 = 0
+    if first == 45 {
+        sign = 9223372036854775808
+        at = 1
+    } else {
+        if first == 43 && lenient {
+            at = 1
+        }
+    }
+    if lenient {
+        if bytes_are_word(data, at, end, "nan") {
+            return Some(Float.from_bits(9221120237041090560))
+        }
+        if bytes_are_word(data, at, end, "inf") || bytes_are_word(data, at, end, "infinity") {
+            return Some(Float.from_bits(sign | 9218868437227405312))
+        }
+    }
+    // The significant digits, at most 800; beyond them only whether any is
+    // not zero matters (`sticky`).
+    var digits: List<Int> = []
+    var fraction_digits = 0
+    var dropped = 0
+    var sticky = false
+    var seen = 0
+    var after_point = false
+    var integer_digits = 0
+    var more = true
+    while more && at < end {
+        let byte = rt_mem_load8(rt_mem_add(data, at))
+        if byte >= 48 && byte <= 57 {
+            let digit = byte - 48
+            if after_point {
+                seen = seen + 1
+            } else {
+                integer_digits = integer_digits + 1
+            }
+            if digits.len() == 0 && digit == 0 {
+                if after_point {
+                    fraction_digits = fraction_digits + 1
+                }
+            } else {
+                if digits.len() < 800 {
+                    digits.push(digit)
+                    if after_point {
+                        fraction_digits = fraction_digits + 1
+                    }
+                } else {
+                    if digit != 0 {
+                        sticky = true
+                    }
+                    if !after_point {
+                        dropped = dropped + 1
+                    }
+                }
+            }
+            at = at + 1
+        } else {
+            if byte == 46 && !after_point && integer_digits > 0 {
+                after_point = true
+                at = at + 1
+            } else {
+                more = false
+            }
+        }
+    }
+    if integer_digits == 0 {
+        return None
+    }
+    if after_point && seen == 0 {
+        return None
+    }
+    var exponent = 0
+    if at < end {
+        let marker = rt_mem_load8(rt_mem_add(data, at))
+        if marker != 101 && marker != 69 {
+            return None
+        }
+        at = at + 1
+        var exponent_negative = false
+        if at < end {
+            let signed = rt_mem_load8(rt_mem_add(data, at))
+            if signed == 45 || signed == 43 {
+                exponent_negative = signed == 45
+                at = at + 1
+            }
+        }
+        if at == end {
+            return None
+        }
+        while at < end {
+            let byte = rt_mem_load8(rt_mem_add(data, at))
+            if byte < 48 || byte > 57 {
+                return None
+            }
+            if exponent < 100000000 {
+                exponent = exponent * 10 + (byte - 48)
+            }
+            at = at + 1
+        }
+        if exponent_negative {
+            exponent = 0 - exponent
+        }
+    }
+    let infinity = Float.from_bits(sign | 9218868437227405312)
+    let zero = Float.from_bits(sign)
+    if digits.len() == 0 {
+        return Some(zero)
+    }
+    var decimal = exponent - fraction_digits + dropped
+    if sticky {
+        digits.push(1)
+        decimal = decimal - 1
+    }
+    // The value is in [10^(top - 1), 10^top).
+    let top = digits.len() + decimal
+    if top > 309 {
+        if lenient {
+            return Some(infinity)
+        }
+        return None
+    }
+    if top <= -324 {
+        return Some(zero)
+    }
+    var number: List<Int> = []
+    var i = 0
+    while i < digits.len() {
+        number = bn_mul_add_small(number, 10, digits.at(i))
+        i = i + 1
+    }
+    // The value is q * 2^x, a little above when `lost`.
+    var q = 0
+    var x = 0
+    var lost = false
+    if decimal >= 0 {
+        let whole = bn_mul_pow10(number, decimal)
+        let length = bn_bit_length(whole)
+        if length > 58 {
+            x = length - 58
+            q = bn_to_int(bn_shr(whole, x))
+            lost = bn_any_below(whole, x)
+        } else {
+            q = bn_to_int(whole)
+        }
+    } else {
+        let divisor = bn_mul_pow10([1], 0 - decimal)
+        let shift = 56 + bn_bit_length(divisor) - bn_bit_length(number)
+        var numerator = number
+        if shift >= 0 {
+            numerator = bn_shl(number, shift)
+            x = 0 - shift
+        } else {
+            numerator = bn_shr(number, 0 - shift)
+            lost = bn_any_below(number, 0 - shift)
+            x = 0 - shift
+        }
+        // The quotient has at most 58 bits: long division, bit by bit.
+        let span = bn_bit_length(numerator) - bn_bit_length(divisor)
+        var remainder = numerator
+        var at_bit = span
+        while at_bit >= 0 {
+            let shifted = bn_shl(divisor, at_bit)
+            if bn_cmp(remainder, shifted) >= 0 {
+                remainder = bn_sub(remainder, shifted)
+                q = q + bn_pow2_small(at_bit)
+            }
+            at_bit = at_bit - 1
+        }
+        if remainder.len() > 0 {
+            lost = true
+        }
+    }
+    let bits = float_round_bits(q, x, lost)
+    if bits < 0 {
+        if lenient {
+            return Some(infinity)
+        }
+        return None
+    }
+    Some(Float.from_bits(sign | bits.to_u64()))
+}
