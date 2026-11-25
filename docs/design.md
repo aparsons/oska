@@ -495,6 +495,8 @@ Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench
 | `P0008` | a shift or rotation by the type's width or more, or a rotation by a negative amount |
 | `P0042` | a `Bytes` slice or endian read out of bounds, a negative length for `Bytes.zeroed`, or `ct_select` between two `Secret<Bytes>` of different lengths |
 | `P0043` | a `Bytes` that would grow past 256 MiB (not yet checked for `String.to_bytes` or a capability's `read_bytes`) |
+| `P0044` | a `std.map` map given a new entry past its entry limit |
+| `P0045` | a `std.map` map whose keys collide under every hash it tries |
 
 - **When `main` returns `Err(e)`,** the runtime prints `e.to_string()` to stderr and exits with code **1**.
 - Exit code 1 means the program failed in a way it expected. Exit code 101 means it has a bug.

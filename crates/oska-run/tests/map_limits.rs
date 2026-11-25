@@ -176,7 +176,10 @@ fn a_flood_of_100000_colliding_keys_finishes_within_the_step_budget() {
 fn the_flood_runs_the_same_natively() {
     let keys = colliding_keys(20_000);
     let outcome = run_on(flood_host(&keys), FLOOD, &[]);
-    assert!(outcome.panic.is_none() && outcome.diagnostics.is_empty(), "{outcome:#?}");
+    assert!(
+        outcome.panic.is_none() && outcome.diagnostics.is_empty(),
+        "{outcome:#?}"
+    );
     assert_eq!(outcome.stdout, "20000 entries\nsum 199990000\n");
 }
 
