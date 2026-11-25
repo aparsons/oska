@@ -74,6 +74,10 @@
 
 set -euo pipefail
 
+# A failing test or a panic prints its stack trace, here and in CI alike, so
+# the cause is in the first log read. A caller's own value wins.
+export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
+
 cd "$(dirname "$0")/.."
 
 usage() {
