@@ -17,6 +17,9 @@ use crate::program::{Callee, Construct};
 
 use crate::ty::{self, Cap, Ty};
 
+/// `Map`, as the checker names it when `use std.map` brings it in.
+const MAP: &str = "pkg.std.map.Map";
+
 impl Body<'_, '_, '_> {
     pub(super) fn call(
         &mut self,
@@ -67,6 +70,7 @@ impl Body<'_, '_, '_> {
                             instance: Vec::new(),
                             intrinsic: None,
                             checked_first: None,
+                            map_key: false,
                         })
                     }
                     Ty::Error => None,
@@ -378,6 +382,7 @@ impl Body<'_, '_, '_> {
             instance: Vec::new(),
             intrinsic: None,
             checked_first: None,
+            map_key: false,
         }
     }
 
@@ -456,6 +461,7 @@ impl Body<'_, '_, '_> {
             construct: None,
             intrinsic: sig.intrinsic.then(|| sig.name.clone()),
             checked_first: None,
+            map_key: matches!(&sig.self_ty, Some(Ty::Named(n, _, _)) if n.as_str() == MAP),
         }
     }
 
@@ -795,7 +801,9 @@ impl Body<'_, '_, '_> {
             // Made only for a call with bounds to check (#572).
             let what = format!("calling {}", callable.description);
             for (ty, bound) in &callable.obligations {
-                self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
+                let key =
+                    callable.map_key && Some(ty) == callable.obligations.first().map(|(k, _)| k);
+                self.require_trait(ty, &bound.trait_name, &bound.args, span, &what, key);
             }
         }
         callable.ret

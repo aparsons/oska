@@ -119,7 +119,7 @@ impl Body<'_, '_, '_> {
             );
             return;
         }
-        self.require_trait(ty, ty::DISPLAY, &[], span, "interpolation");
+        self.require_trait(ty, ty::DISPLAY, &[], span, "interpolation", false);
     }
 
     /// Report the bound `trait_name` that a secret of type `ty` fails at
