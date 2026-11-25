@@ -125,7 +125,14 @@ impl Body<'_, '_, '_> {
     /// Report the bound `trait_name` that a secret of type `ty` fails at
     /// `span`, with the secret's own code. Returns whether it reported.
     pub(super) fn secret_bound(&mut self, ty: &Ty, trait_name: &str, span: Span) -> bool {
-        if !self.is_secret(ty) {
+        // A type that holds a secret is not `Hash` either: its derived hash
+        // would be as much of an address as the secret's own.
+        let holds = if trait_name == ty::HASH {
+            self.holds_secret(ty)
+        } else {
+            self.is_secret(ty)
+        };
+        if !holds {
             return false;
         }
         let Some(refused) = REFUSED.iter().find(|r| r.trait_name == trait_name) else {
