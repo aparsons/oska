@@ -8,6 +8,27 @@
 // to nearest with ties to even, where `a * b + c` as two operators rounds
 // twice, and the compiler never fuses them for you. A NaN result is the
 // canonical NaN, as for every `Float` operation.
+//
+// The integer helpers work on `Int` and never wrap. Each states what it
+// requires as a `requires` clause, so a call that breaks it stops with
+// `P0006`, and an overflow stops with `P0001`:
+//
+// - `math.gcd(a, b)`: the greatest common divisor of `a` and `b`, both at
+//   least 0. `gcd(0, 0)` is 0.
+// - `math.isqrt(n)`: the integer square root of `n`, at least 0: the
+//   largest `r` with `r * r <= n`. It uses the digit-by-digit method, 32
+//   iterations at most, and no `Float`.
+// - `math.pow(base, exp)`: `base` to the power `exp`, `exp` at least 0,
+//   by repeated squaring. `pow(0, 0)` is 1. A result that does not fit an
+//   `Int` panics (`P0001`); the squarings stop as soon as the answer is
+//   known, so an overflow in a square no result needs is not reported.
+// - `math.floor_div(a, b)`: `a / b` rounded toward negative infinity, `b`
+//   not 0. `Int` `/` rounds toward zero.
+// - `math.rem_euclid(a, b)`: the remainder of `a` by `b`, never negative:
+//   `a - b * q` for the `q` that puts it between 0 and `abs(b) - 1`. `b`
+//   not 0. `Int` `%` takes the sign of `a`.
+//
+// Each loop counts steps (ADR 0021), as every loop in Oska does.
 
 // For maintainers: this file is Oska source, checked under the rules for
 // user code and run as Oska by both backends, so `fma` gives one answer
@@ -299,4 +320,93 @@ fn shift_right_sticky(w: Wide, n: Int) -> Wide {
         return Wide(hi: shifted.hi, lo: shifted.lo | 1)
     }
     shifted
+}
+
+// The greatest common divisor of `a` and `b`, by Euclid's algorithm:
+// fewer than 100 iterations for an `Int`. `gcd(0, 0)` is 0.
+pub fn gcd(a: Int, b: Int) -> Int
+    requires a >= 0
+    requires b >= 0
+{
+    var x = a
+    var y = b
+    while y != 0 {
+        let r = x % y
+        x = y
+        y = r
+    }
+    x
+}
+
+// The largest `r` with `r * r <= n`, exactly, for `n` at least 0.
+pub fn isqrt(n: Int) -> Int
+    requires n >= 0
+{
+    var rest = n
+    var root = 0
+    // The largest power of 4 that fits an `Int`.
+    var bit = 4611686018427387904
+    while bit > n {
+        bit = bit / 4
+    }
+    while bit != 0 {
+        if rest >= root + bit {
+            rest = rest - (root + bit)
+            root = root / 2 + bit
+        } else {
+            root = root / 2
+        }
+        bit = bit / 4
+    }
+    root
+}
+
+// `base` to the power `exp`, for `exp` at least 0, by repeated squaring.
+// Every product is checked, so a result that does not fit an `Int` panics
+// (`P0001`) and never wraps. `pow(0, 0)` is 1.
+pub fn pow(base: Int, exp: Int) -> Int
+    requires exp >= 0
+{
+    var result = 1
+    var square = base
+    var left = exp
+    while left > 0 {
+        if left % 2 == 1 {
+            result = result * square
+        }
+        left = left / 2
+        if left > 0 {
+            square = square * square
+        }
+    }
+    result
+}
+
+// `a / b` rounded toward negative infinity, for `b` not 0. The one
+// quotient that does not fit, `Int.MIN / -1`, panics (`P0001`).
+pub fn floor_div(a: Int, b: Int) -> Int
+    requires b != 0
+{
+    let q = a / b
+    if a % b != 0 && ((a < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+// The remainder of `a` by `b` that is never negative, from 0 to
+// `abs(b) - 1`, for `b` not 0: `a - b * floor_div(a, b)` for a positive
+// `b`. `a % b` with a negative `a` is negative; this adds `abs(b)` then.
+pub fn rem_euclid(a: Int, b: Int) -> Int
+    requires b != 0
+{
+    let r = a % b
+    if r >= 0 {
+        r
+    } else if b > 0 {
+        r + b
+    } else {
+        r - b
+    }
 }
