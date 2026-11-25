@@ -160,6 +160,7 @@ pub(crate) mod codes {
     pub const NOT_IN_TRAIT: &str = "E0263";
     pub const AMBIGUOUS_METHOD: &str = "E0264";
     pub const NOT_IMPLEMENTED: &str = "E0265";
+    pub const NOT_A_MAP_KEY: &str = "E0266";
     pub const CAPTURING_CLOSURE: &str = "E0270";
     pub const FORGED: &str = "E0271";
     pub const PRIVATE_FIELD: &str = "E0272";
