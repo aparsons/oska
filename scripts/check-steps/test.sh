@@ -272,7 +272,7 @@ fi
 full_cargo='fmt --all --check
 clippy --all-targets -- -D warnings
 check -p oskac --tests --target x86_64-pc-windows-gnu
-test --all'
+test --all --no-fail-fast'
 for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
   'echo two >docs/index.md && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qam d'; do
   fresh_clone
@@ -432,7 +432,7 @@ if [ "$status" -eq 0 ] && [ "$headers" = "cargo fmt,cargo clippy,cargo test (pri
 else
   bad "--fast on a crate change runs fmt, clippy and cargo test only" "exit $status, headers: $headers"
 fi
-if [ "$cargo_test" = "cargo test -p a" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p a" ]; then
   ok "--fast tests only the changed crate"
 else
   bad "--fast tests only the changed crate" "got: $cargo_test"
@@ -445,28 +445,28 @@ else
 fi
 
 fast_case "two crates" 'mkdir -p crates/b && echo b >crates/b/lib.rs && echo two >crates/a/src/lib.rs && git add -A && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qm c'
-if [ "$cargo_test" = "cargo test -p a -p b" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p a -p b" ]; then
   ok "--fast tests each changed crate, committed or not"
 else
   bad "--fast tests each changed crate, committed or not" "got: $cargo_test"
 fi
 
 fast_case "a library crate change" 'mkdir -p crates/lib && echo two >crates/lib/lib.rs'
-if [ "$cargo_test" = "cargo test -p app -p lib -p top" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p app -p lib -p top" ]; then
   ok "--fast tests a changed crate's dependents, direct and indirect"
 else
   bad "--fast tests a changed crate's dependents, direct and indirect" "got: $cargo_test"
 fi
 
 fast_case "a crate whose directory is not its name" 'mkdir -p crates/app-dir && echo two >crates/app-dir/main.rs'
-if [ "$cargo_test" = "cargo test -p app -p top" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p app -p top" ]; then
   ok "--fast names a crate by its package name, not its directory"
 else
   bad "--fast names a crate by its package name, not its directory" "got: $cargo_test"
 fi
 
 fast_case "a core crate change" 'mkdir -p crates/core && echo two >crates/core/lib.rs'
-if [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast runs the full test command when half the workspace or more would be tested"
 else
   bad "--fast runs the full test command when half the workspace or more would be tested" "got: $cargo_test"
@@ -478,21 +478,21 @@ else
 fi
 
 fast_case "a file in no package" 'mkdir -p crates/loose && echo two >crates/loose/x.rs'
-if [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast tests every crate when a changed file is in no package"
 else
   bad "--fast tests every crate when a changed file is in no package" "got: $cargo_test"
 fi
 
 STUB_FAIL="cargo metadata" fast_case "no cargo metadata" 'echo two >crates/a/src/lib.rs'
-if [ "$status" -eq 0 ] && [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$status" -eq 0 ] && [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast tests every crate when cargo metadata fails"
 else
   bad "--fast tests every crate when cargo metadata fails" "exit $status, got: $cargo_test"
 fi
 
 fast_case "a Cargo.toml change" 'echo two >Cargo.toml'
-if [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast tests every crate for a cargo input outside crates/"
 else
   bad "--fast tests every crate for a cargo input outside crates/" "got: $cargo_test"
@@ -578,7 +578,7 @@ fi
 # Cannot tell what changed: every step runs, still with no stamp.
 fast_case "no origin/main" 'echo two >CLAUDE.md && git update-ref -d refs/remotes/origin/main'
 headers=$(printf '%s\n' "$out" | sed -n 's/^== //p')
-if [ "$status" -eq 0 ] && [ "$headers" = "$list" ] && [ "$cargo_test" = "cargo test --all" ] &&
+if [ "$status" -eq 0 ] && [ "$headers" = "$list" ] && [ "$cargo_test" = "cargo test --all --no-fail-fast" ] &&
   printf '%s\n' "$out" | grep -q 'cannot tell what changed'; then
   ok "--fast that cannot tell what changed runs the full check, and says why"
 else
