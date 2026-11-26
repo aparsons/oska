@@ -63,7 +63,7 @@ jobs:
     # script suites), and three shards of the cargo tests (`--group tests`)
     # run on each processor. scripts/test-shard.sh names the shards, and its test
     # checks that every test runs in exactly one.
-    # shards linux: site native rest
+    # shards linux: site native rest-1 rest-2
     strategy:
       fail-fast: false
       matrix:
@@ -73,10 +73,12 @@ jobs:
           - {os: ubuntu-latest, group: scripts, shard: ""}
           - {os: ubuntu-latest, group: tests, shard: site}
           - {os: ubuntu-latest, group: tests, shard: native}
-          - {os: ubuntu-latest, group: tests, shard: rest}
+          - {os: ubuntu-latest, group: tests, shard: rest-1}
+          - {os: ubuntu-latest, group: tests, shard: rest-2}
           - {os: ubuntu-24.04-arm, group: tests, shard: site}
           - {os: ubuntu-24.04-arm, group: tests, shard: native}
-          - {os: ubuntu-24.04-arm, group: tests, shard: rest}
+          - {os: ubuntu-24.04-arm, group: tests, shard: rest-1}
+          - {os: ubuntu-24.04-arm, group: tests, shard: rest-2}
     name: test (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     # Incremental data about doubles the size of `target`, which is cached
@@ -146,7 +148,7 @@ jobs:
       # TLC. Without them the step fails here, never skips. The formal part
       # runs the formal step; the shard that holds oska-run's lean_reference
       # test needs Lean (check.sh makes that test fail without it, ADR 0018).
-      - if: matrix.group == 'formal' || matrix.shard == 'rest'
+      - if: matrix.group == 'formal' || startsWith(matrix.shard, 'rest')
         run: |
           scripts/formal/install.sh "$HOME/.local/formal"
           echo "$HOME/.local/formal/lean/bin" >> "$GITHUB_PATH"
@@ -161,14 +163,14 @@ jobs:
       # meanwhile and every cargo step ran on the tree as checked out (CI
       # always runs them all). target/tmp holds the tests' scratch files,
       # sparse files of terabytes among them: tar would read them in full.
-      # Only each processor's `rest` shard saves, under the key every part
+      # Only each processor's `rest-1` shard saves, under the key every part
       # of the processor restores from, so the cache stays one entry per
       # processor and under GitHub's limit.
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest-1'
         run: |
           scripts/cargo-cache/mtimes.sh verify
           rm -rf target/tmp
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest-1'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
