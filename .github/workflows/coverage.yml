@@ -3,8 +3,13 @@ name: Coverage
 # Line coverage of the workspace's tests on every push to main, so each merge
 # has a report (Adam, 2026-11-26). Never on a pull request: the instrumented
 # build and full test run would add their time to every PR's wall clock.
-# scripts/coverage.sh writes the table to the job summary; the lcov file and
-# the HTML report are the `coverage` artifact of the run.
+# Instrumented, ci.yml's linux shards take longer than one job may run (a
+# 60 minute cap: the `native` and `rest` shards were cancelled at it), so
+# scripts/coverage-plan.py cuts the same tests into smaller jobs: the plan
+# job prints them, each shard job runs one and uploads its lcov file, and the
+# report job merges them (scripts/coverage-merge.py), writes the table to the
+# job summary, and uploads the merged lcov and the table as the `coverage`
+# artifact. The Pages workflow publishes that at /coverage.html.
 
 on:
   push:
@@ -19,25 +24,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  coverage:
+  plan:
     runs-on: ubuntu-latest
-    # An instrumented build and the whole test suite on one runner.
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: plan
+        run: echo "matrix=$(python3 -I scripts/coverage-plan.py)" >> "$GITHUB_OUTPUT"
+
+  shard:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: shard (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # An instrumented build and a piece of the tests.
     timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          components: llvm-tools
-      - run: scripts/coverage.sh
+      # The toolchain the repository pins (rust-toolchain.toml) is the one
+      # cargo and rustc use here, not the action's `stable`: add the LLVM
+      # tools to that one.
+      - run: rustup component add llvm-tools
+      # The job that holds oska-run's lean_reference test needs Lean (as in
+      # ci.yml).
+      - run: |
+          scripts/formal/install.sh "$HOME/.local/formal"
+          echo "$HOME/.local/formal/lean/bin" >> "$GITHUB_PATH"
+          echo "OSKA_TLA2TOOLS=$HOME/.local/formal/tla2tools.jar" >> "$GITHUB_ENV"
+      - run: scripts/coverage.sh --shard all target/coverage/shard
         env:
           OSKA_TEST_SET: linux
+          OSKA_SHARD_LINES: ${{ matrix.lines }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcov-${{ matrix.name }}
+          path: target/coverage/shard/lcov.info
+
+  report:
+    needs: shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: lcov-*
+          path: target/coverage/lcov
+      - run: python3 -I scripts/coverage-merge.py target/coverage/report target/coverage/lcov/*/lcov.info
       - name: Job summary
-        if: always()
         run: |
           {
             echo "## Line coverage at ${GITHUB_SHA::7}"
             echo
-            cat target/coverage/report/summary.md || echo "No report: the tests failed before coverage was collected."
+            cat target/coverage/report/summary.md
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -2790,12 +2790,12 @@ fn authority_page(all: Site) -> Page {
 }
 
 // Line coverage of the workspace's tests at the latest merge to main:
-// `scripts/coverage.sh`'s table, with links to the browsable report and
-// the lcov file the Pages workflow stages under `coverage/`.
+// `scripts/coverage.sh`'s table, with a link to the lcov file the
+// Pages workflow stages under `coverage/`.
 fn coverage_page(all: Site) -> Page {
     let base = origin()
     let title = "Test coverage"
-    let text = "# {title}\n\nLine coverage of the workspace's tests at the latest merge to `main`, measured with rustc's source-based instrumentation (`scripts/coverage.sh`). The [browsable report]({base}/coverage/html/index.html) shows every file line by line, and [lcov.info]({base}/coverage/lcov.info) is the same data for other tools.\n\n{all.coverage}"
+    let text = "# {title}\n\nLine coverage of the workspace's tests at the latest merge to `main`, measured with rustc's source-based instrumentation (`scripts/coverage.sh`). [lcov.info]({base}/coverage/lcov.info) holds the line counts for other tools. A line counts as covered when any shard of the tests ran it.\n\n{all.coverage}"
     let links = Links(site: all, dir: "")
     Page(path: "coverage.html", title: title, body: markdown(text, links), md: retarget(text, links))
 }

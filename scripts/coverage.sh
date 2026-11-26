@@ -4,23 +4,31 @@
 # instrumentation and the LLVM tools of the pinned toolchain. No third-party
 # crate or tool: Oska has no external dependencies.
 #
-#   scripts/coverage.sh [OUT_DIR] [-- CARGO_TEST_ARGS...]
+#   scripts/coverage.sh [--shard NAME] [OUT_DIR] [-- CARGO_TEST_ARGS...]
 #
-# Runs `cargo test` (the whole workspace unless CARGO_TEST_ARGS say
-# otherwise) in target/coverage, so the normal target directory keeps its
-# uninstrumented build. Writes OUT_DIR (default target/coverage/report):
-#   summary.md   a Markdown table, a row per crate, then the total
-#   lcov.info    the lcov file, for any viewer
-#   html/        the browsable report
-# CI (.github/workflows/coverage.yml) runs it on every push to main and
-# posts summary.md to the job summary. Needs the `llvm-tools` rustup
-# component.
+# Runs the tests in target/coverage, so the normal target directory keeps its
+# uninstrumented build, and writes OUT_DIR (default target/coverage/report):
+#   lcov.info    the lcov file of the run
+#   summary.md   a table a crate and a table a file (a full run only)
+# With --shard NAME it runs one linux shard of scripts/test-shard.sh (site,
+# native or rest), or, when OSKA_SHARD_LINES holds a plan, just that plan
+# (scripts/coverage-plan.py cuts the shards finer), and writes only
+# lcov.info: the Coverage workflow runs the pieces in parallel jobs, because
+# instrumented one shard takes longer than GitHub allows, and
+# scripts/coverage-merge.py merges the files.
+# Without it, it runs `cargo test --workspace` (or CARGO_TEST_ARGS) and
+# writes both files. Needs the `llvm-tools` rustup component.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 root=$PWD
 
+shard=
+if [ "${1:-}" = --shard ]; then
+  shard=${2:?usage: coverage.sh --shard NAME [OUT_DIR]}
+  shift 2
+fi
 out=target/coverage/report
 if [ $# -gt 0 ] && [ "$1" != -- ]; then
   out=$1
@@ -39,11 +47,16 @@ done
 
 export CARGO_TARGET_DIR=$root/target/coverage/build
 export RUSTFLAGS="${RUSTFLAGS:-} -C instrument-coverage"
-export LLVM_PROFILE_FILE=$root/target/coverage/raw/oska-%p-%m.profraw
+# %8m: each process merges its counters into one of eight files for its
+# binary as it exits. A file for each process (%p) would be thousands of
+# profraw files, one for every oskac the tests run.
+export LLVM_PROFILE_FILE=$root/target/coverage/raw/oska-%8m.profraw
 rm -rf "$root/target/coverage/raw" "${root:?}/${out:?}"
 mkdir -p "$root/target/coverage/raw" "$root/$out"
 
-if [ $# -gt 0 ]; then
+if [ -n "$shard" ]; then
+  scripts/test-shard.sh linux "$shard"
+elif [ $# -gt 0 ]; then
   cargo test "$@"
 else
   cargo test --workspace
@@ -63,25 +76,11 @@ done < <(find "$CARGO_TARGET_DIR/debug" -type f -perm -u+x \
   ! -path '*/incremental/*' ! -path '*/examples/*' ! -name 'build[-_]script*' | sort -u)
 
 ignore='/\.cargo/|/rustc/|/tests/|/target/|/build\.rs$'
-common=("$bin/llvm-cov")
-args=(-instr-profile="$root/target/coverage/oska.profdata" -ignore-filename-regex="$ignore" "${objects[@]}")
+"$bin/llvm-cov" export -format=lcov \
+  -instr-profile="$root/target/coverage/oska.profdata" \
+  -ignore-filename-regex="$ignore" "${objects[@]}" >"$root/$out/lcov.info"
 
-"${common[@]}" export -format=lcov "${args[@]}" >"$root/$out/lcov.info"
-"${common[@]}" show -format=html -output-dir="$root/$out/html" -show-line-counts-or-regions "${args[@]}" >/dev/null
-
-# One row a crate: sum the lcov LF (lines found) and LH (lines hit).
-awk -v root="$root/" '
-  /^SF:/ { f = substr($0, 4); sub(root, "", f); split(f, p, "/"); crate = p[1] == "crates" ? p[2] : p[1] }
-  /^LF:/ { lf[crate] += substr($0, 4); tf += substr($0, 4) }
-  /^LH:/ { lh[crate] += substr($0, 4); th += substr($0, 4) }
-  END {
-    print "| Crate | Lines | Covered | Coverage |"
-    print "| --- | ---: | ---: | ---: |"
-    n = 0
-    for (c in lf) names[++n] = c
-    for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (names[j] < names[i]) { t = names[i]; names[i] = names[j]; names[j] = t }
-    for (i = 1; i <= n; i++) { c = names[i]; printf "| %s | %d | %d | %.1f%% |\n", c, lf[c], lh[c], lf[c] ? 100 * lh[c] / lf[c] : 0 }
-    printf "| **Total** | %d | %d | **%.1f%%** |\n", tf, th, tf ? 100 * th / tf : 0
-  }' "$root/$out/lcov.info" >"$root/$out/summary.md"
-
-cat "$root/$out/summary.md"
+if [ -z "$shard" ]; then
+  python3 -I scripts/coverage-merge.py "$root/$out" "$root/$out/lcov.info"
+  cat "$root/$out/summary.md"
+fi

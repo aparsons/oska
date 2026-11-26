@@ -5,8 +5,8 @@
 #
 #   scripts/site/stage-coverage.sh fetch DIR   download it to DIR and copy
 #                                              its table to site/coverage.md
-#   scripts/site/stage-coverage.sh stage DIR SITE   copy the HTML report and
-#                                              lcov.info to SITE/coverage/
+#   scripts/site/stage-coverage.sh stage DIR SITE   copy lcov.info to
+#                                              SITE/coverage/
 #
 # `fetch` runs before the generator, which reads site/coverage.md; `stage`
 # runs after it, before the link check. Before the first Coverage run
@@ -40,7 +40,6 @@ case $mode in
     site=${3:?usage: stage-coverage.sh stage DIR SITE}
     [ -f "$dir/summary.md" ] || { echo "stage-coverage.sh: nothing fetched; nothing to stage"; exit 0; }
     mkdir -p "$site/coverage"
-    cp -R "$dir/html" "$site/coverage/html"
     cp "$dir/lcov.info" "$site/coverage/lcov.info"
     ;;
   *)
