@@ -19,7 +19,7 @@ Inference: Yes. Oska's trust flag is already a two-point information-flow lattic
 - **Authority is reported and bounded.** Unused authority is a release-check error (docs/adr/0016-unused-authority-is-a-release-check-error.md). Widening of authority must be approved (GLOSSARY.md, "Widening"). Lean proves authority safety for Oska Core (docs/adr/0018-oska-core-in-lean-is-the-reference-for-the-interpreter.md).
 - **Secret values.** A secret value is never displayed, logged, interpolated or compared with `==`. Secret integers (`Secret<U8/U32/U64>`) allow constant-time computation and forbid branching, indexing, dividing, shifting or ordering on them. The property holds for native code, not for the interpreter, and not for what hardware does (GLOSSARY.md, "Secret value", "Secret integer", constant-time entry). Inference: this is a one-level confidentiality label with a built-in sink rule (no log, no interpolation) and a built-in ban on the main implicit flows (branch, index).
 - **Compliance reports are self-assessments**, with findings rated by risk and a determination (docs/adr/0017-compliance-reports-are-self-assessments.md).
-- **Parity and freeze.** Every supported platform must behave the same, with the same security guarantees, and new language features were frozen until all five native backends exist (docs/adr/0014-every-supported-platform-builds-and-runs-natively.md). Inference: a new type-system feature must wait for the gate to be open or be a maintainer-approved exception. I did not check the current release state.
+- **Parity gate.** ADR 0014 froze new language features until every supported platform had a native backend, then turns on a parity gate: a feature is done only when it works natively, with the same output and security guarantees, on every supported platform. The ADR names v0.6.0 (Windows) as the release that turns the gate on (docs/adr/0014-every-supported-platform-builds-and-runs-natively.md). Inference: v0.6.0 is released, so the freeze is over and a classification feature must meet the parity gate on all five platforms. I did not check the release state; the coordinator's project memory records v0.6.0 as released on 2026-11-20.
 - **Context.** The earlier research lists "exposed secrets" and log injection among classes to make unwritable, and asks for sink-specific APIs (docs/research/2026-11-ai-first-secure-language.md, question 4 and its list of `Untrusted<T>` taint tracking).
 
 ## 2. What the literature and existing tools say
@@ -82,12 +82,12 @@ The authority report can list each sink's ceiling, each declassification site an
 - **Implicit flows.** `if secret_text.contains("x") then log("yes")` leaks one bit with no text copied. Under ADR 0006's rule that inspection yields trusted results, the same rule would make this pass for classification. This is the largest hole and is a policy decision (open question 3).
 - **Timing and secret integers.** Constant-time guarantees hold only for native code (GLOSSARY.md). A label system that says "cannot leak" would overclaim.
 - **Declassifier fatigue.** If agents add `Declassify` to make errors go away, the check is empty. ADR 0016 shows the answer Oska prefers: make the authority visible and release-checked, with no escape hatch name.
-- **Feature freeze.** Subject to ADR 0014's gate.
+- **Parity gate.** The feature must work natively with the same output and guarantees on all five platforms (ADR 0014). The freeze itself ended with v0.6.0.
 - **Overclaiming to auditors.** Label names borrowed from a standard do not make a program conform to it (docs/adr/0017-compliance-reports-are-self-assessments.md).
 
 ## 6. Open questions for the maintainer
 
-1. Is the freeze in ADR 0014 lifted, or is this an exception needing its own decision?
+1. ADR 0014's freeze ended with v0.6.0, so this needs no exception, only the parity gate. Confirm that reading.
 2. Fixed four-name lattice, or a per-package lattice? How do TLP-style (sharing) and sensitivity-style names coexist?
 3. Does a non-text result computed from classified text (length, `contains`, `parse_int`) stay unlabelled, as trust does, accepting implicit flows, or is it labelled too (more sound, much more label creep)?
 4. Is `Secret<T>` the top label, a separate axis, or unrelated?
