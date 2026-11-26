@@ -320,6 +320,10 @@ _Avoid_: golden file, fixture (for this concept)
 `oskac test --update`: writing each snapshot that is missing or differs from its value instead of failing the test, and listing what was written. It never deletes a snapshot, and its result is reviewed as a diff like any other change.
 _Avoid_: accepting, blessing
 
+**Coverage**:
+The share of a program's lines that a test run executed, counted per function, with the lines that never ran listed. It is line coverage only: whether each side of a branch ran is a different measure and has no term yet. It describes one run, not how good the tests are.
+_Avoid_: test coverage, code coverage (they suggest it grades the tests)
+
 ## Compliance
 
 **Self-assessment**:
