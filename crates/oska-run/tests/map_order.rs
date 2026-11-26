@@ -436,3 +436,28 @@ fn main(io: Stdout) -> Result<(), IoError> {
 "#;
     assert_runs(src, &[], "equal\n");
 }
+
+#[test]
+fn of_builds_a_map_from_a_list_of_entries_in_order() {
+    let src = program(
+        r#"    let made: map.Map<String, Int> = map.Map.of([
+        map.Entry(key: "pear", value: 1),
+        map.Entry(key: "apple", value: 2),
+        map.Entry(key: "pear", value: 3),
+        map.Entry(key: "zebra", value: 4),
+    ])
+    show(io, "made:", made)?
+    let count = made.len()
+    io.println("len {count}")?
+    m.put("pear", 1)
+    m.put("apple", 2)
+    m.put("pear", 3)
+    m.put("zebra", 4)
+    io.println(yes(made == m))?"#,
+    );
+    assert_runs(
+        &src,
+        &[],
+        "made: pear=3 apple=2 zebra=4\nlen 3\ntrue\n",
+    );
+}

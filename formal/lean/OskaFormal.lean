@@ -11,3 +11,4 @@ import OskaFormal.Core.Eval
 import OskaFormal.Core.Authority
 import OskaFormal.Core.CoreIR
 import OskaFormal.Core.Examples
+import OskaFormal.Map

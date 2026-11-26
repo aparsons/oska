@@ -15,6 +15,7 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest re
 - [Capabilities and authority](capabilities.md): how a program's effects are visible in its signatures.
 - [Untrusted data and secrets](untrusted-data.md): how Oska keeps injection and leaks out of programs.
 - [Bytes and binary data](bytes.md): `Bytes`, endian reads and writes, the bitwise and wrapping integer operations, and untrusted bytes.
+- [Maps](maps.md): `std.map`'s `Map<K, V>`, its insertion order, update and remove rules, key types, and limits.
 - [Hashing, HMAC and verifying SSH signatures](hashing-and-signatures.md): `std.sha2`, `std.hmac`, `std.ed25519`, `std.sshsig`, `std.ecdsa`, `std.rsa` and `std.p256`, and what their assurance is.
 - [Certificates and the root store](x509.md): `std.x509`, which parses certificates, validates a server's chain against Mozilla's pinned roots and checks the host name.
 - [Networking with host capabilities](networking.md): `HostConnect`, `Connection`, loopback listening, and how a test sees the network.
