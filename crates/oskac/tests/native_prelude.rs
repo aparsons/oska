@@ -1090,6 +1090,24 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "map_entry_limit",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("before")?
+    map_entry_limit()
+    io.println("after")
+}"#,
+    ),
+    (
+        "map_probe_limit",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("before")?
+    map_probe_limit()
+    io.println("after")
+}"#,
+    ),
+    (
         "Int.eq",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {

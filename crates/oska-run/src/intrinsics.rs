@@ -142,6 +142,8 @@ pub const INTRINSICS: Table = &[
     ("U8.rotr", Plain(rotr)),
     ("dbg", HigherOrder(dbg)),
     ("todo", Plain(todo)),
+    ("map_entry_limit", Plain(map_entry_limit)),
+    ("map_probe_limit", Plain(map_probe_limit)),
 ];
 
 /// The intrinsic named `name`, from every module's table.
@@ -965,6 +967,29 @@ fn todo(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
         span,
     ))
 }
+
+/// `std.map`'s `P0044`: an entry past the map's entry limit.
+fn map_entry_limit(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
+    Err(Panic::new(
+        codes::MAP_ENTRY_LIMIT,
+        MAP_ENTRY_LIMIT_MESSAGE,
+        span,
+    ))
+}
+
+/// `std.map`'s `P0045`: probes past the limit under every hash.
+fn map_probe_limit(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
+    Err(Panic::new(
+        codes::MAP_PROBE_LIMIT,
+        MAP_PROBE_LIMIT_MESSAGE,
+        span,
+    ))
+}
+
+/// The messages of `P0044` and `P0045`, the same in the native backend.
+pub const MAP_ENTRY_LIMIT_MESSAGE: &str = "the map holds as many entries as its limit allows";
+pub const MAP_PROBE_LIMIT_MESSAGE: &str =
+    "the map's keys collide under every hash it tries: they look chosen to flood it";
 
 /// `U8.rotl(self, n)`, and `U32`'s and `U64`'s: `P0008` for an amount
 /// out of range (`ops::rotate`).
