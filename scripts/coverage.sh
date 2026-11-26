@@ -40,7 +40,7 @@ done
 export CARGO_TARGET_DIR=$root/target/coverage/build
 export RUSTFLAGS="${RUSTFLAGS:-} -C instrument-coverage"
 export LLVM_PROFILE_FILE=$root/target/coverage/raw/oska-%p-%m.profraw
-rm -rf "$root/target/coverage/raw" "$root/$out"
+rm -rf "$root/target/coverage/raw" "${root:?}/${out:?}"
 mkdir -p "$root/target/coverage/raw" "$root/$out"
 
 if [ $# -gt 0 ]; then
