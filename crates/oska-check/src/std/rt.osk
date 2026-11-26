@@ -2424,6 +2424,49 @@ pub fn bytes_hash(bytes: Bytes) -> Int {
     h
 }
 
+// The FNV-1a state `state` after it takes the 8 little-endian bytes of
+// `word`: what every `Hash` impl but text builds on (`oska-check`'s
+// `hashing.rs` is the definition).
+pub fn hash_mix(state: Int, word: Int) -> Int {
+    var h = state
+    var i = 0
+    while i < 64 {
+        h = rt_mem_mul(rt_mem_xor(h, rt_mem_and(rt_mem_shr(word, i), 255)), 1099511628211)
+        i = i + 8
+    }
+    h
+}
+
+// `Int.hash` and the other integers' and `Bool`'s: the hash of the 64-bit
+// value, from FNV-1a's offset basis, 0xcbf29ce484222325 as a signed word.
+pub fn int_hash(value: Int) -> Int {
+    hash_mix(-3750763034362895579, value)
+}
+
+// The FNV-1a hash of the `count` bytes at `data`.
+fn text_bytes_hash(data: Int, count: Int) -> Int {
+    var h = -3750763034362895579
+    var i = 0
+    while i < count {
+        h = rt_mem_mul(rt_mem_xor(h, rt_mem_load8(rt_mem_add(data, i))), 1099511628211)
+        i = i + 1
+    }
+    h
+}
+
+// `String.hash`: the FNV-1a hash of the UTF-8 bytes, as `Bytes.hash` of
+// `String.to_bytes`.
+pub fn string_hash(text: String) -> Int {
+    let object = rt_mem_text(text)
+    text_bytes_hash(text_data(object), text_length(object))
+}
+
+// `Path.hash`: the hash of its text.
+pub fn path_hash(path: Path) -> Int {
+    let left = rt_mem_load64(rt_mem_add(rt_mem_path(path), 8))
+    text_bytes_hash(text_data(left), text_length(left))
+}
+
 // The bytes object at `object`, which a place holds a reference to,
 // unshared and with room for `extra` more bytes: `object` itself when it is
 // that already. Otherwise a new one, at least twice as large when `object`

@@ -55,6 +55,7 @@ mod collect;
 mod const_cycles;
 pub mod core_ir;
 mod decl_rules;
+pub mod hashing;
 mod hoist;
 mod infer;
 mod instantiation;
@@ -159,6 +160,7 @@ pub(crate) mod codes {
     pub const NOT_IN_TRAIT: &str = "E0263";
     pub const AMBIGUOUS_METHOD: &str = "E0264";
     pub const NOT_IMPLEMENTED: &str = "E0265";
+    pub const NOT_A_MAP_KEY: &str = "E0266";
     pub const CAPTURING_CLOSURE: &str = "E0270";
     pub const FORGED: &str = "E0271";
     pub const PRIVATE_FIELD: &str = "E0272";
@@ -843,7 +845,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     match oska_syntax::parse_module(src) {
         // A `std` module written in Oska is checked with the file, as one
         // more module of the program (`link.rs`).
-        Ok(module) if !prelude::oska_std_imports(&module).is_empty() => {
+        Ok(module) if !prelude::oska_std_imports(&module, src).is_empty() => {
             package::check_single_with_std(src, options)
         }
         Ok(module) => check_parsed(src, &module, options, link::Modules::default(), false),
@@ -876,7 +878,7 @@ pub fn check_toolchain_rt() -> CheckReport {
     match oska_syntax::parse_prelude(toolchain::RT_SOURCE) {
         // The `std` modules the runtime imports are checked with it, as
         // one more module of the program (`link.rs`).
-        Ok(module) if !prelude::oska_std_imports(&module).is_empty() => {
+        Ok(module) if !prelude::oska_std_imports(&module, toolchain::RT_SOURCE).is_empty() => {
             package::check_toolchain_with_std(toolchain::RT_SOURCE)
         }
         Ok(module) => check_source(

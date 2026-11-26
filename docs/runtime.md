@@ -154,6 +154,8 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
 | `P0042` | A `Bytes` range out of bounds: `slice(start, end)` with `start` below 0, `end` past the length, or `start` past `end`; an endian read (`read_u16_be` and the rest) whose bytes do not all lie inside the buffer; `Bytes.zeroed` with a negative length; or `ct_select` between two `Secret<Bytes>` of different lengths. The message names the range or offset and the length, or both lengths. Spans the call. An index out of bounds in `at` or `set` is `P0002`, as in `List.at`. |
 | `P0043` | A `Bytes` would grow past 256 MiB: `push`, `append` or an endian push whose result would be longer, or `Bytes.zeroed` with a longer length. The runtime panics instead of running out of memory, and the buffer is not changed. The message names the length it would have had. Spans the call. Not yet checked where a whole buffer is made at once from outside: `String.to_bytes` and the capabilities' `read_bytes` (`DirRead`, `FileRead`) give a buffer of any length without this panic, and a file no memory holds is an `IoError` ("out of memory"). |
+| `P0044` | A `std.map` map was given a new entry past its entry limit: `put` of a key the map does not hold, when it already holds as many entries as the limit allows. The limit is 4,194,304 entries, or the lower number given to `Map.with_max_entries`. An update of a key the map holds is no new entry. The map is not changed. Spans the `put` inside `std.map`. |
+| `P0045` | A `std.map` map's keys collide under every hash it tries. A `put` that cannot place its key within 64 slots of where it hashes rebuilds the table under the next of three fixed hashes (the key's `Hash`, then two mixes of it), and panics when the last fails too. Keys with one 64-bit hash, such as those chosen to flood the map, end here after a bounded number of steps. Spans the `put` inside `std.map`. |
 
 ### Panic examples
 
@@ -575,6 +577,64 @@ fn main() {
 ```oska fixed=P0043
 fn main() {
     let small = Bytes.zeroed(3000)
+}
+```
+
+#### `P0044`
+
+```oska error=P0044
+fn main() {
+    var m: Map<Int, Int> = Map.with_max_entries(2)
+    m.put(1, 1)
+    m.put(2, 2)
+    m.put(3, 3)
+}
+```
+
+```oska fixed=P0044
+fn main() {
+    var m: Map<Int, Int> = Map.with_max_entries(3)
+    m.put(1, 1)
+    m.put(2, 2)
+    m.put(3, 3)
+}
+```
+
+#### `P0045`
+
+```oska error=P0045
+struct Key { n: Int }
+
+impl Eq for Key {
+    fn eq(self, other: Key) -> Bool {
+        self.n == other.n
+    }
+}
+
+impl Hash for Key {
+    fn hash(self) -> Int {
+        7
+    }
+}
+
+fn main() {
+    var m: Map<Key, Int> = Map.new()
+    var i = 0
+    while i < 200 {
+        m.put(Key(n: i), i)
+        i = i + 1
+    }
+}
+```
+
+```oska fixed=P0045
+fn main() {
+    var m: Map<Int, Int> = Map.new()
+    var i = 0
+    while i < 200 {
+        m.put(i, i)
+        i = i + 1
+    }
 }
 ```
 

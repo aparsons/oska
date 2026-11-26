@@ -98,6 +98,11 @@ impl Flags {
         self.vars.len() as u32 - 1
     }
 
+    /// Whether `v` is one of these flags' variables.
+    pub(super) fn has(&self, v: u32) -> bool {
+        (v as usize) < self.vars.len()
+    }
+
     /// Whether a high flag has reached `v`, which is final.
     pub(super) fn is_high(&self, v: u32) -> bool {
         self.vars[v as usize].high

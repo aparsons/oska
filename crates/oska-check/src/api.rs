@@ -49,6 +49,7 @@ pub const MODULES: &[&str] = &[
     "std.aes128gcm",
     "std.tls",
     "std.http",
+    "std.map",
 ];
 
 /// What kind of item an entry is.

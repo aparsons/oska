@@ -1086,6 +1086,24 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "map_entry_limit",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("before")?
+    map_entry_limit()
+    io.println("after")
+}"#,
+    ),
+    (
+        "map_probe_limit",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("before")?
+    map_probe_limit()
+    io.println("after")
+}"#,
+    ),
+    (
         "Int.eq",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {
@@ -1802,6 +1820,118 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
         r#"fn main(io: Stdout) -> Result<(), IoError> {
     let b = Bytes.from_hex("0102a0ff").unwrap_or(Bytes.new())
     io.println(b.hash().to_string())
+}"#,
+    ),
+    (
+        "Int.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = 7
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "I8.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I8 = -3
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "I16.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I16 = -3
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "I32.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I32 = -3
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "I64.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I64 = -3
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "U8.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 200
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "U16.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 60000
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "U32.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 4000000000
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "U64.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551615
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "Bool.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x = true
+    io.println(x.hash().to_string())
+}"#,
+    ),
+    (
+        "String.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let s = "héllo"
+    io.println(s.hash().to_string())
+}"#,
+    ),
+    (
+        "Path.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(Path.new("a/b").hash().to_string())
+}"#,
+    ),
+    (
+        "Option.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a: Option<String> = Some("x")
+    let b: Option<String> = None
+    io.println(" ".join([a.hash().to_string(), b.hash().to_string()]))
+}"#,
+    ),
+    (
+        "List.hash",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = [[1, 2], [3]]
+    io.println(a.hash().to_string())
 }"#,
     ),
     (

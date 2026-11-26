@@ -304,10 +304,26 @@ impl Infer {
     pub fn knows(&self, ty: &Ty) -> bool {
         match ty {
             Ty::Var(v) => (*v as usize) < self.solutions.len(),
-            Ty::Named(_, args, _) => args.iter().all(|a| self.knows(a)),
-            Ty::Fn { params, ret, .. } => params.iter().all(|p| self.knows(p)) && self.knows(ret),
+            // A trial copy's flag variables are not this context's either:
+            // resolving one here would index past the flags.
+            Ty::Named(_, args, trust) => {
+                !matches!(trust, Trust::Var(v) if !self.trust.has(*v))
+                    && args.iter().all(|a| self.knows(a))
+            }
+            Ty::Fn {
+                cap, params, ret, ..
+            } => {
+                !matches!(cap, Cap::Var(v) if !self.caps.has(*v))
+                    && params.iter().all(|p| self.knows(p))
+                    && self.knows(ret)
+            }
             Ty::Unit | Ty::Param(_) | Ty::Never | Ty::Error => true,
         }
+    }
+
+    /// Whether the trust variable `v` is one of this context's.
+    pub fn knows_trust(&self, v: u32) -> bool {
+        self.trust.has(v)
     }
 
     /// Follow solved variables at the top of `ty` only.

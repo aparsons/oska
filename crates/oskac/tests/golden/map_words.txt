@@ -1,0 +1,11 @@
+the 4
+quick 3
+brown 1
+fox 2
+jumps 1
+over 3
+lazy 1
+dog 2
+barks 1
+and 2
+runs 1

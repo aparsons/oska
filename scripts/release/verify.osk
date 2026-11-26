@@ -101,7 +101,7 @@ struct Report {
 }
 
 // One line of SHA256SUMS after the first.
-struct Entry { digest: Untrusted<String>, name: Untrusted<String> }
+struct SumLine { digest: Untrusted<String>, name: Untrusted<String> }
 
 // ---- Printing -------------------------------------------------------------------
 
@@ -262,7 +262,7 @@ fn sums_lines(text: Untrusted<String>) -> List<Untrusted<String>> {
 }
 
 // One checksum line: 64 lower-case hex digits, two spaces and a name.
-fn parse_entry(line: Untrusted<String>) -> Option<Entry> {
+fn parse_entry(line: Untrusted<String>) -> Option<SumLine> {
     let bytes = line.to_bytes()
     if bytes.len() < 67 || bytes.at(64) != 32 || bytes.at(65) != 32 {
         return None
@@ -277,7 +277,7 @@ fn parse_entry(line: Untrusted<String>) -> Option<Entry> {
             return None
         }
     }
-    Some(Entry(digest: line.slice(0, 64), name: line.slice(66, line.len())))
+    Some(SumLine(digest: line.slice(0, 64), name: line.slice(66, line.len())))
 }
 
 // ---- The release's own signature ------------------------------------------------
@@ -603,7 +603,7 @@ fn verify_release(root: DirRead, name: Untrusted<String>) -> Result<Report, Refu
         let wanted = safe(tag)
         return Err(refuse("wrong_tag", "SHA256SUMS is signed for '{shown}', not for {wanted}"))
     }
-    var entries: List<Entry> = List.new()
+    var entries: List<SumLine> = List.new()
     for i in 1..lines.len() {
         match parse_entry(lines.at(i)) {
             Some(entry) => entries.push(entry)
