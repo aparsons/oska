@@ -8,10 +8,11 @@
 // a peer's point `P`. A scalar is 32 bytes, a big-endian integer, as a
 // `Secret<Bytes>` (such as `Random.secure_bytes(32)`); it is used as it is,
 // with no clamping, so a caller picks it uniformly from 1 to n - 1 as the
-// standard says. One that is zero or a multiple of the group order n gives
-// the point at infinity, which is all-zero bytes here, and not `None`: an
-// `Option` that depended on the scalar would branch on the secret, which the
-// checker refuses. A scalar of n or more is taken mod n. A peer's point is
+// standard says. A scalar of zero, or of the group order n or more, gives
+// `None`. The only thing the module reveals about the scalar is that one
+// verdict, whether it is in 1 to n - 1: it is computed in constant time over
+// the secret and declassified by comparing a one-byte flag, so no branch or
+// address depends on the scalar's value. A peer's point is
 // the SEC1 uncompressed encoding (`0x04`, `x`, `y`, 65 bytes), checked to
 // be on the curve with both coordinates below the field prime, by
 // `std.ecdsa`, whose public-key check this module uses.
@@ -46,9 +47,9 @@ use std.ecdsa
 
 // The public point `[k]G` of the secret scalar `scalar`, in SEC1
 // uncompressed form (65 bytes), as a secret, or `None` unless `scalar` is
-// 32 bytes. The length is public.
+// 32 bytes and in 1 to n - 1. The length is public.
 pub fn public_key(scalar: Secret<Bytes>) -> Option<Secret<Bytes>> {
-    if scalar.len() != 32 {
+    if !scalar_in_range(scalar) {
         return None
     }
     let base = Point(x: secret(to_limbs(GX_MONT)), y: secret(to_limbs(GY_MONT)), z: secret(to_limbs(ONE_MONT)))
@@ -66,12 +67,13 @@ pub fn public_key(scalar: Secret<Bytes>) -> Option<Secret<Bytes>> {
 
 // The ECDH shared secret of the secret scalar `scalar` and the peer's
 // public point `peer`: the 32-byte big-endian x coordinate of `[k]P`, as a
-// secret. It is `None` unless `scalar` is 32 bytes and `peer` is the 65-byte
-// uncompressed encoding of a point on P-256, the validation SP 800-56A
-// requires. Whether it is `None` depends on the lengths and the peer's
-// point, which are public, never on the scalar.
+// secret. It is `None` unless `scalar` is 32 bytes and in 1 to n - 1, and
+// `peer` is the 65-byte uncompressed encoding of a point on P-256, the
+// validation SP 800-56A requires. Whether it is `None` depends on the
+// lengths, the peer's point and the scalar's range, never on anything else
+// about the scalar.
 pub fn shared_secret(scalar: Secret<Bytes>, peer: Untrusted<Bytes>) -> Option<Secret<Bytes>> {
-    if scalar.len() != 32 {
+    if !scalar_in_range(scalar) {
         return None
     }
     match ecdsa.PublicKey.from_bytes(ecdsa.Curve.P256, peer) {
@@ -87,6 +89,32 @@ pub fn shared_secret(scalar: Secret<Bytes>, peer: Untrusted<Bytes>) -> Option<Se
     }
 }
 
+// Whether `scalar` is 32 bytes and in 1 to n - 1. `scalar - 1` wraps to all
+// ones for 0, so the scalar is in range exactly when `scalar - 1 < n - 1`: one
+// subtraction chain over the limbs, with no branch, whose last borrow is 1
+// then. That borrow goes into a one-byte secret that is compared with 1, the
+// one declassification, of the range and nothing more.
+fn scalar_in_range(scalar: Secret<Bytes>) -> Bool {
+    if scalar.len() != 32 {
+        return false
+    }
+    let limit = to_limbs(ORDER_MINUS_ONE)
+    var below: Secret<U64> = Secret.new(1)
+    var borrow: Secret<U64> = Secret.new(0)
+    for i in 0..8 {
+        let at = 28 - 4 * i
+        let word = (scalar.at(at).to_u64() << 24) | (scalar.at(at + 1).to_u64() << 16) | (scalar.at(at + 2).to_u64() << 8) | scalar.at(at + 3).to_u64()
+        let step = word + 4294967296 - below
+        let decremented = step & MASK
+        below = 1 - (step >> 32)
+        let diff = decremented + 4294967296 - limit.at(i) - borrow
+        borrow = 1 - (diff >> 32)
+    }
+    var flag = Secret.new(Bytes.new())
+    flag.push(borrow.wrapping_to_u8())
+    flag.constant_time_eq(Bytes.from_hex("01").unwrap_or(Bytes.new()))
+}
+
 // ---- Constants --------------------------------------------------------------
 
 const MASK: U64 = 4294967295
@@ -100,6 +128,8 @@ const PRIME_MINUS_TWO: String = "ffffffff00000001000000000000000000000000fffffff
 // R mod p, the number 1 in Montgomery form, and R^2 mod p.
 const ONE_MONT: String = "00000000fffffffeffffffffffffffffffffffff000000000000000000000001"
 const R2: String = "00000004fffffffdfffffffffffffffefffffffbffffffff0000000000000003"
+// n - 1, one less than the order of the base point.
+const ORDER_MINUS_ONE: String = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550"
 // The curve constant b and the base point G, in Montgomery form.
 const B_MONT: String = "dc30061d04874834e5a220abf7212ed6acf005cd78843090d89cdf6229c4bddf"
 const GX_MONT: String = "18905f76a53755c679fb732b7762251075ba95fc5fedb60179e730d418a9143c"

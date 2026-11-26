@@ -47,10 +47,6 @@ does not record where it was asked to go: `t.net_attempts` is a later ticket of 
 /// functions are not scanned at all.
 const EXEMPT: &[(&str, &str)] = &[
     ("TestContext.net_attempts", NATIVE_NET_ATTEMPTS),
-    (
-        "HostConnect.exchange_datagram",
-        "interpreter-first: the native backend refuses it with E0390 (ADR 0026)",
-    ),
     ("Spawn", "process spawning has no runtime yet"),
     ("Sched", "scheduling has no runtime yet"),
 ];
@@ -2018,6 +2014,16 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
         r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
     match net.restrict_to("not a host", 1).connect() {
         Ok(_) => io.println("connected")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "HostConnect.exchange_datagram",
+        Run::Main,
+        r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    match net.restrict_to("example.com", 53).exchange_datagram("12".to_bytes()) {
+        Ok(_) => io.println("answered")
         Err(e) => io.println(e.message)
     }
 }"#,

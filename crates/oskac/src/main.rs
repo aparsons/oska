@@ -19,6 +19,13 @@ macro_rules! outln {
     };
 }
 
+/// Whether this `oskac` is a debug build, the only kind whose programs
+/// honor the DNS test variables `OSKA_DNS_HOSTS`, `OSKA_DNS_RESOLV_CONF` and
+/// `OSKA_DNS_PORT` (ADR 0026). The interpreter's host is told it, and the
+/// native compiler bakes it into each executable; `oskac release` always
+/// builds without it.
+pub(crate) const DNS_TEST_HOOKS: bool = cfg!(debug_assertions);
+
 mod authority_gate;
 mod build;
 mod cache;
@@ -931,9 +938,9 @@ fn run_source(
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
     let mut host = if stdin_closed {
-        oska_run::RealHost::without_stdin()
+        oska_run::RealHost::without_stdin().with_dns_test_hooks(DNS_TEST_HOOKS)
     } else {
-        oska_run::RealHost::new()
+        oska_run::RealHost::new().with_dns_test_hooks(DNS_TEST_HOOKS)
     };
     let outcome = oska_run::run_program_with_limits(program, &mut host, &argv, limits);
     finish_run(outcome, json, &places)
@@ -1006,7 +1013,11 @@ fn test_file(
             }
         }
     }
-    let mut report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
+    let mut report = oska_run::test(
+        &src,
+        &mut oska_run::RealHost::new().with_dns_test_hooks(DNS_TEST_HOOKS),
+        options,
+    );
     settle_snapshots(&mut report, path, &places, flags);
     finish_test(report, json, &places)
 }
@@ -1284,7 +1295,7 @@ fn on_package(
         }
         _ => {}
     }
-    let mut host = oska_run::RealHost::new();
+    let mut host = oska_run::RealHost::new().with_dns_test_hooks(DNS_TEST_HOOKS);
     if let Command::Run(RunOptions { limits, grant }) = command {
         // The package's one check decides both the grant and what runs.
         if let Some(code) = grant.and_then(|file| authority_gate::refuse_run(&report, json, file)) {

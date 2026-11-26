@@ -90,7 +90,14 @@ fn bytes_new(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic>
 /// `Bytes.zeroed(len)`: `len` zero bytes. A negative length panics with
 /// `P0042`, one past [`MAX_BYTES`] with `P0043`.
 fn bytes_zeroed(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
-    let len = args[0].as_int();
+    let len = checked_len(args[0].as_int(), span)?;
+    memory::bytes_of_len(len, span, || vec![0; len])
+}
+
+/// `len` as a buffer length, or `P0042` for a negative one and `P0043` for
+/// one past [`MAX_BYTES`]: the one place `Bytes.zeroed` and
+/// `Random.secure_bytes` refuse a length.
+pub(crate) fn checked_len(len: i128, span: Span) -> Result<usize, Panic> {
     if len < 0 {
         return Err(Panic::new(
             codes::BYTES_OUT_OF_RANGE,
@@ -101,8 +108,7 @@ fn bytes_zeroed(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, 
     if len > MAX_BYTES as i128 {
         return Err(too_long(len, span));
     }
-    let len = len as usize;
-    memory::bytes_of_len(len, span, || vec![0; len])
+    Ok(len as usize)
 }
 
 /// The value of the hexadecimal digit `digit`, in either case.

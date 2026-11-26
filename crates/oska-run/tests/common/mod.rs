@@ -157,7 +157,42 @@ pub fn assert_runs(src: &str, args: &[&str], expected_stdout: &str) {
         outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
         "{src:?} should run cleanly: {outcome:#?}"
     );
-    assert_eq!(outcome.stdout, expected_stdout, "stdout of {src:?}");
+    assert_text_eq(
+        &outcome.stdout,
+        expected_stdout,
+        &format!("stdout of {src:?}"),
+    );
+}
+
+/// Where `actual` first differs from `expected`, if it does: the 1-based
+/// number of the first line that differs and that line on each side (`None`
+/// past the end of a side), then the length of each side in bytes.
+pub fn first_difference(actual: &str, expected: &str) -> Option<String> {
+    if actual == expected {
+        return None;
+    }
+    let mut left = actual.split('\n');
+    let mut right = expected.split('\n');
+    let mut line = 1;
+    loop {
+        let (a, b) = (left.next(), right.next());
+        if a != b {
+            return Some(format!(
+                "first difference at line {line}:\n  left:  {a:?}\n  right: {b:?}\n  lengths: left {} bytes, right {} bytes",
+                actual.len(),
+                expected.len()
+            ));
+        }
+        line += 1;
+    }
+}
+
+/// Assert that two texts are equal. A failure names the first differing line
+/// and both lengths, not both whole texts, so a long output reads at once.
+pub fn assert_text_eq(actual: &str, expected: &str, what: &str) {
+    if let Some(difference) = first_difference(actual, expected) {
+        panic!("{what} differs: {difference}");
+    }
 }
 
 /// Assert that `src` is refused before it starts, with a diagnostic

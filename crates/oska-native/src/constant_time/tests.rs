@@ -543,6 +543,7 @@ mod programs {
             lower::Entry::Main,
             target,
             Limits::NONE,
+            false,
         )
     }
 

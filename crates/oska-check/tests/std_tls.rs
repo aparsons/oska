@@ -16,11 +16,10 @@ use oska_check::{AuditKind, CheckReport};
 
 /// The public functions and methods of `std.tls`, as the authority report
 /// names them.
-const FUNCTIONS: [&str; 15] = [
+const FUNCTIONS: [&str; 14] = [
     "TlsConfig.default",
     "TlsConfig.with_trust",
     "TlsConfig.with_alpn",
-    "TlsConfig.with_rekey_after",
     "Engine.new",
     "Engine.is_connected",
     "Engine.selected_protocol",
@@ -208,6 +207,26 @@ fn what_is_sent_may_be_untrusted() {
 }
 
 #[test]
+fn a_program_cannot_change_when_the_keys_change() {
+    // The rekey interval and the limit on records read under one key are
+    // fixed by RFC 8446, section 5.5: no function of the module lets a
+    // program choose them (the tests build a copy of the module with other
+    // constants, see `crates/oskac/tests/native_tls.rs`).
+    for call in ["with_rekey_after(1)", "with_read_limit(1)"] {
+        let src = format!(
+            "use std.tls\nfn f() -> tls.TlsConfig {{\n    tls.TlsConfig.default().{call}\n}}"
+        );
+        let report = check(&src);
+        assert!(!report.diagnostics.is_empty(), "`{call}` should not check");
+    }
+    let source = include_str!("../src/std/tls.osk");
+    assert!(
+        !source.contains("pub fn with_rekey_after"),
+        "the rekey hook is not public"
+    );
+}
+
+#[test]
 fn the_engines_state_is_private_and_a_stream_cannot_be_forged() {
     let report = check(
         "use std.tls\n\
@@ -309,6 +328,7 @@ fn the_crypto_modules_it_uses_have_no_audit_site() {
         include_str!("../src/std/chacha20poly1305.osk"),
         include_str!("../src/std/aes128gcm.osk"),
         include_str!("../src/std/sha2.osk"),
+        include_str!("../src/std/montgomery.osk"),
         include_str!("../src/std/ecdsa.osk"),
         include_str!("../src/std/rsa.osk"),
         include_str!("../src/std/ed25519.osk"),
@@ -316,5 +336,33 @@ fn the_crypto_modules_it_uses_have_no_audit_site() {
     ] {
         let report = check(source);
         assert!(report.audit.is_empty(), "{:#?}", report.audit);
+    }
+}
+
+/// #699: `std.dns` and `std.tls` (and the runtime's `rt.osk`) never match an
+/// error by its message text. The one reading of an `IoError`'s text is
+/// `std.net_error`'s `classify`, so a change of wording cannot change what
+/// the modules do.
+#[test]
+fn no_module_matches_an_error_by_its_message_text() {
+    for (name, source) in [
+        ("tls.osk", include_str!("../src/std/tls.osk")),
+        ("dns.osk", include_str!("../src/std/dns.osk")),
+        ("rt.osk", include_str!("../src/std/rt.osk")),
+    ] {
+        for (n, line) in source.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            let reads_message = code.contains("error.message")
+                || code.contains("e.message.contains")
+                || code.contains("message.contains(")
+                || code.contains("message.ends_with(")
+                || code.contains("message.starts_with(")
+                || code.contains("message ==");
+            assert!(
+                !reads_message,
+                "{name}:{}: matches a message: {line}",
+                n + 1
+            );
+        }
     }
 }

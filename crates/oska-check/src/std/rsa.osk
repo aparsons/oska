@@ -42,6 +42,7 @@
 // and as many multiplications.
 
 use std.sha2
+use std.montgomery
 
 // The hash a signature was made with. It fixes the digest's length (32,
 // 48 or 64 bytes) and, for PKCS#1 v1.5, its `DigestInfo`.
@@ -53,7 +54,7 @@ pub enum HashAlgorithm {
 
 // An RSA public key: a modulus and a public exponent, which
 // `from_components` checks.
-pub struct PublicKey { field: Field, exponent: List<U64>, size: Int, bits: Int }
+pub struct PublicKey { field: montgomery.Field, exponent: List<U64>, size: Int, bits: Int }
 
 impl PublicKey {
     // The key with `modulus` and `exponent`, big-endian unsigned integers
@@ -77,7 +78,7 @@ impl PublicKey {
             return None
         }
         let limbs = (size + 3) / 4
-        Some(PublicKey(field: make_field(number_from(modulus, m_start, limbs)), exponent: e, size: size, bits: bits))
+        Some(PublicKey(field: montgomery.make_field(number_from(modulus, m_start, limbs)), exponent: e, size: size, bits: bits))
     }
 
     // The modulus' length in bits: 2048 to 8192.
@@ -188,11 +189,11 @@ fn public_operation(key: PublicKey, signature: Untrusted<Bytes>) -> Option<Bytes
     }
     let f = key.field
     let s = number_from(signature, 0, f.m.len())
-    if !less(s, f.m) {
+    if !montgomery.less(s, f.m) {
         return None
     }
-    let result = mont_mul(mont_pow(mont_mul(s, f.r2, f), key.exponent, f), small(1, f.m.len()), f)
-    let bytes = limbs_to_be(result)
+    let result = montgomery.mont_mul(montgomery.mont_pow(montgomery.mont_mul(s, f.r2, f), key.exponent, f), montgomery.small(1, f.m.len()), f)
+    let bytes = montgomery.limbs_to_be(result)
     Some(bytes.slice(bytes.len() - key.size, bytes.len()))
 }
 
@@ -264,159 +265,5 @@ fn number_from(bytes: Untrusted<Bytes>, start: Int, limbs: Int) -> List<U64> {
     for i in start..bytes.len() {
         padded.push(bytes.at(i))
     }
-    limbs_from_be(padded, 0, limbs)
-}
-
-// A prime modulus of `m.len()` limbs, with what Montgomery arithmetic
-// mod it needs: `n0` is -m^-1 mod 2^32, `r2` is R^2 mod m and `one` is R
-// mod m (the number 1 in Montgomery form).
-struct Field { m: List<U64>, n0: U64, r2: List<U64>, one: List<U64> }
-
-// The Montgomery constants of the odd modulus `m`.
-fn make_field(m: List<U64>) -> Field {
-    let m0 = m.at(0)
-    // Newton's iteration for the inverse of m0 mod 2^32: each step doubles
-    // the bits right, and an odd m0 starts with 3.
-    let two: U64 = 2
-    var inverse = m0
-    for _ in 0..5 {
-        inverse = inverse.wrapping_mul(two.wrapping_sub(m0.wrapping_mul(inverse))) & MASK
-    }
-    let n0 = (4294967296 - inverse) & MASK
-    // R mod m and R^2 mod m, by doubling 1 for 32 k and then 64 k times.
-    var x = small(1, m.len())
-    var one = x
-    for i in 0..m.len() * 64 {
-        x = add_mod(x, x, m)
-        if i == m.len() * 32 - 1 {
-            one = x
-        }
-    }
-    Field(m: m, n0: n0, r2: x, one: one)
-}
-
-// ---- Numbers --------------------------------------------------------------------
-
-const MASK: U64 = 4294967295
-
-// The number `value` (below 2^32) in `limbs` limbs.
-fn small(value: U64, limbs: Int) -> List<U64> {
-    var out: List<U64> = [value]
-    for _ in 1..limbs {
-        out.push(0)
-    }
-    out
-}
-
-// The `limbs` limbs of the big-endian number of `4 * limbs` bytes at
-// `start` in `bytes`.
-fn limbs_from_be(bytes: Untrusted<Bytes>, start: Int, limbs: Int) -> List<U64> {
-    var out: List<U64> = List.new()
-    var i = limbs - 1
-    while i >= 0 {
-        out.push(bytes.read_u32_be(start + 4 * i).to_u64())
-        i = i - 1
-    }
-    out
-}
-
-// `x` as big-endian bytes, four to a limb.
-fn limbs_to_be(x: List<U64>) -> Bytes {
-    var out = Bytes.new()
-    var i = x.len() - 1
-    while i >= 0 {
-        out.push_u32_be(x.at(i).to_u32())
-        i = i - 1
-    }
-    out
-}
-
-// Whether `a` < `b`.
-fn less(a: List<U64>, b: List<U64>) -> Bool {
-    var i = a.len() - 1
-    while i >= 0 {
-        if a.at(i) != b.at(i) {
-            return a.at(i) < b.at(i)
-        }
-        i = i - 1
-    }
-    false
-}
-
-// Bit `i` of `x`.
-fn bit_of(x: List<U64>, i: Int) -> Bool {
-    ((x.at(i / 32) >> (i % 32).to_u64()) & 1) == 1
-}
-
-// `a - b`, modulo 2^(32 k) for numbers of k limbs.
-fn sub_limbs(a: List<U64>, b: List<U64>) -> List<U64> {
-    var diff: List<U64> = List.new()
-    var borrow: U64 = 0
-    for i in 0..a.len() {
-        let limb = a.at(i) + 4294967296 - b.at(i) - borrow
-        diff.push(limb & MASK)
-        borrow = 1 - (limb >> 32)
-    }
-    diff
-}
-
-// `a + b` mod m, for `a` and `b` below `m`.
-fn add_mod(a: List<U64>, b: List<U64>, m: List<U64>) -> List<U64> {
-    var sum: List<U64> = List.new()
-    var carry: U64 = 0
-    for i in 0..a.len() {
-        let limb = a.at(i) + b.at(i) + carry
-        sum.push(limb & MASK)
-        carry = limb >> 32
-    }
-    if carry == 1 || !less(sum, m) { sub_limbs(sum, m) } else { sum }
-}
-
-// The Montgomery product `a b R^-1` mod m of `a` and `b` below m: one
-// pass a limb of `b`, adding `a b_i`, then the multiple of m that clears
-// the lowest limb, and shifting down a limb.
-fn mont_mul(a: List<U64>, b: List<U64>, f: Field) -> List<U64> {
-    let k = f.m.len()
-    var t: List<U64> = List.new()
-    for _ in 0..k + 1 {
-        t.push(0)
-    }
-    for i in 0..k {
-        let bi = b.at(i)
-        let s0 = t.at(0) + a.at(0) * bi
-        let q = ((s0 & MASK) * f.n0) & MASK
-        var c1 = s0 >> 32
-        var c2 = ((s0 & MASK) + q * f.m.at(0)) >> 32
-        var next: List<U64> = List.new()
-        for j in 1..k {
-            let s = t.at(j) + a.at(j) * bi + c1
-            c1 = s >> 32
-            let s2 = (s & MASK) + q * f.m.at(j) + c2
-            c2 = s2 >> 32
-            next.push(s2 & MASK)
-        }
-        let top = t.at(k) + c1 + c2
-        next.push(top & MASK)
-        next.push(top >> 32)
-        t = next
-    }
-    var out: List<U64> = List.new()
-    for i in 0..k {
-        out.push(t.at(i))
-    }
-    if t.at(k) != 0 || !less(out, f.m) { sub_limbs(out, f.m) } else { out }
-}
-
-// `base` (in Montgomery form) to the power `exp`, in Montgomery form.
-fn mont_pow(base: List<U64>, exp: List<U64>, f: Field) -> List<U64> {
-    var acc = f.one
-    var i = exp.len() * 32 - 1
-    while i >= 0 {
-        acc = mont_mul(acc, acc, f)
-        if bit_of(exp, i) {
-            acc = mont_mul(acc, base, f)
-        }
-        i = i - 1
-    }
-    acc
+    montgomery.limbs_from_be(padded, 0, limbs)
 }

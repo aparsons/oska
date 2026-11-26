@@ -73,6 +73,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.net_error",
+        source: include_str!("std/net_error.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.dns",
         source: include_str!("std/dns.osk"),
         sink_literal: None,
@@ -87,6 +93,12 @@ pub static STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "std.ed25519",
         source: include_str!("std/ed25519.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.montgomery",
+        source: include_str!("std/montgomery.osk"),
         sink_literal: None,
         written_in_oska: true,
     },

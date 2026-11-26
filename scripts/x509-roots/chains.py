@@ -407,6 +407,19 @@ t = good.index(b"\x17\x0d")
 mal["bad_time"] = good[: t + 2] + b"24x101000000Z" + good[t + 15 :]
 # Month 13.
 mal["month_13"] = good[: t + 2] + b"241301000000Z" + good[t + 15 :]
+# A malformed extension, each parsed before anything is verified: the extension's value is DER inside an
+# OCTET STRING, so change one tag in it. `eku_not_seq`: the extended key usage is not a SEQUENCE; `eku_not_oid`: a
+# purpose is not an OBJECT IDENTIFIER; `aki_not_seq` and `ski_not_octets` likewise for the key identifiers.
+def patch(cert, oid, offset, old, new):
+    at = cert.index(oid) + len(oid)
+    assert cert[at + offset] == old
+    return cert[: at + offset] + bytes([new]) + cert[at + offset + 1 :]
+
+# After `06 03 55 1d NN`: `04 LL` (the OCTET STRING), then the value.
+mal["eku_not_seq"] = patch(good, b"\x06\x03\x55\x1d\x25", 2, 0x30, 0x31)
+mal["eku_not_oid"] = patch(good, b"\x06\x03\x55\x1d\x25", 4, 0x06, 0x04)
+mal["aki_not_seq"] = patch(certs["leaf_k"], b"\x06\x03\x55\x1d\x23", 2, 0x30, 0x31)
+mal["ski_not_octets"] = patch(certs["int_k_good"], b"\x06\x03\x55\x1d\x0e", 2, 0x04, 0x03)
 # Not a certificate at all.
 mal["junk"] = b"\x30\x03\x02\x01\x05"
 
@@ -443,6 +456,7 @@ QUICK = {
     "a wildcard covers one label, only as the whole leftmost label, and not a bare suffix",
     "the common name is never used",
     "the host is checked before the chain",
+    "a malformed extension is Malformed",
     "a critical extension that is not understood is refused when parsing",
     "a certificate that is not strictly DER is Malformed",
     "a version that is not v1 or v3 is UnsupportedVersion",
@@ -871,6 +885,24 @@ test "a path is at most eight certificates before the root" {
 
 test "the server's certificate must name server authentication" {
     t.assert_eq(under_a(leaf_no_eku()), "ExtendedKeyUsage")
+}
+
+test "an intermediate with no extended key usage is accepted" {
+    // `int_a` is a CA with no extended key usage extension at all.
+    t.assert_eq(under_a(leaf_a()), "ok 2")
+}
+
+test "two issuers of one name are told apart by their key identifiers, in either order" {
+    t.assert_eq(verify([root_a()], leaf_k(), [int_k_decoy(), int_k_good()], "example.test"), "ok 2")
+    t.assert_eq(verify([root_a()], leaf_k(), [int_k_good(), int_k_decoy()], "example.test"), "ok 2")
+    t.assert_eq(verify([root_a()], leaf_k(), [int_k_decoy()], "example.test"), "UnknownIssuer")
+}
+
+test "a malformed extension is Malformed" {
+    t.assert_eq(parse_kind(bad_eku_not_seq()), "Malformed")
+    t.assert_eq(parse_kind(bad_eku_not_oid()), "Malformed")
+    t.assert_eq(parse_kind(bad_aki_not_seq()), "Malformed")
+    t.assert_eq(parse_kind(bad_ski_not_octets()), "Malformed")
 }
 
 test "a CA's name constraints apply to the certificates below it, not only the leaf" {

@@ -272,7 +272,7 @@ fi
 full_cargo='fmt --all --check
 clippy --all-targets -- -D warnings
 check -p oskac --tests --target x86_64-pc-windows-gnu
-test --all'
+test --all --no-fail-fast'
 for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
   'echo two >docs/index.md && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qam d'; do
   fresh_clone
@@ -432,7 +432,7 @@ if [ "$status" -eq 0 ] && [ "$headers" = "cargo fmt,cargo clippy,cargo test (pri
 else
   bad "--fast on a crate change runs fmt, clippy and cargo test only" "exit $status, headers: $headers"
 fi
-if [ "$cargo_test" = "cargo test -p a" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p a" ]; then
   ok "--fast tests only the changed crate"
 else
   bad "--fast tests only the changed crate" "got: $cargo_test"
@@ -445,28 +445,28 @@ else
 fi
 
 fast_case "two crates" 'mkdir -p crates/b && echo b >crates/b/lib.rs && echo two >crates/a/src/lib.rs && git add -A && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qm c'
-if [ "$cargo_test" = "cargo test -p a -p b" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p a -p b" ]; then
   ok "--fast tests each changed crate, committed or not"
 else
   bad "--fast tests each changed crate, committed or not" "got: $cargo_test"
 fi
 
 fast_case "a library crate change" 'mkdir -p crates/lib && echo two >crates/lib/lib.rs'
-if [ "$cargo_test" = "cargo test -p app -p lib -p top" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p app -p lib -p top" ]; then
   ok "--fast tests a changed crate's dependents, direct and indirect"
 else
   bad "--fast tests a changed crate's dependents, direct and indirect" "got: $cargo_test"
 fi
 
 fast_case "a crate whose directory is not its name" 'mkdir -p crates/app-dir && echo two >crates/app-dir/main.rs'
-if [ "$cargo_test" = "cargo test -p app -p top" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast -p app -p top" ]; then
   ok "--fast names a crate by its package name, not its directory"
 else
   bad "--fast names a crate by its package name, not its directory" "got: $cargo_test"
 fi
 
 fast_case "a core crate change" 'mkdir -p crates/core && echo two >crates/core/lib.rs'
-if [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast runs the full test command when half the workspace or more would be tested"
 else
   bad "--fast runs the full test command when half the workspace or more would be tested" "got: $cargo_test"
@@ -478,21 +478,21 @@ else
 fi
 
 fast_case "a file in no package" 'mkdir -p crates/loose && echo two >crates/loose/x.rs'
-if [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast tests every crate when a changed file is in no package"
 else
   bad "--fast tests every crate when a changed file is in no package" "got: $cargo_test"
 fi
 
 STUB_FAIL="cargo metadata" fast_case "no cargo metadata" 'echo two >crates/a/src/lib.rs'
-if [ "$status" -eq 0 ] && [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$status" -eq 0 ] && [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast tests every crate when cargo metadata fails"
 else
   bad "--fast tests every crate when cargo metadata fails" "exit $status, got: $cargo_test"
 fi
 
 fast_case "a Cargo.toml change" 'echo two >Cargo.toml'
-if [ "$cargo_test" = "cargo test --all" ]; then
+if [ "$cargo_test" = "cargo test --no-fail-fast --all" ]; then
   ok "--fast tests every crate for a cargo input outside crates/"
 else
   bad "--fast tests every crate for a cargo input outside crates/" "got: $cargo_test"
@@ -578,7 +578,7 @@ fi
 # Cannot tell what changed: every step runs, still with no stamp.
 fast_case "no origin/main" 'echo two >CLAUDE.md && git update-ref -d refs/remotes/origin/main'
 headers=$(printf '%s\n' "$out" | sed -n 's/^== //p')
-if [ "$status" -eq 0 ] && [ "$headers" = "$list" ] && [ "$cargo_test" = "cargo test --all" ] &&
+if [ "$status" -eq 0 ] && [ "$headers" = "$list" ] && [ "$cargo_test" = "cargo test --all --no-fail-fast" ] &&
   printf '%s\n' "$out" | grep -q 'cannot tell what changed'; then
   ok "--fast that cannot tell what changed runs the full check, and says why"
 else
@@ -705,29 +705,102 @@ else
   bad "an unknown argument exits 2 and runs nothing" "exit $status, ran: $log"
 fi
 
-# --- --group splits the steps in two, with none lost ------------------------
+# --- --group splits the steps in four, with none lost -----------------------
 check --list
 all_steps=$(printf '%s\n' "$out" | sort)
-check --list --group tests
-tests_steps=$out
-check --list --group checks
-checks_steps=$out
-both=$(printf '%s\n%s\n' "$tests_steps" "$checks_steps" | sed '/^$/d' | sort)
+group_steps() { # GROUP: the steps of that group, in order
+  check --list --group "$1"
+  printf '%s\n' "$out"
+}
+tests_steps=$(group_steps tests)
+formal_steps=$(group_steps formal)
+lint_steps=$(group_steps lint)
+scripts_steps=$(group_steps scripts)
+checks_steps=$(group_steps checks)
+both=$(printf '%s\n%s\n%s\n%s\n' "$tests_steps" "$formal_steps" "$lint_steps" "$scripts_steps" | sed '/^$/d' | sort)
 if [ "$both" = "$all_steps" ]; then
-  ok "--group tests and --group checks together list every step, each once"
+  ok "--group tests, formal, lint and scripts together list every step, each once"
 else
-  bad "--group tests and --group checks together list every step, each once" "all: $all_steps; groups: $both"
+  bad "--group tests, formal, lint and scripts together list every step, each once" "all: $all_steps; groups: $both"
 fi
 if [ "$tests_steps" = "cargo test (private temporary directory)" ]; then
   ok "--group tests is the cargo test step"
 else
   bad "--group tests is the cargo test step" "got: $tests_steps"
 fi
+if [ "$formal_steps" = $'formal\nformal step tests' ]; then
+  ok "--group formal is the formal step and its tests"
+else
+  bad "--group formal is the formal step and its tests" "got: $formal_steps"
+fi
+for step_name in "cargo fmt" "cargo clippy" "oskac type-checks for Windows" "shellcheck" "claude plugin validate" "workflow validation"; do
+  if printf '%s\n' "$lint_steps" | grep -qxF "$step_name"; then
+    ok "--group lint has the $step_name step"
+  else
+    bad "--group lint has the $step_name step" "got: $lint_steps"
+  fi
+done
+for step_name in "installer tests" "release script tests" "test shard tests" "eval task set"; do
+  if printf '%s\n' "$scripts_steps" | grep -qxF "$step_name"; then
+    ok "--group scripts has the $step_name step"
+  else
+    bad "--group scripts has the $step_name step" "got: $scripts_steps"
+  fi
+done
+union=$(printf '%s\n%s\n%s\n' "$formal_steps" "$lint_steps" "$scripts_steps" | sed '/^$/d' | sort)
+if [ "$(printf '%s\n' "$checks_steps" | sort)" = "$union" ]; then
+  ok "--group checks is formal, lint and scripts together"
+else
+  bad "--group checks is formal, lint and scripts together" "got: $checks_steps"
+fi
+# A group run is not the full check: it writes no pass stamp.
+for group in formal lint scripts checks; do
+  check --group "$group"
+  if [ "$status" -eq 0 ] && ! printf '%s\n' "$out" | grep -q '^\[stamp write' &&
+    printf '%s\n' "$out" | grep -q "Group $group passed. This was NOT the full check"; then
+    ok "--group $group writes no pass stamp"
+  else
+    bad "--group $group writes no pass stamp" "exit $status: $out"
+  fi
+done
+# The formal step may skip a missing Lean or TLC (run.sh exits 3) outside CI,
+# and must fail in CI, also through --group formal (ADRs 0018, 0019).
+formal_run=$tree/scripts/formal/run.sh
+cp "$formal_run" "$work/formal-run.sh.orig"
+printf '#!/usr/bin/env bash\nexit 3\n' >"$formal_run"
+set +e
+out=$(cd "$tree" && env -u CI -u GITHUB_ACTIONS PATH="$tree/bin:$PATH" STUB_LOG="$work/log" scripts/check.sh --group formal 2>&1)
+status=$?
+set -e
+if [ "$status" -eq 0 ]; then
+  ok "--group formal skips a missing Lean or TLC outside CI"
+else
+  bad "--group formal skips a missing Lean or TLC outside CI" "exit $status: $out"
+fi
+set +e
+out=$(cd "$tree" && env -u CI -u GITHUB_ACTIONS GITHUB_ACTIONS=true PATH="$tree/bin:$PATH" STUB_LOG="$work/log" scripts/check.sh --group formal 2>&1)
+status=$?
+set -e
+if [ "$status" -ne 0 ] && printf '%s\n' "$out" | grep -q 'CI must run the formal step'; then
+  ok "--group formal fails, never skips, a missing Lean or TLC in CI"
+else
+  bad "--group formal fails, never skips, a missing Lean or TLC in CI" "exit $status: $out"
+fi
+cp "$work/formal-run.sh.orig" "$formal_run"
 check --group nonsense
 if [ "$status" -eq 2 ] && [ -z "$log" ]; then
   ok "an unknown group exits 2 and runs nothing"
 else
   bad "an unknown group exits 2 and runs nothing" "exit $status, ran: $log"
+fi
+
+# ci.yml's test matrix names exactly the groups check.sh has, so a row cannot
+# name a group that does not exist and no group goes unrun in CI (spec #712).
+have=$(sed -n 's/^ *- {os: [^,]*, group: \([a-z]*\),.*/\1/p' "$repo_root/.github/workflows/ci.yml" | sort -u | tr '\n' ' ')
+if [ "$have" = "formal lint scripts tests " ]; then
+  ok "ci.yml's test matrix runs the groups formal, lint, scripts and tests"
+else
+  bad "ci.yml's test matrix runs the groups formal, lint, scripts and tests" "matrix groups: $have"
 fi
 
 printf '\n%d passed, %d failed\n' "$passed" "$failures"

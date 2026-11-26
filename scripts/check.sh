@@ -11,9 +11,13 @@
 #                              it); never writes a pass stamp
 #   scripts/check.sh --list    print the step names, in order; run nothing
 #   scripts/check.sh --group G only the steps of group G: `tests` (the cargo
-#                              test step) or `checks` (every other step);
-#                              CI runs the groups in separate jobs. Never
-#                              writes a pass stamp. See also OSKA_TEST_SHARD.
+#                              test step), `formal` (Lean and TLC), `lint`
+#                              (the static checks of the source tree) or
+#                              `scripts` (the script suites and the eval
+#                              task set); CI runs the groups in separate
+#                              jobs. `checks` is all of formal, lint and
+#                              scripts. Never writes a pass stamp. See also
+#                              OSKA_TEST_SHARD.
 #
 # --fast is the inner loop, and what the pre-push hook runs for a push to
 # ticket/** branches only. It ends by saying it is NOT the full check: CI
@@ -74,10 +78,14 @@
 
 set -euo pipefail
 
+# A failing test or a panic prints its stack trace, here and in CI alike, so
+# the cause is in the first log read. A caller's own value wins.
+export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
+
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: scripts/check.sh [--fast] [--list]" >&2
+  echo "usage: scripts/check.sh [--fast] [--list] [--group tests|formal|lint|scripts|checks]" >&2
   exit 2
 }
 
@@ -90,7 +98,7 @@ while [ $# -gt 0 ]; do
     --list) mode=list ;;
     --group)
       only_group=${2:-}
-      case $only_group in tests | checks) ;; *) usage ;; esac
+      case $only_group in tests | formal | lint | scripts | checks) ;; *) usage ;; esac
       shift
       ;;
     --fast)
@@ -132,7 +140,7 @@ ran_any=      # set once a step's block runs
 fast_decided= # set once a --fast run has decided whether it can be fast
 
 # step NAME [--fast] [--fast-when PATTERN]... [--no-slot] [--cargo]
-# [--docs-tests] [--group tests]: opens a step's block,
+# [--docs-tests] [--group G]: opens a step's block,
 # `if step "NAME"; then ... fi`. In a run it prints the step's header and the
 # block runs; with --list it prints NAME and the block is skipped. So the list
 # is always the steps that run, in order. The first step of a run records the
@@ -140,7 +148,7 @@ fast_decided= # set once a --fast run has decided whether it can be fast
 # skipped waits for a build slot. In the fast tier a step runs only when its
 # tags say so (see the top of this file).
 step() {
-  local name=$1 fast='' slot=1 cargo='' docs='' when=() group=checks
+  local name=$1 fast='' slot=1 cargo='' docs='' when=() group=lint
   shift
   while [ $# -gt 0 ]; do
     case $1 in
@@ -154,6 +162,11 @@ step() {
       --docs-tests) docs=1 ;;
       --group)
         group=${2:?}
+        case $group in tests | formal | lint | scripts) ;; *)
+          printf 'check.sh: step "%s": unknown group %s\n' "$name" "$group" >&2
+          exit 2
+          ;;
+        esac
         shift
         ;;
       *)
@@ -167,9 +180,12 @@ step() {
     printf 'check.sh: step "%s": --docs-tests needs --cargo\n' "$name" >&2
     exit 2
   fi
-  # --group: another group's steps are not listed and do not run.
+  # --group: another group's steps are not listed and do not run. `checks`
+  # is every group but `tests`. A step with no --group is in `lint`.
   if [ -n "$only_group" ] && [ "$only_group" != "$group" ]; then
-    return 1
+    if [ "$only_group" != checks ] || [ "$group" = tests ]; then
+      return 1
+    fi
   fi
   if [ -n "$fast_run" ] && [ -z "$fast_decided" ]; then
     fast_decided=1
@@ -558,25 +574,25 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests -
     run_docs_tests
   elif [ "$tier" = fast ]; then
     # shellcheck disable=SC2046 # one word per package argument
-    scripts/temp-leak/run.sh cargo test $(fast_crates)
+    scripts/temp-leak/run.sh cargo test --no-fail-fast $(fast_crates)
   elif [ -n "${OSKA_TEST_SHARD:-}" ]; then
     # CI's parallel shards of this step (scripts/test-shard.sh): the set is
     # the host's, "linux" or "macos". Every shard of a set together is the
     # whole `cargo test --all`.
     scripts/temp-leak/run.sh scripts/test-shard.sh "${OSKA_TEST_SET:?OSKA_TEST_SHARD needs OSKA_TEST_SET}" "$OSKA_TEST_SHARD"
   else
-    scripts/temp-leak/run.sh cargo test --all
+    scripts/temp-leak/run.sh cargo test --all --no-fail-fast
   fi
 fi
 
-if step "eval task set" --cargo --fast-when 'eval/*' --fast-when 'crates/oska-eval/*' --fast-when 'scripts/eval-tasks/*'; then
+if step "eval task set" --cargo --fast-when 'eval/*' --fast-when 'crates/oska-eval/*' --fast-when 'scripts/eval-tasks/*' --group scripts; then
   # The harness's `validate` over eval/tasks, with the oskac just built
   # (offline). The fast tier runs it when the task set or the harness changed;
   # a compiler change gets it from the full check and CI.
   scripts/eval-tasks/run.sh
 fi
 
-if step "eval batch driver tests" --fast-when 'scripts/eval-batch/*' --fast-when 'crates/oska-eval/*'; then
+if step "eval batch driver tests" --fast-when 'scripts/eval-batch/*' --fast-when 'crates/oska-eval/*' --group scripts; then
   # The live driver end to end with a stub `claude` on PATH: offline, no
   # model is called. The driver itself refuses to run live in CI.
   # The step takes the build slot in `step` before this block, whether or
@@ -592,21 +608,21 @@ if step "eval batch driver tests" --fast-when 'scripts/eval-batch/*' --fast-when
   fi
 fi
 
-if step "installer tests" --fast-when 'scripts/install/*'; then
+if step "installer tests" --fast-when 'scripts/install/*' --group scripts; then
   bash scripts/install/test.sh
 fi
 
-if step "release script tests" --fast-when 'scripts/release/*'; then
+if step "release script tests" --fast-when 'scripts/release/*' --group scripts; then
   bash scripts/release/test.sh
 fi
 
-if step "release notes tests" --fast-when 'scripts/release/*'; then
+if step "release notes tests" --fast-when 'scripts/release/*' --group scripts; then
   # scripts/release/notes.sh, the GitHub release body: the version's
   # CHANGELOG.md section and a footer; it fails closed.
   bash scripts/release/notes-test.sh
 fi
 
-if step "release image tests" --fast-when 'scripts/release/*'; then
+if step "release image tests" --fast-when 'scripts/release/*' --group scripts; then
   # The oskac container image builder (scripts/release/image.sh): the same
   # fake binaries give the same OCI bytes, and the layout holds only /oskac
   # and /tmp, run as user 65532. They read GNU tar's listing, and jq, as
@@ -622,14 +638,14 @@ if step "release image tests" --fast-when 'scripts/release/*'; then
   fi
 fi
 
-if step "release image push tests" --fast-when 'scripts/release/*'; then
+if step "release image push tests" --fast-when 'scripts/release/*' --group scripts; then
   # scripts/release/push-image.sh, with a fake skopeo: it pushes only the
   # image the signed release rebuilds to, and fails when the registry
   # serves another digest than the signed one.
   bash scripts/release/push-image-test.sh
 fi
 
-if step "Linux build check tests" --fast-when 'scripts/release/*'; then
+if step "Linux build check tests" --fast-when 'scripts/release/*' --group scripts; then
   # They run GNU readelf, as the release runners have it.
   if grep -q 'GNU readelf' <<<"$(readelf --version 2>/dev/null || true)"; then
     bash scripts/release/check-linux-build-test.sh
@@ -642,19 +658,19 @@ if step "Linux build check tests" --fast-when 'scripts/release/*'; then
   fi
 fi
 
-if step "unsafe guard tests" --fast-when 'scripts/unsafe-guard/*'; then
+if step "unsafe guard tests" --fast-when 'scripts/unsafe-guard/*' --group scripts; then
   bash scripts/unsafe-guard/test.sh
 fi
 
-if step "intrinsic guard tests" --fast-when 'scripts/intrinsic-guard/*'; then
+if step "intrinsic guard tests" --fast-when 'scripts/intrinsic-guard/*' --group scripts; then
   bash scripts/intrinsic-guard/test.sh
 fi
 
-if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*'; then
+if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*' --group scripts; then
   bash scripts/spdx-guard/test.sh
 fi
 
-if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json; then
+if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json --group scripts; then
   # The Claude Code hook (.claude/settings.json) that refuses pkill -f, killall
   # and other kills by pattern, name or session.
   bash scripts/kill-guard/test.sh
@@ -684,50 +700,50 @@ if step "claude plugin validate" --no-slot --fast-when '.claude-plugin/*' --fast
   fi
 fi
 
-if step "workflow guard tests" --fast-when 'scripts/workflow-guard/*'; then
+if step "workflow guard tests" --fast-when 'scripts/workflow-guard/*' --group scripts; then
   bash scripts/workflow-guard/test.sh
 fi
 
-if step "temp-leak wrapper tests" --fast-when 'scripts/temp-leak/*'; then
+if step "temp-leak wrapper tests" --fast-when 'scripts/temp-leak/*' --group scripts; then
   bash scripts/temp-leak/test.sh
 fi
 
-if step "rust-stable tests" --fast-when 'scripts/rust-stable/*'; then
+if step "rust-stable tests" --fast-when 'scripts/rust-stable/*' --group scripts; then
   bash scripts/rust-stable/test.sh
 fi
 
-if step "cross-build manifest tests" --fast-when 'scripts/cross-build/*'; then
+if step "cross-build manifest tests" --fast-when 'scripts/cross-build/*' --group scripts; then
   bash scripts/cross-build/test.sh
 fi
 
-if step "cargo cache tests" --fast-when 'scripts/cargo-cache/*'; then
+if step "cargo cache tests" --fast-when 'scripts/cargo-cache/*' --group scripts; then
   bash scripts/cargo-cache/test.sh
 fi
 
-if step "build slot tests" --fast-when 'scripts/build-slots/*'; then
+if step "build slot tests" --fast-when 'scripts/build-slots/*' --group scripts; then
   bash scripts/build-slots/test.sh
 fi
 
-if step "pass stamp tests" --fast-when 'scripts/pass-stamp/*' --fast-when '.githooks/*'; then
+if step "pass stamp tests" --fast-when 'scripts/pass-stamp/*' --fast-when '.githooks/*' --group scripts; then
   bash scripts/pass-stamp/test.sh
 fi
 
-if step "docs-test list tests" --fast-when 'scripts/docs-tests/*'; then
+if step "docs-test list tests" --fast-when 'scripts/docs-tests/*' --group scripts; then
   # The Rust tests that read docs/, which a docs-only change runs.
   bash scripts/docs-tests/test.sh
 fi
 
-if step "test shard tests" --fast-when 'scripts/test-shard*' --fast-when '.github/workflows/ci.yml' --fast-when 'crates/*/tests/*'; then
+if step "test shard tests" --fast-when 'scripts/test-shard*' --fast-when '.github/workflows/ci.yml' --fast-when 'crates/*/tests/*' --group scripts; then
   # Each test of a CI job's set runs in exactly one shard (scripts/test-shard.sh).
   bash scripts/test-shard/test.sh
 fi
 
-if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh; then
+if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh --group scripts; then
   # --list prints exactly the steps a run runs, in order (this file's blocks).
   bash scripts/check-steps/test.sh
 fi
 
-if step "formal" --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
+if step "formal" --fast-when 'formal/*' --fast-when 'scripts/formal/*' --group formal; then
   # Builds the Lean proofs of Oska Core and runs TLC on every TLA+ model
   # (ADRs 0018, 0019; docs/agents/formal.md). An unfinished proof (`sorry`)
   # fails. A missing Lean or TLC skips here, but fails in CI, where the test
@@ -746,7 +762,7 @@ if step "formal" --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
   fi
 fi
 
-if step "formal step tests" --no-slot --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
+if step "formal step tests" --no-slot --fast-when 'formal/*' --fast-when 'scripts/formal/*' --group formal; then
   bash scripts/formal/test.sh
 fi
 
@@ -766,15 +782,15 @@ if step "workflow validation" --no-slot --fast-when '.github/workflows/*' --fast
   fi
 fi
 
-if step "workflow validation tests" --no-slot --fast-when 'scripts/actionlint/*'; then
+if step "workflow validation tests" --no-slot --fast-when 'scripts/actionlint/*' --group scripts; then
   bash scripts/actionlint/test.sh
 fi
 
-if step "x509 roots generator tests" --no-slot --fast-when 'scripts/x509-roots/*' --fast-when 'crates/oska-check/src/std/x509_roots.osk'; then
+if step "x509 roots generator tests" --no-slot --fast-when 'scripts/x509-roots/*' --fast-when 'crates/oska-check/src/std/x509_roots.osk' --group scripts; then
   bash scripts/x509-roots/test.sh
 fi
 
-if step "expected workflows tests" --no-slot --fast-when 'scripts/expected-workflows/*'; then
+if step "expected workflows tests" --no-slot --fast-when 'scripts/expected-workflows/*' --group scripts; then
   bash scripts/expected-workflows/test.sh
 fi
 

@@ -17,6 +17,7 @@ ok() { printf 'ok   %s\n' "$1"; passed=$((passed + 1)); }
 bad() { printf 'FAIL %s: %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
 split=$(grep '^SITE_SPLIT=' scripts/test-shard.sh | cut -d= -f2)
+corpus=$(grep '^CORPUS_SPLIT=' scripts/test-shard.sh | cut -d= -f2)
 
 for set in musl linux macos windows; do
   # Each shard but `all`, one "PACKAGE KIND NAME" line a target; a site slice
@@ -27,10 +28,10 @@ for set in musl linux macos windows; do
   # `all` is the whole set: what every shard must add up to. Its site.rs is
   # one target, so the slices are folded back into it.
   want=$(scripts/test-shard.sh "$set" all --plan | sort)
-  folded=$(printf '%s\n' "$got" | sed 's|^\(oska-run test site\)/[0-9]*$|\1|' | sort | uniq -c | awk '{c=$1; $1=""; sub(/^ /,""); print c "\t" $0}')
+  folded=$(printf '%s\n' "$got" | sed -e 's|^\(oska-run test site\)/[0-9]*$|\1|' -e 's|^\(oskac test native_tests\)/[0-9]*$|\1|' | sort | uniq -c | awk '{c=$1; $1=""; sub(/^ /,""); print c "\t" $0}')
   slices=$(printf '%s\n' "$got" | grep -c '^oska-run test site/' || true)
-  extra=$(printf '%s\n' "$folded" | awk -F'\t' -v n="$split" -v set="$set" '
-    { want = ($2 == "oska-run test site" && set == "musl") ? n : 1; if ($1 != want) print $0 }')
+  extra=$(printf '%s\n' "$folded" | awk -F'\t' -v n="$split" -v c="$corpus" -v set="$set" '
+    { want = ($2 == "oska-run test site" && set == "musl") ? n : (($2 == "oskac test native_tests" && set == "macos") ? c : 1); if ($1 != want) print $0 }')
   if [ -n "$extra" ]; then
     bad "$set: each target runs once" "run more or fewer times than once: $extra"
   else
@@ -48,8 +49,8 @@ for set in musl linux macos windows; do
 done
 
 # Every test file of oska-sys, oska-run and oskac (macos, linux) is in a plan.
-# The plan is read once: `grep -q` closing a pipe early made the writer die of
-# SIGPIPE, which `pipefail` reports as a missing target (about 1 run in 10).
+# The plan is read once into a variable: `grep -q` quitting early on a pipe
+# would end the plan script with SIGPIPE, and `pipefail` would call that a miss.
 linux_plan=$(scripts/test-shard.sh linux all --plan)
 for f in crates/oska-run/tests/*.rs crates/oska-sys/tests/*.rs crates/oskac/tests/*.rs; do
   n=$(basename "$f" .rs)

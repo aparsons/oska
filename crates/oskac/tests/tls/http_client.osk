@@ -11,7 +11,7 @@
 // `error` and the error's wording. Modes: `get` asks for `/index`; `echo`
 // asks for `/a%20b?q=1` with two extra headers, one of them from untrusted
 // text; `large` asks for a big body; `limit` asks for one with a maximum
-// of 30000 bytes; `default_roots` trusts only Mozilla's roots.
+// of 30000 bytes; `ceiling` sets one over `http.MAX_BODY`; `default_roots` trusts only Mozilla's roots.
 
 use std.http
 use std.x509
@@ -42,6 +42,9 @@ fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Resul
     }
     if mode == "limit" {
         request = request.with_max_body(30000)
+    }
+    if mode == "ceiling" {
+        request = request.with_max_body(http.MAX_BODY + 1)
     }
     match http.get(net.restrict_to(name, port), request, config, random, clock) {
         Err(error) => { show(io, error) }

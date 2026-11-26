@@ -15,6 +15,8 @@
 // Every argument and result is an `Int` (a 64-bit word). A system call
 // returns the operating system's raw result: a negative value is `-errno`.
 
+use std.dns
+
 // ---- System calls ----------------------------------------------------------
 //
 // Most are the POSIX calls of their names, which every Unix Oska targets
@@ -123,12 +125,13 @@ pub fn rt_sys_stack_guarantee(size: Int) -> Int
 pub fn rt_sys_system_time(time: Int) -> Int
 // `ProcessPrng(buf, length)`: fills all `length` bytes.
 pub fn rt_sys_process_prng(buf: Int, length: Int) -> Int
-// `GetNetworkParams(info, size)` of `iphlpapi.dll`: writes a `FIXED_INFO`
-// with the system's DNS servers to `info`, whose size in bytes is the
-// `ULONG` at `size`. The result is the Win32 error code itself: 0, or 111
-// when `info` is too small, with the size needed written to `size` (ADR
-// 0024).
-pub fn rt_sys_get_network_params(info: Int, size: Int) -> Int
+// `GetAdaptersAddresses(family, flags, reserved, addresses, size)` of
+// `iphlpapi.dll`: writes the adapters' `IP_ADAPTER_ADDRESSES` list to
+// `addresses`, whose size in bytes is the `ULONG` at `size`. The result is
+// the Win32 error code itself: 0, 111 when `addresses` is too small (with
+// the size needed written to `size`), or 232 when there is no adapter (ADR
+// 0026).
+pub fn rt_sys_get_adapters_addresses(family: Int, flags: Int, reserved: Int, addresses: Int, size: Int) -> Int
 
 // Sockets (spec #228, ADR 0013). `rt_sys_socket(domain, type, protocol)`,
 // `connect(fd, address, length)`, `bind`, `listen(fd, backlog)`,
@@ -232,6 +235,18 @@ pub fn rt_mem_as_bytes(object: Int) -> Bytes
 // The directory or file capability whose object is at `object`, as the
 // runtime's `Root` (the reference passes, as for text).
 pub fn rt_mem_as_root(object: Int) -> Root
+// The capability `FsRead`, `NetConnect`, `Random` or `Env` of the word 0,
+// which is every one of them natively (they keep their state in the
+// runtime's globals): for the resolver that `connect` calls (`std.dns`).
+pub fn rt_mem_as_fs_read(object: Int) -> FsRead
+pub fn rt_mem_as_net_connect(object: Int) -> NetConnect
+pub fn rt_mem_as_random(object: Int) -> Random
+pub fn rt_mem_as_env(object: Int) -> Env
+// 1 when the compiler built this executable for a debug build of Oska,
+// so that `std.dns` honors the `OSKA_DNS_*` test variables, else 0 (ADR
+// 0026). A constant the compiler writes, so `connect`'s flag never comes
+// from a program or its environment.
+pub fn rt_mem_dns_test_hooks() -> Int
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
@@ -2065,11 +2080,17 @@ pub fn bytes_new() -> Bytes {
 // and for one past `max_bytes` the word -1, in place of a buffer, for the
 // generated code to panic (`P0042`, `P0043`).
 pub fn bytes_zeroed(length: Int) -> Bytes {
+    rt_mem_as_bytes(bytes_zeroed_word(length))
+}
+
+// The buffer `bytes_zeroed` makes, or its refusal word, as an `Int`, so
+// `random_secure_bytes` shares the one check without holding a `Bytes`.
+fn bytes_zeroed_word(length: Int) -> Int {
     if length < 0 {
-        return rt_mem_as_bytes(0)
+        return 0
     }
     if length > max_bytes() {
-        return rt_mem_as_bytes(-1)
+        return -1
     }
     let room = bytes_room(length)
     let size = 24 + room
@@ -2093,7 +2114,7 @@ pub fn bytes_zeroed(length: Int) -> Bytes {
         }
     }
     rt_mem_store64(rt_mem_add(object, 8), length)
-    rt_mem_as_bytes(object)
+    object
 }
 
 // The value of the hexadecimal digit `c`, in either case, or -1.
@@ -4098,14 +4119,12 @@ pub fn random_next_int(random: Random) -> Int {
 // length and -1 one past `max_bytes`. No secure source ends the program:
 // there is no guessable fallback.
 pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
-    if length < 0 {
-        return rt_mem_as_secret_bytes(0)
+    let bytes = bytes_zeroed_word(length)
+    if bytes == 0 || bytes == -1 {
+        // `bytes_zeroed`'s own refusal (`P0042`, `P0043`), passed on.
+        return rt_mem_as_secret_bytes(bytes)
     }
-    if length > max_bytes() {
-        return rt_mem_as_secret_bytes(-1)
-    }
-    let bytes = bytes_zeroed(length)
-    let data = bytes_data(rt_mem_bytes(bytes))
+    let data = bytes_data(bytes)
     if faking() {
         var word = 0
         var i = 0
@@ -4140,18 +4159,22 @@ pub fn random_secure_bytes(random: Random, length: Int) -> Secret<Bytes> {
         }
     }
     let object = alloc(16)
-    let held = rt_mem_bytes(bytes)
-    retain(held)
-    rt_mem_store64(rt_mem_add(object, 8), held)
+    rt_mem_store64(rt_mem_add(object, 8), bytes)
     rt_mem_as_secret_bytes(object)
 }
 
 // ---- Name servers ----------------------------------------------------------
 
-// `NetConnect.system_name_servers`: the DNS servers Windows lists, in
-// order, as IPv4 literals, from `GetNetworkParams` (ADR 0026). Every other
-// platform keeps them in `resolv.conf`, which `std.dns` reads itself, so
-// they have none to give; and the test host lists none.
+// `NetConnect.system_name_servers`: the DNS servers of the adapters that
+// are up, in the order Windows asks them, as address literals, from
+// `GetAdaptersAddresses` (ADR 0026): lowest interface metric of the
+// server's family first, adapter order among equal metrics, each server
+// once. Left out are a loopback adapter, an unspecified address, and an
+// IPv6 address that is link-local (`fe80::/10`, which needs a scope a
+// literal cannot carry) or site-local (`fec0::/10`). IPv6 is written as
+// eight groups of four hex digits, as the interpreter writes it. Every
+// other platform keeps them in `resolv.conf`, which `std.dns` reads
+// itself, so they have none to give; and the test host lists none.
 pub fn net_system_name_servers(net: NetConnect) -> Result<List<String>, IoError> {
     var servers: List<String> = []
     if !on_windows() || faking() {
@@ -4159,44 +4182,214 @@ pub fn net_system_name_servers(net: NetConnect) -> Result<List<String>, IoError>
     }
     let cell = alloc(8)
     rt_mem_store64(cell, 0)
-    // A first call with no buffer says how big the buffer must be.
-    let first = rt_sys_get_network_params(0, cell)
-    let size = rt_mem_load32(cell)
-    if first != 111 || size < 320 || size > 65536 {
+    // Family 0 (both), flags 39 (skip unicast 1, anycast 2, multicast 4 and
+    // the friendly name 32: only the DNS servers are wanted). A first call with
+    // no buffer says how big the buffer must be; the adapters can change
+    // between calls, so a buffer too small is asked for again.
+    var result = rt_sys_get_adapters_addresses(0, 39, 0, 0, cell)
+    var info = 0
+    var size = 0
+    var tries = 0
+    while result == 111 && tries < 4 {
+        size = rt_mem_load32(cell)
+        if size < 224 || size > 1048576 {
+            return Err(io_error_text("the system's DNS servers cannot be read"))
+        }
+        info = alloc(size + 8)
+        result = rt_sys_get_adapters_addresses(0, 39, 0, info, cell)
+        tries = tries + 1
+    }
+    // 232 is `ERROR_NO_DATA`: no adapter, so no servers.
+    if result == 232 {
+        return Ok(servers)
+    }
+    if result != 0 || info == 0 {
         return Err(io_error_text("the system's DNS servers cannot be read"))
     }
-    let info = alloc(size + 8)
-    let second = rt_sys_get_network_params(info, cell)
-    if second != 0 {
-        return Err(io_error_text("the system's DNS servers cannot be read"))
-    }
-    // `FIXED_INFO`: `HostName[132]`, `DomainName[132]`, `CurrentDnsServer`
-    // (a pointer, at 264), and at 272 `DnsServerList`, an
-    // `IP_ADDR_STRING`: `Next` (a pointer), `IpAddress[16]` (a C string),
-    // `IpMask[16]` and `Context`, 48 bytes. The list's other nodes follow
-    // the structure in the same buffer. A link that leaves the buffer ends
-    // the list, as it does in the interpreter.
-    var node = rt_mem_add(info, 272)
-    var seen = 0
-    while seen < 16 {
-        let address = rt_mem_add(node, 8)
-        var length = 0
-        while length < 16 && rt_mem_load8(rt_mem_add(address, length)) != 0 {
-            length = length + 1
-        }
-        if length > 0 {
-            servers.push(text_from(address, length))
-        }
-        let next = rt_mem_load64(node)
-        let offset = rt_mem_sub(next, info)
-        if next == 0 || offset < 0 || offset > size - 48 {
-            seen = 16
+    // One pass finds the lowest metric above the last one listed, and one
+    // lists the servers that have it, so equal metrics keep adapter order.
+    var floor = -1
+    var more = true
+    while more {
+        let best = adapter_lowest_metric(info, size, floor)
+        if best < 0 {
+            more = false
         } else {
-            node = next
-            seen = seen + 1
+            servers = adapter_servers_with_metric(info, size, best, servers)
+            floor = best
         }
     }
     Ok(servers)
+}
+
+// Whether the `size`-byte buffer at `info` holds `need` bytes at `at`.
+fn adapter_inside(info: Int, size: Int, at: Int, need: Int) -> Bool {
+    if at == 0 {
+        return false
+    }
+    let offset = rt_mem_sub(at, info)
+    offset >= 0 && offset <= size - need
+}
+
+// Whether `adapter`, an `IP_ADAPTER_ADDRESSES` (224 bytes are read:
+// `IfType` at 100, `OperStatus` at 104, `Ipv4Metric` at 216 and
+// `Ipv6Metric` at 220), is up and not the loopback.
+fn adapter_listed(info: Int, size: Int, adapter: Int) -> Bool {
+    adapter_inside(info, size, adapter, 224) && rt_mem_load32(rt_mem_add(adapter, 104)) == 1 && rt_mem_load32(rt_mem_add(adapter, 100)) != 24
+}
+
+// The next adapter after `adapter` (`Next` at 8), or 0 when the link leaves
+// the buffer.
+fn adapter_next(info: Int, size: Int, adapter: Int) -> Int {
+    let next = rt_mem_load64(rt_mem_add(adapter, 8))
+    if adapter_inside(info, size, next, 224) {
+        return next
+    }
+    0
+}
+
+// The first DNS server of `adapter` (`FirstDnsServerAddress` at 48), an
+// `IP_ADAPTER_DNS_SERVER_ADDRESS` of 32 bytes, or 0 when the link leaves
+// the buffer.
+fn adapter_first_server(info: Int, size: Int, adapter: Int) -> Int {
+    let first = rt_mem_load64(rt_mem_add(adapter, 48))
+    if adapter_inside(info, size, first, 32) {
+        return first
+    }
+    0
+}
+
+// The next DNS server after `node` (`Next` at 8), or 0.
+fn adapter_next_server(info: Int, size: Int, node: Int) -> Int {
+    let next = rt_mem_load64(rt_mem_add(node, 8))
+    if adapter_inside(info, size, next, 32) {
+        return next
+    }
+    0
+}
+
+// The metric of the DNS server at `node` of `adapter`, from its family's
+// metric, or -1 when it is left out. Its address is the `SOCKET_ADDRESS`
+// at 16 (`lpSockaddr`) and 24 (`iSockaddrLength`): family 2 is a
+// `SOCKADDR_IN` (the address at 4), family 23 a `SOCKADDR_IN6` (at 8).
+fn adapter_server_metric(info: Int, size: Int, adapter: Int, node: Int) -> Int {
+    let sockaddr = rt_mem_load64(rt_mem_add(node, 16))
+    let length = rt_mem_load32(rt_mem_add(node, 24))
+    if !adapter_inside(info, size, sockaddr, 8) {
+        return -1
+    }
+    let family = rt_mem_load16(sockaddr)
+    if family == 2 && length >= 16 {
+        if rt_mem_load32(rt_mem_add(sockaddr, 4)) == 0 {
+            return -1
+        }
+        return rt_mem_load32(rt_mem_add(adapter, 216))
+    }
+    if family == 23 && length >= 28 && adapter_inside(info, size, sockaddr, 24) {
+        let high = rt_mem_load8(rt_mem_add(sockaddr, 8))
+        let next = rt_mem_load8(rt_mem_add(sockaddr, 9)) / 64
+        if high == 254 && next >= 2 {
+            return -1
+        }
+        var zero = true
+        var i = 0
+        while i < 16 {
+            if rt_mem_load8(rt_mem_add(sockaddr, 8 + i)) != 0 {
+                zero = false
+            }
+            i = i + 1
+        }
+        if zero {
+            return -1
+        }
+        return rt_mem_load32(rt_mem_add(adapter, 220))
+    }
+    -1
+}
+
+// The lowest metric above `floor` of a listed server, or -1 when none.
+fn adapter_lowest_metric(info: Int, size: Int, floor: Int) -> Int {
+    var best = -1
+    var adapter = info
+    var adapters = 0
+    while adapter != 0 && adapters < 128 {
+        if adapter_listed(info, size, adapter) {
+            var node = adapter_first_server(info, size, adapter)
+            var count = 0
+            while node != 0 && count < 16 {
+                let metric = adapter_server_metric(info, size, adapter, node)
+                if metric > floor && (best < 0 || metric < best) {
+                    best = metric
+                }
+                node = adapter_next_server(info, size, node)
+                count = count + 1
+            }
+        }
+        adapter = adapter_next(info, size, adapter)
+        adapters = adapters + 1
+    }
+    best
+}
+
+// `servers` and, after them, the listed servers whose metric is `metric`
+// and that `servers` does not hold yet, in adapter order.
+fn adapter_servers_with_metric(info: Int, size: Int, metric: Int, servers: List<String>) -> List<String> {
+    var out = servers
+    var adapter = info
+    var adapters = 0
+    while adapter != 0 && adapters < 128 {
+        if adapter_listed(info, size, adapter) {
+            var node = adapter_first_server(info, size, adapter)
+            var count = 0
+            while node != 0 && count < 16 {
+                if adapter_server_metric(info, size, adapter, node) == metric {
+                    let text = adapter_server_text(node)
+                    var held = false
+                    var i = 0
+                    while i < out.len() {
+                        if out.at(i) == text {
+                            held = true
+                        }
+                        i = i + 1
+                    }
+                    if !held {
+                        out.push(text)
+                    }
+                }
+                node = adapter_next_server(info, size, node)
+                count = count + 1
+            }
+        }
+        adapter = adapter_next(info, size, adapter)
+        adapters = adapters + 1
+    }
+    out
+}
+
+// The literal of the server at `node`, whose address
+// `adapter_server_metric` has accepted: dotted decimal, or eight groups of
+// four lower-case hex digits.
+fn adapter_server_text(node: Int) -> String {
+    let sockaddr = rt_mem_load64(rt_mem_add(node, 16))
+    if rt_mem_load16(sockaddr) == 2 {
+        let a = int_to_string(rt_mem_load8(rt_mem_add(sockaddr, 4)))
+        let b = int_to_string(rt_mem_load8(rt_mem_add(sockaddr, 5)))
+        let c = int_to_string(rt_mem_load8(rt_mem_add(sockaddr, 6)))
+        let d = int_to_string(rt_mem_load8(rt_mem_add(sockaddr, 7)))
+        return "{a}.{b}.{c}.{d}"
+    }
+    let out = text_new(39)
+    let digits = text_data(out)
+    var group = 0
+    while group < 8 {
+        let at = rt_mem_add(digits, group * 5)
+        put_hex(at, rt_mem_add(sockaddr, 8 + group * 2), 2)
+        if group < 7 {
+            rt_mem_store8(rt_mem_add(at, 4), 58)
+        }
+        group = group + 1
+    }
+    rt_mem_as_text(out)
 }
 
 // ---- Budgets ---------------------------------------------------------------
@@ -6321,6 +6514,9 @@ fn raw_text_of(contents: Bytes) -> String {
 //   (a text object) and port; and `why`, the text of why a listener could
 //   not listen, which every `accept` on it then fails with, or "". The
 //   backend releases one with `sock_drop`, which closes the socket. A
+//   `LoopbackListen` on a machine with both loopback addresses has a sixth
+//   word, `other`, the handle of its IPv6 (`::1`) socket at the port of the
+//   first, or -1 when it has none, which `sock_drop` also closes. A
 //   `Connection` is `[count][sock]`: the one field `host` of the prelude's
 //   struct, a `Sock` whose handle is the open socket, as the interpreter's
 //   `Connection` holds its `HostCap` with the stream in it.
@@ -6328,10 +6524,9 @@ fn raw_text_of(contents: Bytes) -> String {
 //   instead, for at most 10 seconds to connect to one address and 30 in all
 //   over the addresses of one `connect`, and 60 of silence to send, receive
 //   or accept, and fails with `timed out`.
-// - Name resolution is not here yet: `std.dns` is not wired into `connect`
-//   (tracked in a follow-up issue). A host is an IPv4 or IPv6 literal, or
-//   `localhost` (::1, then 127.0.0.1); any other well-formed name is
-//   `host not found`.
+// - A host is an IPv4 or IPv6 literal, or a DNS name, which `std.dns` (ADR
+//   0026) resolves as the interpreter does (`resolve_addresses`); each
+//   address it gives is tried in turn.
 // - A failure's words are `net_wording`'s, from the error's kind, never the
 //   system's own text.
 //
@@ -6388,7 +6583,7 @@ fn no_network() -> String {
 
 // A new `Sock`: its address, whose count is 1.
 fn sock_new(handle: Int, host: String, port: Int, why: String) -> Int {
-    let object = alloc(40)
+    let object = alloc(48)
     let host_object = rt_mem_text(host)
     retain(host_object)
     let why_object = rt_mem_text(why)
@@ -6397,11 +6592,17 @@ fn sock_new(handle: Int, host: String, port: Int, why: String) -> Int {
     rt_mem_store64(rt_mem_add(object, 16), host_object)
     rt_mem_store64(rt_mem_add(object, 24), port)
     rt_mem_store64(rt_mem_add(object, 32), why_object)
+    rt_mem_store64(rt_mem_add(object, 40), -1)
     object
 }
 
 fn sock_handle(sock: Int) -> Int {
     rt_mem_load64(rt_mem_add(sock, 8))
+}
+
+// The second socket of a listener, or -1.
+fn sock_other(sock: Int) -> Int {
+    rt_mem_load64(rt_mem_add(sock, 40))
 }
 
 fn sock_port(sock: Int) -> Int {
@@ -6431,6 +6632,10 @@ pub fn sock_drop(object: Int) {
     let handle = sock_handle(object)
     if handle >= 0 {
         close_socket(handle)
+    }
+    let other = sock_other(object)
+    if other >= 0 {
+        close_socket(other)
     }
     let host = rt_mem_as_text(rt_mem_load64(rt_mem_add(object, 16)))
     let why = rt_mem_as_text(rt_mem_load64(rt_mem_add(object, 32)))
@@ -6465,11 +6670,8 @@ fn net_wording(code: Int) -> String {
     if code == platform.e_timed_out || code == platform.e_would_block {
         return "timed out"
     }
-    if code == platform.e_net_unreach {
+    if code == platform.e_net_unreach || code == platform.e_host_unreach {
         return "network unreachable"
-    }
-    if code == platform.e_host_unreach {
-        return "host unreachable"
     }
     "I/O error"
 }
@@ -6770,28 +6972,51 @@ fn socket_start() {
 // have passed: 1 when it does, 0 when they have, and minus the error when
 // the wait fails.
 fn wait_ready(fd: Int, events: Int, ms: Int) -> Int {
+    wait_ready_any(fd, -1, events, ms)
+}
+
+// As `wait_ready`, for the socket `fd` and also for `other` when it is not
+// negative: the result says only that one of them is ready.
+fn wait_ready_any(fd: Int, other: Int, events: Int, ms: Int) -> Int {
     let platform = rt_mem_platform()
-    let object = alloc(48)
+    let object = alloc(72)
     let entry = rt_mem_add(object, 8)
-    rt_mem_store64(entry, 0)
-    rt_mem_store64(rt_mem_add(entry, 8), 0)
+    var stride = 8
     if on_windows() {
-        rt_mem_store64(entry, fd)
-        rt_mem_store16(rt_mem_add(entry, 8), events)
-    } else {
-        rt_mem_store32(entry, fd)
-        rt_mem_store16(rt_mem_add(entry, 4), events)
+        stride = 16
+    }
+    var count = 1
+    if other >= 0 {
+        count = 2
+    }
+    var at = 0
+    while at < count {
+        let item = rt_mem_add(entry, at * stride)
+        var handle = fd
+        if at == 1 {
+            handle = other
+        }
+        rt_mem_store64(item, 0)
+        rt_mem_store64(rt_mem_add(item, 8), 0)
+        if on_windows() {
+            rt_mem_store64(item, handle)
+            rt_mem_store16(rt_mem_add(item, 8), events)
+        } else {
+            rt_mem_store32(item, handle)
+            rt_mem_store16(rt_mem_add(item, 4), events)
+        }
+        at = at + 1
     }
     var wait = ms
     if platform.poll_timespec {
-        let spec = rt_mem_add(object, 24)
+        let spec = rt_mem_add(object, 48)
         rt_mem_store64(spec, ms / 1000)
         rt_mem_store64(rt_mem_add(spec, 8), (ms % 1000) * 1000000)
         wait = spec
     }
-    var ready = rt_sys_poll(entry, 1, wait)
+    var ready = rt_sys_poll(entry, count, wait)
     while interrupted(ready) {
-        ready = rt_sys_poll(entry, 1, wait)
+        ready = rt_sys_poll(entry, count, wait)
     }
     free(object)
     ready
@@ -6800,13 +7025,19 @@ fn wait_ready(fd: Int, events: Int, ms: Int) -> Int {
 // A new non-blocking socket of the IPv4 or IPv6 family: its descriptor, or
 // minus the error.
 fn socket_open(v6: Bool) -> Int {
+    socket_open_kind(v6, 1)
+}
+
+// A new non-blocking socket of `kind`: 1 for a stream (TCP), 2 for a
+// datagram (UDP).
+fn socket_open_kind(v6: Bool, kind: Int) -> Int {
     let platform = rt_mem_platform()
     socket_start()
     var domain = 2
     if v6 {
         domain = platform.af_inet6
     }
-    let fd = rt_sys_socket(domain, 1, 0)
+    let fd = rt_sys_socket(domain, kind, 0)
     if fd < 0 {
         return fd
     }
@@ -6897,10 +7128,41 @@ fn connect_to(v6: Bool, ip: Int, port: Int, wait: Int) -> Int {
     fd
 }
 
-// `localhost`, in any case, which the system's hosts file gives as ::1 and
-// 127.0.0.1, in that order on every platform Oska targets.
-fn is_localhost(host: String) -> Bool {
-    string_to_lowercase(host) == "localhost"
+// The addresses of the DNS name `host`, as `std.dns` resolves it with the
+// capabilities `main` could have been given (every one is the word 0), or
+// the wording of why not. The interpreter's `connect` calls the same
+// function (`oska-run/src/resolve.rs`).
+fn resolve_addresses(host: String) -> Result<List<String>, String> {
+    dns.resolve_system(rt_mem_as_fs_read(0), rt_mem_as_net_connect(0), rt_mem_as_random(0), rt_mem_as_env(0), rt_mem_dns_test_hooks() != 0, host)
+}
+
+// What `connect_addresses` gives when no address was one to connect to.
+fn no_address() -> Int {
+    0 - 1000000
+}
+
+// Connect to `port` at each of `addresses` in turn, as `connect_any` of
+// `oska-sys`: the socket's descriptor of the first that answers, else the
+// last error, negated; `no_address` when there was none to try. `ip` is
+// room for an address (`ip_parse`), `started` when the clock of the
+// connect began.
+fn connect_addresses(addresses: List<String>, ip: Int, port: Int, started: Int) -> Int {
+    var last = no_address()
+    for address in addresses {
+        let kind = ip_parse(address, ip)
+        if kind != 0 {
+            let budget = connect_budget(real_now_millis() - started)
+            if budget == 0 {
+                return 0 - rt_mem_platform().e_timed_out
+            }
+            let fd = connect_to(kind == 16, ip, port, budget)
+            if fd >= 0 {
+                return fd
+            }
+            last = fd
+        }
+    }
+    last
 }
 
 // Connect to `host` at `port`, as `NetStream::connect`: the socket's
@@ -6919,28 +7181,23 @@ fn net_connect(host: String, port: Int) -> Result<Int, String> {
         return Err("invalid host {name}: it is not a DNS name or an IP address")
     }
     var fd = 0
-    let started = real_now_millis()
     if kind != 0 {
         fd = connect_to(kind == 16, ip, port, connect_budget(0))
-    } else if is_localhost(host) {
-        rt_mem_store8(rt_mem_add(ip, 15), 1)
-        fd = connect_to(true, ip, port, connect_budget(0))
-        if fd < 0 {
-            let budget = connect_budget(real_now_millis() - started)
-            if budget == 0 {
-                fd = 0 - rt_mem_platform().e_timed_out
-            } else {
-                rt_mem_store8(rt_mem_add(ip, 15), 0)
-                rt_mem_store8(ip, 127)
-                rt_mem_store8(rt_mem_add(ip, 3), 1)
-                fd = connect_to(false, ip, port, budget)
+    } else {
+        match resolve_addresses(host) {
+            Ok(addresses) => {
+                fd = connect_addresses(addresses, ip, port, real_now_millis())
+            }
+            Err(why) => {
+                free(object)
+                return Err("cannot connect to {shown}: {why}")
             }
         }
-    } else {
-        free(object)
-        return Err("cannot connect to {shown}: host not found")
     }
     free(object)
+    if fd == no_address() {
+        return Err("cannot connect to {shown}: host not found")
+    }
     if fd < 0 {
         let why = net_wording(0 - fd)
         return Err("cannot connect to {shown}: {why}")
@@ -6976,6 +7233,194 @@ pub fn host_connect(host: Int) -> Result<Int, IoError> {
     match net_connect(name, port) {
         Ok(fd) => Ok(link_new(sock_new(fd, name, port, "")))
         Err(message) => Err(io_error_text(message))
+    }
+}
+
+// ---- Datagrams
+
+// How long `exchange_datagram` waits for the answer, in milliseconds:
+// `DATAGRAM_TIMEOUT` of `oska-sys`.
+fn datagram_wait() -> Int {
+    5000
+}
+
+// The longest datagram sent or accepted: `MAX_DATAGRAM` of `oska-sys`.
+fn datagram_max() -> Int {
+    65507
+}
+
+// A random port of the dynamic range, 49152 to 65535, from the system's
+// secure random source (the generator's next word if that fails): the
+// source port of a datagram query (spec #228), as `bind_random_port` of
+// `oska-sys` draws it. When the source fails there is no fallback to the
+// generator (its words are guessable): the error is the source's, negated.
+fn datagram_random_port() -> Result<Int, Int> {
+    let object = alloc(16)
+    var got = 0 - 1
+    if on_windows() {
+        got = rt_sys_process_prng(rt_mem_add(object, 8), 8)
+    } else {
+        got = rt_sys_random(rt_mem_add(object, 8), 8)
+    }
+    let word = rt_mem_load64(rt_mem_add(object, 8))
+    free(object)
+    if got < 0 {
+        return Err(0 - got)
+    }
+    Ok(49152 + rt_mem_and(word, 16383))
+}
+
+// Bind the datagram socket `fd` to the wildcard address at a random port of
+// the dynamic range; a port that will not bind (in use) is replaced by
+// another draw, up to 16 times. Zero, or minus the last error.
+fn datagram_bind_random(fd: Int, v6: Bool) -> Int {
+    let ip = alloc(24)
+    rt_mem_store64(rt_mem_add(ip, 8), 0)
+    rt_mem_store64(rt_mem_add(ip, 16), 0)
+    var result = 0 - 1
+    var tries = 0
+    while tries < 16 {
+        let port = match datagram_random_port() {
+            Ok(drawn) => drawn
+            Err(error) => {
+                result = 0 - error
+                0 - 1
+            }
+        }
+        if port < 0 {
+            break
+        }
+        let address = sockaddr_new(v6, rt_mem_add(ip, 8), port)
+        result = rt_sys_bind(fd, rt_mem_add(address, 8), sockaddr_size(v6))
+        free(address)
+        if result >= 0 {
+            break
+        }
+        tries = tries + 1
+    }
+    free(ip)
+    if result >= 0 {
+        return 0
+    }
+    result
+}
+
+// Send `count` bytes at `data` as one datagram to the address at `ip` and
+// return the first one that comes back whose first two bytes (a DNS
+// transaction id) are the message's own, in a new buffer the caller frees:
+// the count is its word 0 and the bytes follow. A datagram from any other
+// address is never delivered (the socket is connected); one with another id
+// is skipped until the deadline. The error is the system's, negated.
+fn datagram_exchange(v6: Bool, ip: Int, port: Int, data: Int, count: Int) -> Result<Int, Int> {
+    let platform = rt_mem_platform()
+    let fd = socket_open_kind(v6, 2)
+    if fd < 0 {
+        return Err(0 - fd)
+    }
+    let bound = datagram_bind_random(fd, v6)
+    if bound < 0 {
+        close_socket(fd)
+        return Err(0 - bound)
+    }
+    let address = sockaddr_new(v6, ip, port)
+    let connected = rt_sys_connect(fd, rt_mem_add(address, 8), sockaddr_size(v6))
+    free(address)
+    if connected < 0 {
+        close_socket(fd)
+        return Err(0 - connected)
+    }
+    let started = real_now_millis()
+    var sent = rt_sys_send(fd, data, count)
+    while interrupted(sent) {
+        sent = rt_sys_send(fd, data, count)
+    }
+    if sent < 0 {
+        close_socket(fd)
+        return Err(0 - sent)
+    }
+    let buffer = alloc(datagram_max() + 8)
+    var failure = 0
+    var got = 0
+    while true {
+        let left = datagram_wait() - (real_now_millis() - started)
+        if left <= 0 {
+            failure = platform.e_timed_out
+            break
+        }
+        let ready = wait_ready(fd, platform.poll_in, left)
+        if ready < 0 {
+            failure = 0 - ready
+            break
+        }
+        if ready == 0 {
+            failure = platform.e_timed_out
+            break
+        }
+        got = rt_sys_recv(fd, rt_mem_add(buffer, 8), datagram_max())
+        if interrupted(got) || got == 0 - platform.e_would_block {
+            continue
+        }
+        if got < 0 {
+            failure = 0 - got
+            break
+        }
+        if got >= 2 && count >= 2 && rt_mem_load8(rt_mem_add(buffer, 8)) == rt_mem_load8(data) && rt_mem_load8(rt_mem_add(buffer, 9)) == rt_mem_load8(rt_mem_add(data, 1)) {
+            break
+        }
+    }
+    close_socket(fd)
+    if failure != 0 {
+        free(buffer)
+        return Err(failure)
+    }
+    rt_mem_store64(buffer, got)
+    Ok(buffer)
+}
+
+// `HostConnect.exchange_datagram`: one UDP datagram to the host's address
+// literal, and the first matching one back, in at most 5 seconds, as
+// `oska_sys::exchange_datagram` does, with its words.
+pub fn host_exchange_datagram(host: Int, message: Bytes) -> Result<Bytes, IoError> {
+    let name = sock_text(host, 16)
+    let port = sock_port(host)
+    if faking() {
+        return Err(io_error_text(no_network()))
+    }
+    if port < 1 || port > 65535 {
+        return Err(io_error_text("port {port} is out of range: use 1 to 65535"))
+    }
+    let object = alloc(72)
+    let ip = rt_mem_add(object, 8)
+    let kind = ip_parse(name, ip)
+    if kind == 0 {
+        free(object)
+        if !is_dns_name(name) {
+            let shown = os_debug(name)
+            return Err(io_error_text("invalid host {shown}: it is not a DNS name or an IP address"))
+        }
+        let shown = os_debug(name)
+        return Err(io_error_text("invalid host {shown}: a datagram goes to an IP address"))
+    }
+    let held = rt_mem_bytes(message)
+    let count = bytes_length(held)
+    if count > datagram_max() {
+        free(object)
+        return Err(io_error_text("the datagram is too long to send"))
+    }
+    let result = datagram_exchange(kind == 16, ip, port, bytes_data(held), count)
+    free(object)
+    match result {
+        Ok(buffer) => {
+            let got = rt_mem_load64(buffer)
+            let bytes = bytes_copy_of(rt_mem_add(buffer, 8), got)
+            free(buffer)
+            Ok(rt_mem_as_bytes(bytes))
+        }
+        Err(code) => {
+            let why = net_wording(code)
+            let shown = shown_address(name, port)
+            Err(io_error_text("cannot reach {shown}: {why}"))
+        }
     }
 }
 
@@ -7042,15 +7487,41 @@ pub fn net_restrict_to_loopback(net: Int, port: Int) -> Int {
     if faking() {
         return sock_new(-1, "loopback", 0, no_network())
     }
-    var fd = listen_on(false, port)
-    if fd < 0 {
-        fd = listen_on(true, port)
+    // Both loopback addresses at one port, as `oska-sys` does: a chosen port
+    // may be taken on the other family, so ask again (a few times). A machine
+    // with no IPv6 loopback listens on `127.0.0.1` alone, and one with no
+    // IPv4 on `::1` alone.
+    var tries = 1
+    if port == 0 {
+        tries = 8
     }
-    if fd < 0 {
-        let why = net_wording(0 - fd)
-        return sock_new(-1, "loopback", 0, "listen failed: {why}")
+    var failure = 0
+    var attempt = 0
+    while attempt < tries {
+        attempt = attempt + 1
+        let first = listen_on(false, port)
+        if first >= 0 {
+            let at = socket_port(first)
+            let second = listen_on(true, at)
+            if second >= 0 || attempt == tries || port != 0 {
+                let listener = sock_new(first, "loopback", at, "")
+                if second >= 0 {
+                    rt_mem_store64(rt_mem_add(listener, 40), second)
+                }
+                return listener
+            }
+            close_socket(first)
+        } else {
+            let second = listen_on(true, port)
+            if second >= 0 {
+                return sock_new(second, "loopback", socket_port(second), "")
+            }
+            failure = second
+            attempt = tries
+        }
     }
-    sock_new(fd, "loopback", socket_port(fd), "")
+    let why = net_wording(0 - failure)
+    sock_new(-1, "loopback", 0, "listen failed: {why}")
 }
 
 // `LoopbackListen.port`: the port, or 0 when it could not listen.
@@ -7066,8 +7537,9 @@ pub fn loopback_accept(listener: Int) -> Result<Int, IoError> {
     }
     let platform = rt_mem_platform()
     let fd = sock_handle(listener)
+    let other = sock_other(listener)
     while true {
-        let ready = wait_ready(fd, platform.poll_in, read_wait())
+        let ready = wait_ready_any(fd, other, platform.poll_in, read_wait())
         if ready < 0 {
             let words = net_wording(0 - ready)
             return Err(io_error_text("accept failed: {words}"))
@@ -7076,7 +7548,10 @@ pub fn loopback_accept(listener: Int) -> Result<Int, IoError> {
             let words = net_wording(platform.e_timed_out)
             return Err(io_error_text("accept failed: {words}"))
         }
-        let accepted = rt_sys_accept(fd, 0, 0)
+        var accepted = rt_sys_accept(fd, 0, 0)
+        if other >= 0 && (accepted == 0 - platform.e_would_block || interrupted(accepted)) {
+            accepted = rt_sys_accept(other, 0, 0)
+        }
         if accepted == 0 - platform.e_would_block || interrupted(accepted) {
             continue
         }

@@ -183,7 +183,15 @@ pub fn release(
     let mut executables = Vec::with_capacity(Target::ALL.len());
     for target in Target::ALL {
         match cached.native("build", target, json, &[], || {
-            oska_native::build(program, target, places)
+            // Shipped executables never carry the DNS test hooks, whatever
+            // build of `oskac` makes them (ADR 0026).
+            oska_native::build_hooked(
+                program,
+                target,
+                places,
+                oska_check::limits::Limits::NONE,
+                false,
+            )
         }) {
             Ok(bytes) => {
                 let file = format!("{name}-{}{}", target.name(), target.suffix());

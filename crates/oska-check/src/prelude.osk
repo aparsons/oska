@@ -237,9 +237,10 @@ impl NetConnect {
     // that is none of those, or a port outside 1 to 65535, is not refused
     // here: `connect` fails with an `IoError` that says why.
     pub fn restrict_to(self, host: String, port: Int) -> HostConnect
-    // The DNS servers the operating system is configured with, in order,
-    // as IPv4 address literals, for `std.dns`. Windows keeps them in its
-    // network parameters (`GetNetworkParams`); every other platform
+    // The DNS servers the operating system is configured with, as
+    // address literals, for `std.dns`: on Windows those of the adapters
+    // that are up, in metric order, IPv4 and global IPv6 (`GetAdaptersAddresses`);
+    // every other platform
     // keeps them in `resolv.conf`, which `std.dns` reads itself, so this
     // gives an empty list there. It reaches nobody: it reads this
     // machine's settings.
@@ -252,7 +253,7 @@ impl NetConnect {
 // connect or read that gets no answer fails after a documented default
 // (10 seconds to connect, 60 to read). Failures read the same on every
 // platform: `host not found`, `connection refused`, `timed out`,
-// `network unreachable`, `host unreachable` and `connection reset`.
+// `network unreachable` and `connection reset`.
 #[capability]
 pub struct HostConnect { handle: Int }
 

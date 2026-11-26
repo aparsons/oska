@@ -1,7 +1,7 @@
 # On Windows, a system-call intrinsic is one kernel32 or ntdll call
 
 - **Status:** Accepted (2026-11-19), for spec #155 (#176). On 2026-11-19 the user accepted all eight decisions the research recommends (its §4, Q1–Q8). Amends [ADR 0015](0015-macos-intrinsics-are-libsystem-calls.md) for Windows. The research behind it is [docs/research/2026-11-windows-kernel32-calls.md](../research/2026-11-windows-kernel32-calls.md), whose §4 lists the decisions (Q1–Q8).
-- **Amended by:** [ADR 0026](0026-name-resolution-is-an-oska-stub-resolver-and-windows-asks-iphlpapi-for-its-servers.md), which adds one function, `GetNetworkParams` of `iphlpapi.dll`, for the system's DNS servers.
+- **Amended by:** [ADR 0026](0026-name-resolution-is-an-oska-stub-resolver-and-windows-asks-iphlpapi-for-its-servers.md), which adds one function, `GetAdaptersAddresses` of `iphlpapi.dll`, for the DNS servers of the adapters that are up.
 
 ## Decision
 

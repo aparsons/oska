@@ -36,8 +36,10 @@
 // it), and the connection fails before a sequence number would wrap.
 // `KeyUpdate` is handled, answering when asked, and the client sends one
 // itself after 2^24 records under one key, under AES-128-GCM's confidentiality
-// limit (RFC 8446, section 5.5; `TlsConfig.with_rekey_after`). The receive
-// side relies on the server to rekey: no limit is enforced on records read. Before it fails the client
+// limit (RFC 8446, section 5.5). The read side accepts at most 2^24.5 records
+// under one key, the limit for AES-128-GCM that the RFC gives (ChaCha20-Poly1305
+// is held to it too), and fails the stream at the next one. A program cannot
+// change either number. Before it fails the client
 // sends the alert RFC 8446, section 6 names for the failure, and an alert it
 // receives is reported by name. A stream cut off without `close_notify` is
 // `Truncated`.
@@ -76,6 +78,7 @@ use std.ed25519
 use std.chacha20poly1305
 use std.aes128gcm
 use std.x509
+use std.net_error
 
 // ---- Errors, events, configuration --------------------------------------------------
 
@@ -119,45 +122,28 @@ impl Display for TlsError {
 // table (a platform's own wording) is `other`, never copied: the message is
 // from outside the program and no trust assertion is made on it.
 fn io_reason(error: IoError) -> String {
-    let message = error.message
-    for known in ["host not found", "connection refused", "timed out", "network unreachable", "host unreachable", "connection reset", "the connection is closed", "invalid host"] {
-        if message.contains(known) {
-            return known
-        }
-    }
-    "other"
+    net_error.classify(error).wording()
 }
 
 // What a TLS client trusts and offers: the roots a certificate chain must
 // end in, and the application protocols to offer (ALPN, by default none).
-pub struct TlsConfig { trust: x509.TrustConfig, alpn: List<String>, rekey_after: Int }
+pub struct TlsConfig { trust: x509.TrustConfig, alpn: List<String> }
 
 impl TlsConfig {
     // Mozilla's roots and no application protocols.
     pub fn default() -> TlsConfig {
-        TlsConfig(trust: x509.TrustConfig.default(), alpn: [], rekey_after: REKEY_AFTER)
+        TlsConfig(trust: x509.TrustConfig.default(), alpn: [])
     }
 
     // The same configuration with `trust` as the roots.
     pub fn with_trust(self, trust: x509.TrustConfig) -> TlsConfig {
-        TlsConfig(trust: trust, alpn: self.alpn, rekey_after: self.rekey_after)
+        TlsConfig(trust: trust, alpn: self.alpn)
     }
 
     // The same configuration offering `protocols` (such as `["http/1.1"]`)
     // in the ALPN extension; the server must choose one of them or none.
     pub fn with_alpn(self, protocols: List<String>) -> TlsConfig {
-        TlsConfig(trust: self.trust, alpn: protocols, rekey_after: self.rekey_after)
-    }
-
-    // The same configuration that sends a `KeyUpdate` and changes its write
-    // key once `records` records have been sent under one key (at least 1).
-    // The default is 2^24 (16777216), under the confidentiality limit of
-    // AES-128-GCM that RFC 8446, section 5.5 gives (about 2^24.5 full-size
-    // records), and ChaCha20-Poly1305 is held to it too. A smaller number is
-    // for tests of the rekeying.
-    pub fn with_rekey_after(self, records: Int) -> TlsConfig {
-        let most = if records < 1 { 1 } else { records }
-        TlsConfig(trust: self.trust, alpn: self.alpn, rekey_after: most)
+        TlsConfig(trust: self.trust, alpn: protocols)
     }
 }
 
@@ -195,6 +181,10 @@ const MAX_CERTIFICATES: Int = 16
 // Records sent under one key before the client changes it: below the
 // AES-128-GCM limit of RFC 8446, section 5.5.
 const REKEY_AFTER: Int = 16777216
+// Records the read side accepts under one key: 2^24.5 rounded down, the
+// AES-128-GCM limit of RFC 8446, section 5.5. A server that follows the RFC
+// rekeys before it.
+const READ_LIMIT: Int = 23726566
 const MAX_SEQUENCE: Int = 4611686018427387904
 
 const STATE_NEW: Int = 0
@@ -901,7 +891,7 @@ impl Engine {
         let bytes = copied(data)
         var at = 0
         while at < bytes.len() {
-            if self.write_sequence >= self.config.rekey_after {
+            if self.write_sequence >= REKEY_AFTER {
                 match self.rekey_write() {
                     Ok(_) => {}
                     Err(failure) => {
@@ -1084,6 +1074,9 @@ impl Engine {
         }
         if body.len() < 17 {
             return Err(protocol(ALERT_DECODE_ERROR, "a protected record shorter than its tag"))
+        }
+        if self.read_sequence >= READ_LIMIT {
+            return Err(protocol(ALERT_INTERNAL_ERROR, "more records than one key may protect"))
         }
         if self.read_sequence >= MAX_SEQUENCE {
             return Err(protocol(ALERT_INTERNAL_ERROR, "the read sequence number is exhausted"))
@@ -1700,7 +1693,7 @@ impl TlsStream {
             None => {}
         }
         if self.closed {
-            return Err(TlsError.Io(IoError(message: "the connection is closed")))
+            return Err(TlsError.Io(net_error.NetFailure.Closed.io_error()))
         }
         let step = self.engine.send(data)
         let _ = self.absorb(step)?
