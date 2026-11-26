@@ -198,13 +198,12 @@ jobs:
     # and to the script (`scripts/test-shard.sh --sets` names them).
     # shards musl: site-0 site-1 site-2 sites-1 sites-2 rest
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: (github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'ticket/') || startsWith(github.head_ref, 'review-fixes-') || startsWith(github.head_ref, 'spec/'))) && needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
         shard: [site-0, site-1, site-2, sites-1, sites-2, rest]
     name: musl (${{ matrix.shard }})
-    if: github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'ticket/') || startsWith(github.head_ref, 'review-fixes-') || startsWith(github.head_ref, 'spec/'))
     runs-on: ubuntu-latest
     # One shard: the build, then at most some 8 minutes of tests.
     timeout-minutes: 30
@@ -261,7 +260,7 @@ jobs:
     # (scripts/test-shard.sh, spec #631); Apple silicon runs them whole.
     # shards macos: native-1 native-2 rest
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/')))) && needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -271,7 +270,6 @@ jobs:
           - {os: macos-15-intel, arch: x86_64, shard: native-2}
           - {os: macos-15-intel, arch: x86_64, shard: rest}
     name: macos (${{ matrix.os }}, ${{ matrix.arch }}${{ matrix.shard != 'all' && format(', {0}', matrix.shard) || '' }})
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/')))
     runs-on: ${{ matrix.os }}
     # Incremental data about doubles the size of `target`, which is cached
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
@@ -326,12 +324,11 @@ jobs:
     # scripts/cross-build/refused.txt does not expect fails here, with
     # oskac's error, so two hosts cannot agree by refusing.
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/')))) && needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/')))
     runs-on: ${{ matrix.os }}
     # A build and one compile per corpus program per target: a few minutes.
     timeout-minutes: 20
