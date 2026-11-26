@@ -1,0 +1,46 @@
+name: Coverage
+
+# Line coverage of the workspace's tests on every push to main, so each merge
+# has a report (Adam, 2026-11-26). Never on a pull request: the instrumented
+# build and full test run would add their time to every PR's wall clock.
+# scripts/coverage.sh writes the table to the job summary; the lcov file and
+# the HTML report are the `coverage` artifact of the run.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    # An instrumented build and the whole test suite on one runner.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: llvm-tools
+      - run: scripts/coverage.sh
+        env:
+          OSKA_TEST_SET: linux
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Line coverage at ${GITHUB_SHA::7}"
+            echo
+            cat target/coverage/report/summary.md || echo "No report: the tests failed before coverage was collected."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: target/coverage/report
+          retention-days: 90
