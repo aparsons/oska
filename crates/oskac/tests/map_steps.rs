@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `std.map` under `--max-steps` (spec #591, ticket #603, ADR 0021 and
+//! `Map` under `--max-steps` (spec #591, ticket #603, ADR 0021 and
 //! ADR 0028): a map is written in Oska, so each probe of its table is a
 //! loop back-edge and each of its methods a call, and both backends count
 //! them alike. A map-heavy program stops at the same step, with the same
@@ -22,10 +22,8 @@ use differential::{assert_same, Case};
 
 /// Puts, updates, removes and reads 150 keys: the table grows, probes,
 /// compacts and rebuilds on the way.
-const MAP_HEAVY: &str = r#"use std.map
-
-fn main(io: Stdout) {
-    var m: map.Map<String, Int> = map.Map.new()
+const MAP_HEAVY: &str = r#"fn main(io: Stdout) {
+    var m: Map<String, Int> = Map.new()
     var i = 0
     while i < 150 {
         m.put("key{i}", i)
@@ -56,9 +54,7 @@ fn main(io: Stdout) {
 "#;
 
 /// Every key has the same hash, so every hash of the list is flooded.
-const FLOODED: &str = r#"use std.map
-
-struct Key { n: Int }
+const FLOODED: &str = r#"struct Key { n: Int }
 
 impl Eq for Key {
     fn eq(self, other: Key) -> Bool {
@@ -73,7 +69,7 @@ impl Hash for Key {
 }
 
 fn main(io: Stdout) {
-    var m: map.Map<Key, Int> = map.Map.new()
+    var m: Map<Key, Int> = Map.new()
     var i = 0
     while i < 500 {
         m.put(Key(n: i), i)

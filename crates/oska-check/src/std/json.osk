@@ -27,8 +27,6 @@
 // booleans, string enumerations and lists. `Schema.validate` checks a
 // `Value` against it.
 
-use std.map
-
 // For maintainers: unlike the other `std` modules, this file is Oska
 // source with bodies, checked and run with each program that imports it
 // as one more module of the program. The comment block directly above a
@@ -247,10 +245,10 @@ impl Value {
     // the later member in the object, from 0. A value that is not an
     // object is an error with the reason `not an object`, at offset 0.
     // Keys keep their trust, so a key `parse` read stays untrusted.
-    pub fn as_map(self) -> Result<map.Map<Untrusted<String>, Value>, Error> {
+    pub fn as_map(self) -> Result<Map<Untrusted<String>, Value>, Error> {
         match self {
             Value.Object(members) => {
-                var table: map.Map<Untrusted<String>, Value> = map.Map.new()
+                var table: Map<Untrusted<String>, Value> = Map.new()
                 var place = 0
                 for member in members {
                     if table.contains_key(member.key) {

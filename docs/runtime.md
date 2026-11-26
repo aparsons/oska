@@ -583,10 +583,8 @@ fn main() {
 #### `P0044`
 
 ```oska error=P0044
-use std.map
-
 fn main() {
-    var m: map.Map<Int, Int> = map.Map.with_max_entries(2)
+    var m: Map<Int, Int> = Map.with_max_entries(2)
     m.put(1, 1)
     m.put(2, 2)
     m.put(3, 3)
@@ -594,10 +592,8 @@ fn main() {
 ```
 
 ```oska fixed=P0044
-use std.map
-
 fn main() {
-    var m: map.Map<Int, Int> = map.Map.with_max_entries(3)
+    var m: Map<Int, Int> = Map.with_max_entries(3)
     m.put(1, 1)
     m.put(2, 2)
     m.put(3, 3)
@@ -607,8 +603,6 @@ fn main() {
 #### `P0045`
 
 ```oska error=P0045
-use std.map
-
 struct Key { n: Int }
 
 impl Eq for Key {
@@ -624,7 +618,7 @@ impl Hash for Key {
 }
 
 fn main() {
-    var m: map.Map<Key, Int> = map.Map.new()
+    var m: Map<Key, Int> = Map.new()
     var i = 0
     while i < 200 {
         m.put(Key(n: i), i)
@@ -634,10 +628,8 @@ fn main() {
 ```
 
 ```oska fixed=P0045
-use std.map
-
 fn main() {
-    var m: map.Map<Int, Int> = map.Map.new()
+    var m: Map<Int, Int> = Map.new()
     var i = 0
     while i < 200 {
         m.put(i, i)

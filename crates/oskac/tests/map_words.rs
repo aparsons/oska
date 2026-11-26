@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `std.map` through the CLI (#601): a word counter prints its words in the
+//! `Map` through the CLI (#601): a word counter prints its words in the
 //! order they first appear, byte for byte the same on the interpreter and
 //! on a native build. The expected output is the golden file
 //! `golden/map_words.txt`.
@@ -18,10 +18,8 @@ use differential::{assert_same, Case};
 
 /// Counts the words of stdin, ignoring case, and prints each word with its
 /// count in the order the word first appeared.
-const WORDS: &str = r#"use std.map
-
-fn main(io: Stdout, stdin: Stdin) -> Result<(), IoError> {
-    var counts: map.Map<Untrusted<String>, Int> = map.Map.new()
+const WORDS: &str = r#"fn main(io: Stdout, stdin: Stdin) -> Result<(), IoError> {
+    var counts: Map<Untrusted<String>, Int> = Map.new()
     while true {
         let line = match stdin.read_line()? {
             Some(line) => line

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// `std.map`: `Map<K, V>`, a table that finds a value by its key and keeps
-// its entries in insertion order (ADR 0028). `use std.map`, then write
-// `map.Map.new()`, `m.put(key, value)` and `m.get(key)`.
+// `Map<K, V>`, a table that finds a value by its key and keeps its entries
+// in insertion order (ADR 0028). `Map` and `Entry` are in the prelude: write
+// `Map.new()`, `m.put(key, value)` and `m.get(key)` with no `use`. This
+// file is the module `std.map`, which `use std.map` still imports.
 //
 // - A map is a value, like a `List`: it is copied on write, and a method
 //   that changes it needs a `var`.

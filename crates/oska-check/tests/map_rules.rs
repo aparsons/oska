@@ -12,9 +12,7 @@ use common::{assert_errors, assert_ok, check};
 /// A program that makes a map of `key` to `Int`, with `body` after the
 /// binding `var m`.
 fn program(key: &str, decls: &str, body: &str) -> String {
-    format!(
-        "use std.map\n{decls}\nfn main() {{\n    var m: map.Map<{key}, Int> = map.Map.new()\n{body}\n}}"
-    )
+    format!("{decls}\nfn main() {{\n    var m: Map<{key}, Int> = Map.new()\n{body}\n}}")
 }
 
 /// The first diagnostic's message.
@@ -55,7 +53,7 @@ fn a_key_type_without_eq_is_refused() {
     let src = program("P", decls, "    m.put(P(x: 1), 1)");
     assert_errors(
         &src,
-        &[("E0266", "map.Map.new()"), ("E0266", "m.put(P(x: 1), 1)")],
+        &[("E0266", "Map.new()"), ("E0266", "m.put(P(x: 1), 1)")],
     );
     let text = message(&src);
     assert!(text.contains("`P` cannot be a `Map` key"), "{text}");
@@ -71,7 +69,7 @@ fn a_key_type_without_hash_is_refused() {
     let decls = "struct R { r: Result<Int, String> }\n\
                  impl Eq for R {\n    fn eq(self, other: Self) -> Bool { true }\n}\n";
     let src = program("R", decls, "");
-    assert_errors(&src, &[("E0266", "map.Map.new()")]);
+    assert_errors(&src, &[("E0266", "Map.new()")]);
     assert!(message(&src).contains("`Hash`"));
 }
 
@@ -111,17 +109,17 @@ fn a_struct_that_holds_a_secret_is_refused_as_a_key() {
 
 #[test]
 fn put_and_remove_need_a_var() {
-    let src = "use std.map\nfn main() {\n    let m: map.Map<Int, Int> = map.Map.new()\n    m.put(1, 2)\n}";
+    let src = "fn main() {\n    let m: Map<Int, Int> = Map.new()\n    m.put(1, 2)\n}";
     assert_errors(src, &[("E0230", "m")]);
-    let src = "use std.map\nfn main() {\n    let m: map.Map<Int, Int> = map.Map.new()\n    let gone = m.remove(1)\n}";
+    let src = "fn main() {\n    let m: Map<Int, Int> = Map.new()\n    let gone = m.remove(1)\n}";
     assert_errors(src, &[("E0230", "m")]);
-    let src = "use std.map\nfn main() {\n    var m: map.Map<Int, Int> = map.Map.new()\n    m.put(1, 2)\n    let gone = m.remove(1)\n}";
+    let src = "fn main() {\n    var m: Map<Int, Int> = Map.new()\n    m.put(1, 2)\n    let gone = m.remove(1)\n}";
     assert_ok(src);
 }
 
 #[test]
 fn a_generic_function_over_a_key_type_is_told_the_bounds() {
-    let src = "use std.map\nfn count<K>(k: K) -> Int {\n    var m: map.Map<K, Int> = map.Map.new()\n    m.put(k, 1)\n    m.len()\n}\nfn main() {}";
+    let src = "fn count<K>(k: K) -> Int {\n    var m: Map<K, Int> = Map.new()\n    m.put(k, 1)\n    m.len()\n}\nfn main() {}";
     let report = check(src);
     assert!(
         report.diagnostics.iter().all(|d| d.code == "E0265"),
@@ -133,7 +131,7 @@ fn a_generic_function_over_a_key_type_is_told_the_bounds() {
 
 #[test]
 fn a_type_that_holds_a_type_parameter_keeps_e0265() {
-    let src = "use std.map\nfn count<K>(k: List<K>) -> Int {\n    var m: map.Map<List<K>, Int> = map.Map.new()\n    m.put(k, 1)\n    m.len()\n}\nfn main() {}";
+    let src = "fn count<K>(k: List<K>) -> Int {\n    var m: Map<List<K>, Int> = Map.new()\n    m.put(k, 1)\n    m.len()\n}\nfn main() {}";
     let report = check(src);
     assert!(!report.diagnostics.is_empty());
     assert!(
@@ -145,7 +143,5 @@ fn a_type_that_holds_a_type_parameter_keeps_e0265() {
 
 #[test]
 fn a_map_type_that_is_only_written_is_accepted() {
-    assert_ok(
-        "use std.map\nstruct Point { x: Int }\nfn f(m: map.Map<Point, Int>) {}\nfn main() {}",
-    );
+    assert_ok("struct Point { x: Int }\nfn f(m: Map<Point, Int>) {}\nfn main() {}");
 }
