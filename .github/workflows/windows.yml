@@ -11,7 +11,7 @@ name: Windows
 
 on:
   push:
-    branches: [main, "ticket/**", "review-fixes-*"]
+    branches: [main, "spec/**"]
     paths:
       - crates/**
       - site/**
