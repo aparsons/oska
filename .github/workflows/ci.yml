@@ -24,6 +24,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether a pull request changes only files no test reads (#718), so the
+  # macOS, musl and cross-build jobs, the slowest, can skip. A push (main,
+  # ticket branches) always runs everything. A skipped job reports as
+  # skipped, which docs/agents/merge-policy.md counts as passed for these
+  # jobs. The `test` job always runs: its formal, lint and scripts parts
+  # check docs/agents too, and its cargo shards are cheap beside macOS.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+    steps:
+      # The merge commit of a pull request: its first parent is the base.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD | scripts/ci-changes/docs-only.sh >> "$GITHUB_OUTPUT"
+          else
+            echo docs_only=false >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     # On arm64 and x86_64 the tests are also differential (spec #125,
     # #153): every runtime test, example, guide program, CLI fixture and
@@ -163,6 +189,8 @@ jobs:
     # runner minutes for wall time. A new shard must be added to this matrix
     # and to the script (`scripts/test-shard.sh --sets` names them).
     # shards musl: site-0 site-1 site-2 sites-1 sites-2 rest
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -223,6 +251,8 @@ jobs:
     # Intel is the slow one, so its tests run as three parallel shards
     # (scripts/test-shard.sh, spec #631); Apple silicon runs them whole.
     # shards macos: native-1 native-2 rest
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -285,6 +315,8 @@ jobs:
     # host. A refusal that
     # scripts/cross-build/refused.txt does not expect fails here, with
     # oskac's error, so two hosts cannot agree by refusing.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
