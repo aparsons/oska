@@ -103,9 +103,10 @@ fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
     if data_events != "[data 50 0 49]" {
         return io.println("mismatch server data {data_events}")
     }
-    // The close_notify of each side. The trace has the client's first, but a
-    // closed engine takes no more input, so the server's is fed first; the
-    // bytes of each do not depend on the order.
+    // The close_notify of each side. The trace has the client's first, but the
+    // engine takes no input once it has closed (its close ends the
+    // connection), so the server's is fed first; the bytes of each do not
+    // depend on the order.
     let after_alert = engine.receive(server.at(4))
     let alert_events = events_of(after_alert).assume_trusted()
     if alert_events != "[closed]" {

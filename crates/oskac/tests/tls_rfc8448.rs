@@ -10,10 +10,16 @@
 //! ID, key share, extensions and the compatibility change_cipher_spec come
 //! from the engine's choices), so the test builds a copy of the module with a
 //! test-only hook: a few replaced lines that fix the client random, the
-//! x25519 key and the ClientHello's extensions to the RFC's. The copy is the
-//! package's own `tls` module (as `native_tls.rs` does to change the rekey
-//! limits). `std.tls` has no hook, and a program cannot reach one;
-//! `crates/oska-check/tests/std_tls_rfc8448_hook.rs` holds that.
+//! session ID and the x25519 key to the RFC's, and the cipher suites and the
+//! extensions around the server name and the key share to the RFC's list. The
+//! engine's own `client_hello` still builds the message, the server name and
+//! the key share included. The copy is the package's own `tls` module (as
+//! `native_tls.rs` does to change the rekey limits). `std.tls` has no hook,
+//! and a program cannot reach one; `crates/oska-check/tests/std_tls_rfc8448_hook.rs`
+//! holds that.
+//!
+//! Proof: `cargo test -p oskac --test tls_rfc8448` and
+//! `cargo test -p oska-check --test std_tls_rfc8448_hook`.
 //!
 //! The RFC's server is a 1024-bit RSA key for the name `rsa`, which `std.rsa`
 //! (2048 bits and up) and the host name check refuse. So the package also
@@ -50,47 +56,24 @@ const RSA_MODULE: &str = include_str!("../../oska-check/src/std/rsa.osk");
 const CLIENT_RANDOM: &str = "cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7";
 const CLIENT_PRIVATE_KEY: &str = "49af42ba7f7994852d713ef2784bcbcaa7911de26adc5642cb634540e7ea5005";
 
-/// The ClientHello of the trace, built from the engine's own helpers: the
-/// RFC's cipher suites and extensions, in its order. The key share is the
-/// engine's, from the fixed private key.
-const HELLO: &str = r#"fn client_hello(random: Bytes, session_id: Bytes, name: String, group: Int, share: Bytes, alpn: List<String>, cookie: Bytes) -> Bytes {
-    var body = Bytes.new()
-    body.push_u16_be(771)
-    body.append(random)
-    body.push(session_id.len().to_u8())
-    body.append(session_id)
-    body.append(u16_list([4865, 4867, 4866]))
-    body.push(1)
-    body.push(0)
-    var extensions = Bytes.new()
-    let host = name.to_bytes()
-    var entry = Bytes.new()
-    entry.push(0)
-    entry.push_u16_be(host.len().to_u16())
-    entry.append(host)
-    var names = Bytes.new()
-    names.push_u16_be(entry.len().to_u16())
-    names.append(entry)
-    extensions.append(extension(0, names))
-    extensions.append(extension(65281, Bytes.from_hex("00").unwrap_or(Bytes.new())))
+/// The cipher suites of the trace's ClientHello, in its order (the engine
+/// offers two of the three; the server of the trace picks the first).
+const HELLO_SUITES: &str = "body.append(u16_list([4865, 4867, 4866]))";
+
+/// The extensions of the trace's ClientHello that come before the key share:
+/// renegotiation_info, the nine groups and the session ticket. The server
+/// name is the engine's own, and so is the key share that follows.
+const HELLO_BEFORE_SHARE: &str = r#"    extensions.append(extension(65281, Bytes.from_hex("00").unwrap_or(Bytes.new())))
     extensions.append(extension(10, u16_list([29, 23, 24, 25, 256, 257, 258, 259, 260])))
     extensions.append(extension(35, Bytes.new()))
-    var key = Bytes.new()
-    key.push_u16_be(group.to_u16())
-    key.push_u16_be(share.len().to_u16())
-    key.append(share)
-    var shares = Bytes.new()
-    shares.push_u16_be(key.len().to_u16())
-    shares.append(key)
-    extensions.append(extension(51, shares))
+"#;
+
+/// The extensions of the trace's ClientHello after the key share.
+const HELLO_AFTER_SHARE: &str = r#"    extensions.append(extension(51, shares))
     extensions.append(extension(43, Bytes.from_hex("020304").unwrap_or(Bytes.new())))
     extensions.append(extension(13, u16_list([1027, 1283, 1539, 515, 2052, 2053, 2054, 1025, 1281, 1537, 513, 1026, 1282, 1538, 514])))
     extensions.append(extension(45, Bytes.from_hex("0101").unwrap_or(Bytes.new())))
     extensions.append(extension(28, Bytes.from_hex("4001").unwrap_or(Bytes.new())))
-    body.push_u16_be(extensions.len().to_u16())
-    body.append(extensions)
-    handshake(1, body)
-}
 "#;
 
 /// What the hook adds to the module: the engine the trace needs, and the
@@ -121,6 +104,22 @@ fn replaced(text: &str, old: &str, new: &str) -> String {
     text.replace(old, new)
 }
 
+/// `text` with what lies from the one `start` up to the one `end` replaced by
+/// `new` (`end` stays).
+fn replaced_between(text: &str, start: &str, end: &str, new: &str) -> String {
+    assert_eq!(
+        text.matches(start).count(),
+        1,
+        "std.tls should hold `{start}` once"
+    );
+    let from = text.find(start).expect("start");
+    let to = from
+        + text[from..]
+            .find(end)
+            .unwrap_or_else(|| panic!("std.tls should hold `{end}` after it"));
+    format!("{}{}{}", &text[..from], new, &text[to..])
+}
+
 /// The module with the hook, over the package's copies of `rsa` and `x509`.
 /// The hook fixes the client random, the x25519 key, an empty legacy session
 /// ID, the ClientHello and its record, and the extension the ClientHello asks
@@ -128,13 +127,24 @@ fn replaced(text: &str, old: &str, new: &str) -> String {
 /// sends no compatibility change_cipher_spec and skips the certificate path
 /// check.
 fn hooked_module() -> String {
-    let start = TLS_MODULE
-        .find("fn client_hello(")
-        .expect("std.tls has client_hello");
-    let end = TLS_MODULE
-        .find("// An extension read from a message.")
-        .expect("std.tls has Ext");
-    let mut module = format!("{}{}\n{}", &TLS_MODULE[..start], HELLO, &TLS_MODULE[end..]);
+    // The engine's own `client_hello` runs: only its suite list and the
+    // extensions around the server name and the key share are the trace's.
+    let mut module = replaced(
+        TLS_MODULE,
+        "body.append(u16_list([SUITE_CHACHA, SUITE_AES]))",
+        HELLO_SUITES,
+    );
+    module = replaced_between(
+        &module,
+        "    extensions.append(extension(10, u16_list([GROUP_X25519, GROUP_P256])))\n",
+        "    var entry = Bytes.new()\n    entry.push_u16_be(group.to_u16())",
+        HELLO_BEFORE_SHARE,
+    );
+    module = replaced(
+        &module,
+        "    extensions.append(extension(51, shares))\n",
+        HELLO_AFTER_SHARE,
+    );
     module = replaced(
         &module,
         "Some(bytes) => { client_random = bytes.expose() }",
