@@ -45,7 +45,10 @@ done
 
 export CARGO_TARGET_DIR=$root/target/coverage/build
 export RUSTFLAGS="${RUSTFLAGS:-} -C instrument-coverage"
-export LLVM_PROFILE_FILE=$root/target/coverage/raw/oska-%p-%m.profraw
+# %8m: each process merges its counters into one of eight files for its
+# binary as it exits. A file for each process (%p) would be thousands of
+# profraw files, one for every oskac the tests run.
+export LLVM_PROFILE_FILE=$root/target/coverage/raw/oska-%8m.profraw
 rm -rf "$root/target/coverage/raw" "${root:?}/${out:?}"
 mkdir -p "$root/target/coverage/raw" "$root/$out"
 
