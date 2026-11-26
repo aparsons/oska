@@ -19,7 +19,7 @@ Inference: Yes. Oska's trust flag is already a two-point information-flow lattic
 - **Authority is reported and bounded.** Unused authority is a release-check error (docs/adr/0016-unused-authority-is-a-release-check-error.md). Widening of authority must be approved (GLOSSARY.md, "Widening"). Lean proves authority safety for Oska Core (docs/adr/0018-oska-core-in-lean-is-the-reference-for-the-interpreter.md).
 - **Secret values.** A secret value is never displayed, logged, interpolated or compared with `==`. Secret integers (`Secret<U8/U32/U64>`) allow constant-time computation and forbid branching, indexing, dividing, shifting or ordering on them. The property holds for native code, not for the interpreter, and not for what hardware does (GLOSSARY.md, "Secret value", "Secret integer", constant-time entry). Inference: this is a one-level confidentiality label with a built-in sink rule (no log, no interpolation) and a built-in ban on the main implicit flows (branch, index).
 - **Compliance reports are self-assessments**, with findings rated by risk and a determination (docs/adr/0017-compliance-reports-are-self-assessments.md).
-- **Parity gate.** ADR 0014 froze new language features until every supported platform had a native backend, then turns on a parity gate: a feature is done only when it works natively, with the same output and security guarantees, on every supported platform. The ADR names v0.6.0 (Windows) as the release that turns the gate on (docs/adr/0014-every-supported-platform-builds-and-runs-natively.md). Inference: v0.6.0 is released, so the freeze is over and a classification feature must meet the parity gate on all five platforms. I did not check the release state; the coordinator's project memory records v0.6.0 as released on 2026-11-20.
+- **Parity gate.** ADR 0014 froze new language features until every supported platform had a native backend, then turns on a parity gate: a feature is done only when it works natively, with the same output and security guarantees, on every supported platform. The ADR names v0.6.0 (Windows) as the release that turns the gate on (docs/adr/0014-every-supported-platform-builds-and-runs-natively.md). Inference: v0.6.0 is released, so the freeze is over and a classification feature must meet the parity gate on all five platforms. The GitHub release v0.6.0 was published on 2026-11-20 (https://github.com/aparsons/oska/releases/tag/v0.6.0, accessed 2026-11-26).
 - **Context.** The earlier research lists "exposed secrets" and log injection among classes to make unwritable, and asks for sink-specific APIs (docs/research/2026-11-ai-first-secure-language.md, question 4 and its list of `Untrusted<T>` taint tracking).
 
 ## 2. What the literature and existing tools say
@@ -128,3 +128,12 @@ External:
 16. https://csrc.nist.gov/pubs/fips/199/final (FIPS 199, abstract only)
 17. https://www.first.org/tlp/ (Traffic Light Protocol)
 18. https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32016R0679 (GDPR, recital 51 only)
+
+## Outcome of the grilling, 2026-11-26
+
+This section was added after the note above and does not change it. Adam settled these points on decision cards in the project thread, and they replace the matching recommendations and open questions above. The record is `docs/adr/0029-classification-is-a-flag-on-text-and-bytes-with-sink-ceilings.md`, and the spec is issue #770.
+
+- The four names are fixed by the language, so the line in section 3 that says to define the lattice per program is not followed. A per-package order may come later.
+- `Secret` stays a separate axis, so the suggestion in section 4F that `Secret<T>` become the top label is not followed.
+- Results of inspecting classified text stay unclassified (open question 3). Trust and classification are two independent flags (question 5). Declassification needs a `Declassify` capability (question 6). Ceilings are raised only by a widening in the authority baseline (question 8). The Lean model proves the flow rule and ceiling check now, and a noninterference proof is a follow-up (question 9). No standard mapping yet (question 10). Parsed text fields keep the flag, with `std.json` and `std.sql` later (question 7).
+- Question 1 is answered: the freeze ended with v0.6.0.

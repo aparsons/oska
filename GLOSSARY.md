@@ -173,15 +173,15 @@ The property of code that no conditional branch or memory address depends on a s
 _Avoid_: timing-safe, side-channel free
 
 **Classification**:
-A flag on text and bytes that says how far the data may travel: `Public`, `Internal`, `Confidential` or `Restricted`, in that order (ADR 0029). It flows one way, to the same or a higher classification, and a prelude operation gives its result the highest classification of its inputs. It is separate from trust and from a secret value; a value can have any combination.
+A flag on text and bytes that says how far the data may travel: `Public`, `Internal`, `Confidential` or `Restricted`, in that order. Decided in ADR 0029 and not built yet; it is separate from an untrusted value and from a secret value, and a value can have any combination.
 _Avoid_: sensitivity level, label, tainted, sensitive
 
 **Ceiling**:
-The highest classification that a sink capability accepts. A sink refuses a value above its ceiling. The default is `Public`, and attenuation can only lower it.
+The highest classification that a sink capability accepts, `Public` by default. Attenuation can only lower it, and raising it above the baseline is a widening. Decided in ADR 0029 and not built yet.
 _Avoid_: clearance, limit
 
 **Declassification**:
-Lowering a classification on purpose. Only code that holds a `Declassify` capability can do it, and every use is an audit site.
+Lowering a classification on purpose. Only code that holds a `Declassify` capability can do it, and every use is an audit site. Decided in ADR 0029 and not built yet.
 _Avoid_: downgrade, unclassify, redact
 
 **Approval**:
