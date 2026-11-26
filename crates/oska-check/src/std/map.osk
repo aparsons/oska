@@ -104,6 +104,17 @@ impl<K: Eq + Hash, V> Map<K, V> {
         empty
     }
 
+    // A map of `entries`, put in order: a key that occurs again keeps its
+    // first place and takes the later value, as `put` does. More distinct
+    // keys than the entry limit panics with `P0044`.
+    pub fn of(entries: List<Entry<K, V>>) -> Map<K, V> {
+        var made: Map<K, V> = Map.new()
+        for entry in entries {
+            made.put(entry.key, entry.value)
+        }
+        made
+    }
+
     // The number of entries.
     pub fn len(self) -> Int {
         self.live
