@@ -79,5 +79,21 @@ else
   ok "a bad set fails"
 fi
 
+# scripts/coverage-plan.py cuts the linux set finer for the Coverage workflow:
+# its jobs together must run every target of the set once (native_tests in
+# its three slices, as one target).
+want=$(scripts/test-shard.sh linux all --plan | sort)
+got=$(python3 -I scripts/coverage-plan.py | python3 -I -c 'import json, sys
+for job in json.load(sys.stdin):
+    print(job["lines"])' | grep -v '^$' | sed 's|^\(oskac test native_tests\)/[0-9]*$|\1|' | sort | uniq)
+count=$(python3 -I scripts/coverage-plan.py | python3 -I -c 'import json, sys
+print(sum(len(j["lines"].splitlines()) for j in json.load(sys.stdin)))')
+all=$(scripts/test-shard.sh linux all --plan | wc -l)
+if [ "$want" = "$got" ] && [ "$count" -eq $((all + 2)) ]; then
+  ok "coverage plan: each linux target runs exactly once"
+else
+  bad "coverage plan: each linux target runs exactly once" "targets differ, or run more than once ($count lines, $all targets)"
+fi
+
 printf '\n%s passed, %s failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]

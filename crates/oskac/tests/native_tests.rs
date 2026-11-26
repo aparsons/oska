@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use differential::in_parallel;
+use differential::{in_parallel, is_coverage_profile};
 
 /// What one `oskac test` run showed.
 #[derive(Debug, PartialEq, Eq)]
@@ -129,6 +129,8 @@ fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, String>) {
         if path.is_dir() {
             tree.insert(format!("{name}/"), String::new());
             read_tree(&path, &format!("{name}/"), tree);
+        } else if is_coverage_profile(&path) {
+            // The instrumented build's, not the program's output.
         } else {
             let text = std::fs::read(&path).expect("should read the file");
             tree.insert(name, String::from_utf8_lossy(&text).into_owned());
