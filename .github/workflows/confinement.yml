@@ -5,9 +5,10 @@
 # Linux that ci.yml runs: symlinks, hard links and a component swapped
 # during a walk everywhere, and junctions and mount points on Windows.
 #
-# A push runs it only on main and on the ticket and review-fix branches
-# that are merged into an integration branch before any pull request, so
-# a pull request's head is not tested twice.
+# Linux runs on every push and pull request. macOS and Windows run only on
+# main, on spec/** and on dispatch (spec #711): they wait longest for a
+# runner. A pull request whose head is a pushed branch is skipped, because
+# the push run of the same commit is its check.
 #
 # Needs no configuration.
 
@@ -15,13 +16,14 @@ name: Confinement
 
 on:
   push:
-    branches: [main, "ticket/**", "review-fixes-*"]
+    branches: [main, "spec/**", "ticket/**", "review-fixes-*"]
     paths:
       - crates/oska-sys/**
       - crates/oska-run/**
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/confinement.yml
+  workflow_dispatch:
   pull_request:
     paths:
       - crates/oska-sys/**
@@ -45,17 +47,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-latest
-            machine: x86_64
-          - runner: ubuntu-24.04-arm
-            machine: aarch64
-          - runner: macos-latest
-            machine: arm64
-          - runner: macos-15-intel
-            machine: x86_64
-          - runner: windows-latest
-            machine: x86_64
+        include: ${{ fromJSON((github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/')))) && '[{"runner":"ubuntu-latest","machine":"x86_64"},{"runner":"ubuntu-24.04-arm","machine":"aarch64"},{"runner":"macos-latest","machine":"arm64"},{"runner":"macos-15-intel","machine":"x86_64"},{"runner":"windows-latest","machine":"x86_64"}]' || '[{"runner":"ubuntu-latest","machine":"x86_64"},{"runner":"ubuntu-24.04-arm","machine":"aarch64"}]') }}
+    if: github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'ticket/') || startsWith(github.head_ref, 'review-fixes-') || startsWith(github.head_ref, 'spec/'))
     runs-on: ${{ matrix.runner }}
     # A wrong O_NONBLOCK would hang the FIFO test rather than fail it.
     timeout-minutes: 30

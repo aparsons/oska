@@ -1,12 +1,19 @@
 name: CI
 
-# A push runs on main and on the ticket and review-fix branches, which are
-# merged into an integration branch before any pull request, so a pull
-# request's head is not tested twice (as windows.yml and confinement.yml).
+# Where it runs (spec #711): the Linux jobs (test, musl) run on every push to
+# main, spec/**, ticket/** and review-fixes-* and on every pull request. The
+# macOS and cross-build jobs, which wait longest for a runner, run only on
+# main, on spec/** (the branch of a spec's pull request) and on dispatch, so
+# a ticket push or a small pull request uses no Mac. A pull request whose head
+# is a pushed branch (ticket/**, review-fixes-*, spec/**) is skipped: the push
+# run of the same commit is its check, so the matrix runs once, not twice (as
+# windows.yml and confinement.yml). To run the full matrix on any branch:
+#   gh workflow run ci.yml --ref <branch>
 on:
   push:
-    branches: [main, "ticket/**", "review-fixes-*"]
+    branches: [main, "spec/**", "ticket/**", "review-fixes-*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -78,6 +85,7 @@ jobs:
           - {os: ubuntu-24.04-arm, group: tests, shard: native}
           - {os: ubuntu-24.04-arm, group: tests, shard: rest}
     name: test (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
+    if: github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'ticket/') || startsWith(github.head_ref, 'review-fixes-') || startsWith(github.head_ref, 'spec/'))
     runs-on: ${{ matrix.os }}
     # Incremental data about doubles the size of `target`, which is cached
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
@@ -196,6 +204,7 @@ jobs:
       matrix:
         shard: [site-0, site-1, site-2, sites-1, sites-2, rest]
     name: musl (${{ matrix.shard }})
+    if: github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'ticket/') || startsWith(github.head_ref, 'review-fixes-') || startsWith(github.head_ref, 'spec/'))
     runs-on: ubuntu-latest
     # One shard: the build, then at most some 8 minutes of tests.
     timeout-minutes: 30
@@ -262,6 +271,7 @@ jobs:
           - {os: macos-15-intel, arch: x86_64, shard: native-2}
           - {os: macos-15-intel, arch: x86_64, shard: rest}
     name: macos (${{ matrix.os }}, ${{ matrix.arch }}${{ matrix.shard != 'all' && format(', {0}', matrix.shard) || '' }})
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/')))
     runs-on: ${{ matrix.os }}
     # Incremental data about doubles the size of `target`, which is cached
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
@@ -321,6 +331,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/')))
     runs-on: ${{ matrix.os }}
     # A build and one compile per corpus program per target: a few minutes.
     timeout-minutes: 20
