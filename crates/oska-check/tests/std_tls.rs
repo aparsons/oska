@@ -343,6 +343,32 @@ fn the_crypto_modules_it_uses_have_no_audit_site() {
 /// error by its message text. The one reading of an `IoError`'s text is
 /// `std.net_error`'s `classify`, so a change of wording cannot change what
 /// the modules do.
+/// The test hook of the RFC 8448 replay (#695, `oskac`'s `tls_rfc8448.rs`)
+/// exists only in a copy of the module that the test builds. The module a
+/// program imports has no such name, and a program cannot call one.
+#[test]
+fn the_rfc_8448_hook_is_not_reachable_from_a_program() {
+    let module = include_str!("../src/std/tls.osk");
+    assert!(
+        !module.to_lowercase().contains("rfc8448"),
+        "std.tls must not hold the test hook"
+    );
+    assert_errors(
+        "use std.tls\n\
+         fn f() -> Int {\n    \
+             var e = tls.rfc8448_engine(tls.TlsConfig.default())\n    \
+             e.start().output.len()\n}",
+        &[("E0312", "rfc8448_engine")],
+    );
+    assert_errors(
+        "use std.tls\n\
+         fn f() -> Int {\n    \
+             let e = tls.Engine.rfc8448(tls.TlsConfig.default())\n    \
+             0\n}",
+        &[("E0228", "rfc8448")],
+    );
+}
+
 #[test]
 fn no_module_matches_an_error_by_its_message_text() {
     for (name, source) in [
