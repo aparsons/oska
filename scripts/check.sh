@@ -738,6 +738,11 @@ if step "test shard tests" --fast-when 'scripts/test-shard*' --fast-when '.githu
   bash scripts/test-shard/test.sh
 fi
 
+if step "ci changes tests" --no-slot --fast-when 'scripts/ci-changes/*' --group scripts; then
+  # Which pull requests skip the slow test jobs (scripts/ci-changes/docs-only.sh).
+  bash scripts/ci-changes/test.sh
+fi
+
 if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh --group scripts; then
   # --list prints exactly the steps a run runs, in order (this file's blocks).
   bash scripts/check-steps/test.sh
