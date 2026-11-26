@@ -387,6 +387,7 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to_file(\"site/authority.txt\")",
         "read.restrict_to_file(\"site/api.json\")",
         "read.restrict_to_file(\"site/lastmod.txt\")",
+        "read.restrict_to_file(\"site/coverage.md\")",
         "restrict_to(Path.new(\"_site\"))",
     ] {
         assert!(
@@ -413,6 +414,24 @@ fn main_narrows_writing_before_it_writes_anything() {
         ["write.restrict_to"],
         "`main` should use its `FsWrite` only to attenuate it to a directory capability"
     );
+}
+
+// ---- The coverage report ---------------------------------------------------------------
+
+#[test]
+fn a_coverage_table_gets_a_page_a_markdown_copy_and_a_reference_entry() {
+    let table = "| Crate | Lines | Covered | Coverage |\n| --- | ---: | ---: | ---: |\n| oska-syntax | 10 | 9 | 90.0% |\n";
+    let site = build_ok(&[("site/coverage.md", table)]);
+    assert!(site["coverage.html"].contains("oska-syntax"));
+    assert!(site["coverage.html"].contains("/coverage/html/index.html"));
+    assert!(site["coverage.md"].contains(table));
+    assert!(site["reference.html"].contains("coverage.html"));
+}
+
+#[test]
+fn without_a_coverage_table_there_is_no_coverage_page() {
+    let site = build_ok(&[]);
+    assert!(!site.contains_key("coverage.html"));
 }
 
 // ---- The generator's own authority report ---------------------------------------------

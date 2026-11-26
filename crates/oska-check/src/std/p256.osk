@@ -23,7 +23,7 @@
 // double-and-add of every bit, so the checker proves that no branch or
 // memory address depends on the scalar, and the native backend keeps that
 // on every platform. That is the whole of the timing story (see
-// [secrets](../guide/secrets.md)): nothing measures time. The results are
+// [secrets](https://oskalang.dev/guide/secrets.html)): nothing measures time. The results are
 // `Secret<Bytes>`, even the public point, which the caller exposes in its own
 // code where it needs it in the clear, as it does a TLS key share: `oskac
 // audit` lists that call. The module has no audit site of its own: no

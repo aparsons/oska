@@ -10,6 +10,11 @@ name: Pages
 on:
   push:
     branches: [main]
+  # A new coverage report (coverage.yml) rebuilds the site to publish it.
+  workflow_run:
+    workflows: [Coverage]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +30,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A Coverage run that failed has no report to publish.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: read
+      actions: read
     steps:
       # The whole history, so each file's last commit date is its own
       # (site/lastmod.txt, below), not the date of the commit checked out.
@@ -51,7 +61,16 @@ jobs:
             [ -n "$date" ] || { echo "no commit date for $file" >&2; exit 1; }
             printf '%s %s\n' "$date" "$file"
           done < "$RUNNER_TEMP/sources" > site/lastmod.txt
+      # The line-coverage report of the latest merge to main (coverage.yml),
+      # published at /coverage.html and /coverage/. None before the first
+      # Coverage run succeeds.
+      - name: Fetch the coverage report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/site/stage-coverage.sh fetch "$RUNNER_TEMP/coverage"
       - run: ./target/release/oskac run site/build.osk
+      - run: scripts/site/stage-coverage.sh stage "$RUNNER_TEMP/coverage" _site
       # The Oska release verifier, built natively with this `oskac`: the
       # second check on every release, beside verify.sh (stage-site.sh).
       - run: ./target/release/oskac build scripts/release/verify.osk -o "$RUNNER_TEMP/verify-release"

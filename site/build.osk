@@ -94,6 +94,10 @@ cap struct Sources {
     // writes from git just before the build. Without it the sitemap has
     // no `<lastmod>`.
     lastmod: FileRead,
+    // `site/coverage.md`: the line-coverage table `scripts/coverage.sh`
+    // wrote for the latest merge to main, which the Pages workflow copies
+    // here just before the build. Without it there is no coverage page.
+    coverage: FileRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
@@ -110,6 +114,7 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
         authority: read.restrict_to_file("site/authority.txt"),
         api: read.restrict_to_file("site/api.json"),
         lastmod: read.restrict_to_file("site/lastmod.txt"),
+        coverage: read.restrict_to_file("site/coverage.md"),
     )
     // Writing is narrowed to the repository before anything is written,
     // then to `_site` once it exists (a narrowing needs its directory).
@@ -154,6 +159,8 @@ struct Site {
     assets: List<Asset>,
     // The generator's own authority report, or "" if there is none.
     authority: Untrusted<String>,
+    // The coverage table of the latest merge to main (Markdown), or "".
+    coverage: Untrusted<String>,
     // The items of the API reference, in order, none if there is no
     // `site/api.json`.
     api: List<ApiItem>,
@@ -205,6 +212,9 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     }
     if all.authority != "" {
         pages.push(authority_page(all))
+    }
+    if all.coverage != "" {
+        pages.push(coverage_page(all))
     }
     if has_api(all) {
         site.create_dir(Path.new("api"))?
@@ -352,6 +362,10 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         Ok(text) => text
         Err(_) => ""
     }
+    let coverage = match sources.coverage.read_to_string() {
+        Ok(text) => text
+        Err(_) => ""
+    }
     let api: List<ApiItem> = match sources.api.read_to_string() {
         Ok(text) => {
             match api_reference(text) {
@@ -367,7 +381,7 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         Ok(text) => dates_of(text)
         Err(_) => List.new()
     }
-    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority, api: api, dates: dates))
+    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority, coverage: coverage, api: api, dates: dates))
 }
 
 // The lines of `site/lastmod.txt`: a date, one space, and a path. A line
@@ -1318,6 +1332,9 @@ fn reference_page(all: Site) -> Page {
     }
     if all.authority != "" {
         entries.push(["authority.html", "The site generator's authority"])
+    }
+    if all.coverage != "" {
+        entries.push(["coverage.html", "Test coverage"])
     }
     entries.push(["glossary.html", "Glossary"])
     for section in all.sections {
@@ -2770,6 +2787,17 @@ fn authority_page(all: Site) -> Page {
     let head = markup("<h1>The site generator's authority</h1>\n<p>This site is built by <code>site/build.osk</code>, an Oska program. Just before each build, <code>oskac check site/build.osk</code> prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or <code>pure</code> if it can reach none. <code>main</code> is granted <code>FsRead</code> and <code>FsWrite</code>, which can only be narrowed, so only the functions it passes a directory or file capability to can touch the filesystem. Each indented line under a function is an attenuation: a place where it narrows a capability, with the kind it narrows from and to and its root, or <code>computed at runtime</code> when the root is not a literal. <code>main</code>'s attenuations are the generator's real reach: the files and directories it reads, and the directory it writes.</p>\n")
     let report = wrap("<pre><code>", html.text(all.authority), "</code></pre>\n")
     Page(path: "authority.html", title: title, body: head.concat(report), md: "# {title}\n\n{intro}\n\n```text\n{all.authority}```\n")
+}
+
+// Line coverage of the workspace's tests at the latest merge to main:
+// `scripts/coverage.sh`'s table, with links to the browsable report and
+// the lcov file the Pages workflow stages under `coverage/`.
+fn coverage_page(all: Site) -> Page {
+    let base = origin()
+    let title = "Test coverage"
+    let text = "# {title}\n\nLine coverage of the workspace's tests at the latest merge to `main`, measured with rustc's source-based instrumentation (`scripts/coverage.sh`). The [browsable report]({base}/coverage/html/index.html) shows every file line by line, and [lcov.info]({base}/coverage/lcov.info) is the same data for other tools.\n\n{all.coverage}"
+    let links = Links(site: all, dir: "")
+    Page(path: "coverage.html", title: title, body: markdown(text, links), md: retarget(text, links))
 }
 
 // The group of `llms.txt` that lists the files of the setup beside the

@@ -15,6 +15,7 @@
 /site/api.json
 # Each source file's last commit date, which the workflow writes too
 /site/lastmod.txt
+/site/coverage.md
 # The tracked files the link checker reads, which the workflow writes too
 /site/tracked.txt
 
