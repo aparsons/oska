@@ -26,11 +26,18 @@ This file states those rules twice and proves they agree.
    (`Layout.WF`: every place in `order` is in `log`), which `new`, `put`
    and `remove` all keep.
 
-The hash table (`table` in `map.osk`), the probe limit (`P0045`), the entry
+The slot table (`table` in `map.osk`), the probe limit (`P0045`), the entry
 limit (`P0044`) and the rebuild only decide where a key is found, and a
 rebuild keeps the live entries in the same order, so they are not modelled
 here; the differential tests (`crates/oska-run/tests/map_order.rs`,
 `map_limits.rs`) cover them.
+
+The gap: `Layout` is copied by hand from `map.osk`; no proof links the Lean
+`Layout` to the Oska code. The differential tests (`map_order.rs` checks
+random `put` and `remove` sequences entry by entry against a plain list)
+carry that link. `Layout` also does not state that its keys are unique; the
+abstract `put_nodup` shows the rules keep keys unique, but it is not
+proved for `Layout`.
 -/
 
 namespace OskaFormal.MapModel
