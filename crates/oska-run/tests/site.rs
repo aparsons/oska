@@ -423,7 +423,7 @@ fn a_coverage_table_gets_a_page_a_markdown_copy_and_a_reference_entry() {
     let table = "| Crate | Lines | Covered | Coverage |\n| --- | ---: | ---: | ---: |\n| oska-syntax | 10 | 9 | 90.0% |\n";
     let site = build_ok(&[("site/coverage.md", table)]);
     assert!(site["coverage.html"].contains("oska-syntax"));
-    assert!(site["coverage.html"].contains("/coverage/html/index.html"));
+    assert!(site["coverage.html"].contains("/coverage/lcov.info"));
     assert!(site["coverage.md"].contains(table));
     assert!(site["reference.html"].contains("coverage.html"));
 }
