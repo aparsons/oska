@@ -173,7 +173,7 @@ The property of code that no conditional branch or memory address depends on a s
 _Avoid_: timing-safe, side-channel free
 
 **Classification**:
-A flag on text and bytes that says how far the data may travel: `Public`, `Internal`, `Confidential` or `Restricted`, in that order (ADR 0030). It flows one way, to the same or a higher classification, and a prelude operation gives its result the highest classification of its inputs. It is separate from trust and from a secret value; a value can have any combination.
+A flag on text and bytes that says how far the data may travel: `Public`, `Internal`, `Confidential` or `Restricted`, in that order (ADR 0029). It flows one way, to the same or a higher classification, and a prelude operation gives its result the highest classification of its inputs. It is separate from trust and from a secret value; a value can have any combination.
 _Avoid_: sensitivity level, label, tainted, sensitive
 
 **Ceiling**:
