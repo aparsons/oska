@@ -42,7 +42,7 @@ CORPUS_SPLIT=3
 shards_of() {
   case $1 in
     musl) echo "site-0 site-1 site-2 sites-1 sites-2 rest all" ;;
-    linux) echo "site native rest all" ;;
+    linux) echo "site native rest-1 rest-2 all" ;;
     macos) echo "native-1 native-2 rest all" ;;
     windows) echo "native heavy rest-1 rest-2 all" ;;
     *) return 1 ;;
@@ -54,6 +54,12 @@ heavy_of() { # SET SHARD
     "musl sites-2") echo "oska-run:site_links oska-run:site_corpus oska-run:site_compliance" ;;
     "linux site") echo "oska-run:site oska-run:site_api oska-run:site_links oska-run:site_corpus oska-run:site_compliance oska-run:site_home oska-run:site_meta" ;;
     "linux native") echo "oskac:native_tests oskac:native_prelude oskac:build_cache oskac:run_limits oskac:native_corpus oskac:run_limits_steps_native oskac:native_sshsig" ;;
+    # Linux `rest` is some 14 minutes of test binaries, one after another, so
+    # it runs as two shards. The binaries that take 14 s or more are pinned
+    # (their times from CI run 45754852640: 220 s and 233 s); the other
+    # targets alternate by position, as on Windows.
+    "linux rest-1") echo "oskac:native_sockets oska-run:text_toolkit oskac:native_x509 oskac:native_http oska-run:postconditions" ;;
+    "linux rest-2") echo "oskac:native_tls oska-run:lean_reference oska-run:scopes oskac:native_p256 oskac:native_ecdsa oska-run:oska_core oska-run:core oskac:native_kex_primitives" ;;
     "windows native") echo "oskac:native_tests" ;;
     "windows heavy") echo "oskac:native_prelude oskac:native_corpus oskac:native_tls oskac:native_ints" ;;
     "macos native-1") echo "oskac:native_prelude oskac:native_data oskac:native_system_calls oskac:native_tests/0" ;;
@@ -95,7 +101,7 @@ plan() { # SET SHARD
   if [ -n "$is_rest" ]; then
     local all s heavy=" " n=0
     for s in $(shards_of "$set"); do
-      case $s in all | rest | rest-[0-9]*) continue ;; esac
+      case $s in all | rest) continue ;; esac
       for h in $(heavy_of "$set" "$s"); do heavy="$heavy${h%%/*} "; done
     done
     for h in $(split_of "$set"); do heavy="$heavy$h "; done
@@ -104,6 +110,11 @@ plan() { # SET SHARD
       # oskac: only the differential suite and its own unit tests run on musl.
       all="$all"$'\n'"oskac test native_files"$'\n'"oskac test native_parity"$'\n'"oskac test native_default"$'\n'"oskac bins"
     fi
+    # A rest-K shard first runs the targets pinned to it.
+    case $shard in rest-[0-9]*)
+      for h in $(heavy_of "$set" "$shard"); do echo "${h%%:*} test ${h#*:}"; done
+      ;;
+    esac
     while read -r pkg kind name; do
       [ -n "$pkg" ] || continue
       if [ "$kind" = test ] && [ "$shard" != all ]; then

@@ -34,7 +34,7 @@ for line in plan("native"):
             jobs.append({"name": f"native_tests-{k}", "lines": f"oskac test native_tests/{k}"})
     else:
         jobs.append({"name": line.split()[-1], "lines": line})
-rest = plan("rest")
+rest = plan("rest-1") + plan("rest-2")
 for k in range(REST_JOBS):
     jobs.append({"name": f"rest-{k + 1}", "lines": "\n".join(rest[k::REST_JOBS])})
 print(json.dumps(jobs))
