@@ -6,7 +6,7 @@ A value of text or bytes can carry a **classification**: one of `Public < Intern
 
 - A classification flows one way. A value may flow into a slot with the same or a higher classification, never a lower one. Prelude text and byte operations give the result the highest classification of their inputs.
 - A result that is not text or bytes (`Int`, `Bool`, …) is unclassified, as it is trusted under ADR 0006. This leaves **implicit flows** open, for example `if name.contains("x") { log("yes") }`. The documentation says so, and the feature does not claim to stop them.
-- Each sink capability has a **ceiling**: the highest classification it accepts. Logging, network send and `std.llm` come first. The default ceiling is `Public`. Attenuation can only lower a ceiling, and raising one is a widening.
+- Each sink capability has a **ceiling**: the highest classification it accepts. Logging, network send and `std.llm` come first. The default ceiling is `Public`. Attenuation can only lower a ceiling. Raising one above the approved authority baseline is a widening, so a reviewer approves it before a build; code cannot raise its own ceiling.
 - Only code that holds a `Declassify` capability can lower a classification. `main` passes it down like any other capability, and every use is also an audit site.
 - The four names are fixed by the language. The syntax stays open so that a per-package order can be added later without breaking programs.
 - `Secret` is a separate axis and does not change. Trust and classification are two independent flags: each has its own rule and its own join, and a value can be untrusted and confidential at once.
@@ -28,7 +28,9 @@ Oska already tracks one flag by one-way flow, and capabilities already name ever
 ## Consequences
 
 - The checker, the interpreter and every native backend need the same behaviour (ADR 0014). Labels are erased after checking, so no runtime label is needed.
-- The Lean model changes in the same PR as the checker rule (ADR 0018; see `docs/agents/formal.md`).
+- The Lean model changes in the same PR as the checker rule (ADR 0018; see `docs/agents/formal.md`). It proves the flow rule and the ceiling check. A noninterference proof of a restricted model is a follow-up, because implicit flows are out of scope.
+- The compliance reports describe the four names as written. A mapping to ISO/IEC 27001, FIPS 199 or TLP waits for a released version that has the feature.
+- A text field parsed from classified text keeps its classification, so parsing cannot lower it without `Declassify`. The `std.json` and `std.sql` changes that carry the flag through follow the first spec.
 - The authority report lists each sink's ceiling, each `Declassify` holder and each widening. These are self-assessment evidence (ADR 0017). A classification name borrowed from a standard does not make a program conform to it.
 - Classification gives no timing guarantee. Constant time holds for native code only.
 - Reading from a capability gives the capability's own classification, as everything read from a connection is untrusted under ADR 0025. How that is set is for the spec.
