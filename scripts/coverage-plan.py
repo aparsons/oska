@@ -6,7 +6,7 @@
 
 Instrumented, the linux shards of scripts/test-shard.sh take longer than the
 60 minutes a job may run, so coverage cuts the same tests finer: the `site`
-shard whole, each heavy test file of `native` as a job of its own (the
+shard whole, each heavy test file of `native-1` and `native-2` as a job of its own (the
 corpus test in three slices, as the macOS shards do), and the `rest` shard
 dealt round-robin into REST_JOBS jobs. Every test still runs in exactly one
 job. Each entry is {"name", "lines"}: `lines` is a plan for
@@ -28,12 +28,8 @@ def plan(shard):
 
 
 jobs = [{"name": "site", "lines": "\n".join(plan("site"))}]
-for line in plan("native"):
-    if line == "oskac test native_tests":
-        for k in range(3):
-            jobs.append({"name": f"native_tests-{k}", "lines": f"oskac test native_tests/{k}"})
-    else:
-        jobs.append({"name": line.split()[-1], "lines": line})
+for line in plan("native-1") + plan("native-2"):
+    jobs.append({"name": line.split()[-1].replace("/", "-"), "lines": line})
 rest = plan("rest-1") + plan("rest-2")
 for k in range(REST_JOBS):
     jobs.append({"name": f"rest-{k + 1}", "lines": "\n".join(rest[k::REST_JOBS])})

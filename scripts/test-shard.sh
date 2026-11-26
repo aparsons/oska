@@ -35,14 +35,14 @@ cd "$(dirname "$0")/.."
 SITE_SPLIT=3
 # Windows: the leftover targets are split into this many `rest-K` shards.
 REST_SPLIT=2
-# macOS: the corpus cases of native_tests run in this many slices.
+# macOS and Linux: the corpus cases of native_tests run in this many slices.
 CORPUS_SPLIT=3
 
 # The shards of each set, then each shard's heavy targets, "PACKAGE:NAME".
 shards_of() {
   case $1 in
     musl) echo "site-0 site-1 site-2 sites-1 sites-2 rest all" ;;
-    linux) echo "site native rest-1 rest-2 all" ;;
+    linux) echo "site native-1 native-2 rest-1 rest-2 all" ;;
     macos) echo "native-1 native-2 rest all" ;;
     windows) echo "native heavy rest-1 rest-2 all" ;;
     *) return 1 ;;
@@ -53,13 +53,17 @@ heavy_of() { # SET SHARD
     "musl sites-1") echo "oska-run:site_api oska-run:site_home oska-run:site_meta" ;;
     "musl sites-2") echo "oska-run:site_links oska-run:site_corpus oska-run:site_compliance" ;;
     "linux site") echo "oska-run:site oska-run:site_api oska-run:site_links oska-run:site_corpus oska-run:site_compliance oska-run:site_home oska-run:site_meta" ;;
-    "linux native") echo "oskac:native_tests oskac:native_prelude oskac:build_cache oskac:run_limits oskac:native_corpus oskac:run_limits_steps_native oskac:native_sshsig" ;;
     # Linux `rest` is some 14 minutes of test binaries, one after another, so
     # it runs as two shards. The binaries that take 14 s or more are pinned
     # (their times from CI run 45754852640: 220 s and 233 s); the other
     # targets alternate by position, as on Windows.
     "linux rest-1") echo "oskac:native_sockets oska-run:text_toolkit oskac:native_x509 oskac:native_http oska-run:postconditions" ;;
     "linux rest-2") echo "oskac:native_tls oska-run:lean_reference oska-run:scopes oskac:native_p256 oskac:native_ecdsa oska-run:oska_core oska-run:core oskac:native_kex_primitives" ;;
+    # Linux `native`: some 490 s of tests in 7 binaries (CI run 45908735193),
+    # in two shards of about 250 s each; the native_tests corpus cases run in
+    # the same CORPUS_SPLIT slices as on macOS.
+    "linux native-1") echo "oskac:native_tests/0 oskac:native_prelude" ;;
+    "linux native-2") echo "oskac:native_tests/1 oskac:native_tests/2 oskac:native_corpus oskac:run_limits oskac:run_limits_steps_native oskac:build_cache oskac:native_sshsig" ;;
     "windows native") echo "oskac:native_tests" ;;
     "windows heavy") echo "oskac:native_prelude oskac:native_corpus oskac:native_tls oskac:native_ints" ;;
     "macos native-1") echo "oskac:native_prelude oskac:native_data oskac:native_system_calls oskac:native_tests/0" ;;

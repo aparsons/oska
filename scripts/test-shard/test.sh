@@ -31,7 +31,7 @@ for set in musl linux macos windows; do
   folded=$(printf '%s\n' "$got" | sed -e 's|^\(oska-run test site\)/[0-9]*$|\1|' -e 's|^\(oskac test native_tests\)/[0-9]*$|\1|' | sort | uniq -c | awk '{c=$1; $1=""; sub(/^ /,""); print c "\t" $0}')
   slices=$(printf '%s\n' "$got" | grep -c '^oska-run test site/' || true)
   extra=$(printf '%s\n' "$folded" | awk -F'\t' -v n="$split" -v c="$corpus" -v set="$set" '
-    { want = ($2 == "oska-run test site" && set == "musl") ? n : (($2 == "oskac test native_tests" && set == "macos") ? c : 1); if ($1 != want) print $0 }')
+    { want = ($2 == "oska-run test site" && set == "musl") ? n : (($2 == "oskac test native_tests" && (set == "macos" || set == "linux")) ? c : 1); if ($1 != want) print $0 }')
   if [ -n "$extra" ]; then
     bad "$set: each target runs once" "run more or fewer times than once: $extra"
   else
