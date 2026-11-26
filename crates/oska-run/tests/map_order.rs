@@ -455,9 +455,5 @@ fn of_builds_a_map_from_a_list_of_entries_in_order() {
     m.put("zebra", 4)
     io.println(yes(made == m))?"#,
     );
-    assert_runs(
-        &src,
-        &[],
-        "made: pear=3 apple=2 zebra=4\nlen 3\ntrue\n",
-    );
+    assert_runs(&src, &[], "made: pear=3 apple=2 zebra=4\nlen 3\ntrue\n");
 }
