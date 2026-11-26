@@ -172,6 +172,18 @@ _Avoid_: constant-time int, CtU32
 The property of code that no conditional branch or memory address depends on a secret value, and no secret is a divisor or a shift amount, so the path the code takes and the memory it touches do not reveal the secret. It holds for native code, not for the interpreter, and not for what the hardware does with the instructions.
 _Avoid_: timing-safe, side-channel free
 
+**Classification**:
+A flag on text and bytes that says how far the data may travel: `Public`, `Internal`, `Confidential` or `Restricted`, in that order. Decided in ADR 0029 and not built yet; it is separate from an untrusted value and from a secret value, and a value can have any combination.
+_Avoid_: sensitivity level, label, tainted, sensitive
+
+**Ceiling**:
+The highest classification that a sink capability accepts, `Public` by default. Attenuation can only lower it, and raising it above the baseline is a widening. Decided in ADR 0029 and not built yet.
+_Avoid_: clearance, limit
+
+**Declassification**:
+Lowering a classification on purpose. Only code that holds a `Declassify` capability can do it, and every use is an audit site. Decided in ADR 0029 and not built yet.
+_Avoid_: downgrade, unclassify, redact
+
 **Approval**:
 A person's yes to one consequential action, such as a tool deleting a file, recorded with the action's summary and details. Only an approver makes one, and it is single use: the tool it is given to consumes it, and the runtime refuses a second use. It is not the approval of a widening, which is a change to an authority baseline that a reviewer makes before a build.
 _Avoid_: consent, confirmation token

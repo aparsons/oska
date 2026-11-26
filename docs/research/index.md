@@ -10,6 +10,7 @@ Each note answers one question, with its sources and the date it was written. A 
 - [An operating system built with Oska](2026-11-oska-operating-system.md) (2026-11-19): what an operating system, or an environment like one, for Oska and AI agents could look like, and a staged roadmap. Mostly proposals.
 - [A secure-by-default `std.json`](2026-11-json-parser.md) (2026-11-19): how `std.json` should parse, with the lessons of nine JSON parsers. Strict by default, with every limit on.
 - [Math and data science for Oska](2026-11-math-and-data-science.md) (2026-11-22): what the main math and data libraries of ten languages provide, and what belongs in `std`. Build a `Float` with pinned IEEE 754 results first, then a deterministic map, `std.math`, `std.stats`, a seeded `Rng` and `std.csv`. Not Parquet, BLAS, tensors or plotting yet.
+- [Data classification for Oska](2026-11-data-classification.md) (2026-11-26): yes. A classification flag on text and bytes like the trust flag, a ceiling label on log, network and `std.llm` sinks, and a `Declassify` capability. Open: implicit flows and declassification policy.
 
 ## Agents and code mode
 
