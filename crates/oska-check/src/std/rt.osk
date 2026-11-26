@@ -242,6 +242,11 @@ pub fn rt_mem_as_fs_read(object: Int) -> FsRead
 pub fn rt_mem_as_net_connect(object: Int) -> NetConnect
 pub fn rt_mem_as_random(object: Int) -> Random
 pub fn rt_mem_as_env(object: Int) -> Env
+// 1 when the compiler built this executable for a debug build of Oska,
+// so that `std.dns` honors the `OSKA_DNS_*` test variables, else 0 (ADR
+// 0026). A constant the compiler writes, so `connect`'s flag never comes
+// from a program or its environment.
+pub fn rt_mem_dns_test_hooks() -> Int
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
@@ -7085,7 +7090,7 @@ fn connect_to(v6: Bool, ip: Int, port: Int, wait: Int) -> Int {
 // the wording of why not. The interpreter's `connect` calls the same
 // function (`oska-run/src/resolve.rs`).
 fn resolve_addresses(host: String) -> Result<List<String>, String> {
-    dns.resolve_system(rt_mem_as_fs_read(0), rt_mem_as_net_connect(0), rt_mem_as_random(0), rt_mem_as_env(0), host)
+    dns.resolve_system(rt_mem_as_fs_read(0), rt_mem_as_net_connect(0), rt_mem_as_random(0), rt_mem_as_env(0), rt_mem_dns_test_hooks() != 0, host)
 }
 
 // What `connect_addresses` gives when no address was one to connect to.

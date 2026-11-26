@@ -6,6 +6,7 @@ Every release's notes, newest first. A change users can see adds its line under 
 
 v0.7.0 ships two Linux builds of `oskac`, so it runs on any Linux, and publishes a container image ([ADR 0022](docs/adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). These are the changes you can see:
 
+- **The DNS test variables work in debug builds only.** `OSKA_DNS_HOSTS`, `OSKA_DNS_RESOLV_CONF` and `OSKA_DNS_PORT`, which redirect `connect()`'s name lookups, are ignored by release builds of `oskac` and by the executables they produce, on both backends, so whoever starts a process cannot redirect its lookups. Nothing to change in a program; tests that use them need a debug `oskac`.
 - **`TlsConfig.with_rekey_after` is removed (breaking).** A program that calls it no longer checks. The client always sends its `KeyUpdate` after 2^24 records written and fails the stream past 2^24.5 records read under one key, and no setting changes either; delete the call.
 - **`std.http`: `with_max_body` has a ceiling.** A maximum body above `http.MAX_BODY` (16 MiB) is now `InvalidRequest` from `http.get`, before it connects, where any value was accepted. Lower the setting to 16777216 or less.
 - **`std.p256` refuses a scalar out of range (breaking).** `p256.public_key` and `p256.shared_secret` now return `None` for a scalar of zero, of the group order n, or above it, where they gave zeros or the result mod n. Pick scalars from 1 to n - 1 (`Random.secure_bytes(32)` fails the range about once in 2^32 draws, so retry on `None`); `std.tls` already treats `None` as a failed key share.

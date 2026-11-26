@@ -30,8 +30,8 @@ pub struct Files {
 
 const SOURCE: &str = "use std.dns
 
-pub fn system(fs: FsRead, net: NetConnect, random: Random, env: Env, name: String) -> Result<List<String>, String> {
-    dns.resolve_system(fs, net, random, env, name)
+pub fn system(fs: FsRead, net: NetConnect, random: Random, env: Env, hooks: Bool, name: String) -> Result<List<String>, String> {
+    dns.resolve_system(fs, net, random, env, hooks, name)
 }
 
 pub fn given(net: NetConnect, random: Random, hosts: String, resolv_conf: String, port: Int, name: String) -> Result<List<String>, String> {
@@ -66,6 +66,7 @@ fn program() -> std::rc::Rc<Program> {
 pub(crate) fn resolve(
     host: &mut dyn Host,
     files: Option<&Files>,
+    hooks: bool,
     name: &str,
 ) -> io::Result<Vec<String>> {
     let program = program();
@@ -80,6 +81,7 @@ pub(crate) fn resolve(
                 cap("NetConnect"),
                 cap("Random"),
                 cap("Env"),
+                Value::Bool(hooks),
                 Value::str(name),
             ],
         ),
