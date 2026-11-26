@@ -44,10 +44,19 @@ fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
             None => { reading = false }
             Some(line) => {
                 let text = line.trim().assume_trusted()
-                if text.starts_with("C ") {
-                    client.push(Bytes.from_hex(text.slice(2, text.len())).unwrap_or(Bytes.new()))
-                } else if text.starts_with("S ") {
-                    server.push(Bytes.from_hex(text.slice(2, text.len())).unwrap_or(Bytes.new()))
+                if text.starts_with("C ") || text.starts_with("S ") {
+                    match Bytes.from_hex(text.slice(2, text.len())) {
+                        Some(bytes) => {
+                            if text.starts_with("C ") {
+                                client.push(bytes)
+                            } else {
+                                server.push(bytes)
+                            }
+                        }
+                        None => { return io.println("mismatch trace") }
+                    }
+                } else if text.len() > 0 && !text.starts_with("#") {
+                    return io.println("mismatch trace")
                 }
             }
         }

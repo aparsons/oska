@@ -10,16 +10,16 @@
 //! ID, key share, extensions and the compatibility change_cipher_spec come
 //! from the engine's choices), so the test builds a copy of the module with a
 //! test-only hook: a few replaced lines that fix the client random, the
-//! x25519 key and the ClientHello's extensions to the RFC's. The hook exists
-//! only in the copy, a package's own `tls` module (as `native_tls.rs` does
-//! to change the rekey limits); `std.tls` has none, and a program cannot
-//! reach it (`oska-check`'s `std_tls.rs` holds that).
+//! x25519 key and the ClientHello's extensions to the RFC's. The copy is the
+//! package's own `tls` module (as `native_tls.rs` does to change the rekey
+//! limits). `std.tls` has no hook, and a program cannot reach one;
+//! `crates/oska-check/tests/std_tls_rfc8448_hook.rs` holds that.
 //!
 //! The RFC's server is a 1024-bit RSA key for the name `rsa`, which `std.rsa`
 //! (2048 bits and up) and the host name check refuse. So the package also
 //! holds copies of `rsa` and `x509` that take a 1024-bit key, and the copy of
-//! `tls` skips the certificate path and host name check (`verify_server`),
-//! which have their own tests. The CertificateVerify signature (RSA-PSS) is
+//! `tls` skips the certificate path and host name check (`verify_server`).
+//! `every_crafted_chain_natively` in `native_x509.rs` holds that check. The CertificateVerify signature (RSA-PSS) is
 //! still checked, so is every Finished and every record's tag.
 
 #![cfg(any(
@@ -121,11 +121,12 @@ fn replaced(text: &str, old: &str, new: &str) -> String {
     text.replace(old, new)
 }
 
-/// The module with the hook (over the copies of `rsa` and `x509` below): the client random, the x25519 key, an empty
-/// legacy session ID, the ClientHello and its record, the extension the
-/// ClientHello asks for (record_size_limit, which the server's
-/// EncryptedExtensions answers), no compatibility change_cipher_spec, and no
-/// certificate path check.
+/// The module with the hook, over the package's copies of `rsa` and `x509`.
+/// The hook fixes the client random, the x25519 key, an empty legacy session
+/// ID, the ClientHello and its record, and the extension the ClientHello asks
+/// for (record_size_limit, which the server's EncryptedExtensions answers). It
+/// sends no compatibility change_cipher_spec and skips the certificate path
+/// check.
 fn hooked_module() -> String {
     let start = TLS_MODULE
         .find("fn client_hello(")
