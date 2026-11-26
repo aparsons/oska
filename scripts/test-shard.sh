@@ -136,7 +136,15 @@ set=$1 shard=$2 mode=${3:-run}
 [ "$mode" = run ] || [ "$mode" = --plan ] || usage
 case " $(shards_of "$set" 2>/dev/null || true) " in *" $shard "*) ;; *) echo "unknown set or shard: $set $shard" >&2; exit 2 ;; esac
 
-lines=$(plan "$set" "$shard")
+# OSKA_SHARD_LINES: a plan of the same lines, in place of the shard's own.
+# scripts/coverage-plan.py cuts the linux set into finer pieces than CI's
+# shards, which the instrumented coverage run needs (spec "Add coverage
+# reports to merges"). Not for CI's own shards.
+if [ -n "${OSKA_SHARD_LINES:-}" ]; then
+  lines=$OSKA_SHARD_LINES
+else
+  lines=$(plan "$set" "$shard")
+fi
 if [ "$mode" = --plan ]; then
   printf '%s\n' "$lines"
   exit 0

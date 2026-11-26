@@ -10,10 +10,12 @@
 # uninstrumented build, and writes OUT_DIR (default target/coverage/report):
 #   lcov.info    the lcov file of the run
 #   summary.md   a table a crate and a table a file (a full run only)
-# With --shard NAME it runs one linux shard of scripts/test-shard.sh, as CI
-# does (site, native or rest), and writes only lcov.info: the Coverage
-# workflow runs the shards in parallel jobs, because one job takes longer
-# than GitHub allows, and scripts/coverage-merge.py merges the files.
+# With --shard NAME it runs one linux shard of scripts/test-shard.sh (site,
+# native or rest), or, when OSKA_SHARD_LINES holds a plan, just that plan
+# (scripts/coverage-plan.py cuts the shards finer), and writes only
+# lcov.info: the Coverage workflow runs the pieces in parallel jobs, because
+# instrumented one shard takes longer than GitHub allows, and
+# scripts/coverage-merge.py merges the files.
 # Without it, it runs `cargo test --workspace` (or CARGO_TEST_ARGS) and
 # writes both files. Needs the `llvm-tools` rustup component.
 

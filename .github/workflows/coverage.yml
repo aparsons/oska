@@ -3,12 +3,13 @@ name: Coverage
 # Line coverage of the workspace's tests on every push to main, so each merge
 # has a report (Adam, 2026-11-26). Never on a pull request: the instrumented
 # build and full test run would add their time to every PR's wall clock.
-# The tests run as the three linux shards of scripts/test-shard.sh, as in
-# ci.yml, because instrumented they take longer than one job may (the first
-# single-job run hit the 60 minute cap). Each shard uploads its lcov file;
-# the report job merges them (scripts/coverage-merge.py), writes the table to
-# the job summary, and uploads the merged lcov and the table as the
-# `coverage` artifact. The Pages workflow publishes that at /coverage.html.
+# Instrumented, ci.yml's linux shards take longer than one job may run (a
+# 60 minute cap: the `native` and `rest` shards were cancelled at it), so
+# scripts/coverage-plan.py cuts the same tests into smaller jobs: the plan
+# job prints them, each shard job runs one and uploads its lcov file, and the
+# report job merges them (scripts/coverage-merge.py), writes the table to the
+# job summary, and uploads the merged lcov and the table as the `coverage`
+# artifact. The Pages workflow publishes that at /coverage.html.
 
 on:
   push:
@@ -23,15 +24,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: plan
+        run: echo "matrix=$(python3 -I scripts/coverage-plan.py)" >> "$GITHUB_OUTPUT"
+
   shard:
-    # shards linux: site native rest
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        shard: [site, native, rest]
-    name: shard (${{ matrix.shard }})
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: shard (${{ matrix.name }})
     runs-on: ubuntu-latest
-    # An instrumented build and one shard of the tests.
+    # An instrumented build and a piece of the tests.
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: 0
@@ -42,20 +53,19 @@ jobs:
       # cargo and rustc use here, not the action's `stable`: add the LLVM
       # tools to that one.
       - run: rustup component add llvm-tools
-      # The shard that holds oska-run's lean_reference test needs Lean (as
-      # in ci.yml).
-      - if: matrix.shard == 'rest'
-        run: |
+      # The job that holds oska-run's lean_reference test needs Lean (as in
+      # ci.yml).
+      - run: |
           scripts/formal/install.sh "$HOME/.local/formal"
           echo "$HOME/.local/formal/lean/bin" >> "$GITHUB_PATH"
           echo "OSKA_TLA2TOOLS=$HOME/.local/formal/tla2tools.jar" >> "$GITHUB_ENV"
-      - run: scripts/coverage.sh --shard ${{ matrix.shard }} target/coverage/shard
+      - run: scripts/coverage.sh --shard all target/coverage/shard
         env:
           OSKA_TEST_SET: linux
-          OSKA_TEST_SHARD: ${{ matrix.shard }}
+          OSKA_SHARD_LINES: ${{ matrix.lines }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: lcov-${{ matrix.shard }}
+          name: lcov-${{ matrix.name }}
           path: target/coverage/shard/lcov.info
 
   report:
