@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: Apache-2.0
+// Replays the handshake of RFC 8448, section 3, through `std.tls`'s engine, with
+// no socket (#695). The trace is on stdin (`rfc8448.txt`): the records the
+// client sent (`C`) and received (`S`), in order. The engine is the one the
+// test hook of `tls_rfc8448.rs` makes, in a copy of the module, so that its
+// ClientHello is the RFC's. The program feeds the server's records and checks
+// that every record the engine sends is the RFC's, byte for byte, and what it
+// reports: the handshake done, the server's 50 bytes of data, the close.
+//
+// It prints `done` when all of it holds, else `mismatch` and the step.
+
+use pkg.tls
+
+fn same(sent: Bytes, wanted: Bytes) -> Bool {
+    sent.to_hex() == wanted.to_hex()
+}
+
+// The events of a step, as one text: `done`, `data N`, `closed`, `failed`.
+fn events_of(step: tls.Step) -> Untrusted<String> {
+    var text = ""
+    for event in step.events {
+        let one = match event {
+            tls.Event.HandshakeDone => "done"
+            tls.Event.Data(bytes) => {
+                let size = bytes.len()
+                let first = bytes.at(0).to_int()
+                let last = bytes.at(size - 1).to_int()
+                "data {size} {first} {last}"
+            }
+            tls.Event.Closed => "closed"
+            tls.Event.Failed(error) => "failed: {error}"
+        }
+        text = "{text}[{one}]"
+    }
+    text
+}
+
+fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {
+    var client: List<Bytes> = []
+    var server: List<Bytes> = []
+    var reading = true
+    while reading {
+        match input.read_line()? {
+            None => { reading = false }
+            Some(line) => {
+                let text = line.trim().assume_trusted()
+                if text.starts_with("C ") || text.starts_with("S ") {
+                    match Bytes.from_hex(text.slice(2, text.len())) {
+                        Some(bytes) => {
+                            if text.starts_with("C ") {
+                                client.push(bytes)
+                            } else {
+                                server.push(bytes)
+                            }
+                        }
+                        None => { return io.println("mismatch trace") }
+                    }
+                } else if text.len() > 0 && !text.starts_with("#") {
+                    return io.println("mismatch trace")
+                }
+            }
+        }
+    }
+    if client.len() != 4 || server.len() != 5 {
+        return io.println("mismatch trace")
+    }
+    var engine = tls.rfc8448_engine(tls.TlsConfig.default())
+    // The ClientHello.
+    let hello = engine.start()
+    if !same(hello.output, client.at(0)) {
+        return io.println("mismatch ClientHello")
+    }
+    // The ServerHello: the engine sends nothing.
+    let after_hello = engine.receive(server.at(0))
+    if after_hello.output.len() != 0 || events_of(after_hello) != "" {
+        return io.println("mismatch ServerHello")
+    }
+    // The server's flight: the engine's Finished.
+    let after_flight = engine.receive(server.at(1))
+    let flight_events = events_of(after_flight).assume_trusted()
+    if flight_events != "[done]" {
+        return io.println("mismatch flight {flight_events}")
+    }
+    if !same(after_flight.output, client.at(1)) {
+        return io.println("mismatch Finished")
+    }
+    // The NewSessionTicket.
+    let after_ticket = engine.receive(server.at(2))
+    if after_ticket.output.len() != 0 || events_of(after_ticket) != "" {
+        return io.println("mismatch NewSessionTicket")
+    }
+    // The 50 bytes the client sends, and the 50 the server sends.
+    var payload = Bytes.new()
+    for i in 0..50 {
+        payload.push(i.to_u8())
+    }
+    let sent = engine.send(payload)
+    if !same(sent.output, client.at(2)) {
+        return io.println("mismatch client data")
+    }
+    let after_data = engine.receive(server.at(3))
+    let data_events = events_of(after_data).assume_trusted()
+    if data_events != "[data 50 0 49]" {
+        return io.println("mismatch server data {data_events}")
+    }
+    // The close_notify of each side. The trace has the client's first, but a
+    // closed engine takes no more input, so the server's is fed first; the
+    // bytes of each do not depend on the order.
+    let after_alert = engine.receive(server.at(4))
+    let alert_events = events_of(after_alert).assume_trusted()
+    if alert_events != "[closed]" {
+        return io.println("mismatch server alert {alert_events}")
+    }
+    let closing = engine.close()
+    if !same(closing.output, client.at(3)) {
+        return io.println("mismatch client alert")
+    }
+    io.println("done")
+}
