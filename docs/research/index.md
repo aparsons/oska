@@ -45,3 +45,4 @@ These notes are about this repository's development process, not about the langu
 - [Could Oska speed up the project's own tooling?](2026-11-oska-for-development-tooling.md) (2026-11-15): not yet, and speed is the smallest reason.
 - [Oska versions of grep, sed, awk and jq?](2026-11-oska-text-tools.md) (2026-11-15): no. Those tools take 2% of the agents' command time, and an Oska version would be slower.
 - [Bottlenecks in development, testing and release](2026-11-bottlenecks-dev-test-release.md) (2026-11-20): the biggest wait is for a human merge or a release tag, not the machines. The changes, ranked by impact.
+- [Could Oska tests detect and report coverage?](2026-11-test-coverage.md) (2026-11-26): yes. The Rust code of `oskac` is cheap to cover with `cargo-llvm-cov` in a CI job. Oska programs need counters added to the interpreter and the native backends, with line coverage as the first report.
