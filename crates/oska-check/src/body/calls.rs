@@ -17,7 +17,7 @@ use crate::program::{Callee, Construct};
 
 use crate::ty::{self, Cap, Ty};
 
-/// `Map`, as the checker names it when `use std.map` brings it in.
+/// `Map`, as the checker names it once the program has `std.map`.
 const MAP: &str = "pkg.std.map.Map";
 
 impl Body<'_, '_, '_> {

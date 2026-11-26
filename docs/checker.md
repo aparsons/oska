@@ -116,7 +116,7 @@ A `std.*` module is a file `crates/oska-check/src/std/<name>.osk`, registered in
 | `std.json` | `Value`, `Member`, `Number` (`from_int`, `parse`, `to_int`, `text`), `Error`, `Violation`, `DecodeError`, `parse`, `encode`, `decode`, `Schema` (`string`, `integer`, `number`, `boolean`, `one_of`, `list`, `object`, `describe`, `to_value`, `validate`), `Field` (`required`, `optional`), and the constants `MAX_LENGTH` and `MAX_DEPTH` | None |
 | `std.map` | `Map<K, V>` (`new`, `with_max_entries`, `of`, `put`, `get`, `remove`, `contains_key`, `len`, `is_empty`, `entries`, `keys`, `values`), `Entry` | None |
 
-`std.map` is written in Oska like `std.json`: an insertion-ordered table (ADR 0028) over a `List` of entries and two `Bytes` tables of positions, so it runs on both backends as the program's own code, and its probes count as steps. A key type needs `Eq` and `Hash`; a type that lacks one is `E0266` at the call, a `Secret` key is `E0351` and `E0354`, and `put` and `remove` need a `var` (`E0230`). A map holds at most 4,194,304 entries (`Map.with_max_entries(n)` lowers it): a new key past the limit panics with `P0044`. A lookup looks at 64 slots at most; a `put` that cannot place its key that close to its slot rebuilds under the next of three fixed hashes and panics with `P0045` after the last. The two panics are the prelude functions `map_entry_limit` and `map_probe_limit`, which `std.map` calls.
+`Map` and `Entry` are prelude names: a program writes them with no `use`, and `use std.map` still works. They are declared in `std.map`, which is written in Oska like `std.json` and is joined to a program that writes either name (a program that never does is unchanged): an insertion-ordered table (ADR 0028) over a `List` of entries and two `Bytes` tables of positions, so it runs on both backends as the program's own code, and its probes count as steps. A key type needs `Eq` and `Hash`; a type that lacks one is `E0266` at the call, a `Secret` key is `E0351` and `E0354`, and `put` and `remove` need a `var` (`E0230`). A map holds at most 4,194,304 entries (`Map.with_max_entries(n)` lowers it): a new key past the limit panics with `P0044`. A lookup looks at 64 slots at most; a `put` that cannot place its key that close to its slot rebuilds under the next of three fixed hashes and panics with `P0045` after the last. The two panics are the prelude functions `map_entry_limit` and `map_probe_limit`, which `std.map` calls.
 
 Three modules are internal and a program is not meant to import them: `std.montgomery` (the modular arithmetic of `std.ecdsa` and `std.rsa`), `std.net_error` (the one classification of a network `IoError`, shared by `std.dns` and `std.tls`) and `std.x509_roots` (the pinned roots). They are not hidden: `use std.net_error` checks, like `use std.x509_roots`, but their names are not a stable interface and may change in any release.
 
@@ -805,7 +805,7 @@ A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when 
 | `E0263` | An `impl Trait` method that the trait does not declare. Spans the method name. | None. | — |
 | `E0264` | A method call that two or more of the receiver's traits (or a parameter's bounds) provide, when the type's own `impl` does not. Spans the method name. Call it qualified instead: `Display.to_string(x)`. | None. | — |
 | `E0265` | A type that does not implement a trait it must: `==` and `!=` need `Eq`; a call must satisfy the callee's bounds; a qualified call `Trait.method(x)` needs `x`'s type to implement `Trait`; an interpolation hole needs `Display`. Spans the operator expression, the call, or the hole. | On a generic parameter of the enclosing function, add the bound. | maybe |
-| `E0266` | A type used as a `Map` key (`std.map`) that is not a key: a key type needs `Eq` and `Hash` (ADR 0028). The core types are keys (integers, `Bool`, `String`, `Path`, `Bytes`, and an `Option` or `List` of a key type); a struct or enum is a key when it has an `impl Eq` and every field is a key. A `Secret`, or a type that holds one, is refused with `E0351` (not `Eq`) and `E0354` (not `Hash`) instead, and a `Float` is refused as a key once `Float` exists. Reported where a `Map` method is called, instead of `E0265`; on a type parameter of the enclosing function, or a type that holds one such as `List<K>`, it stays `E0265`, whose fix adds the bound where the type is the parameter itself. It fires where a `Map` method is called, so a `Map<Point, Int>` that is only written in an annotation and never used is accepted. Spans the call. | None: write `impl Eq` for the key type, or key the map by a field that is a key. | — |
+| `E0266` | A type used as a `Map` key that is not a key: a key type needs `Eq` and `Hash` (ADR 0028). The core types are keys (integers, `Bool`, `String`, `Path`, `Bytes`, and an `Option` or `List` of a key type); a struct or enum is a key when it has an `impl Eq` and every field is a key. A `Secret`, or a type that holds one, is refused with `E0351` (not `Eq`) and `E0354` (not `Hash`) instead, and a `Float` is refused as a key once `Float` exists. Reported where a `Map` method is called, instead of `E0265`; on a type parameter of the enclosing function, or a type that holds one such as `List<K>`, it stays `E0265`, whose fix adds the bound where the type is the parameter itself. It fires where a `Map` method is called, so a `Map<Point, Int>` that is only written in an annotation and never used is accepted. Spans the call. | None: write `impl Eq` for the key type, or key the map by a field that is a key. | — |
 | `E0270` | A `cap fn` used where a plain `fn` is expected: a closure that captures a capability-bearing value (a built-in capability, a `cap` type, a `cap fn`, or a container of one, including a capability-bearing `self`), or a `cap fn` value passed on. The rule is part of type compatibility, so it holds on every route: arguments, returns, assignments, `?`, generic instantiation, and inside type arguments such as `Option<cap fn()>` or `List<cap fn()>`, which never become `Option<fn()>` or `List<fn()>`. A plain `fn` may always be used as a `cap fn`. Where values meet, a plain `fn` and a `cap fn` join to `cap fn` rather than conflicting, as trusted and untrusted text join to untrusted: the elements of a list, `if` and `match` branches, and the arguments of a generic function for one type parameter, including inside type arguments. So `[pure_fn, capturing_closure]` is a `List<cap fn() -> Int>`, and anything that calls its elements must declare `cap fn`. An annotation fixes the flag, so `let fs: List<fn() -> Int> = [pure_fn, capturing_closure]` is still `E0270`. A value already used as a plain `fn`, by flowing into a plain `fn` slot or by being called in a contract, rejects a `cap fn` that arrives later, as with `fs = [capturing_closure]` after `run_all(fs)`. A closure is a `cap fn` when anything it captures turns out capability-bearing, even if that is settled only later in the body (`let g = || xs` before `xs.push(out)`), so a closure already used as a plain `fn` is then `E0270` at the closure. A mutating method's receiver takes what the method writes into it, so `push` cannot add a `cap fn` to a `List<fn()>`. | None. | — |
 | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability (`Stdout(handle: 1)`) or `Args`, or a `Secret<String>` made with `Secret.new`. Capabilities cannot be forged; they come from `main`, and secret text comes from `Env.secret`. | None. | — |
 | `E0272` | Reading a private field of a prelude type, such as `out.handle`. | None. | — |
@@ -1927,23 +1927,19 @@ fn main() {
 #### `E0266`
 
 ```oska error=E0266
-use std.map
-
 struct Point { x: Int }
 
 fn main() {
-    var seen: map.Map<Point, Int> = map.Map.new()
+    var seen: Map<Point, Int> = Map.new()
     seen.put(Point(x: 1), 1)
 }
 ```
 
 ```oska fixed=E0266
-use std.map
-
 struct Point { x: Int }
 
 fn main() {
-    var seen: map.Map<Int, Int> = map.Map.new()
+    var seen: Map<Int, Int> = Map.new()
     seen.put(1, 1)
 }
 ```

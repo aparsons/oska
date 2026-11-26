@@ -8,7 +8,7 @@ mod common;
 
 use common::{assert_refused, assert_runs};
 
-/// A program that imports `std.json` and `std.map`, parses the JSON text
+/// A program that imports `std.json`, parses the JSON text
 /// `json` and runs `body` with `value` bound to the parsed value.
 fn program(json: &str, body: &str) -> String {
     let escaped = json
@@ -17,7 +17,7 @@ fn program(json: &str, body: &str) -> String {
         .replace('{', "\\{")
         .replace('}', "\\}");
     format!(
-        "use std.json\nuse std.map\n\n\
+        "use std.json\n\
          fn main(io: Stdout) -> Result<(), IoError> {{\n    \
              let value = match json.parse(\"{escaped}\") {{\n        \
                  Ok(v) => v\n        \
@@ -102,7 +102,7 @@ fn a_value_that_is_not_an_object_is_an_error() {
 fn a_duplicate_key_gives_the_error_parse_gives() {
     // `parse` refuses a duplicate key, so a program that reaches one
     // builds the object by hand. The reason is the parser's.
-    let src = "use std.json\nuse std.map\n\n\
+    let src = "use std.json\n\
         fn member(key: String, n: Int) -> json.Member {\n    \
             json.Member(key: key, value: json.Value.Number(json.Number.from_int(n)))\n}\n\n\
         fn main(io: Stdout) -> Result<(), IoError> {\n    \
@@ -125,11 +125,11 @@ fn a_duplicate_key_gives_the_error_parse_gives() {
 
 #[test]
 fn a_key_from_untrusted_text_stays_untrusted_in_the_map() {
-    let src = "use std.json\nuse std.map\n\n\
+    let src = "use std.json\n\
         fn trusted(text: String) -> String {\n    text\n}\n\n\
         fn first_key(raw: Untrusted<String>) -> String {\n    \
             let value = json.parse(raw).unwrap_or(json.Value.Null)\n    \
-            let m = value.as_map().unwrap_or(map.Map.new())\n    \
+            let m = value.as_map().unwrap_or(Map.new())\n    \
             for e in m.entries() {\n        \
                 return trusted(e.key)\n    \
             }\n    \
@@ -141,11 +141,11 @@ fn a_key_from_untrusted_text_stays_untrusted_in_the_map() {
 
 #[test]
 fn a_parsed_object_gives_its_untrusted_keys_back_from_the_map() {
-    let src = "use std.json\nuse std.map\n\n\
+    let src = "use std.json\n\
         fn main(io: Stdout) -> Result<(), IoError> {\n    \
             let raw: Untrusted<String> = \"\\{\\\"k1\\\":1,\\\"k2\\\":2\\}\"\n    \
             let value = json.parse(raw).unwrap_or(json.Value.Null)\n    \
-            let m = value.as_map().unwrap_or(map.Map.new())\n    \
+            let m = value.as_map().unwrap_or(Map.new())\n    \
             for e in m.entries() {\n        \
                 let text = json.encode(e.value)\n        \
                 io.println(\"{e.key}={text}\")?\n    \

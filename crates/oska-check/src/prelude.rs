@@ -194,9 +194,44 @@ pub static STD_MODULES: &[StdModule] = &[
     },
 ];
 
-/// The `std` modules written in Oska that `module` imports, in the order
-/// of their first `use`.
-pub fn oska_std_imports(module: &Module) -> Vec<&'static StdModule> {
+/// The `std` modules written in Oska whose `pub` names are prelude names:
+/// a program uses them with no `use`, as it uses `List`. The module is
+/// still `std.*` source, written in Oska and run by both backends, so it
+/// is joined to a program only when the program's text writes one of the
+/// names (a program that never says `Map` or `Entry` is unchanged).
+/// `use std.map` still works.
+pub const PRELUDE_STD: &[(&str, &[&str])] = &[("std.map", &["Map", "Entry"])];
+
+/// The names of module `path` that the prelude brings into every module.
+pub fn prelude_names(path: &str) -> &'static [&'static str] {
+    PRELUDE_STD
+        .iter()
+        .find(|(module, _)| *module == path)
+        .map_or(&[], |(_, names)| names)
+}
+
+/// Whether `name` is a prelude name of module `path`.
+pub fn is_prelude_name(path: &str, name: &str) -> bool {
+    prelude_names(path).contains(&name)
+}
+
+/// Whether `source` writes the identifier `name`, in code, a comment or a
+/// string: a cheap test that errs toward yes.
+fn mentions(source: &str, name: &str) -> bool {
+    let is_name_char = |c: char| c.is_alphanumeric() || c == '_';
+    source.match_indices(name).any(|(at, _)| {
+        !source[..at].chars().next_back().is_some_and(is_name_char)
+            && !source[at + name.len()..]
+                .chars()
+                .next()
+                .is_some_and(is_name_char)
+    })
+}
+
+/// The `std` modules written in Oska that `module`, parsed from `source`,
+/// uses: those it imports, in the order of their first `use`, then those
+/// whose prelude names `source` writes ([`PRELUDE_STD`]).
+pub fn oska_std_imports(module: &Module, source: &str) -> Vec<&'static StdModule> {
     let mut found: Vec<&'static StdModule> = Vec::new();
     for item in &module.items {
         let ItemKind::Use(u) = &item.kind else {
@@ -207,6 +242,14 @@ pub fn oska_std_imports(module: &Module) -> Vec<&'static StdModule> {
             continue;
         };
         if std.written_in_oska && !found.iter().any(|m| m.path == std.path) {
+            found.push(std);
+        }
+    }
+    for (path, names) in PRELUDE_STD {
+        let Some(std) = std_module(path) else {
+            continue;
+        };
+        if !found.iter().any(|m| m.path == std.path) && names.iter().any(|n| mentions(source, n)) {
             found.push(std);
         }
     }
@@ -332,15 +375,26 @@ mod tests {
             // linked with them, as that program is.
             let mut uses = vec![std.path];
             if std.written_in_oska {
-                let report = crate::check_module(std.source);
-                assert!(
-                    report.diagnostics.is_empty(),
-                    "{}: {:#?}",
-                    std.path,
-                    report.diagnostics
-                );
+                // A module with prelude names cannot be checked as a
+                // file: its own declarations would clash with the
+                // prelude names that the program it is joined to sees.
+                // Programs that use it check it (`tests/map_prelude.rs`).
+                if super::prelude_names(std.path).is_empty() {
+                    let report = crate::check_module(std.source);
+                    assert!(
+                        report.diagnostics.is_empty(),
+                        "{}: {:#?}",
+                        std.path,
+                        report.diagnostics
+                    );
+                }
                 let ast = oska_syntax::parse_module(std.source).expect("the module parses");
-                uses.extend(super::oska_std_imports(&ast).iter().map(|m| m.path));
+                uses.extend(
+                    super::oska_std_imports(&ast, std.source)
+                        .iter()
+                        .map(|m| m.path)
+                        .filter(|path| *path != std.path),
+                );
             }
             let importer: String = uses.iter().map(|path| format!("use {path}\n")).collect();
             let importer = oska_syntax::parse_module(&importer).expect("a use parses");

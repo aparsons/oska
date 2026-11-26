@@ -216,7 +216,7 @@ impl<'a> ItemKey<'a> {
     /// The item as code in `module` names it: plainly in its own module,
     /// and otherwise by its module path and name, as in `util.text.shout`.
     pub fn in_module(self, module: &str) -> String {
-        if self.module == module {
+        if self.module == module || prelude::is_prelude_name(self.module, self.name) {
             self.name.to_string()
         } else if is_std_path(self.module) {
             // A `std` module written in Oska: code names its items by the
@@ -557,6 +557,7 @@ impl Linker {
         for name in names.iter().filter(|_| !plain) {
             self.not_a_prelude_name(ast, name);
         }
+        self.prelude_std_names(index, ast, &mut scope);
         for (name, declared) in &self.declared[index] {
             scope.names.insert(name.clone(), declared.key.clone());
         }
@@ -569,6 +570,39 @@ impl Linker {
             self.not_imported_and_declared(index, ast, &scope);
         }
         scope
+    }
+
+    /// The names of the `std` modules written in Oska that the prelude
+    /// brings into every module (`prelude::PRELUDE_STD`, `Map` and
+    /// `Entry`), when the program has the module: they are in `scope`
+    /// with no `use`. A module that declares one of them is reported, as
+    /// for any prelude name, in a single file too.
+    fn prelude_std_names(&mut self, index: usize, ast: &Module, scope: &mut Scope) {
+        for (target, path) in self.paths.clone().iter().enumerate() {
+            if target == index {
+                continue;
+            }
+            for name in prelude::prelude_names(path) {
+                let Some(declared) = self.declared[target].get(*name) else {
+                    continue;
+                };
+                scope
+                    .names
+                    .insert((*name).to_string(), declared.key.clone());
+                if let Some(ident) = ast
+                    .items
+                    .iter()
+                    .filter_map(item_name)
+                    .find(|i| i.name == *name)
+                {
+                    self.diagnostics.push(Diagnostic::new(
+                        codes::DUPLICATE_NAME,
+                        format!("`{name}` is already declared in the prelude"),
+                        ident.span,
+                    ));
+                }
+            }
+        }
     }
 
     /// A module declares its items under keys, which never clash with

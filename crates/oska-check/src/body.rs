@@ -337,7 +337,7 @@ struct Callable {
     /// qualified call of a method with one `impl` per type argument, as
     /// `Secret.rotl(k, 3)`, checks its receiver to choose the `impl`.
     checked_first: Option<Ty>,
-    /// A method of `std.map`'s `Map`: its `Eq` and `Hash` bounds on the key
+    /// A method of the prelude's `Map`: its `Eq` and `Hash` bounds on the key
     /// type are `E0266`.
     map_key: bool,
 }

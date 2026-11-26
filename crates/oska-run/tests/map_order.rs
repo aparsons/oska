@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `std.map`'s `Map<K, V>` (#601, ADR 0028): the insertion-ordered table.
+//! `Map<K, V>` (#601, ADR 0028): the insertion-ordered table.
 //!
 //! Every order here is pinned exactly. Each helper that runs a program also
 //! runs it natively on Linux and compares (`common/mod.rs`), so each
@@ -9,13 +9,13 @@ mod common;
 
 use common::assert_runs;
 
-/// A program that imports `std.map`, with a `show` that prints a
+/// A program with a `show` that prints a
 /// `Map<String, Int>` as `key=value` pairs on one line, and the given
 /// `body` as `main`'s statements.
 fn program(body: &str) -> String {
     format!(
-        "use std.map\n\n\
-         fn show(io: Stdout, label: String, m: map.Map<String, Int>) -> Result<(), IoError> {{\n    \
+        "\
+         fn show(io: Stdout, label: String, m: Map<String, Int>) -> Result<(), IoError> {{\n    \
              var line = label\n    \
              for e in m.entries() {{\n        \
                  let n = e.value\n        \
@@ -27,7 +27,7 @@ fn program(body: &str) -> String {
              if b {{ \"true\" }} else {{ \"false\" }}\n\
          }}\n\n\
          fn main(io: Stdout) -> Result<(), IoError> {{\n    \
-             var m: map.Map<String, Int> = map.Map.new()\n{body}\n    Ok(())\n}}\n"
+             var m: Map<String, Int> = Map.new()\n{body}\n    Ok(())\n}}\n"
     )
 }
 
@@ -165,10 +165,10 @@ fn a_map_is_a_value_copied_on_write() {
 #[test]
 fn equality_is_by_content_and_order() {
     let src = program(
-        r#"    var one: map.Map<String, Int> = map.Map.new()
-    var two: map.Map<String, Int> = map.Map.new()
-    var swapped: map.Map<String, Int> = map.Map.new()
-    var other: map.Map<String, Int> = map.Map.new()
+        r#"    var one: Map<String, Int> = Map.new()
+    var two: Map<String, Int> = Map.new()
+    var swapped: Map<String, Int> = Map.new()
+    var other: Map<String, Int> = Map.new()
     one.put("a", 1)
     one.put("b", 2)
     two.put("a", 1)
@@ -253,9 +253,7 @@ fn many_keys_keep_their_order_through_growth_and_compaction() {
 
 #[test]
 fn integer_and_struct_keys_work() {
-    let src = r#"use std.map
-
-struct Point { x: Int, y: Int }
+    let src = r#"struct Point { x: Int, y: Int }
 
 impl Eq for Point {
     fn eq(self, other: Point) -> Bool {
@@ -270,7 +268,7 @@ impl Hash for Point {
 }
 
 fn main(io: Stdout) -> Result<(), IoError> {
-    var ints: map.Map<Int, String> = map.Map.new()
+    var ints: Map<Int, String> = Map.new()
     ints.put(30, "c")
     ints.put(-1, "a")
     ints.put(7, "b")
@@ -281,7 +279,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
         text = "{text} {k}={e.value}"
     }
     io.println(text)?
-    var points: map.Map<Point, Int> = map.Map.new()
+    var points: Map<Point, Int> = Map.new()
     points.put(Point(x: 1, y: 2), 10)
     points.put(Point(x: 2, y: 1), 20)
     points.put(Point(x: 1, y: 2), 30)
@@ -312,9 +310,7 @@ fn random_sequences_match_a_plain_list_model_entry_by_entry() {
     // every step. The program prints the number of disagreements, which
     // must be 0, and a digest of the final entries, which pins the order (the same
     // sequence on Python's `OrderedDict` gave it).
-    let src = r#"use std.map
-
-fn index_of(keys: List<Int>, key: Int) -> Int {
+    let src = r#"fn index_of(keys: List<Int>, key: Int) -> Int {
     var i = 0
     while i < keys.len() {
         if keys.at(i) == key {
@@ -326,7 +322,7 @@ fn index_of(keys: List<Int>, key: Int) -> Int {
 }
 
 fn main(io: Stdout) -> Result<(), IoError> {
-    var m: map.Map<Int, Int> = map.Map.new()
+    var m: Map<Int, Int> = Map.new()
     var keys: List<Int> = []
     var values: List<Int> = []
     var seed = 20260101

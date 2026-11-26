@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `std.map`'s limits (#603, ADR 0028): the probe limit with its second
+//! `Map`'s limits (#603, ADR 0028): the probe limit with its second
 //! and third hash, `P0045` when every hash is flooded, the entry limit
 //! and `P0044`, and a flood of 100,000 colliding keys that must neither
 //! run unbounded nor take more steps than a budget.
@@ -96,11 +96,9 @@ fn colliding_keys(count: usize) -> Vec<String> {
 /// A program that reads the keys, one a line, from `keys.txt` and puts
 /// each in a `Map<String, Int>`, then prints its length and the value of
 /// the first and the last key.
-const FLOOD: &str = r#"use std.map
-
-fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+const FLOOD: &str = r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
     let text = read.restrict_to_file("keys.txt").read_to_string()?.assume_trusted()
-    var m: map.Map<String, Int> = map.Map.new()
+    var m: Map<String, Int> = Map.new()
     var i = 0
     for key in text.lines() {
         m.put(key, i)
@@ -185,9 +183,7 @@ fn the_flood_runs_the_same_natively() {
 
 /// A key whose hash is one number whatever it holds, and so collides under
 /// every hash of the list: nothing but a panic can bound it.
-const SAME_HASH: &str = r#"use std.map
-
-struct Key { n: Int }
+const SAME_HASH: &str = r#"struct Key { n: Int }
 
 impl Eq for Key {
     fn eq(self, other: Key) -> Bool {
@@ -202,7 +198,7 @@ impl Hash for Key {
 }
 
 fn main(io: Stdout) -> Result<(), IoError> {
-    var m: map.Map<Key, Int> = map.Map.new()
+    var m: Map<Key, Int> = Map.new()
     var i = 0
     while i < LIMIT {
         m.put(Key(n: i), i)
@@ -232,10 +228,8 @@ fn colliding_keys_up_to_the_probe_limit_do_not_panic() {
     assert_runs(&src, &[], "60 entries\n");
 }
 
-const ENTRY_LIMIT: &str = r#"use std.map
-
-fn main(io: Stdout) -> Result<(), IoError> {
-    var m: map.Map<Int, Int> = map.Map.with_max_entries(1000)
+const ENTRY_LIMIT: &str = r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var m: Map<Int, Int> = Map.with_max_entries(1000)
     var i = 0
     while i < COUNT {
         m.put(i, i)
@@ -263,10 +257,8 @@ fn an_insert_loop_stops_at_the_entry_limit_with_p0044() {
 /// are no new entry: at the limit they still work.
 #[test]
 fn an_update_or_a_remove_then_put_at_the_limit_is_no_new_entry() {
-    let src = r#"use std.map
-
-fn main(io: Stdout) -> Result<(), IoError> {
-    var m: map.Map<Int, Int> = map.Map.with_max_entries(3)
+    let src = r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var m: Map<Int, Int> = Map.with_max_entries(3)
     m.put(1, 1)
     m.put(2, 2)
     m.put(3, 3)
@@ -289,10 +281,8 @@ fn main(io: Stdout) -> Result<(), IoError> {
 /// The limit is a number a program picks, never more than the default.
 #[test]
 fn a_limit_above_the_default_is_the_default() {
-    let src = r#"use std.map
-
-fn main(io: Stdout) -> Result<(), IoError> {
-    var m: map.Map<Int, Int> = map.Map.with_max_entries(9999999999)
+    let src = r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var m: Map<Int, Int> = Map.with_max_entries(9999999999)
     m.put(1, 1)
     let n = m.len()
     io.println("{n}")?
@@ -307,10 +297,8 @@ fn main(io: Stdout) -> Result<(), IoError> {
 /// within a budget of a few hundred steps each.
 #[test]
 fn updates_of_a_large_map_take_steps_that_do_not_grow_with_its_size() {
-    let src = r#"use std.map
-
-fn main(io: Stdout) -> Result<(), IoError> {
-    var m: map.Map<Int, Int> = map.Map.new()
+    let src = r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var m: Map<Int, Int> = Map.new()
     var i = 0
     while i < 4000 {
         m.put(i, i)
@@ -339,10 +327,8 @@ fn main(io: Stdout) -> Result<(), IoError> {
 /// `P0044` on the first new key, not by a wrong count or a crash.
 #[test]
 fn a_negative_limit_is_zero() {
-    let src = r#"use std.map
-
-fn main(io: Stdout) -> Result<(), IoError> {
-    var m: map.Map<Int, Int> = map.Map.with_max_entries(-5)
+    let src = r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var m: Map<Int, Int> = Map.with_max_entries(-5)
     let n = m.len()
     io.println("{n}")?
     m.put(1, 1)
