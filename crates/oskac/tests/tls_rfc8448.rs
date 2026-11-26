@@ -58,7 +58,7 @@ const CLIENT_PRIVATE_KEY: &str = "49af42ba7f7994852d713ef2784bcbcaa7911de26adc56
 
 /// The cipher suites of the trace's ClientHello, in its order (the engine
 /// offers two of the three; the server of the trace picks the first).
-const HELLO_SUITES: &str = "body.append(u16_list([4865, 4867, 4866]))";
+const HELLO_SUITES_LINE: &str = "body.append(u16_list([4865, 4867, 4866]))";
 
 /// The extensions of the trace's ClientHello that come before the key share:
 /// renegotiation_info, the nine groups and the session ticket. The server
@@ -122,17 +122,18 @@ fn replaced_between(text: &str, start: &str, end: &str, new: &str) -> String {
 
 /// The module with the hook, over the package's copies of `rsa` and `x509`.
 /// The hook fixes the client random, the x25519 key, an empty legacy session
-/// ID, the ClientHello and its record, and the extension the ClientHello asks
-/// for (record_size_limit, which the server's EncryptedExtensions answers). It
-/// sends no compatibility change_cipher_spec and skips the certificate path
-/// check.
+/// ID, the cipher suites and the extensions around the server name and key
+/// share (the engine's own `client_hello` builds the rest), the record version
+/// of the ClientHello, and the extension it asks for (record_size_limit, which
+/// the server's EncryptedExtensions answers). It sends no compatibility
+/// change_cipher_spec and skips the certificate path check.
 fn hooked_module() -> String {
     // The engine's own `client_hello` runs: only its suite list and the
     // extensions around the server name and the key share are the trace's.
     let mut module = replaced(
         TLS_MODULE,
         "body.append(u16_list([SUITE_CHACHA, SUITE_AES]))",
-        HELLO_SUITES,
+        HELLO_SUITES_LINE,
     );
     module = replaced_between(
         &module,
