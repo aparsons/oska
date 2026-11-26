@@ -24,8 +24,8 @@
 // a loop back-edge, so it is a step of `--max-steps` on both backends
 // (ADR 0021).
 //
-// Not yet here, and left to a later ticket of spec #591: the refusals of a
-// `Float` or a secret key (`E` codes).
+// A `Secret` key is refused by the checker (`E0351`, `E0354`); a `Float`
+// key will be refused once `Float` exists.
 
 // For maintainers: this file is Oska source, checked under the rules for
 // user code and run as Oska by both backends. The comment block directly
