@@ -95,6 +95,13 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; the
+                                           only commands that use the network
+                                           are this and self update
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
@@ -397,7 +404,9 @@ On success it prints the files it wrote and exits with 0. With `--format=json` i
 
 ## `oskac self`
 
-`oskac self info [--format=json]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`), and `oskac` makes no network connection to do it. Any other `self` command or flag is a usage error (exit code 2); with `--format=json` it prints `{"ok":false,"error":"usage","message":"..."}`.
+`oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation, check it against the signed release index and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`). `info` and `uninstall` make no network connection; `self check` is the one command that does, to `https://oskalang.dev` only, and `oskac` uses the network for nothing else.
+
+`oskac self check` reports the installed and the latest version and whether the running binary is a genuine release, verified against the release key built into `oskac`. It exits 0 whether or not an update exists. `--no-identify` skips the comparison of the binary's SHA-256 with the release's signed `SHA256SUMS`. The JSON fields, the identity states and the error codes are in [Check with `oskac self check`](install.md#check-with-oskac-self-check). Any other `self` command or flag is a usage error (exit code 2); with `--format=json` it prints `{"ok":false,"error":"usage","message":"..."}`.
 
 `self info` prints the version, the platform (on Linux with the build, `gnu` or `musl`), the canonical path of the running executable, the Oska home and the receipt. With `--format=json` it prints one object: `version`, `platform`, `linux_build` (`"gnu"` for the glibc build or `"musl"` for the musl build, from the target `oskac` was compiled for; `null` on macOS and Windows), `executable`, `oska_home` (`null` with no home), `receipt` (the receipt as parsed, with every field it has, or `null` when there is none or it cannot be read), `receipt_error` (why it cannot be read, else `null`), `receipt_matches` and `digest_checked`. `receipt_matches` is `true` when the receipt's `version` is this `oskac`'s and it lists this executable as a `binary`, by path. `digest_checked` is always `false`: `oskac` does not check the receipt's SHA-256 digests, so it identifies its install by path and version only. It exits with 0.
 

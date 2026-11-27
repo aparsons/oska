@@ -530,6 +530,18 @@ if step "SPDX headers and NOTICE" --no-slot --fast-when 'scripts/spdx-guard/*'; 
   scripts/spdx-guard/guard.sh
 fi
 
+if step "test-site feature kept out of releases" --no-slot --fast-when 'crates/oskac/Cargo.toml' --fast-when 'scripts/test-site-guard/*' --fast-when '.github/*'; then
+  # `oskac`'s test-only `test-site` feature (spec #230) points the update
+  # checker at a loopback server and a test key. It must never be a default
+  # feature, be turned on by another, or reach a build that ships; a release
+  # binary already built here must not hold its marker.
+  binaries=()
+  for built in target/dist/oskac target/release/oskac; do
+    [ -f "$built" ] && binaries+=("$built")
+  done
+  scripts/test-site-guard/guard.sh . ${binaries[@]+"${binaries[@]}"}
+fi
+
 if step "every workflow job has a timeout" --no-slot; then
   # GitHub lets a job run 360 minutes unless it says otherwise. The guard fails
   # a job with no `timeout-minutes`, a non-literal value, or one above 60.
@@ -668,6 +680,10 @@ fi
 
 if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*' --group scripts; then
   bash scripts/spdx-guard/test.sh
+fi
+
+if step "test-site guard tests" --fast-when 'scripts/test-site-guard/*' --group scripts; then
+  bash scripts/test-site-guard/test.sh
 fi
 
 if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json --group scripts; then

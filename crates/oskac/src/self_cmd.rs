@@ -40,7 +40,7 @@ const PROFILE_MARK: &str = "# added by the Oska installer";
 const PROFILES: [&str; 4] = [".zshrc", ".bashrc", ".bash_profile", ".profile"];
 
 /// The platform name release assets use, as the installers record it.
-fn platform() -> String {
+pub(crate) fn platform() -> String {
     let os = if cfg!(target_os = "linux") {
         "linux"
     } else if cfg!(target_os = "macos") {
@@ -57,7 +57,7 @@ fn platform() -> String {
 /// Which Linux build this `oskac` is, from the target it was compiled for:
 /// the glibc build (`gnu`) or the musl build (`musl`), the suffix of its
 /// release asset (ADR 0022). `None` off Linux, where there is one build.
-fn linux_build() -> Option<&'static str> {
+pub(crate) fn linux_build() -> Option<&'static str> {
     if cfg!(all(target_os = "linux", target_env = "musl")) {
         Some("musl")
     } else if cfg!(all(target_os = "linux", target_env = "gnu")) {
@@ -91,20 +91,20 @@ pub(crate) fn clean(path: PathBuf) -> PathBuf {
 }
 
 /// The Oska home: `OSKA_HOME`, else `.oska` in the user's home directory.
-fn oska_home() -> Option<PathBuf> {
+pub(crate) fn oska_home() -> Option<PathBuf> {
     env_path("OSKA_HOME")
         .or_else(|| user_home().map(|h| h.join(".oska")))
         .map(clean)
 }
 
 /// This executable's canonical path.
-fn executable() -> Option<PathBuf> {
+pub(crate) fn executable() -> Option<PathBuf> {
     std::env::current_exe().and_then(|p| p.canonicalize()).ok()
 }
 
 /// A path for output. Windows canonical paths carry a `\\?\` prefix; it is
 /// dropped when a drive letter follows, as the path means the same without.
-fn display(path: &Path) -> String {
+pub(crate) fn display(path: &Path) -> String {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
@@ -145,7 +145,7 @@ pub(crate) fn usage(json: bool) -> ExitCode {
     if json {
         outln!(
             "{{\"ok\":false,\"error\":\"usage\",\"message\":{}}}",
-            quote("the self commands are `oskac self info [--format=json]` and `oskac self uninstall [--format=json]`")
+            quote("the self commands are `oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]` and `oskac self uninstall [--format=json]`")
         );
     } else {
         eprint!("{}", crate::USAGE);
@@ -254,7 +254,7 @@ fn entries(receipt: &Json) -> Result<Vec<Entry>, String> {
         .collect())
 }
 
-fn read_receipt(path: &Path) -> Result<Json, String> {
+pub(crate) fn read_receipt(path: &Path) -> Result<Json, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     Json::parse(&text)
 }
@@ -262,7 +262,7 @@ fn read_receipt(path: &Path) -> Result<Json, String> {
 /// Whether this `oskac` is the install the receipt records: the receipt's
 /// version is this version, and one of its binary entries is this
 /// executable, by path.
-fn identity(receipt: &Json, exe: Option<&Path>) -> Result<(), String> {
+pub(crate) fn identity(receipt: &Json, exe: Option<&Path>) -> Result<(), String> {
     let version = receipt.get("version").and_then(Json::as_str);
     if version != Some(VERSION) {
         return Err(format!(
