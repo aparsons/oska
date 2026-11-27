@@ -58,8 +58,8 @@ def to_fraction(v):
             # Far beyond the largest double: any such value rounds to infinity.
             return Fraction(2) ** 1100 * (-1 if sign else 1)
         if exp + bc < -1200:
-            # Far below half the smallest subnormal: it rounds to zero.
-            return Fraction(0)
+            # Far below half the smallest subnormal: it rounds to a zero of its sign.
+            return Fraction(-1 if sign else 1, 2**1200)
         return Fraction(-1 if sign else 1) * Fraction(int(man)) * (Fraction(2) ** exp)
     return Fraction(v)
 
@@ -77,6 +77,9 @@ def pair(v):
     hi = rounded(frac)
     if is_inf(hi):
         return hi, 0
+    if hi == 0 and frac < 0:
+        # A negative value that rounds to zero is `-0.0`.
+        return SIGN, 0
     lo = bits(float(frac - Fraction(flt(hi))))
     return hi, lo
 

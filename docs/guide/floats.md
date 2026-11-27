@@ -122,11 +122,23 @@ fn main(io: Stdout) -> Result<(), IoError> {
 
 The bound is on the result, not a promise that it is the nearest double: in the example `math.powf(2.0, 0.5)` is `1.414213562373095`, one ulp below the nearest double to the square root of two, which `2.0.sqrt()` gives exactly. A program that needs the nearest double says so by name, in the exact tier below. Each loop in `std.math` counts steps, so `--max-steps` stops a float-heavy program at the same step on both backends ([ADR 0021](../adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)).
 
-<!-- exact-tier: owned by #606. That ticket adds the correctly rounded `_exact` functions (`sin_exact` and the rest) here, with each function's fast path, slow path and error proof, and the measured speed against the fast tier. Nothing above depends on this section. -->
-
 ### The exact tier
 
-The exact tier returns the nearest double for every input, under a distinct name such as `sin_exact`, so that an agent cannot pick it by accident. [ADR 0027](../adr/0027-float-results-are-pinned-by-the-spec-on-every-platform.md) states the promise; the functions, their error proofs and their speed are documented here when they ship.
+The exact tier returns the nearest double for every input, a tie going to the even one, under a distinct name so that an agent cannot pick it by accident: `math.hypot_exact`, `math.exp_exact`, `math.ln_exact`, `math.sin_exact`, `math.cos_exact`, `math.atan2_exact` and `math.powf_exact`. They have the special cases of the fast functions (and `sin_exact` and `cos_exact` stop with `P0006` above 1647098 in size), give the same bits on every platform and backend, and differ from the fast tier by at most the last bit: `math.exp(1.0)` is 2.7182818284590455, `math.exp_exact(1.0)` is `e`. [ADR 0027](../adr/0027-float-results-are-pinned-by-the-spec-on-every-platform.md) states the promise.
+
+Each function has two paths. The **fast path** evaluates it in double-double arithmetic (two doubles, about 106 bits) with a proven error below 2^-71 of the result, and answers when the result and the result moved by 2^-70 round to the same double. The **slow path** runs for the one input in about 100000 that fails that test: it uses 256-bit fixed point, or for `hypot` exact integers, and rounds once. A tie, which `hypot` and `powf` can have, is found and rounded to even. Each function's error proof is in its entry of the `std.math` reference.
+
+| Function | Exact | Fast | Ratio |
+| --- | --- | --- | --- |
+| `exp` | 480 ns | 46 ns | 10 |
+| `ln` | 1270 ns | 51 ns | 25 |
+| `sin` | 1280 ns | 98 ns | 13 |
+| `cos` | 1150 ns | 114 ns | 10 |
+| `hypot` | 253 ns | 19 ns | 13 |
+| `atan2` | 1290 ns | 485 ns | 2.7 |
+| `powf` | 2470 ns | 1940 ns | 1.3 |
+
+Measured natively on x86_64, one million calls, the loop's own cost removed. The fast `atan2` and `powf` call the software `fma`, which the exact tier does not. A call takes 140 to 300 steps on the fast path and 2700 to 45000 on the slow path.
 
 <!-- end exact-tier -->
 
