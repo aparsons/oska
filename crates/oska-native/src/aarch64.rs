@@ -43,7 +43,10 @@
 //! executable needs no relocation: [`Text::link`] patches the addresses
 //! of data ([`Fixup`]) once the file has been laid out.
 
-use crate::ir::{Arith, BinOp, Cond, FnId, Function, Inst, IntKind, Module, Symbol, Temp, Width};
+use crate::ir::{
+    Arith, BinOp, Cond, FloatCond, FloatOp, FnId, Function, Inst, IntKind, Module, Symbol, Temp,
+    Width, CANONICAL_NAN,
+};
 use crate::regalloc::{self, Loc, Registers};
 use crate::target::{Code, Layout};
 
@@ -174,10 +177,14 @@ const PUSH_FRAME: u32 = 0xa9bf_7bfd;
 const POP_FRAME: u32 = 0xa8c1_7bfd;
 
 // Condition codes.
+const EQ: u32 = 0;
 const NE: u32 = 1;
 const HS: u32 = 2;
 const LO: u32 = 3;
+const MI: u32 = 4;
 const VS: u32 = 6;
+const VC: u32 = 7;
+const LS: u32 = 9;
 
 /// How a branch to a label is encoded, for patching.
 #[derive(Clone, Copy)]
@@ -404,6 +411,40 @@ impl Emitter {
             .unwrap_or(Loc::Slot(0))
     }
 
+    /// `dst = lhs op rhs` on the bits of two `Float`s, in `d0` and `d1`,
+    /// which nothing else uses. A result that is a NaN is made the
+    /// canonical NaN: `fcmp` of a value with itself sets the overflow flag
+    /// for a NaN.
+    fn float(&mut self, op: FloatOp, dst: Temp, lhs: Temp, rhs: Temp) {
+        let a = self.read(lhs, X9);
+        self.put(fmov_to_double(0, a));
+        match op {
+            FloatOp::Canonical => {}
+            FloatOp::Sqrt => self.put(0x1e61_c000),
+            FloatOp::Add | FloatOp::Sub | FloatOp::Mul | FloatOp::Div => {
+                let b = self.read(rhs, X10);
+                self.put(fmov_to_double(1, b));
+                let base = match op {
+                    FloatOp::Add => 0x1e60_2800,
+                    FloatOp::Sub => 0x1e60_3800,
+                    FloatOp::Mul => 0x1e60_0800,
+                    _ => 0x1e60_1800,
+                };
+                // `fop d0, d0, d1`.
+                self.put(base | 1 << 16);
+            }
+        }
+        self.put(fcmp(0, 0));
+        // `b.vc` over the next two instructions: three words on.
+        self.put(B_COND | 3 << 5 | VC);
+        self.put(movz(X11, (CANONICAL_NAN >> 48) as u32, 3));
+        self.put(fmov_to_double(0, X11));
+        let r = self.target(dst, X9);
+        // `fmov r, d0`.
+        self.put(0x9e66_0000 | r);
+        self.write(dst, r);
+    }
+
     fn mov(&mut self, rd: u32, rm: u32) {
         if rd != rm {
             self.put(reg3(0xaa00_0000, rd, XZR, rm));
@@ -524,6 +565,31 @@ impl Emitter {
                 self.put(cmp(a, b));
                 // `cset r, cond`.
                 self.put(0x9a9f_07e0 | ((condition(*cond) ^ 1) << 12) | r);
+                self.write(*dst, r);
+            }
+            Inst::Float { op, dst, lhs, rhs } => self.float(*op, *dst, *lhs, *rhs),
+            Inst::FloatCompare {
+                cond,
+                dst,
+                lhs,
+                rhs,
+            } => {
+                let a = self.read(*lhs, X9);
+                let b = self.read(*rhs, X10);
+                let r = self.target(*dst, X9);
+                self.put(fmov_to_double(0, a));
+                self.put(fmov_to_double(1, b));
+                self.put(fcmp(0, 1));
+                // `cset r, cond`. After `fcmp`, an unordered pair has
+                // `Z` clear, `N` clear and `C` set: `eq`, `mi` and `ls`
+                // are false for it and `ne` is true, as IEEE 754 says.
+                let flag = match cond {
+                    FloatCond::Eq => EQ,
+                    FloatCond::Ne => NE,
+                    FloatCond::Lt => MI,
+                    FloatCond::Le => LS,
+                };
+                self.put(0x9a9f_07e0 | ((flag ^ 1) << 12) | r);
                 self.write(*dst, r);
             }
             Inst::Load {
@@ -851,6 +917,17 @@ fn movz(rd: u32, imm16: u32, hw: u32) -> u32 {
 
 fn reg3(base: u32, rd: u32, rn: u32, rm: u32) -> u32 {
     base | rm << 16 | rn << 5 | rd
+}
+
+/// `fmov d<fd>, x<rn>`: the bits of a general register into the low
+/// 64 bits of a floating-point register.
+fn fmov_to_double(fd: u32, rn: u32) -> u32 {
+    0x9e67_0000 | rn << 5 | fd
+}
+
+/// `fcmp d<fn>, d<fm>`.
+fn fcmp(fn_: u32, fm: u32) -> u32 {
+    0x1e60_2000 | fm << 16 | fn_ << 5
 }
 
 /// `cmp rn, rm`.

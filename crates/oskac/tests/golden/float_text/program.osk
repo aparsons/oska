@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: Apache-2.0
+// `Float` conversions and text (ticket #594): prints the text of floats,
+// fixed decimals, what `parse_float` takes and refuses, and the checked
+// conversions. The output is plain text, the same on every platform.
+
+fn shown(b: Bool) -> String {
+    if b { "true" } else { "false" }
+}
+
+fn parsed(text: String) -> String {
+    match text.parse_float() {
+        Some(x) => x.to_string()
+        None => "none"
+    }
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let xs = [1.5, 100.0, 1e15, 1e16, 1.5e-7, 0.00001, 0.1, 0.30000000000000004, 5e-324, 1.7976931348623157e308, -2.5, 0.0, -0.0]
+    for x in xs {
+        let text = x.to_string()
+        let fixed = x.fmt(2)
+        io.println("{text} {fixed}")?
+    }
+    let texts = ["1.5", "-0", "1e5", "9007199254740993", "0.1", "2.5e-324", "NaN", "inf", "+1", "1e999", "1.", ".5", " 1", ""]
+    for text in texts {
+        let value = parsed(text)
+        io.println("parse {text} -> {value}")?
+    }
+    let wide = "-Infinity".parse_float_lenient().unwrap_or(0.0)
+    io.println("lenient {wide}")?
+    let a = (2.9).to_int()
+    let b = (-2.9).to_int()
+    let c = (3).to_float()
+    let d = 9007199254740993.to_float_rounded()
+    io.println("{a} {b} {c} {d}")?
+    let order = (1.0).total_cmp(2.0)
+    let close = shown((0.1 + 0.2).approx_eq(0.3, 1e-9, 0.0))
+    io.println("{order} {close}")?
+    Ok(())
+}

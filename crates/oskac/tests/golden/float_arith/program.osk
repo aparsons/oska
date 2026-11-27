@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: Apache-2.0
+use std.math
+
+// Prints the 64 bits of each result in hex, so the output is the bits.
+fn hex(bits: U64) -> String {
+    var text = ""
+    for i in 0..16 {
+        let shift = (60 - 4 * i).to_u64()
+        let nibble = ((bits >> shift) & 15).to_int()
+        let digit = "0123456789abcdef".slice(nibble, nibble + 1)
+        text = "{text}{digit}"
+    }
+    text
+}
+
+fn show(io: Stdout, name: String, x: Float) -> Result<(), IoError> {
+    let bits = hex(x.to_bits())
+    io.println("{name} {bits}")
+}
+
+fn yes(x: Bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let one_and_a_half = 1.5
+    let milli = 2e-3
+    let tiny = 5e-324
+    let huge = 1.7976931348623157e308
+    let zero = 0.0
+    show(io, "literal", one_and_a_half)?
+    show(io, "exponent", milli)?
+    show(io, "sum", one_and_a_half + milli)?
+    show(io, "difference", one_and_a_half - milli)?
+    show(io, "product", one_and_a_half * milli)?
+    show(io, "quotient", one_and_a_half / milli)?
+    show(io, "sqrt", 2.0.sqrt())?
+    show(io, "subnormal", tiny / 2.0)?
+    show(io, "overflow", huge * 2.0)?
+    show(io, "negative zero", -zero)?
+    show(io, "zero minus zero", zero - zero)?
+    show(io, "infinity", one_and_a_half / zero)?
+    show(io, "negative infinity", -one_and_a_half / zero)?
+    show(io, "nan", zero / zero)?
+    show(io, "nan sqrt", (-1.0).sqrt())?
+    let nan = zero / zero
+    let ordered = yes(nan == nan)
+    let unordered = yes(nan != nan)
+    io.println("nan == nan {ordered}, nan != nan {unordered}")?
+    let same_zero = yes(0.0 == -0.0)
+    io.println("0.0 == -0.0 {same_zero}")?
+    let a = 0.1
+    let b = 10.0
+    let c = -1.0
+    show(io, "a * b + c", a * b + c)?
+    show(io, "fma(a, b, c)", math.fma(a, b, c))?
+    Ok(())
+}

@@ -11,6 +11,7 @@ Each note answers one question, with its sources and the date it was written. A 
 - [A secure-by-default `std.json`](2026-11-json-parser.md) (2026-11-19): how `std.json` should parse, with the lessons of nine JSON parsers. Strict by default, with every limit on.
 - [Math and data science for Oska](2026-11-math-and-data-science.md) (2026-11-22): what the main math and data libraries of ten languages provide, and what belongs in `std`. Build a `Float` with pinned IEEE 754 results first, then a deterministic map, `std.math`, `std.stats`, a seeded `Rng` and `std.csv`. Not Parquet, BLAS, tensors or plotting yet.
 - [Data classification for Oska](2026-11-data-classification.md) (2026-11-26): yes. A classification flag on text and bytes like the trust flag, a ceiling label on log, network and `std.llm` sinks, and a `Declassify` capability. Open: implicit flows and declassification policy.
+- [Knowledge graphs and ontologies in Oska](2026-11-knowledge-graphs-and-ontology.md) (2026-11-27): which W3C and ISO standards own the facts, and how capabilities, untrusted text and `std.llm` fit building, running and maintaining a graph. Build a strict RDF codec, diff, SHACL-core and canonical hashing first. Not an OWL reasoner or a SPARQL engine. Open: GQL and SPARQL Update were not read.
 
 ## Agents and code mode
 
@@ -47,3 +48,4 @@ These notes are about this repository's development process, not about the langu
 - [Oska versions of grep, sed, awk and jq?](2026-11-oska-text-tools.md) (2026-11-15): no. Those tools take 2% of the agents' command time, and an Oska version would be slower.
 - [Bottlenecks in development, testing and release](2026-11-bottlenecks-dev-test-release.md) (2026-11-20): the biggest wait is for a human merge or a release tag, not the machines. The changes, ranked by impact.
 - [Could Oska tests detect and report coverage?](2026-11-test-coverage.md) (2026-11-26): yes. The Rust code of `oskac` is cheap to cover with `cargo-llvm-cov` in a CI job. Oska programs need counters added to the interpreter and the native backends, with line coverage as the first report.
+- [AI-first, secure-by-default data stores for Oska](2026-11-ai-first-data-stores.md) (2026-11-27): build an embedded, single-writer, typed store (hash-chained append-only log plus snapshot) that carries trust and classification labels, is encrypted at rest from a capability key, and is exposed through `std.mcp`. Not a SQL server first. Open: the prelude has no append, fsync, rename or lock, and `std.sql` has no runtime.

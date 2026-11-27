@@ -33,6 +33,8 @@ pub const E: u8 = 0x4;
 pub const NE: u8 = 0x5;
 pub const BE: u8 = 0x6;
 pub const A: u8 = 0x7;
+pub const P: u8 = 0xa;
+pub const NP: u8 = 0xb;
 pub const L: u8 = 0xc;
 pub const GE: u8 = 0xd;
 pub const LE: u8 = 0xe;
@@ -399,6 +401,35 @@ impl Asm {
 
     pub fn syscall(&mut self) {
         self.put(&[0x0f, 0x05]);
+    }
+
+    /// `movq xmm, r64`: the low 64 bits of the SSE register `x` (0 to 7)
+    /// = `r`.
+    pub fn movq_to_xmm(&mut self, x: u8, r: u8) {
+        self.put(&[0x66]);
+        self.op_rr(true, &[0x0f, 0x6e], x, r);
+    }
+
+    /// `movq r64, xmm`: `r` = the low 64 bits of the SSE register `x`
+    /// (0 to 7).
+    pub fn movq_from_xmm(&mut self, r: u8, x: u8) {
+        self.put(&[0x66]);
+        self.op_rr(true, &[0x0f, 0x7e], x, r);
+    }
+
+    /// A scalar double-precision operation on two of the SSE registers 0
+    /// to 7: `dst = dst op src`, the opcode byte after `F2 0F` being
+    /// `0x58` for `addsd`, `0x59` `mulsd`, `0x5c` `subsd`, `0x5e` `divsd`,
+    /// and `0x51` for `sqrtsd` (`dst = sqrt(src)`).
+    pub fn sd(&mut self, opcode: u8, dst: u8, src: u8) {
+        self.put(&[0xf2, 0x0f, opcode, 0xc0 | dst << 3 | src]);
+    }
+
+    /// `ucomisd xmm_a, xmm_b`: set `ZF`, `PF` and `CF` from the unordered
+    /// comparison of the low doubles of two SSE registers 0 to 7. A NaN
+    /// operand sets all three.
+    pub fn ucomisd(&mut self, a: u8, b: u8) {
+        self.put(&[0x66, 0x0f, 0x2e, 0xc0 | a << 3 | b]);
     }
 }
 

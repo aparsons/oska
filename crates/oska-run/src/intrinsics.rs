@@ -209,12 +209,13 @@ pub(crate) fn display_in_place(name: &IntrinsicName) -> Option<InPlace> {
 
 /// Every module's table, in the order [`lookup`] prefers them, with the
 /// `std` module whose functions it holds, for a `std` module's table.
-const TABLES: [(Option<&str>, Table); 12] = [
+const TABLES: [(Option<&str>, Table); 13] = [
     (None, INTRINSICS),
     (None, crate::net::INTRINSICS),
     (None, budget::INTRINSICS),
     (None, approval::INTRINSICS),
     (None, int_methods::INTRINSICS),
+    (None, crate::float::INTRINSICS),
     (None, data::INTRINSICS),
     (None, bytes::INTRINSICS),
     (None, secrets::INTRINSICS),
@@ -396,6 +397,7 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Unit => out.push_str("()"),
         Value::Bool(b) => out.push_str(&b.to_string()),
         Value::Int(n, _) => out.push_str(&n.to_string()),
+        Value::Float(bits) => out.push_str(&crate::float::text(f64::from_bits(*bits))),
         Value::Str(s) => debug_text(s, out),
         Value::Struct { ty, fields } if &**ty == builtins::RANGE => {
             debug(&fields[0], out);

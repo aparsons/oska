@@ -12,3 +12,6 @@ import OskaFormal.Core.Authority
 import OskaFormal.Core.CoreIR
 import OskaFormal.Core.Examples
 import OskaFormal.Map
+import OskaFormal.Float.Model
+import OskaFormal.Float.Vectors
+import OskaFormal.Float.Checks
