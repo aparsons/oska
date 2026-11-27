@@ -975,6 +975,7 @@ if [ "$status" -eq 0 ] && [ "$modes" = "drwx------ " ] && [ -z "$(ls -A "$work/c
 else
   bad "the buffer directory is private and removed on exit" "exit $status, modes: $modes, left: $(ls -A "$work/conc-tmp"): $out"
 fi
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
 set_stub "$install_stub" '#!/usr/bin/env bash
 exit 1'
 OSKA_CHECK_JOBS=4 TMPDIR=$work/conc-tmp check --group scripts
@@ -1002,6 +1003,7 @@ for jobs in 0 many -2; do
 done
 
 # A failing suite's exit code is the group's exit code, serial or concurrent.
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
 set_stub "$install_stub" '#!/usr/bin/env bash
 exit 3'
 for jobs in 4 1; do
@@ -1028,9 +1030,11 @@ done
 
 # A suite whose runner dies without a result (SIGKILL, the OOM killer) fails
 # the run; it does not hang it. The stub kills its grandparent, the runner.
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
 set_stub "$install_stub" '#!/usr/bin/env bash
 kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"
 sleep 1'
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
 set_stub "$kill_stub" '#!/usr/bin/env bash
 sleep 1'
 mkdir -p "$work/dead-tmp"
@@ -1064,10 +1068,12 @@ for sig in INT TERM; do
   rm -f "$work"/log.*
   rm -rf "$work/sig-tmp"
   mkdir -p "$work/sig-tmp"
+  # shellcheck disable=SC2016 # the stub script is written out, not expanded here
   set_stub "$install_stub" '#!/usr/bin/env bash
 sleep 60 &
 echo $! >"$STUB_LOG.gc1"
 wait'
+  # shellcheck disable=SC2016 # the stub script is written out, not expanded here
   set_stub "$kill_stub" '#!/usr/bin/env bash
 sleep 60 &
 echo $! >"$STUB_LOG.gc2"
