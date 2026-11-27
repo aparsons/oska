@@ -1,0 +1,247 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.base64url`: base64url (RFC 4648, section 5) without padding, the
+// encoding JSON Web Signatures use (RFC 7515, section 2), and the raw
+// `R || S` form of an ES256 signature (RFC 7518, section 3.4). A module
+// sees them only after `use std.base64url`.
+//
+// `encode` writes the URL-safe alphabet (`-` and `_` in place of `+` and
+// `/`) and never writes `=`. `decode` is strict: it takes exactly what
+// `encode` writes and refuses everything else, so one text has one
+// meaning. A `=`, a character of the standard alphabet (`+` or `/`), any
+// other stray character (a space or a line break included), a length that
+// no byte count gives and a last character whose unused bits are not zero
+// are each an error of their own kind.
+//
+// ES256 signs with ECDSA on P-256 and SHA-256, and its JWS signature is
+// the 64 bytes `R || S`, each half a big-endian integer padded with
+// leading zeros to 32 bytes. This is not the DER `SEQUENCE` that X.509
+// and TLS carry. `es256_raw` builds it from the two integers and
+// `es256_raw_from_der` from a DER signature.
+//
+// Every input is public and every function is a pure function, so the
+// module holds nothing secret and has no audit site: no `expose()` and no
+// `.assume_trusted()`.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by RFC 4648's test vectors and RFC 7515's appendix A.1 and A.3
+// vectors, on the interpreter and natively on every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+
+// Why a text was refused by `decode`, or a signature by the `es256`
+// functions. The kinds are stable: a program may match on them.
+pub enum Base64UrlError {
+    // The text has a `=`: base64url here has no padding.
+    Padding,
+    // The text has a `+` or a `/`, which are the standard alphabet's.
+    StandardAlphabet,
+    // The text has another character outside the URL-safe alphabet.
+    InvalidCharacter,
+    // The length is one more than a multiple of four, which no number of
+    // bytes encodes to.
+    InvalidLength,
+    // The unused bits of the last character are not zero, so the text is
+    // not the one `encode` writes for these bytes.
+    NonCanonical,
+    // An ES256 signature half has more than 32 significant bytes, or a
+    // DER signature is not the strict `SEQUENCE { INTEGER r, INTEGER s }`.
+    InvalidSignature,
+}
+
+impl Display for Base64UrlError {
+    fn to_string(self) -> String {
+        match self {
+            Base64UrlError.Padding => "base64url text has padding"
+            Base64UrlError.StandardAlphabet => "base64url text uses the standard alphabet"
+            Base64UrlError.InvalidCharacter => "base64url text has a character outside the alphabet"
+            Base64UrlError.InvalidLength => "base64url text has a length no bytes encode to"
+            Base64UrlError.NonCanonical => "base64url text has unused bits that are not zero"
+            Base64UrlError.InvalidSignature => "the ES256 signature is malformed"
+        }
+    }
+}
+
+// The 64 characters of the URL-safe alphabet, in value order.
+fn alphabet() -> List<String> {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".chars()
+}
+
+// `data` as unpadded base64url text. The empty bytes give the empty text.
+pub fn encode(data: Bytes) -> String {
+    let chars = alphabet()
+    var parts: List<String> = []
+    let n = data.len()
+    var i = 0
+    while i + 3 <= n {
+        let v = data.at(i).to_int() * 65536 + data.at(i + 1).to_int() * 256 + data.at(i + 2).to_int()
+        parts.push(chars.at(v / 262144))
+        parts.push(chars.at(v / 4096 % 64))
+        parts.push(chars.at(v / 64 % 64))
+        parts.push(chars.at(v % 64))
+        i = i + 3
+    }
+    if n - i == 1 {
+        let v = data.at(i).to_int()
+        parts.push(chars.at(v / 4))
+        parts.push(chars.at(v % 4 * 16))
+    } else if n - i == 2 {
+        let v = data.at(i).to_int() * 256 + data.at(i + 1).to_int()
+        parts.push(chars.at(v / 1024))
+        parts.push(chars.at(v / 16 % 64))
+        parts.push(chars.at(v % 16 * 4))
+    }
+    "".join(parts)
+}
+
+// The value of the URL-safe character `c` (a byte), or the reason it is
+// not one.
+fn value(c: Int) -> Result<Int, Base64UrlError> {
+    if c >= 65 && c <= 90 {
+        Ok(c - 65)
+    } else if c >= 97 && c <= 122 {
+        Ok(c - 71)
+    } else if c >= 48 && c <= 57 {
+        Ok(c + 4)
+    } else if c == 45 {
+        Ok(62)
+    } else if c == 95 {
+        Ok(63)
+    } else if c == 61 {
+        Err(Base64UrlError.Padding)
+    } else if c == 43 || c == 47 {
+        Err(Base64UrlError.StandardAlphabet)
+    } else {
+        Err(Base64UrlError.InvalidCharacter)
+    }
+}
+
+// The bytes `text` encodes, or why it is not unpadded base64url. The
+// empty text gives the empty bytes. A character is checked before the
+// length is, so `"ab=="` is `Padding`, not `InvalidLength`.
+pub fn decode(text: Untrusted<String>) -> Result<Bytes, Base64UrlError> {
+    let raw = text.to_bytes()
+    let n = raw.len()
+    var values: List<Int> = []
+    for i in 0..n {
+        values.push(value(raw.at(i).to_int())?)
+    }
+    if n % 4 == 1 {
+        return Err(Base64UrlError.InvalidLength)
+    }
+    var out = Bytes.new()
+    var i = 0
+    while i + 4 <= n {
+        let v = values.at(i) * 262144 + values.at(i + 1) * 4096 + values.at(i + 2) * 64 + values.at(i + 3)
+        out.push((v / 65536).to_u8())
+        out.push((v / 256 % 256).to_u8())
+        out.push((v % 256).to_u8())
+        i = i + 4
+    }
+    if n - i == 2 {
+        let v = values.at(i) * 64 + values.at(i + 1)
+        if v % 16 != 0 {
+            return Err(Base64UrlError.NonCanonical)
+        }
+        out.push((v / 16).to_u8())
+    } else if n - i == 3 {
+        let v = values.at(i) * 4096 + values.at(i + 1) * 64 + values.at(i + 2)
+        if v % 4 != 0 {
+            return Err(Base64UrlError.NonCanonical)
+        }
+        out.push((v / 1024).to_u8())
+        out.push((v / 4 % 256).to_u8())
+    }
+    Ok(out)
+}
+
+// The 32-byte big-endian form of the non-negative integer `half`, which
+// may carry leading zero bytes (as a DER integer does) or have fewer than
+// 32 bytes. `None` when it has more than 32 significant bytes.
+fn padded_half(half: Bytes) -> Option<Bytes> {
+    var start = 0
+    while start < half.len() && half.at(start) == 0 {
+        start = start + 1
+    }
+    let significant = half.len() - start
+    if significant > 32 {
+        return None
+    }
+    var out = Bytes.zeroed(32 - significant)
+    for i in start..half.len() {
+        out.push(half.at(i))
+    }
+    Some(out)
+}
+
+// The 64-byte raw ES256 signature `R || S` (RFC 7518, section 3.4) of the
+// integers `r` and `s`, each given as big-endian bytes. Each half is
+// padded with leading zeros to 32 bytes, so a half with leading zero
+// bytes still takes its 32. A leading zero byte in the input is dropped
+// first, as DER writes one in front of a half whose top bit is set. A half
+// with more than 32 significant bytes is `InvalidSignature`. An empty
+// half is the integer 0.
+pub fn es256_raw(r: Bytes, s: Bytes) -> Result<Bytes, Base64UrlError> {
+    let rp = padded_half(r)
+    let sp = padded_half(s)
+    if !rp.is_some() || !sp.is_some() {
+        return Err(Base64UrlError.InvalidSignature)
+    }
+    var out = rp.unwrap_or(Bytes.new())
+    let right = sp.unwrap_or(Bytes.new())
+    for i in 0..32 {
+        out.push(right.at(i))
+    }
+    Ok(out)
+}
+
+// The two integers of the strict DER `SEQUENCE { INTEGER r, INTEGER s }`
+// in `der`, as big-endian bytes with the DER sign byte dropped, or
+// `None`. Strict as `std.ecdsa.verify_der` is: short-form lengths, minimal
+// non-negative integers, nothing after the sequence.
+fn der_halves(der: Untrusted<Bytes>) -> Option<List<Bytes>> {
+    let n = der.len()
+    if n < 8 || der.at(0) != 48 || der.at(1).to_int() != n - 2 || der.at(1) >= 128 {
+        return None
+    }
+    var halves: List<Bytes> = []
+    var at = 2
+    for _ in 0..2 {
+        if at + 2 > n || der.at(at) != 2 {
+            return None
+        }
+        let len = der.at(at + 1).to_int()
+        if len == 0 || len >= 128 || at + 2 + len > n {
+            return None
+        }
+        let first = der.at(at + 2)
+        if first >= 128 {
+            return None
+        }
+        if len > 1 && first == 0 && der.at(at + 3) < 128 {
+            return None
+        }
+        var half = Bytes.new()
+        for j in 0..len {
+            half.push(der.at(at + 2 + j))
+        }
+        halves.push(half)
+        at = at + 2 + len
+    }
+    if at != n {
+        return None
+    }
+    Some(halves)
+}
+
+// The 64-byte raw ES256 signature of the DER signature `der`, as
+// `es256_raw` writes it. A DER signature that is not strict (see
+// `std.ecdsa.verify_der`), or whose integers do not fit 32 bytes, is
+// `InvalidSignature`.
+pub fn es256_raw_from_der(der: Untrusted<Bytes>) -> Result<Bytes, Base64UrlError> {
+    match der_halves(der) {
+        Some(halves) => es256_raw(halves.at(0), halves.at(1))
+        None => Err(Base64UrlError.InvalidSignature)
+    }
+}
