@@ -14,6 +14,10 @@
 //! a real directory, on Unix and Windows, and holds the lock from a second
 //! process.
 
+// The tests take a lock from outside the program with `File::try_lock`
+// (Rust 1.89), as another process would; the pinned toolchain has it.
+#![allow(clippy::incompatible_msrv)]
+
 mod common;
 
 use common::{printed, printed_with, run_on, test_fake};

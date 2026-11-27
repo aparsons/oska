@@ -55,7 +55,7 @@ struct Mac {
     page: u64,
     /// The functions its executables import from `libSystem`, in the
     /// order of the import table (ADR 0015: the list is reviewed surface).
-    imports: [&'static str; 35],
+    imports: [&'static str; 36],
     /// Whether this host runs its executables.
     is_host: bool,
 }

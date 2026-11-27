@@ -6,7 +6,7 @@
 //! `std` cannot open a path beneath a directory handle, and the workspace
 //! takes no crates from outside the repo, so this crate declares the
 //! system functions it needs itself. On Unix they are the C library's
-//! `openat`, `mkdirat`, `renameat`, `unlinkat`, `fdopendir`, `readdir`
+//! `openat`, `mkdirat`, `renameat`, `unlinkat`, `flock`, `fdopendir`, `readdir`
 //! and `closedir`, the address of `errno`, and `geteuid`, which `std`
 //! already links.
 //! On Windows they are `ntdll`'s `NtCreateFile`, `NtQueryInformationFile`,
