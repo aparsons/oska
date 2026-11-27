@@ -1234,3 +1234,80 @@ pub struct Polled<T> {
     pub value: T,
     pub retry_after: Option<Int>,
 }
+
+// ---- External Account Binding ----------------------------------------------------------
+
+// The credentials a CA such as ZeroSSL or Google Trust Services issues for
+// External Account Binding (RFC 8555 section 7.3.4): a key identifier and
+// an HMAC key. The caller gives both. The key is a `Secret`: it has no
+// `Display`, and this module never exposes it; only the HS256 tag of
+// `std.jws` leaves.
+pub struct Eab {
+    pub key_id: String,
+    key: Secret<Bytes>,
+}
+
+impl Eab {
+    // The binding credentials `key_id` and `hmac_key` (the raw key bytes,
+    // such as the base64url-decoded `hmac key` a CA shows). A key id that
+    // is empty, has a character a JWS header may not hold, or an empty key
+    // is `InvalidInput`.
+    pub fn new(key_id: String, hmac_key: Secret<Bytes>) -> Result<Eab, AcmeError> {
+        if !printable(key_id, 255) || hmac_key.len() == 0 {
+            return Err(AcmeError.InvalidInput("an EAB key id or key is empty or has a character that is not allowed"))
+        }
+        Ok(Eab(key_id: key_id, key: hmac_key))
+    }
+}
+
+// The JSON body of a `newAccount` request that carries `binding`, the
+// flattened JWS of `eab_binding`, as `externalAccountBinding`. The other
+// members are those of `new_account_body`.
+pub fn new_account_body_with_eab(contact: List<String>, terms_agreed: Bool, binding: String) -> Result<Bytes, AcmeError> {
+    let plain_body = new_account_body(contact, terms_agreed, false)?
+    let parsed = match json.parse(plain_body.to_text().unwrap_or("")) {
+        Ok(v) => v
+        Err(_) => { return Err(AcmeError.Malformed("the account body is not JSON")) }
+    }
+    let object = match json.parse(binding) {
+        Ok(v) => v
+        Err(_) => { return Err(AcmeError.Key) }
+    }
+    var members: List<json.Member> = parsed.as_members().unwrap_or([])
+    members.push(json.Member(key: "externalAccountBinding", value: object))
+    Ok(vouch_bytes(json.encode(json.Value.Object(members)).to_bytes()))
+}
+
+impl Client {
+    // The External Account Binding for `eab` (RFC 8555 section 7.3.4): the
+    // account key's JWK signed with HS256 under the HMAC key, naming
+    // `eab.key_id` and the `newAccount` URL.
+    fn binding(self, eab: Eab) -> Result<String, AcmeError> {
+        let public = match jws.public_key(self.key) {
+            Ok(p) => p
+            Err(_) => { return Err(AcmeError.Key) }
+        }
+        let account_jwk = match jws.jwk(public) {
+            Ok(j) => j
+            Err(_) => { return Err(AcmeError.Key) }
+        }
+        match jws.sign_hs256(eab.key, eab.key_id, self.directory.new_account.text, account_jwk.to_bytes()) {
+            Ok(text) => Ok(text)
+            Err(_) => Err(AcmeError.InvalidInput("an EAB key id or key is not acceptable"))
+        }
+    }
+
+    // As `new_account`, with External Account Binding: the request carries
+    // `externalAccountBinding`, the account key's JWK MACed with the CA's
+    // HMAC key. A CA that wants a binding and gets none or a wrong one
+    // answers a problem (`externalAccountRequired`, `unauthorized`,
+    // `malformed`), which is the typed error as for any other request.
+    pub fn new_account_with_eab<T: Transport>(var self, transport: T, eab: Eab, contact: List<String>, terms_agreed: Bool) -> Result<Account, AcmeError> {
+        let binding = self.binding(eab)?
+        let body = new_account_body_with_eab(contact, terms_agreed, binding)?
+        let response = self.signed_post(transport, self.directory.new_account, body, [200, 201], true)?
+        let account = parse_account(response, self.loopback)?
+        self.account = Some(account.url)
+        Ok(account)
+    }
+}
