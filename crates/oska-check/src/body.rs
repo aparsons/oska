@@ -1669,6 +1669,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         if ty.is_error() || ty == Ty::Never || ty.is_integer() || ty.is_float() {
             return true;
         }
+        // `Bool` and text are `Ord` (ADR 0034): they order, though they
+        // do no arithmetic.
+        let orders = matches!(
+            op,
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        ) && matches!(ty.head(), Some(ty::BOOL | ty::STRING));
+        if orders {
+            return true;
+        }
         if let Ty::Var(_) = ty {
             self.error(
                 codes::CANNOT_INFER,
@@ -1679,6 +1688,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         let hint = if op == BinaryOp::Add && ty == Ty::string() {
             "; build strings with interpolation, as in \"{a}{b}\""
+        } else if matches!(
+            op,
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        ) {
+            "; `<`, `<=`, `>` and `>=` are defined for the integers, `Float`, `Bool` and `String`"
         } else {
             ""
         };
@@ -1868,8 +1882,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         let ty = self.infer.resolve(ty);
         let bound = Ty::generic(trait_name, args.to_vec()).to_string();
-        let message =
+        let mut message =
             format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
+        if trait_name == ty::ORD && ty.is_float() {
+            message.push_str(
+                ": a `Float` has no total order, because `NaN` is unordered; \
+                 `total_cmp` orders floats",
+            );
+        }
         if map_key && !ty.has_param() {
             let message = format!(
                 "`{ty}` cannot be a `Map` key: it does not implement `{bound}`. A key type needs `Eq` and `Hash`: an integer, `Bool`, `String`, `Bytes`, `Path`, an `Option` or `List` of a key type, or a struct or enum with `impl Eq` whose fields are all keys"

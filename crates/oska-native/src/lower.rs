@@ -2934,6 +2934,26 @@ impl<'l, 'p> Body<'l, 'p> {
                     }
                     return Ok(equal);
                 }
+                if lhs.ty == Type::String {
+                    // `<`, `<=`, `>` and `>=` on text (ADR 0034): the order
+                    // of its bytes, as -1, 0 or 1, against 0.
+                    let operands = self.borrowed_args(&[lhs, rhs])?;
+                    let [left, right] = operands[..] else {
+                        return Err(self.refuse(span, "comparing texts"));
+                    };
+                    let order = self.call_runtime("string_compare", vec![left, right], span)?;
+                    self.consume(left)?;
+                    self.consume(right)?;
+                    let zero = self.constant(0);
+                    let dst = self.temp();
+                    self.push(Inst::Compare {
+                        cond: comparison(op, false),
+                        dst,
+                        lhs: order,
+                        rhs: zero,
+                    });
+                    return Ok(dst);
+                }
                 let unsigned = match &lhs.ty {
                     Type::Int(int) => int.min() == 0,
                     Type::Bool | Type::Unit => false,

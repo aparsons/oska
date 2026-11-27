@@ -1184,6 +1184,157 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "Int.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = 3.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I8.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I8 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I16.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I16 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I32.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I32 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I64.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I64 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U8.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 3
+    let a = x.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U16.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 3
+    let a = x.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U32.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 3
+    let a = x.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U64.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551615
+    let a = x.cmp(1)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "Bool.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = false.cmp(true)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "String.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = "b".cmp("ab")
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
         "Bool.eq",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {

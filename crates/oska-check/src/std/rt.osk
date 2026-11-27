@@ -1458,6 +1458,81 @@ pub fn string_eq(a: String, b: String) -> Bool {
     bytes_equal(text_data(left), text_data(right), length)
 }
 
+// How the text `a` orders against the text `b` by code point, which is the
+// order of their UTF-8 bytes (ADR 0034): -1, 0 or 1. A prefix is before a
+// longer text. `<` on text, and `String.cmp`, are this.
+pub fn string_compare(a: String, b: String) -> Int {
+    let left = rt_mem_text(a)
+    let right = rt_mem_text(b)
+    let length = text_length(left)
+    let other = text_length(right)
+    let shared = if length < other { length } else { other }
+    let at = text_data(left)
+    let to = text_data(right)
+    var i = 0
+    // Skip the words that are the same, then compare the bytes after them.
+    while rt_mem_add(i, 8) <= shared && rt_mem_load64(rt_mem_add(at, i)) == rt_mem_load64(rt_mem_add(to, i)) {
+        i = rt_mem_add(i, 8)
+    }
+    while i < shared {
+        let x = rt_mem_load8(rt_mem_add(at, i))
+        let y = rt_mem_load8(rt_mem_add(to, i))
+        if x != y {
+            if x < y {
+                return -1
+            }
+            return 1
+        }
+        i = rt_mem_add(i, 1)
+    }
+    if length < other {
+        return -1
+    }
+    if length > other {
+        return 1
+    }
+    0
+}
+
+// An `Ordering` from -1, 0 or 1.
+fn ordering_of(order: Int) -> Ordering {
+    if order < 0 {
+        return Ordering.Less
+    }
+    if order > 0 {
+        return Ordering.Greater
+    }
+    Ordering.Equal
+}
+
+// `String.cmp`.
+pub fn string_cmp(a: String, b: String) -> Ordering {
+    ordering_of(string_compare(a, b))
+}
+
+// `Int.cmp` and the other signed integers', `U8`'s, `U16`'s, `U32`'s and
+// `Bool`'s: each is a word that orders as a signed word.
+pub fn int_cmp(a: Int, b: Int) -> Ordering {
+    if a < b {
+        return Ordering.Less
+    }
+    if a > b {
+        return Ordering.Greater
+    }
+    Ordering.Equal
+}
+
+// `U64.cmp`: its words order as unsigned words.
+pub fn u64_cmp(a: U64, b: U64) -> Ordering {
+    if a < b {
+        return Ordering.Less
+    }
+    if a > b {
+        return Ordering.Greater
+    }
+    Ordering.Equal
+}
+
 // `String.slice`: the characters from `start` up to `end`, or, when they
 // are out of range, the word 0 in place of a text, for the generated code
 // to panic (`P0035`).

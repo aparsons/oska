@@ -1237,6 +1237,41 @@ impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Boo
 impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
 impl Eq for Bytes { fn eq(self, other: Bytes) -> Bool }
 
+// The result of comparing two values: `Ordering.Less`, `Ordering.Equal` or
+// `Ordering.Greater`, matched in call style like any variant.
+pub enum Ordering {
+    Less,
+    Equal,
+    Greater,
+}
+
+// A total order (ADR 0034): `<`, `<=`, `>` and `>=` work on every `Ord`
+// type, as `==` works on every `Eq` type. The integer types, `Bool` (`false`
+// before `true`) and `String` are `Ord`; a type of your own is `Ord` when it
+// writes `impl Ord for`. `Float` is not (a `NaN` is unordered: use
+// `total_cmp`), and neither is a `Secret` (an ordering that stops at the
+// first difference leaks through timing: use `constant_time_eq`).
+pub trait Ord {
+    // How `self` orders against `other`. The result is trusted.
+    fn cmp(self, other: Self) -> Ordering
+}
+
+impl Ord for Int { fn cmp(self, other: Int) -> Ordering }
+impl Ord for I8 { fn cmp(self, other: I8) -> Ordering }
+impl Ord for I16 { fn cmp(self, other: I16) -> Ordering }
+impl Ord for I32 { fn cmp(self, other: I32) -> Ordering }
+impl Ord for I64 { fn cmp(self, other: I64) -> Ordering }
+impl Ord for U8 { fn cmp(self, other: U8) -> Ordering }
+impl Ord for U16 { fn cmp(self, other: U16) -> Ordering }
+impl Ord for U32 { fn cmp(self, other: U32) -> Ordering }
+impl Ord for U64 { fn cmp(self, other: U64) -> Ordering }
+// `false` is before `true`.
+impl Ord for Bool { fn cmp(self, other: Bool) -> Ordering }
+// By Unicode code point, which is the order of the UTF-8 bytes: the same on
+// every platform and backend, with no locale, case folding or normalization.
+// `""` is before every other text, and a prefix before a longer text.
+impl Ord for String { fn cmp(self, other: String) -> Ordering }
+
 // A value that can be hashed.
 pub trait Hash {
     // A hash of the value.
