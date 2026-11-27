@@ -1669,7 +1669,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         if ty.is_error() || ty == Ty::Never || ty.is_integer() || ty.is_float() {
             return true;
         }
-        // `Bool` and text are `Ord` (ADR 0031): they order, though they
+        // `Bool` and text are `Ord` (ADR 0034): they order, though they
         // do no arithmetic.
         let orders = matches!(
             op,

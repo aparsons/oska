@@ -2935,7 +2935,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     return Ok(equal);
                 }
                 if lhs.ty == Type::String {
-                    // `<`, `<=`, `>` and `>=` on text (ADR 0031): the order
+                    // `<`, `<=`, `>` and `>=` on text (ADR 0034): the order
                     // of its bytes, as -1, 0 or 1, against 0.
                     let operands = self.borrowed_args(&[lhs, rhs])?;
                     let [left, right] = operands[..] else {

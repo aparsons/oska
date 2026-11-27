@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `oskac check` on the types that have no `Ord` (spec #660, ticket #664,
-//! ADR 0031). `tests/fixtures/ord/refused.osk` has one function per
+//! ADR 0034). `tests/fixtures/ord/refused.osk` has one function per
 //! refusal: `cmp` on a `Float`, `Float` and `Secret` as an `Ord` bound, `<`
 //! and `cmp` on a secret, and `<` on a list. Each message says why and what
 //! to use instead (`total_cmp`, `constant_time_eq`).

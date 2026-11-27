@@ -21,7 +21,7 @@ pub use crate::ty::{
     STRING, TEST_CONTEXT,
 };
 
-/// The prelude's `Ordering`, which `cmp` returns (ADR 0031).
+/// The prelude's `Ordering`, which `cmp` returns (ADR 0034).
 pub const ORDERING: &str = "Ordering";
 
 /// The prelude's `Task`, which `Scope.spawn` returns.

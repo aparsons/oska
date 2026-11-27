@@ -1,4 +1,5 @@
-// Each function is refused by `Ord` (ADR 0031): a `Float` and a `Secret`
+// SPDX-License-Identifier: Apache-2.0
+// Each function is refused by `Ord` (ADR 0034): a `Float` and a `Secret`
 // have no order, and the message says why and what to use instead.
 
 fn float_cmp(a: Float, b: Float) -> Bool {

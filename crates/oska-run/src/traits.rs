@@ -140,7 +140,7 @@ fn same(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0] == args[1]))
 }
 
-/// `cmp(self, other)` for the integers, `Bool` and `String` (ADR 0031): an
+/// `cmp(self, other)` for the integers, `Bool` and `String` (ADR 0034): an
 /// `Ordering`.
 fn cmp(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     let variant = match crate::ops::order(&args[0], &args[1]) {

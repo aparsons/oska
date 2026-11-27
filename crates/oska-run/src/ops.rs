@@ -53,7 +53,7 @@ pub fn binary(
     Ok(value)
 }
 
-/// How `lhs` orders against `rhs`, two values of one `Ord` type (ADR 0031):
+/// How `lhs` orders against `rhs`, two values of one `Ord` type (ADR 0034):
 /// integers by value, `Bool` with `false` first, and text by code point,
 /// which is the order of its UTF-8 bytes.
 pub fn order(lhs: &Value, rhs: &Value) -> std::cmp::Ordering {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `Ord` and `Ordering` on the integers, `Bool` and `String` (spec #660,
-//! ticket #664, ADR 0031): `<`, `<=`, `>` and `>=` on `Bool` and text, and
+//! ticket #664, ADR 0034): `<`, `<=`, `>` and `>=` on `Bool` and text, and
 //! `cmp` on every `Ord` type, matched as an `Ordering`. Every helper that
 //! runs a program also runs it natively on Linux and compares
 //! (`common/mod.rs`), so each result holds on both backends.

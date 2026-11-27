@@ -24,7 +24,7 @@ const ORD_LOOP: &str = r#"fn rank(o: Ordering) -> Int {
 }
 
 fn main(io: Stdout) -> Result<(), IoError> {
-    let words = ["pear", "apple", "fig", "", "apples", "\u{e9}clair", "zebra"]
+    let words = ["pear", "apple", "fig", "", "apples", "éclair", "zebra"]
     var total = 0
     for a in words {
         for b in words {

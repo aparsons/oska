@@ -1245,7 +1245,7 @@ pub enum Ordering {
     Greater,
 }
 
-// A total order (ADR 0031): `<`, `<=`, `>` and `>=` work on every `Ord`
+// A total order (ADR 0034): `<`, `<=`, `>` and `>=` work on every `Ord`
 // type, as `==` works on every `Eq` type. The integer types, `Bool` (`false`
 // before `true`) and `String` are `Ord`; a type of your own is `Ord` when it
 // writes `impl Ord for`. `Float` is not (a `NaN` is unordered: use

@@ -1459,7 +1459,7 @@ pub fn string_eq(a: String, b: String) -> Bool {
 }
 
 // How the text `a` orders against the text `b` by code point, which is the
-// order of their UTF-8 bytes (ADR 0031): -1, 0 or 1. A prefix is before a
+// order of their UTF-8 bytes (ADR 0034): -1, 0 or 1. A prefix is before a
 // longer text. `<` on text, and `String.cmp`, are this.
 pub fn string_compare(a: String, b: String) -> Int {
     let left = rt_mem_text(a)
