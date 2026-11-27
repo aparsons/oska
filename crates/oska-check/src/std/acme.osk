@@ -1647,6 +1647,12 @@ impl Client {
     // chain with `std.x509`. Each wait is at most `max_polls` polls, with
     // `waiter.wait` between them.
     pub fn issue<T: Transport, R: Responder, W: Waiter>(var self, transport: T, responder: R, waiter: W, random: Random, names: List<String>, kind: ChallengeKind, max_polls: Int) -> Result<Issued, AcmeError> {
+        self.issue_replacing(transport, responder, waiter, random, names, kind, max_polls, None)
+    }
+
+    // `issue`, with `replaces` (RFC 9773) on the new order when there is a
+    // certificate to name. `renew` is the public way in.
+    fn issue_replacing<T: Transport, R: Responder, W: Waiter>(var self, transport: T, responder: R, waiter: W, random: Random, names: List<String>, kind: ChallengeKind, max_polls: Int, replaced: Option<x509.Certificate>) -> Result<Issued, AcmeError> {
         if !self.account.is_some() {
             return Err(AcmeError.NoAccount)
         }
@@ -1657,7 +1663,10 @@ impl Client {
             }
             identifiers.push(Identifier.dns(name))
         }
-        let order = self.new_order(transport, identifiers)?
+        let order = match replaced {
+            Some(old) => self.new_order_replacing(transport, identifiers, old)?
+            None => self.new_order(transport, identifiers)?
+        }
         let key = new_key(random)?
         let csr = match x509_csr.create(key, names) {
             Ok(der) => der
@@ -1700,5 +1709,395 @@ impl Client {
         }
         let chain = self.download_certificate(transport, location, names)?
         Ok(Issued(chain: chain, key: key))
+    }
+}
+
+// ---- Renewal (RFC 9773, ARI) -------------------------------------------------------------
+//
+// ACME Renewal Information. A CA with a `renewalInfo` URL in its directory
+// answers, for a certificate it issued, a suggested window in which to
+// renew it. `ari_url` makes the URL, `parse_renewal_info` reads the answer,
+// `choose_renewal_time` picks a random instant inside the window (so
+// clients do not all come at once), and `renew` orders the new
+// certificate with `replaces` naming the old one. A CA with no renewal
+// information gets the backstop of `backstop_time`: renew when one third
+// of the lifetime is left, or one half for a certificate valid under ten
+// days. A failed renewal is tried at most once a day (`may_attempt`), and a
+// CA's `Retry-After` is honoured (`next_check`, `failure_wait`). Every time
+// here is in seconds since 1970; the functions take the time and the random
+// number as arguments, so a test needs no clock and no entropy.
+
+// A day, in seconds.
+pub const DAY: Int = 86400
+
+// A certificate valid for less than this (ten days) is renewed with half
+// its lifetime left, not a third.
+pub const SHORT_LIFETIME: Int = 864000
+
+// How long to wait before asking again when the CA sent no `Retry-After`
+// (six hours, as RFC 9773 section 4.3.3 suggests).
+pub const DEFAULT_CHECK: Int = 21600
+
+// The least wait the library honours from a `Retry-After`, so a CA that
+// says 0 does not make a loop.
+pub const MIN_CHECK: Int = 60
+
+// The renewal window the CA suggests, both ends inclusive.
+pub struct RenewalWindow {
+    pub start: Int,
+    pub end: Int,
+}
+
+// What the CA answered about a certificate.
+pub struct RenewalInfo {
+    pub window: RenewalWindow,
+    // The page that says why the window is what it is. Untrusted text is
+    // kept only as a checked URL.
+    pub explanation_url: Option<Url>,
+    // The `Retry-After` of the response in seconds, when it is a number.
+    pub retry_after: Option<Int>,
+}
+
+// Where a renewal time came from.
+pub enum PlanSource {
+    // A window the CA suggested.
+    Window,
+    // The one-third (or one-half) backstop: the CA offered nothing usable.
+    Backstop,
+}
+
+// When to renew, and why that time.
+pub struct RenewalPlan {
+    pub renew_at: Int,
+    pub source: PlanSource,
+}
+
+// `count` decimal digits of `bytes` from `at`, or None.
+fn digits_at(bytes: Bytes, at: Int, count: Int) -> Option<Int> {
+    if at + count > bytes.len() {
+        return None
+    }
+    var value = 0
+    for i in 0..count {
+        let b = bytes.at(at + i).to_int()
+        if b < 48 || b > 57 {
+            return None
+        }
+        value = value * 10 + (b - 48)
+    }
+    Some(value)
+}
+
+// Days from 1970-01-01 to the civil date (proleptic Gregorian).
+fn civil_days(year: Int, month: Int, day: Int) -> Int {
+    let y = if month <= 2 { year - 1 } else { year }
+    let era = y / 400
+    let yoe = y - era * 400
+    let mp = (month + 9) % 12
+    let doy = (153 * mp + 2) / 5 + day - 1
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    era * 146097 + doe - 719468
+}
+
+fn days_in_month(year: Int, month: Int) -> Int {
+    if month == 2 {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+        if leap { 29 } else { 28 }
+    } else if month == 4 || month == 6 || month == 9 || month == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+// An RFC 3339 timestamp, `YYYY-MM-DDTHH:MM:SS`, an optional fraction of a
+// second (dropped), and `Z` or an offset `+HH:MM` or `-HH:MM`, in seconds
+// since 1970. The `T` and `Z` may be lower case. Anything else, or a date
+// or time that does not exist, is None. A leap second (`:60`) is refused.
+pub fn parse_rfc3339(text: String) -> Option<Int> {
+    let b = text.to_bytes()
+    let n = b.len()
+    if n < 20 || n > 40 {
+        return None
+    }
+    let year = digits_at(b, 0, 4)?
+    let month = digits_at(b, 5, 2)?
+    let day = digits_at(b, 8, 2)?
+    let hour = digits_at(b, 11, 2)?
+    let minute = digits_at(b, 14, 2)?
+    let second = digits_at(b, 17, 2)?
+    let dash1 = b.at(4).to_int()
+    let dash2 = b.at(7).to_int()
+    let t = b.at(10).to_int()
+    let colon1 = b.at(13).to_int()
+    let colon2 = b.at(16).to_int()
+    if dash1 != 45 || dash2 != 45 || (t != 84 && t != 116) || colon1 != 58 || colon2 != 58 {
+        return None
+    }
+    if year < 1970 || month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) {
+        return None
+    }
+    if hour > 23 || minute > 59 || second > 59 {
+        return None
+    }
+    var at = 19
+    if b.at(at).to_int() == 46 {
+        at = at + 1
+        let start = at
+        while at < n && b.at(at).to_int() >= 48 && b.at(at).to_int() <= 57 {
+            at = at + 1
+        }
+        if at == start {
+            return None
+        }
+    }
+    if at >= n {
+        return None
+    }
+    var offset = 0
+    let zone = b.at(at).to_int()
+    if zone == 90 || zone == 122 {
+        if at + 1 != n {
+            return None
+        }
+    } else if zone == 43 || zone == 45 {
+        if at + 6 != n || b.at(at + 3).to_int() != 58 {
+            return None
+        }
+        let oh = digits_at(b, at + 1, 2)?
+        let om = digits_at(b, at + 4, 2)?
+        if oh > 23 || om > 59 {
+            return None
+        }
+        offset = oh * 3600 + om * 60
+        if zone == 45 {
+            offset = 0 - offset
+        }
+    } else {
+        return None
+    }
+    Some(civil_days(year, month, day) * DAY + hour * 3600 + minute * 60 + second - offset)
+}
+
+// The time member `name` of `object`, checked and parsed.
+fn window_time(object: json.Value, name: String) -> Result<Int, AcmeError> {
+    let text = required_text(object, name)?
+    if !printable(text, 40) {
+        return Err(AcmeError.Malformed("a renewal time is not a timestamp"))
+    }
+    match parse_rfc3339(vouch(text)) {
+        Some(t) => Ok(t)
+        None => Err(AcmeError.Malformed("a renewal time is not an RFC 3339 timestamp"))
+    }
+}
+
+// The renewal information in `response` (status 200, RFC 9773 section
+// 4.2): `suggestedWindow.start` and `.end` are required, and the end must
+// not be before the start. `explanationURL` is kept when it passes
+// `parse_url` and dropped when it does not, since it is only a hint for a
+// person. `Retry-After` of the response comes along.
+pub fn parse_renewal_info(response: http.Response, allow_loopback: Bool) -> Result<RenewalInfo, AcmeError> {
+    status_in(response, [200])?
+    let object = body_object(response)?
+    let window = match object.object("suggestedWindow") {
+        Some(w) => w
+        None => { return Err(AcmeError.Malformed("no suggested renewal window")) }
+    }
+    let start = window_time(window, "start")?
+    let end = window_time(window, "end")?
+    if end < start {
+        return Err(AcmeError.Malformed("the renewal window ends before it starts"))
+    }
+    var explanation: Option<Url> = None
+    match object.text("explanationURL") {
+        Some(t) => {
+            match parse_url(t, allow_loopback) {
+                Ok(u) => { explanation = Some(u) }
+                Err(_) => {}
+            }
+        }
+        None => {}
+    }
+    Ok(RenewalInfo(window: RenewalWindow(start: start, end: end), explanation_url: explanation, retry_after: retry_after_of(response)))
+}
+
+// The URL to ask for the renewal information of a certificate: the
+// directory's `renewalInfo` URL, a slash (unless it ends with one) and the
+// certificate's id (RFC 9773 section 4.1, `x509.Certificate.ari_id`). None
+// when the directory has no `renewalInfo`. A certificate with no Authority
+// Key Identifier has no id: `InvalidInput`.
+pub fn ari_url(directory: Directory, certificate: x509.Certificate, allow_loopback: Bool) -> Result<Option<Url>, AcmeError> {
+    match directory.renewal_info {
+        Some(base) => {
+            let id = match certificate.ari_id() {
+                Ok(i) => i
+                Err(_) => { return Err(AcmeError.InvalidInput("the certificate has no authority key identifier")) }
+            }
+            let joined = if base.text.ends_with("/") { "{base.text}{id}" } else { "{base.text}/{id}" }
+            let url = parse_url(joined, allow_loopback)?
+            Ok(Some(url))
+        }
+        None => Ok(None)
+    }
+}
+
+// A renewal plan with the `Retry-After` of the CA's answer (None when it
+// sent none or was not asked).
+pub struct Planned {
+    pub plan: RenewalPlan,
+    pub retry_after: Option<Int>,
+}
+
+// An instant inside `window`, chosen by `random`, a number from 0 up (a
+// `Random.next_int`): `start` plus the remainder of `random` by the window
+// length plus one second, so both ends can be chosen. A negative `random`
+// counts as 0.
+pub fn choose_renewal_time(window: RenewalWindow, random: Int) -> Int {
+    let span = window.end - window.start + 1
+    let r = if random < 0 { 0 } else { random }
+    window.start + r % span
+}
+
+// The renewal time when the CA gave no window: one third of the lifetime
+// before `not_after`, or one half when the lifetime is under ten days.
+// A 90-day certificate is renewed with 30 days left, a 45-day one with 15,
+// a 6-day one with 3.
+pub fn backstop_time(not_before: Int, not_after: Int) -> Int {
+    let lifetime = not_after - not_before
+    if lifetime < SHORT_LIFETIME {
+        not_after - lifetime / 2
+    } else {
+        not_after - lifetime / 3
+    }
+}
+
+// When to renew `certificate`: a time in the CA's window when there is one
+// (`info`), else the backstop. `random` is a `Random.next_int`.
+pub fn plan_renewal(certificate: x509.Certificate, info: Option<RenewalInfo>, random: Int) -> RenewalPlan {
+    match info {
+        Some(i) => RenewalPlan(renew_at: choose_renewal_time(i.window, random), source: PlanSource.Window)
+        None => RenewalPlan(renew_at: backstop_time(certificate.not_before(), certificate.not_after()), source: PlanSource.Backstop)
+    }
+}
+
+// When to ask the CA for the window again: `now` plus the CA's
+// `Retry-After` (at least `MIN_CHECK`, at most a day), or `DEFAULT_CHECK`
+// when it sent none.
+pub fn next_check(retry_after: Option<Int>, now: Int) -> Int {
+    match retry_after {
+        Some(n) => {
+            let wait = if n < MIN_CHECK { MIN_CHECK } else if n > DAY { DAY } else { n }
+            now + wait
+        }
+        None => now + DEFAULT_CHECK
+    }
+}
+
+// How long to wait after a failed renewal: a day, or longer when the CA
+// said `Retry-After` (a rate limit) with more than a day, but never more
+// than a week.
+pub fn failure_wait(error: AcmeError) -> Int {
+    let said = match error {
+        AcmeError.RateLimited(p) => p.retry_after
+        AcmeError.Problem(p) => p.retry_after
+        AcmeError.Unauthorized(p) => p.retry_after
+        AcmeError.BadNonce(p) => p.retry_after
+        _ => None
+    }
+    match said {
+        Some(n) => if n > DAY { if n > 7 * DAY { 7 * DAY } else { n } } else { DAY }
+        None => DAY
+    }
+}
+
+// Whether a renewal may be tried at `now`: the plan's time has come, and
+// the last failure (None when there was none) was `wait` or more seconds
+// ago, with `wait` from `failure_wait`. So a failed renewal is tried at
+// most once a day.
+pub fn may_attempt(plan: RenewalPlan, last_failure: Option<Int>, wait: Int, now: Int) -> Bool {
+    if now < plan.renew_at {
+        return false
+    }
+    match last_failure {
+        Some(at) => now >= at + wait
+        None => true
+    }
+}
+
+// The JSON body of a `newOrder` request for `identifiers` that replaces
+// the certificate with id `replaces` (RFC 9773 section 5, the `replaces`
+// member). The id is checked to be two base64url parts joined by a dot.
+pub fn new_order_body_replacing(identifiers: List<Identifier>, replaces: String) -> Result<Bytes, AcmeError> {
+    let plain = new_order_body(identifiers)?
+    let parts = replaces.split(".")
+    if parts.len() != 2 || !is_token(parts.at(0)) || !is_token(parts.at(1)) {
+        return Err(AcmeError.InvalidInput("a certificate id is not two base64url parts"))
+    }
+    let parsed = match json.parse(plain.to_text().unwrap_or("")) {
+        Ok(v) => v
+        Err(_) => { return Err(AcmeError.Malformed("unreachable")) }
+    }
+    var members: List<json.Member> = []
+    for m in parsed.as_members().unwrap_or([]) {
+        members.push(m)
+    }
+    members.push(json.Member(key: "replaces", value: json.Value.Text(replaces)))
+    Ok(vouch_bytes(json.encode(json.Value.Object(members)).to_bytes()))
+}
+
+impl Client {
+    // The renewal information of `certificate`, asked of the CA's
+    // `renewalInfo` URL by an unauthenticated GET (RFC 9773 section 4.2).
+    // None when the directory has no such URL. A CA error is its typed
+    // error (a 404 is a `Problem`): the caller falls back to the backstop.
+    pub fn renewal_info<T: Transport>(self, transport: T, certificate: x509.Certificate) -> Result<Option<RenewalInfo>, AcmeError> {
+        match ari_url(self.directory, certificate, self.loopback)? {
+            Some(url) => {
+                let response = match transport.get(url) {
+                    Ok(r) => r
+                    Err(error) => { return Err(from_http(error)) }
+                }
+                let info = parse_renewal_info(response, self.loopback)?
+                Ok(Some(info))
+            }
+            None => Ok(None)
+        }
+    }
+
+    // When to renew `certificate`: the CA's window when it has renewal
+    // information and answers, else the backstop. An answer the CA gave
+    // wrongly, or an error, is not a reason to miss the renewal, so any
+    // failure of the ask is the backstop. `Planned.retry_after` is the
+    // `Retry-After` of the CA's answer, for `next_check`.
+    pub fn plan<T: Transport>(self, transport: T, certificate: x509.Certificate, random: Random) -> Planned {
+        match self.renewal_info(transport, certificate) {
+            Ok(Some(info)) => Planned(plan: plan_renewal(certificate, Some(info), random.next_int()), retry_after: info.retry_after)
+            _ => Planned(plan: plan_renewal(certificate, None, 0), retry_after: None)
+        }
+    }
+
+    // Place an order for `identifiers` that replaces `certificate`
+    // (RFC 9773 section 5).
+    pub fn new_order_replacing<T: Transport>(var self, transport: T, identifiers: List<Identifier>, certificate: x509.Certificate) -> Result<Order, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        let id = match certificate.ari_id() {
+            Ok(i) => i
+            Err(_) => { return Err(AcmeError.InvalidInput("the certificate has no authority key identifier")) }
+        }
+        let body = new_order_body_replacing(identifiers, id)?
+        let response = self.signed_post(transport, self.directory.new_order, body, [201], false)?
+        parse_order(response, None, self.loopback)
+    }
+}
+
+impl Client {
+    // Get a new certificate for `names` that replaces `certificate`: the
+    // steps of `issue`, with the old certificate's id in `replaces` on the
+    // new order (RFC 9773 section 5). The caller decides when, with
+    // `plan`, `may_attempt` and the clock.
+    pub fn renew<T: Transport, R: Responder, W: Waiter>(var self, transport: T, responder: R, waiter: W, random: Random, certificate: x509.Certificate, names: List<String>, kind: ChallengeKind, max_polls: Int) -> Result<Issued, AcmeError> {
+        self.issue_replacing(transport, responder, waiter, random, names, kind, max_polls, Some(certificate))
     }
 }
