@@ -135,7 +135,7 @@ fn is_version(version: &str) -> bool {
                 && n.bytes().all(|b| b.is_ascii_digit())
                 && (n.len() == 1 || !n.starts_with('0'))
         })
-        && pre.map_or(true, |pre| {
+        && pre.is_none_or(|pre| {
             !pre.is_empty()
                 && pre
                     .split('.')

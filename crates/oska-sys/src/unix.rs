@@ -74,9 +74,6 @@ mod c {
         #[cfg_attr(target_os = "macos", link_name = "__error")]
         pub fn errno_location() -> *mut c_int;
 
-        /// `int flock(int fd, int operation)`.
-        pub fn flock(fd: c_int, operation: c_int) -> c_int;
-
         /// `uid_t geteuid(void)`: the effective user ID, which never fails.
         /// `uid_t` is 32 bits unsigned on every target this crate covers.
         pub fn geteuid() -> u32;
@@ -86,10 +83,6 @@ mod c {
         /// bytes at a time. 0 on success, -1 on an error.
         pub fn getentropy(buffer: *mut c_void, length: usize) -> c_int;
     }
-
-    /// `LOCK_EX | LOCK_NB`: an exclusive lock, without waiting. The same
-    /// on Linux and macOS.
-    pub const LOCK_EX_NB: c_int = 2 | 4;
 
     pub const O_RDONLY: c_int = 0;
     pub const O_WRONLY: c_int = 1;
@@ -360,8 +353,8 @@ impl Dir {
     /// Take an exclusive lock on this directory: the lock file
     /// [`crate::LOCK_NAME`] beneath it, created when it is missing and
     /// never emptied, opened like any file written beneath a `Dir` (no
-    /// symlink, one link, a regular file) and locked with `flock`
-    /// without waiting. Dropping the returned file releases the lock,
+    /// symlink, one link, a regular file) and locked with std's
+    /// `File::try_lock` without waiting. Dropping the returned file releases the lock,
     /// and the system releases it when the process ends. A lock another
     /// open file of this process holds conflicts as one from another
     /// process does. A lock already held is the error
@@ -371,15 +364,10 @@ impl Dir {
         let fd = open_name(self, OsStr::new(crate::LOCK_NAME), c::FILE_WRITE)
             .map_err(|error| refused(error, crate::LOCK_NAME, "file"))?;
         let file = lone_file(File::from(fd), &names)?;
-        let fd = file.as_raw_fd();
-        match retried(|| {
-            // SAFETY: `fd` is the descriptor of `file`, open for the
-            // call; `flock` touches no memory of ours.
-            unsafe { c::flock(fd, c::LOCK_EX_NB) }
-        }) {
-            Ok(_) => Ok(file),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Err(refusal::lock_held()),
-            Err(error) => Err(error),
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => Err(refusal::lock_held()),
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
         }
     }
 

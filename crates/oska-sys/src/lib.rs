@@ -6,7 +6,7 @@
 //! `std` cannot open a path beneath a directory handle, and the workspace
 //! takes no crates from outside the repo, so this crate declares the
 //! system functions it needs itself. On Unix they are the C library's
-//! `openat`, `mkdirat`, `renameat`, `unlinkat`, `flock`, `fdopendir`, `readdir`
+//! `openat`, `mkdirat`, `renameat`, `unlinkat`, `fdopendir`, `readdir`
 //! and `closedir`, the address of `errno`, and `geteuid`, which `std`
 //! already links.
 //! On Windows they are `ntdll`'s `NtCreateFile`, `NtQueryInformationFile`,
@@ -22,7 +22,7 @@
 //! symlink, or on Windows any other reparse point (a junction or a mount
 //! point), to read a file, write one, create a directory or list one, and
 //! on Unix to rename or remove a file within one directory, and to take
-//! an exclusive lock on the directory ([`Dir::lock`]): `flock` on Unix, a
+//! an exclusive lock on the directory ([`Dir::lock`]): `File::try_lock` on Unix, a
 //! share-less open on Windows, both released by the system when the
 //! process ends.
 //! A file with more than one link is refused. Because every component is

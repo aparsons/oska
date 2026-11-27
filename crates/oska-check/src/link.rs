@@ -267,7 +267,7 @@ impl Keys {
             let boundary = text[..at]
                 .chars()
                 .next_back()
-                .map_or(true, |c| !is_name_char(c) && c != '.');
+                .is_none_or(|c| !is_name_char(c) && c != '.');
             if !boundary {
                 continue;
             }

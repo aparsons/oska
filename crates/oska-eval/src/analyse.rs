@@ -437,7 +437,7 @@ fn applied(fix: &Fix, file: Option<&str>, edits: &[&EditAt], runs: &[&FixRunAt])
     if fix.applicability == "machine" && runs.iter().any(|r| covers(&r.target)) {
         return true;
     }
-    let same_file = |e: &&&EditAt| file.map_or(true, |f| same_path(&e.path, f));
+    let same_file = |e: &&&EditAt| file.is_none_or(|f| same_path(&e.path, f));
     let here: Vec<&&EditAt> = edits.iter().filter(same_file).collect();
     if here.is_empty() {
         return false;
