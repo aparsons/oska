@@ -720,11 +720,13 @@ fn unchanged_in_home(
     match entry.kind {
         Kind::Binary => {
             let this = executable().is_some_and(|exe| path.canonicalize().is_ok_and(|p| p == exe));
-            let kept = receipt
-                .get("kept_previous")
-                .and_then(|k| k.get("path"))
-                .and_then(Json::as_str)
-                .is_some_and(|k| Path::new(k) == path);
+            // The copy `self update --keep-previous` made: only at the name
+            // it gives one beside this oskac, as a regular file and not a
+            // link; the receipt's word for the path is not enough.
+            let kept = executable()
+                .and_then(|exe| crate::self_update::recorded_kept(receipt, &exe))
+                .is_some_and(|k| k.path == path)
+                && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file());
             if this {
                 Ok(())
             } else if kept {

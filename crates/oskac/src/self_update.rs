@@ -81,9 +81,9 @@ struct Done {
 
 /// A copy of a replaced binary, as the receipt records it.
 #[derive(Clone)]
-struct Kept {
+pub(crate) struct Kept {
     version: String,
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     sha256: String,
 }
 
@@ -104,6 +104,14 @@ fn kept_path(exe: &Path, version: &str) -> Option<PathBuf> {
     Some(exe.with_file_name(format!("{stem}-{plain}{}", std::env::consts::EXE_SUFFIX)))
 }
 
+/// Remove a kept copy this `oskac` made: a regular file, never a link
+/// (which could stand for something else), at the name it would give it.
+fn remove_kept(copy: &Kept) {
+    if std::fs::symlink_metadata(&copy.path).is_ok_and(|m| m.is_file()) {
+        let _ = std::fs::remove_file(&copy.path);
+    }
+}
+
 fn is_digest(text: &str) -> bool {
     text.len() == 64
         && text
@@ -114,7 +122,7 @@ fn is_digest(text: &str) -> bool {
 /// The kept copy the receipt records, if what it says is where this
 /// `oskac` would put one (so that a receipt cannot name another file to be
 /// used or deleted).
-fn recorded_kept(receipt: &Json, exe: &Path) -> Option<Kept> {
+pub(crate) fn recorded_kept(receipt: &Json, exe: &Path) -> Option<Kept> {
     let entry = receipt.get("kept_previous")?;
     let text = |key: &str| entry.get(key).and_then(Json::as_str).map(str::to_string);
     let (version, path, sha256) = (text("version")?, text("path")?, text("sha256")?);
@@ -301,7 +309,7 @@ fn run(request: &Request) -> Result<Done, Failed> {
     let new_kept = keep.clone().flatten();
     let discard_kept = |path: &Option<Kept>| {
         if let Some(copy) = path {
-            let _ = std::fs::remove_file(&copy.path);
+            remove_kept(copy);
         }
     };
     let record = Records::prepare(
@@ -337,7 +345,7 @@ fn run(request: &Request) -> Result<Done, Failed> {
             // longer records it. (Its name is never the new one's.)
             if let Some(old) = &old_kept {
                 if new_kept.as_ref().map(|k| &k.path) != Some(&old.path) {
-                    let _ = std::fs::remove_file(&old.path);
+                    remove_kept(old);
                 }
             }
         }
