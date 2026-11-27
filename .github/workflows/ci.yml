@@ -70,7 +70,7 @@ jobs:
     # script suites), and three shards of the cargo tests (`--group tests`)
     # run on each processor. scripts/test-shard.sh names the shards, and its test
     # checks that every test runs in exactly one.
-    # shards linux: site native rest-1 rest-2
+    # shards linux: site native-1 native-2 rest-1 rest-2
     strategy:
       fail-fast: false
       matrix:
@@ -79,11 +79,13 @@ jobs:
           - {os: ubuntu-latest, group: lint, shard: ""}
           - {os: ubuntu-latest, group: scripts, shard: ""}
           - {os: ubuntu-latest, group: tests, shard: site}
-          - {os: ubuntu-latest, group: tests, shard: native}
+          - {os: ubuntu-latest, group: tests, shard: native-1}
+          - {os: ubuntu-latest, group: tests, shard: native-2}
           - {os: ubuntu-latest, group: tests, shard: rest-1}
           - {os: ubuntu-latest, group: tests, shard: rest-2}
           - {os: ubuntu-24.04-arm, group: tests, shard: site}
-          - {os: ubuntu-24.04-arm, group: tests, shard: native}
+          - {os: ubuntu-24.04-arm, group: tests, shard: native-1}
+          - {os: ubuntu-24.04-arm, group: tests, shard: native-2}
           - {os: ubuntu-24.04-arm, group: tests, shard: rest-1}
           - {os: ubuntu-24.04-arm, group: tests, shard: rest-2}
     name: test (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
