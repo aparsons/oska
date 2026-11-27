@@ -238,6 +238,7 @@ fn every_public_item_of_the_prelude_and_std_is_listed() {
         ("std.sql", "crates/oska-check/src/std/sql.osk"),
         ("std.proc", "crates/oska-check/src/std/proc.osk"),
         ("std.map", "crates/oska-check/src/std/map.osk"),
+        ("std.set", "crates/oska-check/src/std/set.osk"),
         ("std.deque", "crates/oska-check/src/std/deque.osk"),
     ];
     for (module, path) in sources {
@@ -285,6 +286,7 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
             "std.tls",
             "std.http",
             "std.map",
+            "std.set",
             "std.deque"
         ]
     );

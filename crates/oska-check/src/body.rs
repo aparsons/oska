@@ -337,9 +337,9 @@ struct Callable {
     /// qualified call of a method with one `impl` per type argument, as
     /// `Secret.rotl(k, 3)`, checks its receiver to choose the `impl`.
     checked_first: Option<Ty>,
-    /// A method of the prelude's `Map`: its `Eq` and `Hash` bounds on the key
-    /// type are `E0266`.
-    map_key: bool,
+    /// A method of the prelude's `Map` (`"Map"`) or `Set` (`"Set"`): its `Eq`
+    /// and `Hash` bounds on the key or item type are `E0266`.
+    map_key: Option<&'static str>,
 }
 
 /// What `base.name` names when `base` is not a value.
@@ -1565,7 +1565,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         &[],
                         expr.span,
                         &format!("`{}`", op.text()),
-                        false,
+                        None,
                     );
                     self.defer(expr.span, &ty, Deferred::Equality);
                     let what = if op == BinaryOp::Eq { "`==`" } else { "`!=`" };
@@ -1853,8 +1853,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// `trait_name<args>`, which `what` needs. On a generic parameter of
     /// this function, the fix adds the bound.
     ///
-    /// `map_key` marks the key type of a `Map` method: a concrete type that
-    /// fails there is `E0266`, which says what a key needs.
+    /// `map_key` names the collection (`Map` or `Set`) whose method this
+    /// is, for its key or item type: a concrete type that fails there is
+    /// `E0266`, which says what a key needs.
     fn require_trait(
         &mut self,
         ty: &Ty,
@@ -1862,7 +1863,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         args: &[Ty],
         span: Span,
         what: &str,
-        map_key: bool,
+        map_key: Option<&str>,
     ) {
         let bound = Bound {
             param: String::new(),
@@ -1877,9 +1878,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let bound = Ty::generic(trait_name, args.to_vec()).to_string();
         let message =
             format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
-        if map_key && !ty.has_param() {
+        if let (Some(collection), false) = (map_key, ty.has_param()) {
+            let role = if collection == "Set" { "item" } else { "key" };
             let message = format!(
-                "`{ty}` cannot be a `Map` key: it does not implement `{bound}`. A key type needs `Eq` and `Hash`: an integer, `Bool`, `String`, `Bytes`, `Path`, an `Option` or `List` of a key type, or a struct or enum with `impl Eq` whose fields are all keys"
+                "`{ty}` cannot be a `{collection}` {role}: it does not implement `{bound}`. A {role} type needs `Eq` and `Hash`: an integer, `Bool`, `String`, `Bytes`, `Path`, an `Option` or `List` of a {role} type, or a struct or enum with `impl Eq` whose fields are all {role}s"
             );
             self.error(codes::NOT_A_MAP_KEY, message, span);
             return;
