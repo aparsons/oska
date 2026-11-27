@@ -1,8 +1,8 @@
 # Concurrency audit of the `scripts` group
 
-Spec #810, ticket #812. For each step of `scripts/check.sh --group scripts`, the state it shares with the other steps and a verdict: `safe` to run beside another suite, or `serial`. This is an audit only: nothing runs concurrently yet. Ticket 3 of the spec reads this table.
+Spec #810, tickets #812 and #813. For each step of `scripts/check.sh --group scripts`, the state it shares with the other steps and a verdict: `safe` to run beside another suite, or `serial`. `scripts/check.sh --group scripts` runs the `safe` steps concurrently, up to the number of cores (`OSKA_CHECK_JOBS=N` sets the number; `1` runs one at a time). A `safe` step carries the `--concurrent` tag in `scripts/check.sh`; a `serial` step has none, runs in the group's one serial lane (never beside another serial step), and may run beside safe ones. Each suite's output is buffered in a private temp dir and prints as one block, in step order.
 
-`scripts/check-steps/test.sh` fails when a step of the group has no row here, when a row names no step of the group, or when a verdict is not `safe` or `serial` with a reason. A new suite adds its row.
+`scripts/check-steps/test.sh` fails when the `--concurrent` tags and the `safe` rows differ, when a step of the group has no row here, when a row names no step of the group, or when a verdict is not `safe` or `serial` with a reason. A new suite adds its row.
 
 ## How it was checked
 

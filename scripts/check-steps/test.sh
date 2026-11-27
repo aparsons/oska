@@ -857,6 +857,160 @@ else
   bad "ci.yml's test matrix runs the groups formal, lint, scripts and tests" "matrix groups: $have"
 fi
 
+# --- the scripts group runs its safe suites concurrently (spec #810, #813) ---
+# Fake suites stand in for two safe suites (the installer and kill guard
+# tests) and two serial ones (the eval task set and the release script tests).
+# `noisy TAG [EXIT]` prints six slow lines; `meet ME OTHER` says whether the
+# other suite ran at the same time (each waits up to a second for the other's
+# marker file).
+noisy() {
+  printf '%s\n' '#!/usr/bin/env bash' "for i in 1 2 3 4 5 6; do echo \"$1 line \$i\"; sleep 0.05; done" "exit ${2:-0}"
+}
+meet() {
+  printf '%s\n' '#!/usr/bin/env bash' "touch \"\$STUB_LOG.$1\"; n=0" \
+    "until [ -e \"\$STUB_LOG.$2\" ] || [ \$n -ge 20 ]; do sleep 0.05; n=\$((n + 1)); done" \
+    "if [ -e \"\$STUB_LOG.$2\" ]; then echo '$1 met $2'; else echo '$1 ran alone'; fi" \
+    "sleep 0.2; rm -f \"\$STUB_LOG.$1\""
+}
+set_stub() { printf '%s\n' "$2" >"$tree/$1"; }
+reset_stub() { printf '%s' "$stub" >"$tree/$1"; }
+install_stub=scripts/install/test.sh
+kill_stub=scripts/kill-guard/test.sh
+eval_stub=scripts/eval-tasks/run.sh
+release_stub=scripts/release/test.sh
+# normalized: a run's output without its timings, which differ between runs.
+normalized() { printf '%s\n' "$1" | sed -E '/^\([0-9]+s\)$/d; /^Slowest steps:$/d; /^ +[0-9]+s  /d'; }
+
+rm -f "$work"/log.*
+set_stub "$install_stub" "$(meet A B)"
+set_stub "$kill_stub" "$(meet B A)"
+OSKA_CHECK_JOBS=4 check --group scripts
+if [ "$status" -eq 0 ] && grep -q '^A met B$' <<<"$out" && grep -q '^B met A$' <<<"$out"; then
+  ok "the safe suites of the scripts group run at the same time"
+else
+  bad "the safe suites of the scripts group run at the same time" "exit $status: $out"
+fi
+rm -f "$work"/log.*
+OSKA_CHECK_JOBS=1 check --group scripts
+if [ "$status" -eq 0 ] && grep -q '^A ran alone$' <<<"$out" && grep -q '^B ran alone$' <<<"$out"; then
+  ok "OSKA_CHECK_JOBS=1 runs the suites one at a time"
+else
+  bad "OSKA_CHECK_JOBS=1 runs the suites one at a time" "exit $status: $out"
+fi
+
+set_stub "$install_stub" "$(noisy INSTALL)"
+set_stub "$kill_stub" "$(noisy KILL)"
+OSKA_CHECK_JOBS=4 check --group scripts
+conc_out=$out
+conc_status=$status
+conc_tags=$(grep -oE '^(INSTALL|KILL)' <<<"$out" | uniq | tr '\n' ' ')
+if [ "$status" -eq 0 ] && [ "$conc_tags" = "INSTALL KILL " ] && [ "$(grep -c '^INSTALL line' <<<"$out")" -eq 6 ] &&
+  [ "$(grep -c '^KILL line' <<<"$out")" -eq 6 ]; then
+  ok "each concurrent suite's output is one block, in step order"
+else
+  bad "each concurrent suite's output is one block, in step order" "exit $status, blocks: $conc_tags: $out"
+fi
+header_order=$(grep -nE '^(== installer tests|INSTALL line 1|== kill guard tests|KILL line 1)$' <<<"$out" | cut -d: -f2 | tr '\n' ',')
+if [ "$header_order" = "== installer tests,INSTALL line 1,== kill guard tests,KILL line 1," ]; then
+  ok "a concurrent suite's header comes right before its output"
+else
+  bad "a concurrent suite's header comes right before its output" "got: $header_order"
+fi
+OSKA_CHECK_JOBS=1 check --group scripts
+if [ "$status" -eq "$conc_status" ] && [ "$(normalized "$out")" = "$(normalized "$conc_out")" ]; then
+  ok "OSKA_CHECK_JOBS=1 prints what the default prints"
+else
+  bad "OSKA_CHECK_JOBS=1 prints what the default prints" "serial: $out; concurrent: $conc_out"
+fi
+if grep -q '^Slowest steps:$' <<<"$conc_out" && grep -qE '^ +[0-9]+s  [a-z]' <<<"$conc_out"; then
+  ok "a concurrent run still reports each suite's seconds and the slowest steps"
+else
+  bad "a concurrent run still reports each suite's seconds and the slowest steps" "$conc_out"
+fi
+
+# A failing suite fails the group; its output is whole, and a later suite's
+# output is not printed.
+set_stub "$install_stub" "$(noisy INSTALL 1)"
+for jobs in 4 1; do
+  OSKA_CHECK_JOBS=$jobs check --group scripts
+  if [ "$status" -ne 0 ] && [ "$(grep -c '^INSTALL line' <<<"$out")" -eq 6 ] &&
+    ! grep -q '^KILL line' <<<"$out" && ! grep -q 'Group scripts passed' <<<"$out" &&
+    grep -q 'installer tests' <<<"$out"; then
+    ok "a failing suite fails the group with its whole output (OSKA_CHECK_JOBS=$jobs)"
+  else
+    bad "a failing suite fails the group with its whole output (OSKA_CHECK_JOBS=$jobs)" "exit $status: $out"
+  fi
+done
+
+# The suites that need the repo's target never overlap each other.
+reset_stub "$install_stub"
+reset_stub "$kill_stub"
+rm -f "$work"/log.*
+serial_body='echo start >>"$STUB_LOG.ser"; sleep 0.3; echo end >>"$STUB_LOG.ser"'
+set_stub "$eval_stub" "#!/usr/bin/env bash
+$serial_body"
+set_stub "$release_stub" "#!/usr/bin/env bash
+$serial_body"
+OSKA_CHECK_JOBS=4 check --group scripts
+if [ "$status" -eq 0 ] && [ "$(tr '\n' ' ' <"$work/log.ser")" = "start end start end " ]; then
+  ok "the serial suites (eval task set, release script tests) never overlap"
+else
+  bad "the serial suites (eval task set, release script tests) never overlap" "exit $status: $(cat "$work/log.ser" 2>/dev/null): $out"
+fi
+reset_stub "$eval_stub"
+reset_stub "$release_stub"
+
+# Buffered output sits in a private (0700) directory under TMPDIR, removed on
+# exit, a failing run included.
+mkdir "$work/conc-tmp"
+set_stub "$install_stub" '#!/usr/bin/env bash
+for d in "$TMPDIR"/*/; do ls -ld "$d" | cut -c1-10 >>"$STUB_LOG.mode"; done'
+rm -f "$work"/log.*
+OSKA_CHECK_JOBS=4 TMPDIR=$work/conc-tmp check --group scripts
+modes=$(sort -u "$work/log.mode" 2>/dev/null | tr '\n' ' ')
+if [ "$status" -eq 0 ] && [ "$modes" = "drwx------ " ] && [ -z "$(ls -A "$work/conc-tmp")" ]; then
+  ok "the buffer directory is private and removed on exit"
+else
+  bad "the buffer directory is private and removed on exit" "exit $status, modes: $modes, left: $(ls -A "$work/conc-tmp"): $out"
+fi
+set_stub "$install_stub" '#!/usr/bin/env bash
+exit 1'
+OSKA_CHECK_JOBS=4 TMPDIR=$work/conc-tmp check --group scripts
+if [ "$status" -ne 0 ] && [ -z "$(ls -A "$work/conc-tmp")" ]; then
+  ok "the buffer directory is removed when a suite fails"
+else
+  bad "the buffer directory is removed when a suite fails" "exit $status, left: $(ls -A "$work/conc-tmp")"
+fi
+reset_stub "$install_stub"
+
+# A group run still writes no stamp, and a bad job count is a usage error.
+OSKA_CHECK_JOBS=4 check --group scripts
+if [ "$status" -eq 0 ] && ! grep -q '^\[stamp write' <<<"$out"; then
+  ok "a concurrent --group run writes no pass stamp"
+else
+  bad "a concurrent --group run writes no pass stamp" "exit $status: $out"
+fi
+for jobs in 0 many -2; do
+  OSKA_CHECK_JOBS=$jobs check --group scripts
+  if [ "$status" -eq 2 ] && [ -z "$log" ]; then
+    ok "OSKA_CHECK_JOBS=$jobs exits 2 and runs nothing"
+  else
+    bad "OSKA_CHECK_JOBS=$jobs exits 2 and runs nothing" "exit $status, ran: $log"
+  fi
+done
+
+# Drift guard: the steps tagged --concurrent in check.sh are the audit's safe
+# rows, so a verdict and the tag cannot disagree.
+tagged=$(sed -n 's/^if step "\([^"]*\)".* --concurrent.*; then$/\1/p' "$repo_root/scripts/check.sh" | sort)
+# shellcheck disable=SC2016 # awk's $4 is a field, not a shell variable
+safe_rows=$(awk -F'|' '/^\| `/ { v = $4; gsub(/ /, "", v); if (v == "safe") { n = $2; gsub(/^ *`|` *$/, "", n); print n } }' \
+  "$repo_root/docs/agents/check-concurrency.md" | sort)
+if [ -n "$tagged" ] && [ "$tagged" = "$safe_rows" ]; then
+  ok "the steps tagged --concurrent are the audit's safe rows"
+else
+  bad "the steps tagged --concurrent are the audit's safe rows" "tagged: $tagged; safe: $safe_rows"
+fi
+
 # The scripts group's concurrency audit (spec #810, ticket #812): every step of
 # the group has a row in docs/agents/check-concurrency.md with a verdict and a
 # reason, so a new suite cannot skip the audit, and no row names a step that is
