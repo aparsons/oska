@@ -133,6 +133,7 @@ pub fn program_type(ty: &Ty) -> Option<Type> {
     Some(match ty {
         Ty::Named(name, args, _) => match (name.as_str(), IntType::named(name)) {
             (_, Some(int)) => Type::Int(int),
+            (ty::FLOAT, _) => Type::Float,
             (ty::BOOL, _) => Type::Bool,
             (ty::STRING, _) => Type::String,
             _ => Type::Named {
@@ -655,6 +656,7 @@ impl Lowering<'_> {
             ast::ExprKind::Unit => ExprKind::Unit,
             ast::ExprKind::Bool(b) => ExprKind::Bool(*b),
             ast::ExprKind::Int(text) => self.int_literal(text, false, expr.span),
+            ast::ExprKind::Float(text) => self.float_literal(text, false, expr.span),
             ast::ExprKind::Str(parts) => self.string(parts),
             ast::ExprKind::Name(ident) => self.local(ident),
             ast::ExprKind::Field { base, name } => self.field(expr.span, base, name),
@@ -664,6 +666,12 @@ impl Lowering<'_> {
                 (UnaryOp::Not, _) => ExprKind::Not(self.boxed(operand)),
                 // A negative literal is one value, so `-128` fits `I8`.
                 (UnaryOp::Neg, ast::ExprKind::Int(text)) => self.int_literal(text, true, expr.span),
+                (UnaryOp::Neg, ast::ExprKind::Float(text)) => {
+                    self.float_literal(text, true, expr.span)
+                }
+                (UnaryOp::Neg, _) if self.type_at(operand.span) == Type::Float => {
+                    ExprKind::FloatNeg(self.boxed(operand))
+                }
                 (UnaryOp::Neg, _) => match self.resolutions.get(&expr.span) {
                     Some(Resolution::Int(int)) => ExprKind::Neg {
                         operand: self.boxed(operand),
@@ -877,6 +885,16 @@ impl Lowering<'_> {
         }
     }
 
+    /// A float literal as written, negated when `negative`: its value
+    /// rounded to nearest, ties to even. The checker has already checked
+    /// that it is finite.
+    fn float_literal(&self, text: &str, negative: bool, span: Span) -> ExprKind {
+        match crate::body::parse_float_literal(text, negative) {
+            Some(value) => ExprKind::Float(value.to_bits()),
+            None => self.unsupported(span, "a float literal"),
+        }
+    }
+
     /// The node at `span` the checked program cannot express: named as
     /// the checker recorded it, or else as `what`.
     fn unsupported(&self, span: Span, what: &str) -> ExprKind {
@@ -911,6 +929,25 @@ impl Lowering<'_> {
 
     fn binary(&self, span: Span, op: BinaryOp, lhs: &ast::Expr, rhs: &ast::Expr) -> ExprKind {
         let resolved = self.resolutions.get(&span);
+        if self.type_at(lhs.span) == Type::Float {
+            return match op {
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge => ExprKind::FloatBinary {
+                    op,
+                    lhs: self.boxed(lhs),
+                    rhs: self.boxed(rhs),
+                },
+                _ => self.unsupported(span, &format!("`{}` on this type", op.text())),
+            };
+        }
         if let (BinaryOp::Eq | BinaryOp::Ne, Some(Resolution::EqualityVia(eq))) = (op, resolved) {
             let call = ExprKind::Call {
                 callee: eq.clone(),

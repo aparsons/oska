@@ -273,6 +273,7 @@ fn inert(e: &Expr) -> bool {
     use oska_syntax::ast::UnaryOp::Not;
     match &e.kind {
         ExprKind::Int(_)
+        | ExprKind::Float(_)
         | ExprKind::Str(_)
         | ExprKind::SinkStr { .. }
         | ExprKind::Bool(_)
@@ -343,6 +344,7 @@ fn expr(e: &Expr, hole: Span, reorders: bool) -> Walk {
             walked => walked,
         },
         ExprKind::Int(_)
+        | ExprKind::Float(_)
         | ExprKind::SinkStr { .. }
         | ExprKind::Bool(_)
         | ExprKind::Unit
@@ -377,6 +379,7 @@ fn leaves(e: &Expr) -> bool {
                     .any(|a| leaves(&a.body) || a.guard.as_ref().is_some_and(leaves))
         }
         ExprKind::Int(_)
+        | ExprKind::Float(_)
         | ExprKind::Str(_)
         | ExprKind::SinkStr { .. }
         | ExprKind::Bool(_)

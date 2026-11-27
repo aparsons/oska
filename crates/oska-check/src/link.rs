@@ -1333,7 +1333,11 @@ impl Rewriter<'_> {
     fn expr(&mut self, expr: &mut Expr) {
         let span = expr.span;
         match &mut expr.kind {
-            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Unit | ExprKind::SelfValue => {}
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Unit
+            | ExprKind::SelfValue => {}
             ExprKind::Name(ident) => {
                 if !self.is_local(&ident.name) {
                     if let Some(key) = self.plain(&ident.name, ident.span, Expect::Value) {

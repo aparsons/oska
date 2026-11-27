@@ -1,0 +1,2602 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.math`: functions on `Float`, written in Oska so that they give the
+// same bits on every platform and on both backends (ADR 0027). A module
+// sees it only after `use std.math`. Every function here is a pure
+// function.
+//
+// `math.fma(a, b, c)` is the fused multiply-add: `a * b + c` rounded once,
+// to nearest with ties to even, where `a * b + c` as two operators rounds
+// twice, and the compiler never fuses them for you. A NaN result is the
+// canonical NaN, as for every `Float` operation.
+//
+// The integer helpers work on `Int` and never wrap. Each states what it
+// requires as a `requires` clause, so a call that breaks it stops with
+// `P0006`, and an overflow stops with `P0001`:
+//
+// - `math.gcd(a, b)`: the greatest common divisor of `a` and `b`, both at
+//   least 0. `gcd(0, 0)` is 0.
+// - `math.isqrt(n)`: the integer square root of `n`, at least 0: the
+//   largest `r` with `r * r <= n`. It uses the digit-by-digit method, 32
+//   loop iterations at most in all (the first loop finds the top bit, the
+//   second takes one bit per step), and no `Float`.
+// - `math.pow(base, exp)`: `base` to the power `exp`, `exp` at least 0,
+//   by repeated squaring. `pow(0, 0)` is 1. A result that does not fit an
+//   `Int` panics (`P0001`); the squarings stop as soon as the answer is
+//   known, so an overflow in a square no result needs is not reported.
+// - `math.floor_div(a, b)`: `a / b` rounded toward negative infinity, `b`
+//   not 0. `Int` `/` rounds toward zero.
+// - `math.rem_euclid(a, b)`: the remainder of `a` by `b`, never negative:
+//   `a - b * q` for the `q` that puts it between 0 and `abs(b) - 1`. `b`
+//   not 0. `Int` `%` takes the sign of `a`.
+//
+// Each loop counts steps (ADR 0021), as every loop in Oska does.
+//
+// The `Float` functions (fast tier of ADR 0027), each one fixed algorithm,
+// with its error bound against the exact result:
+//
+// - `math.abs(x)`, `math.floor(x)`, `math.ceil(x)` and
+//   `math.round_half_even(x)`: exact. Bit and exact-arithmetic algorithms.
+// - `math.hypot(x, y)`: fdlibm `e_hypot.c`, less than 1 ulp.
+// - `math.exp(x)`: fdlibm `e_exp.c`, less than 1 ulp.
+// - `math.ln(x)`: fdlibm `e_log.c`, less than 1 ulp.
+// - `math.sin(x)` and `math.cos(x)`: fdlibm `s_sin.c`, `s_cos.c` with the
+//   Cody-Waite reduction of `e_rem_pio2.c`, less than 1 ulp, for `|x|` up
+//   to 1647098 (a larger finite `x` is a `requires` failure, `P0006`).
+// - `math.atan2(y, x)`: fdlibm `e_atan2.c` and `s_atan.c`, with the
+//   rounding error of `y / x` carried into the result, less than 1 ulp.
+// - `math.powf(x, y)`: `exp(y * ln(x))` carried in about 106 bits, less
+//   than 1 ulp. Named `powf` because `math.pow` is the `Int` function.
+//
+// The measured worst error of each over its reference vectors is in
+// `crates/oska-run/tests/std_math_float.rs`, which stores the bound.
+//
+// The exact tier (ADR 0027), each function correctly rounded: the nearest
+// double to the true value for every input, a tie going to the even one, with
+// the special cases of the fast tier. Each is a fast path in double-double
+// arithmetic (about 106 bits) and a slow path with more precision for the
+// rare input whose result is too close to the middle of two doubles for the
+// fast path to decide (see "The exact tier" below, which states both paths and
+// the error proof of each):
+//
+// - `math.hypot_exact(x, y)`, `math.exp_exact(x)`, `math.ln_exact(x)`,
+//   `math.atan2_exact(y, x)` and `math.powf_exact(x, y)`.
+// - `math.sin_exact(x)` and `math.cos_exact(x)`, for `|x|` up to 1647098 as
+//   `math.sin` and `math.cos` (a larger finite `x` stops with `P0006`).
+//
+// Speed, measured natively (x86_64 Linux, one million calls in a loop, the
+// loop's own cost taken off): the exact tier takes about 10 times as long as
+// the fast tier for `exp`, `sin`, `cos` and `hypot` (480, 1280, 1150 and 250
+// ns a call against 46, 98, 114 and 19), 25 times for `ln` (1270 ns against
+// 51), 2.7 times for `atan2` (1290 ns against 485) and 1.3 times for `powf`
+// (2470 ns against 1940): the fast `atan2` and `powf` call `fma`, which is
+// software here, and the exact tier does not. A call counts about 140 to
+// 300 steps (ADR 0021) on the fast path, and 2700 to 45000 on the slow path.
+// The slow path is taken by about one input in 100000.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends, so `fma` gives one answer
+// whether or not the processor has a fused instruction. The comment block
+// directly above a `pub` item is its description in the API reference.
+//
+// `fma` works on the bits. There is no 128-bit integer, so a `Wide` is a
+// pair of `U64`s, high and low. The exact product of two 53-bit
+// significands has 106 bits. The exact sum is rounded once, by one
+// routine, `round`, which also makes a subnormal result and an overflow.
+// The smaller addend, shifted right to the position the larger one's top
+// bit sets, keeps a lost bit as a sticky bit, which is enough because the
+// register holds 125 bits below the larger addend's top bit and the final
+// precision is 53.
+
+// The bits of a `Float` that hold its fraction, its hidden bit, its sign
+// and its infinity (and NaN) pattern.
+const FRACTION: U64 = 4503599627370495
+const HIDDEN: U64 = 4503599627370496
+const SIGN: U64 = 9223372036854775808
+const INFINITY: U64 = 9218868437227405312
+const QUIET_NAN: U64 = 9221120237041090560
+// 2^53, one past the largest 53-bit significand.
+const CARRIED: U64 = 9007199254740992
+
+// An unsigned 128-bit integer.
+struct Wide { hi: U64, lo: U64 }
+
+// `a * b + c` with one rounding, to nearest, ties to even. A NaN in any
+// argument, or an infinity times a zero, gives the canonical NaN, and so
+// does an infinity added to its opposite. A product that overflows gives
+// an infinity, and one that underflows a subnormal or a zero, as if
+// computed exactly and then rounded.
+pub fn fma(a: Float, b: Float, c: Float) -> Float {
+    Float.from_bits(fma_bits(a.to_bits(), b.to_bits(), c.to_bits()))
+}
+
+fn exponent_field(x: U64) -> Int {
+    ((x >> 52) & 2047).to_int()
+}
+
+// The significand of a finite `x` as an integer: its fraction, and the
+// hidden bit unless it is subnormal.
+fn significand(x: U64) -> U64 {
+    let fraction = x & FRACTION
+    if exponent_field(x) == 0 {
+        fraction
+    } else {
+        fraction | HIDDEN
+    }
+}
+
+// The exponent of the significand's last bit, so that a finite `x` is its
+// significand times 2 to this power.
+fn scale(x: U64) -> Int {
+    let field = exponent_field(x)
+    if field == 0 {
+        -1074
+    } else {
+        field - 1075
+    }
+}
+
+fn fma_bits(a: U64, b: U64, c: U64) -> U64 {
+    let a_field = exponent_field(a)
+    let b_field = exponent_field(b)
+    let c_field = exponent_field(c)
+    let a_special = a_field == 2047
+    let b_special = b_field == 2047
+    let c_special = c_field == 2047
+    let a_zero = a_field == 0 && (a & FRACTION) == 0
+    let b_zero = b_field == 0 && (b & FRACTION) == 0
+    let c_zero = c_field == 0 && (c & FRACTION) == 0
+    if (a_special && (a & FRACTION) != 0) || (b_special && (b & FRACTION) != 0) {
+        return QUIET_NAN
+    }
+    if c_special && (c & FRACTION) != 0 {
+        return QUIET_NAN
+    }
+    let product_sign = (a ^ b) >> 63
+    let c_sign = c >> 63
+    if a_special || b_special {
+        if a_zero || b_zero {
+            return QUIET_NAN
+        }
+        if c_special && c_sign != product_sign {
+            return QUIET_NAN
+        }
+        return (product_sign << 63) | INFINITY
+    }
+    if c_special {
+        return c
+    }
+    if a_zero || b_zero {
+        if c_zero {
+            // Two zeros add to a zero of their common sign, or to +0.
+            if product_sign == c_sign {
+                return c
+            }
+            return 0
+        }
+        return c
+    }
+    let product = multiply(significand(a), significand(b))
+    let product_scale = scale(a) + scale(b)
+    if c_zero {
+        return round(product_sign, product, product_scale)
+    }
+    let addend = Wide(hi: 0, lo: significand(c))
+    let addend_scale = scale(c)
+    // The exponent of each addend's top bit; `x` has the larger.
+    let product_top = product_scale + bit_length(product) - 1
+    let addend_top = addend_scale + bit_length(addend) - 1
+    let product_larger = product_top >= addend_top
+    let x = if product_larger { product } else { addend }
+    let y = if product_larger { addend } else { product }
+    let x_sign = if product_larger { product_sign } else { c_sign }
+    let y_sign = if product_larger { c_sign } else { product_sign }
+    let x_top = if product_larger { product_top } else { addend_top }
+    let y_top = if product_larger { addend_top } else { product_top }
+    // `x` with its top bit at bit 125, and `y` where its top sits below
+    // that, the bits it loses on the right kept as one sticky bit.
+    let gap = x_top - y_top
+    let big = shift_left(x, 125 - (bit_length(x) - 1))
+    let from_top = (125 - (bit_length(y) - 1)) - gap
+    let small = if from_top >= 0 {
+        shift_left(y, from_top)
+    } else {
+        shift_right_sticky(y, 0 - from_top)
+    }
+    var sum = Wide(hi: 0, lo: 0)
+    var sign = x_sign
+    if x_sign == y_sign {
+        sum = add(big, small)
+    } else if at_least(big, small) {
+        sum = subtract(big, small)
+    } else {
+        sum = subtract(small, big)
+        sign = y_sign
+    }
+    if sum.hi == 0 && sum.lo == 0 {
+        // Equal and opposite: +0, as round-to-nearest says.
+        return 0
+    }
+    // Bit `k` of `sum` is worth 2 to the power `x_top - 125 + k`.
+    round(sign, sum, x_top - 125)
+}
+
+// The `Float` bits of the exact value `m` times 2 to the power `e`, with
+// sign bit `sign` (0 or 1), rounded to nearest, ties to even: a normal
+// number, a subnormal or zero, or an infinity. `m` is not zero.
+fn round(sign: U64, m: Wide, e: Int) -> U64 {
+    let top = e + bit_length(m) - 1
+    // The exponent of the last bit that is kept: 52 below the top, or the
+    // subnormal range's -1074.
+    let last = if top < -1022 { -1074 } else { top - 52 }
+    let drop = last - e
+    var q: U64 = 0
+    if drop <= 0 {
+        q = shift_left(m, 0 - drop).lo
+    } else if drop < 128 {
+        let kept = shift_right(m, drop).lo
+        // The bits dropped, moved to the top of a `Wide`: half is 2^127.
+        let rest = shift_left(m, 128 - drop)
+        let more = rest.hi > SIGN || (rest.hi == SIGN && rest.lo != 0)
+        let tie = rest.hi == SIGN && rest.lo == 0
+        if more || (tie && (kept & 1) == 1) {
+            q = kept + 1
+        } else {
+            q = kept
+        }
+    }
+    var last_bit = last
+    if q == CARRIED {
+        q = HIDDEN
+        last_bit = last_bit + 1
+    }
+    let sign_bit = sign << 63
+    if q < HIDDEN {
+        // Subnormal or zero: the significand is the whole fraction.
+        return sign_bit | q
+    }
+    let field = last_bit + 1075
+    if field >= 2047 {
+        return sign_bit | INFINITY
+    }
+    sign_bit | (field.to_u64() << 52) | (q - HIDDEN)
+}
+
+// The exact product of two significands, each below 2^53.
+fn multiply(a: U64, b: U64) -> Wide {
+    let low: U64 = 134217727
+    let a_low = a & low
+    let a_high = a >> 27
+    let b_low = b & low
+    let b_high = b >> 27
+    let lows = a_low * b_low
+    let middle = a_low * b_high + a_high * b_low
+    let highs = a_high * b_high
+    let sum = add(Wide(hi: 0, lo: lows), shift_left(Wide(hi: 0, lo: middle), 27))
+    add(sum, shift_left(Wide(hi: 0, lo: highs), 54))
+}
+
+// The number of bits in `w`: 0 for zero.
+fn bit_length(w: Wide) -> Int {
+    if w.hi != 0 {
+        64 + word_length(w.hi)
+    } else {
+        word_length(w.lo)
+    }
+}
+
+fn word_length(x: U64) -> Int {
+    var length = 0
+    var rest = x
+    var step = 32
+    while step > 0 {
+        let amount = step.to_u64()
+        if (rest >> amount) != 0 {
+            rest = rest >> amount
+            length = length + step
+        }
+        step = step / 2
+    }
+    if rest != 0 {
+        length + 1
+    } else {
+        length
+    }
+}
+
+fn add(a: Wide, b: Wide) -> Wide {
+    let lo = a.lo.wrapping_add(b.lo)
+    var carry: U64 = 0
+    if lo < a.lo {
+        carry = 1
+    }
+    Wide(hi: a.hi.wrapping_add(b.hi).wrapping_add(carry), lo: lo)
+}
+
+// `a - b`, for `a` at least `b`.
+fn subtract(a: Wide, b: Wide) -> Wide {
+    var borrow: U64 = 0
+    if a.lo < b.lo {
+        borrow = 1
+    }
+    Wide(hi: a.hi.wrapping_sub(b.hi).wrapping_sub(borrow), lo: a.lo.wrapping_sub(b.lo))
+}
+
+fn at_least(a: Wide, b: Wide) -> Bool {
+    a.hi > b.hi || (a.hi == b.hi && a.lo >= b.lo)
+}
+
+// `w` shifted left by `n` bits, from 0 to 127, the bits shifted out lost.
+fn shift_left(w: Wide, n: Int) -> Wide {
+    if n == 0 {
+        return w
+    }
+    if n >= 64 {
+        return Wide(hi: w.lo << (n - 64).to_u64(), lo: 0)
+    }
+    let amount = n.to_u64()
+    let back = (64 - n).to_u64()
+    Wide(hi: (w.hi << amount) | (w.lo >> back), lo: w.lo << amount)
+}
+
+// `w` shifted right by `n` bits, from 0 to 127.
+fn shift_right(w: Wide, n: Int) -> Wide {
+    if n == 0 {
+        return w
+    }
+    if n >= 64 {
+        return Wide(hi: 0, lo: w.hi >> (n - 64).to_u64())
+    }
+    let amount = n.to_u64()
+    let back = (64 - n).to_u64()
+    Wide(hi: w.hi >> amount, lo: (w.lo >> amount) | (w.hi << back))
+}
+
+// `w`, which is not zero, shifted right by `n` bits, from 1 up, with the
+// lowest bit set when any bit shifted out was set.
+fn shift_right_sticky(w: Wide, n: Int) -> Wide {
+    if n >= 128 {
+        return Wide(hi: 0, lo: 1)
+    }
+    let lost = shift_left(w, 128 - n)
+    let shifted = shift_right(w, n)
+    if lost.hi != 0 || lost.lo != 0 {
+        return Wide(hi: shifted.hi, lo: shifted.lo | 1)
+    }
+    shifted
+}
+
+// The greatest common divisor of `a` and `b`, by Euclid's algorithm:
+// fewer than 100 iterations for an `Int`. `gcd(0, 0)` is 0.
+pub fn gcd(a: Int, b: Int) -> Int
+    requires a >= 0
+    requires b >= 0
+{
+    var x = a
+    var y = b
+    while y != 0 {
+        let r = x % y
+        x = y
+        y = r
+    }
+    x
+}
+
+// The largest `r` with `r * r <= n`, exactly, for `n` at least 0.
+pub fn isqrt(n: Int) -> Int
+    requires n >= 0
+{
+    var rest = n
+    var root = 0
+    // The largest power of 4 that fits an `Int`.
+    var bit = 4611686018427387904
+    while bit > n {
+        bit = bit / 4
+    }
+    while bit != 0 {
+        if rest >= root + bit {
+            rest = rest - (root + bit)
+            root = root / 2 + bit
+        } else {
+            root = root / 2
+        }
+        bit = bit / 4
+    }
+    root
+}
+
+// `base` to the power `exp`, for `exp` at least 0, by repeated squaring.
+// Every product is checked, so a result that does not fit an `Int` panics
+// (`P0001`) and never wraps. `pow(0, 0)` is 1.
+pub fn pow(base: Int, exp: Int) -> Int
+    requires exp >= 0
+{
+    var result = 1
+    var square = base
+    var left = exp
+    while left > 0 {
+        if left % 2 == 1 {
+            result = result * square
+        }
+        left = left / 2
+        if left > 0 {
+            square = square * square
+        }
+    }
+    result
+}
+
+// `a / b` rounded toward negative infinity, for `b` not 0. The one
+// quotient that does not fit, `Int.MIN / -1`, panics (`P0001`).
+pub fn floor_div(a: Int, b: Int) -> Int
+    requires b != 0
+{
+    let q = a / b
+    if a % b != 0 && ((a < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+// The remainder of `a` by `b` that is never negative, from 0 to
+// `abs(b) - 1`, for `b` not 0: `a - b * floor_div(a, b)` for a positive
+// `b`. `a % b` with a negative `a` is negative; this adds `abs(b)` then.
+pub fn rem_euclid(a: Int, b: Int) -> Int
+    requires b != 0
+{
+    let r = a % b
+    if r >= 0 {
+        r
+    } else if b > 0 {
+        r + b
+    } else {
+        r - b
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The `Float` functions (spec #590, ticket #596).
+//
+// Every function below is one fixed algorithm, written with `Float`
+// operations that are exact IEEE 754 (`+ - * /` and `sqrt`, ADR 0027) and
+// with the bits of its arguments, so it gives the same bits on every
+// platform and on both backends. None calls the C library. The constants
+// are fdlibm's: each is a decimal that parses to the double fdlibm lists.
+//
+// This is the fast tier of ADR 0027: within 1 ulp of the exact result,
+// except where a function says it is exact. The plain name is the fast
+// tier; the correctly rounded tier takes the suffix `_exact` and follows
+// these functions. An ulp is the gap between the two doubles that bracket
+// the exact result. The bounds are those of the algorithms, and the
+// reference check in `crates/oska-run/tests/std_math_float.rs` measures
+// every function against a 60-digit reference and stores the bound it
+// holds to.
+//
+// A NaN argument gives the canonical NaN, except where IEEE 754 defines
+// the result without it (`hypot(inf, NaN)` is `inf`, `powf(NaN, 0.0)` is
+// `1.0`). The preconditions are `requires` clauses: a call that breaks
+// one stops with `P0006`.
+// ---------------------------------------------------------------------------
+
+const ABS_MASK: U64 = 9223372036854775807
+const HIGH_MASK: U64 = 18446744069414584320
+const LOW_MASK: U64 = 4294967295
+// 2^52: every `Float` at or above it is an integer.
+const TWO52: Float = 4503599627370496.0
+const LN2_HI: Float = 6.93147180369123816490e-01
+const LN2_LO: Float = 1.90821492927058770002e-10
+const INV_LN2: Float = 1.44269504088896338700e+00
+const PI: Float = 3.1415926535897931160e+00
+const PI_LO: Float = 1.2246467991473531772e-16
+const PI_2: Float = 1.57079632679489655800e+00
+// The least |x| for which `sin` and `cos` no longer reduce: 2^20 * pi / 2
+// rounded down.
+const TRIG_LIMIT: Float = 1647098.0
+
+fn infinity() -> Float {
+    Float.from_bits(INFINITY)
+}
+
+fn nan() -> Float {
+    Float.from_bits(QUIET_NAN)
+}
+
+// The high 32 bits of `x`, sign included, as an `Int` from 0 to 2^32 - 1.
+fn high_word(x: Float) -> Int {
+    (x.to_bits() >> 32).to_int()
+}
+
+// The high word of `x` with the sign bit cleared.
+fn abs_high(x: Float) -> Int {
+    ((x.to_bits() >> 32) & 2147483647).to_int()
+}
+
+fn low_word(x: Float) -> Int {
+    (x.to_bits() & LOW_MASK).to_int()
+}
+
+// `x` with its high 32 bits replaced by `hi`.
+fn with_high(x: Float, hi: Int) -> Float {
+    Float.from_bits((hi.to_u64() << 32) | (x.to_bits() & LOW_MASK))
+}
+
+// `x` with its low 32 bits cleared: its top 21 significant bits.
+fn high_part(x: Float) -> Float {
+    Float.from_bits(x.to_bits() & HIGH_MASK)
+}
+
+// 2 to the power `k`, for `k` from -1022 to 1023.
+fn exp2_int(k: Int) -> Float {
+    Float.from_bits((k + 1023).to_u64() << 52)
+}
+
+// `y` times 2 to the power `k`, for `k` from -1100 to 1100. A result in
+// the subnormal range is rounded once, by the last multiplication.
+fn scale_by_pow2(y: Float, k: Int) -> Float {
+    if k > 1023 {
+        y * exp2_int(k - 1023) * exp2_int(1023)
+    } else if k >= -1021 {
+        y * exp2_int(k)
+    } else {
+        y * exp2_int(k + 1000) * exp2_int(-1000)
+    }
+}
+
+// `|x|`: the sign bit cleared. `abs(-0.0)` is `0.0`, `abs(-inf)` is `inf`
+// and a NaN stays the canonical NaN. Exact.
+pub fn abs(x: Float) -> Float {
+    Float.from_bits(x.to_bits() & ABS_MASK)
+}
+
+// The nearest integer to `a`, for `a` from 0 to 2^52 exclusive, ties to
+// even: adding 2^52 pushes every fraction bit out of the significand, and
+// the addition rounds to nearest even.
+fn nearest(a: Float) -> Float {
+    (a + TWO52) - TWO52
+}
+
+// The largest integer not above `x`, as a `Float`. `floor(-0.0)` is
+// `-0.0`, a negative `x` above -1 gives `-1.0`, and NaN, an infinity and
+// every `x` at or above 2^52 in size come back unchanged. Exact.
+pub fn floor(x: Float) -> Float {
+    if x != x || x == 0.0 || abs(x) >= TWO52 {
+        return x
+    }
+    let a = abs(x)
+    let r = nearest(a)
+    if x > 0.0 {
+        if r > a { r - 1.0 } else { r }
+    } else {
+        if r < a { -(r + 1.0) } else { -r }
+    }
+}
+
+// The smallest integer not below `x`, as a `Float`. `ceil(-0.5)` is
+// `-0.0`; the special values are as for `floor`. Exact.
+pub fn ceil(x: Float) -> Float {
+    if x != x || x == 0.0 || abs(x) >= TWO52 {
+        return x
+    }
+    let a = abs(x)
+    let r = nearest(a)
+    if x > 0.0 {
+        if r < a { r + 1.0 } else { r }
+    } else {
+        if r > a { -(r - 1.0) } else { -r }
+    }
+}
+
+// The integer nearest `x`, a tie going to the even one: `round_half_even(2.5)`
+// is `2.0` and `round_half_even(3.5)` is `4.0`. It keeps the sign of `x`,
+// so `-0.4` gives `-0.0`. The special values are as for `floor`. Exact.
+pub fn round_half_even(x: Float) -> Float {
+    if x != x || x == 0.0 || abs(x) >= TWO52 {
+        return x
+    }
+    let r = nearest(abs(x))
+    if x < 0.0 { -r } else { r }
+}
+
+// `e` to the power `x`. Algorithm: fdlibm `e_exp.c`. `x` is reduced to
+// `r` with `|r| <= ln(2) / 2` and `x = k ln(2) + r`, where `k ln(2)` is
+// subtracted in two parts so that the first product is exact, then
+// `exp(r)` is `1 - ((lo - r c / (2 - c)) - hi)` with `c` a degree-10
+// polynomial in `r * r`, and the result is scaled by 2 to the power `k`.
+// Error bound: less than 1 ulp (fdlibm states 1 ulp for `exp`); a result in
+// the subnormal range is rounded twice and holds the same bound in ulps of
+// the subnormal. `exp(NaN)` is NaN, `exp(inf)` is `inf`, `exp(-inf)` is
+// `0.0`, an `x` above 709.782712893384 gives `inf` and one below
+// -745.1332191019411 gives `0.0`.
+pub fn exp(x: Float) -> Float {
+    if x != x {
+        return x
+    }
+    if x > 709.78271289338397 {
+        return infinity()
+    }
+    if x < -745.13321910194111 {
+        return 0.0
+    }
+    exp_parts(x, 0.0)
+}
+
+// `exp(x + tail)` for `x` in the range above and `tail` far below the last
+// bit of `x`: the tail joins the reduced argument as a correction, which is
+// what `powf` needs to hand over a double-double exponent.
+fn exp_parts(x: Float, tail: Float) -> Float {
+    var k = 0
+    var hi = x
+    var lo = 0.0
+    let ax = abs(x)
+    if ax > 0.34657359027997264 {
+        if ax < 1.0397207708399179 {
+            if x > 0.0 {
+                k = 1
+                hi = x - LN2_HI
+                lo = LN2_LO
+            } else {
+                k = -1
+                hi = x + LN2_HI
+                lo = -LN2_LO
+            }
+        } else {
+            let half = if x < 0.0 { -0.5 } else { 0.5 }
+            k = (x * INV_LN2 + half).to_int()
+            let kf = k.to_float()
+            hi = x - kf * LN2_HI
+            lo = kf * LN2_LO
+        }
+    } else if ax < 3.7252902984619141e-09 && tail == 0.0 {
+        // |x| < 2^-28: exp(x) rounds to 1 + x.
+        return 1.0 + x
+    }
+    let low = lo - tail
+    let r = hi - low
+    let t = r * r
+    let p1 = 1.66666666666666019037e-01
+    let p2 = -2.77777777770155933842e-03
+    let p3 = 6.61375632143793436117e-05
+    let p4 = -1.65339022054652515390e-06
+    let p5 = 4.13813679705723846039e-08
+    let c = r - t * (p1 + t * (p2 + t * (p3 + t * (p4 + t * p5))))
+    let y = 1.0 - ((low - (r * c) / (2.0 - c)) - hi)
+    scale_by_pow2(y, k)
+}
+
+// The natural logarithm of `x`. Algorithm: fdlibm `e_log.c`. `x` is
+// written `2^k (1 + f)` with `1 + f` between sqrt(2) / 2 and sqrt(2), and
+// `ln(1 + f) = f - s (f - R)` with `s = f / (2 + f)` and `R` a degree-14
+// polynomial in `s * s`; `k ln(2)` is added in two parts. Error bound:
+// less than 1 ulp (fdlibm states 1 ulp for `ln`). `ln(1.0)` is `+0.0`,
+// `ln(0.0)` and `ln(-0.0)` are `-inf`, `ln(inf)` is `inf`, and a negative
+// `x` and NaN give NaN.
+pub fn ln(x: Float) -> Float {
+    if x != x {
+        return x
+    }
+    if x < 0.0 {
+        return nan()
+    }
+    if x == 0.0 {
+        return -infinity()
+    }
+    if x == infinity() {
+        return x
+    }
+    var v = x
+    var k = 0
+    if high_word(v) < 1048576 {
+        // Subnormal: scale by 2^54.
+        k = -54
+        v = v * 18014398509481984.0
+    }
+    let hx0 = high_word(v)
+    k = k + hx0 / 1048576 - 1023
+    let hx1 = hx0 % 1048576
+    // 1048576 when hx1 + 0x95f64 reaches bit 20: 1 + f is then above sqrt(2),
+    // and the exponent is lowered by one to bring it below.
+    let i = ((hx1 + 614244) / 1048576) * 1048576
+    v = with_high(v, hx1 + 1072693248 - i)
+    k = k + i / 1048576
+    let f = v - 1.0
+    let dk = k.to_float()
+    if abs(f) < 9.5367431640625e-07 {
+        // |f| < 2^-20.
+        if f == 0.0 {
+            return dk * LN2_HI + dk * LN2_LO
+        }
+        let rr = f * f * (0.5 - 0.33333333333333333 * f)
+        if k == 0 {
+            return f - rr
+        }
+        return dk * LN2_HI - ((rr - dk * LN2_LO) - f)
+    }
+    let s = f / (2.0 + f)
+    let z = s * s
+    let hx = hx1
+    let w = z * z
+    let t1 = w * (3.999999999940941908e-01 + w * (2.222219843214978396e-01 + w * 1.531383769920937332e-01))
+    let t2 = z * (6.666666666666735130e-01 + w * (2.857142874366239149e-01 + w * (1.818357216161805012e-01 + w * 1.479819860511658591e-01)))
+    let rr = t2 + t1
+    if hx >= 397434 && hx <= 440401 {
+        let hfsq = 0.5 * f * f
+        if k == 0 {
+            f - (hfsq - s * (hfsq + rr))
+        } else {
+            dk * LN2_HI - ((hfsq - (s * (hfsq + rr) + dk * LN2_LO)) - f)
+        }
+    } else {
+        if k == 0 {
+            f - s * (f - rr)
+        } else {
+            dk * LN2_HI - ((s * (f - rr) - dk * LN2_LO) - f)
+        }
+    }
+}
+
+// The sine and cosine of `r + t`, for `|r + t| <= pi / 4`, where `t` is
+// the tail of the reduced argument (fdlibm `k_sin.c` and `k_cos.c`).
+fn kernel_sin(x: Float, y: Float, tail: Bool) -> Float {
+    let z = x * x
+    let v = z * x
+    let r = 8.33333333332248946124e-03 + z * (-1.98412698298579493134e-04 + z * (2.75573137070700676789e-06 + z * (-2.50507602534068634195e-08 + z * 1.58969099521155010221e-10)))
+    if tail {
+        x - ((z * (0.5 * y - v * r) - y) - v * -1.66666666666666324348e-01)
+    } else {
+        x + v * (-1.66666666666666324348e-01 + z * r)
+    }
+}
+
+fn kernel_cos(x: Float, y: Float) -> Float {
+    let z = x * x
+    let r = z * (4.16666666666666019037e-02 + z * (-1.38888888888741095749e-03 + z * (2.48015872894767294178e-05 + z * (-2.75573143513906633035e-07 + z * (2.08757232129817482790e-09 + z * -1.13596475577881948265e-11)))))
+    let ix = abs_high(x)
+    if ix < 1070810931 {
+        // |x| < 0.3
+        1.0 - (0.5 * z - (z * r - x * y))
+    } else {
+        var qx = 0.28125
+        if ix <= 1071382528 {
+            qx = Float.from_bits((ix - 2097152).to_u64() << 32)
+        }
+        let hz = 0.5 * z - qx
+        let a = 1.0 - qx
+        a - (hz - (z * r - x * y))
+    }
+}
+
+// `x` reduced modulo pi / 2: `x = n pi / 2 + y0 + y1`, `|y0 + y1| <= pi / 4`
+// (fdlibm `e_rem_pio2.c`, the medium-size branch: pi / 2 is subtracted in
+// up to three parts, each with trailing zero bits so `n` times it is
+// exact). For `|x|` up to `TRIG_LIMIT`.
+struct Reduced { n: Int, y0: Float, y1: Float }
+
+fn reduce(x: Float) -> Reduced {
+    if abs(x) <= 0.7853981633974483 {
+        return Reduced(n: 0, y0: x, y1: 0.0)
+    }
+    let half = if x < 0.0 { -0.5 } else { 0.5 }
+    let n = (x * 6.36619772367581382433e-01 + half).to_int()
+    let nf = n.to_float()
+    let j = exponent_field(x.to_bits())
+    var r = x - nf * 1.57079632673412561417e+00
+    var w = nf * 6.07710050650619224932e-11
+    var y0 = r - w
+    var i = j - exponent_field(y0.to_bits())
+    if i > 16 {
+        let t = r
+        w = nf * 6.07710050630396597660e-11
+        r = t - w
+        w = nf * 2.02226624879595063154e-21 - ((t - r) - w)
+        y0 = r - w
+        i = j - exponent_field(y0.to_bits())
+        if i > 49 {
+            let t2 = r
+            w = nf * 2.02226624871116645580e-21
+            r = t2 - w
+            w = nf * 8.47842766036889956997e-32 - ((t2 - r) - w)
+            y0 = r - w
+        }
+    }
+    Reduced(n: n, y0: y0, y1: (r - y0) - w)
+}
+
+// Whether `x` is one `sin` and `cos` take: NaN, an infinity, or a finite
+// number of size at most `TRIG_LIMIT` (about 1.6 million).
+fn trig_domain(x: Float) -> Bool {
+    x != x || abs(x) <= TRIG_LIMIT || abs(x) == infinity()
+}
+
+// The sine of `x`, `x` in radians. Algorithm: fdlibm `s_sin.c`: `x` is
+// reduced modulo pi / 2 in extended precision, then a degree-13 (sine) or
+// degree-14 (cosine) polynomial in the reduced argument is evaluated, the
+// quadrant choosing which. Error bound: less than 1 ulp for every `x`
+// with `|x|` up to the limit. `sin(-0.0)` is `-0.0`, an infinity gives
+// NaN, and so does NaN. The reduction here is the three-part
+// Cody-Waite one, which holds for `|x| <= 1647098`; a larger `x` breaks
+// the `requires` and stops with `P0006`.
+pub fn sin(x: Float) -> Float
+    requires trig_domain(x)
+{
+    if x != x || abs(x) == infinity() {
+        return nan()
+    }
+    if abs(x) < 3.725290298461914e-09 {
+        // |x| < 2^-27: sin(x) rounds to x.
+        return x
+    }
+    let red = reduce(x)
+    let q = ((red.n % 4) + 4) % 4
+    if q == 0 {
+        kernel_sin(red.y0, red.y1, red.n != 0)
+    } else if q == 1 {
+        kernel_cos(red.y0, red.y1)
+    } else if q == 2 {
+        -kernel_sin(red.y0, red.y1, red.n != 0)
+    } else {
+        -kernel_cos(red.y0, red.y1)
+    }
+}
+
+// The cosine of `x`, `x` in radians. Algorithm and bound as for `sin`
+// (fdlibm `s_cos.c`): less than 1 ulp for `|x|` up to 1647098, which
+// `requires` clause enforces. `cos(0.0)` is `1.0`, an infinity gives NaN,
+// and so does NaN.
+pub fn cos(x: Float) -> Float
+    requires trig_domain(x)
+{
+    if x != x || abs(x) == infinity() {
+        return nan()
+    }
+    let red = reduce(x)
+    let q = ((red.n % 4) + 4) % 4
+    if q == 0 {
+        kernel_cos(red.y0, red.y1)
+    } else if q == 1 {
+        -kernel_sin(red.y0, red.y1, red.n != 0)
+    } else if q == 2 {
+        -kernel_cos(red.y0, red.y1)
+    } else {
+        kernel_sin(red.y0, red.y1, red.n != 0)
+    }
+}
+
+// The arc tangent of `x`, from -pi / 2 to pi / 2 (fdlibm `s_atan.c`): `x`
+// is mapped to a small argument by one of four identities, around 0, 0.5,
+// 1 and 1.5 after the reduction, then an odd polynomial of degree 23.
+fn atan(x: Float, tail: Float) -> Float {
+    let ax = abs(x)
+    // The correction to the result for `tail`, a part of the argument too small for it.
+    let dz = tail / (1.0 + ax * ax)
+    if ax >= 7.378697629483821e+19 {
+        // |x| >= 2^66, and infinity.
+        let r = 1.57079632679489655800e+00 + 6.12323399573676603587e-17
+        return if x < 0.0 { -r } else { r }
+    }
+    var id = -1
+    var v = ax
+    if ax < 0.4375 {
+        if ax < 7.450580596923828e-09 {
+            return x + tail
+        }
+    } else if ax < 1.1875 {
+        if ax < 0.6875 {
+            id = 0
+            v = (2.0 * ax - 1.0) / (2.0 + ax)
+        } else {
+            id = 1
+            v = (ax - 1.0) / (ax + 1.0)
+        }
+    } else if ax < 2.4375 {
+        id = 2
+        v = (ax - 1.5) / (1.0 + 1.5 * ax)
+    } else {
+        id = 3
+        v = -1.0 / ax
+    }
+    let z = v * v
+    let w = z * z
+    let s1 = z * (3.33333333333329318027e-01 + w * (1.42857142725034663711e-01 + w * (9.09088713343650656196e-02 + w * (6.66107313738753120669e-02 + w * (4.97687799461593236017e-02 + w * 1.62858201153657823623e-02)))))
+    let s2 = w * (-1.99999999998764832476e-01 + w * (-1.11111104054623557880e-01 + w * (-7.69187620504482999495e-02 + w * (-5.83357013379057348645e-02 + w * -3.65315727442169155270e-02))))
+    if id < 0 {
+        let r = v - (v * (s1 + s2) - dz)
+        return if x < 0.0 { -r } else { r }
+    }
+    var hi = 0.0
+    var lo = 0.0
+    if id == 0 {
+        hi = 4.63647609000806093515e-01
+        lo = 2.26987774529616870924e-17
+    } else if id == 1 {
+        hi = 7.85398163397448278999e-01
+        lo = 3.06161699786838301793e-17
+    } else if id == 2 {
+        hi = 9.82793723247329054082e-01
+        lo = 1.39033110312309984516e-17
+    } else {
+        hi = 1.57079632679489655800e+00
+        lo = 6.12323399573676603587e-17
+    }
+    let r = hi - (((v * (s1 + s2) - lo) - v) - dz)
+    if x < 0.0 { -r } else { r }
+}
+
+// The angle of the point `(x, y)` from the positive x axis, from -pi to
+// pi: the arc tangent of `y / x` put in the right quadrant (fdlibm
+// `e_atan2.c`).
+pub fn atan2(y: Float, x: Float) -> Float {
+    if x != x || y != y {
+        return nan()
+    }
+    let x_negative = (x.to_bits() >> 63) == 1
+    let y_negative = (y.to_bits() >> 63) == 1
+    // m: 0 for x, y >= 0; 1 for y < 0; 2 for x < 0; 3 for both.
+    let m = (if y_negative { 1 } else { 0 }) + (if x_negative { 2 } else { 0 })
+    if y == 0.0 {
+        if m < 2 {
+            return y
+        }
+        return if m == 2 { PI } else { -PI }
+    }
+    if x == 0.0 {
+        return if y_negative { -PI_2 } else { PI_2 }
+    }
+    if abs(x) == infinity() {
+        if abs(y) == infinity() {
+            if m == 0 { return 7.8539816339744827900e-01 }
+            if m == 1 { return -7.8539816339744827900e-01 }
+            if m == 2 { return 2.3561944901923448370e+00 }
+            return -2.3561944901923448370e+00
+        }
+        if m == 0 { return 0.0 }
+        if m == 1 { return -0.0 }
+        return if m == 2 { PI } else { -PI }
+    }
+    if abs(y) == infinity() {
+        return if y_negative { -PI_2 } else { PI_2 }
+    }
+    let k = exponent_field(y.to_bits()) - exponent_field(x.to_bits())
+    var z = 0.0
+    if k > 60 {
+        z = PI_2 + 0.5 * PI_LO
+    } else if x_negative && k < -60 {
+        z = 0.0
+    } else {
+        // The quotient and the remainder the division left, so that the
+        // argument of `atan` is `q` plus a tail to the last bit of `q`.
+        let ay = abs(y)
+        let ax = abs(x)
+        let q = ay / ax
+        z = atan(q, fma(-q, ax, ay) / ax)
+    }
+    if m == 0 {
+        z
+    } else if m == 1 {
+        -z
+    } else if m == 2 {
+        PI - (z - PI_LO)
+    } else {
+        (z - PI_LO) - PI
+    }
+}
+
+// `sqrt(x * x + y * y)` without the overflow or underflow of the squares
+// (fdlibm `e_hypot.c`): the larger argument `a` and the smaller `b` are
+// scaled by a power of 2 into the safe range when they are far from 1,
+// then the sum of squares is formed with the high halves of `a` and `b`
+// split off so that every product is exact and the square root rounds
+// once, on a sum with an error below 1 ulp. Error bound: less than 1 ulp.
+// `hypot(inf, y)` is `inf` for every `y`, a NaN included; otherwise a NaN
+// gives NaN.
+pub fn hypot(x: Float, y: Float) -> Float {
+    var a = abs(x)
+    var b = abs(y)
+    if high_word(b) > high_word(a) {
+        let t = a
+        a = b
+        b = t
+    }
+    var ha = high_word(a)
+    var hb = high_word(b)
+    if ha - hb > 62914560 {
+        // b is at least 2^60 times smaller: a + b is a.
+        return a + b
+    }
+    var k = 0
+    if ha > 1596981248 {
+        // a > 2^500
+        if ha >= 2146435072 {
+            var w = a + b
+            if ha % 1048576 == 0 && low_word(a) == 0 {
+                w = a
+            }
+            if hb == 2146435072 && low_word(b) == 0 {
+                w = b
+            }
+            return w
+        }
+        a = a * exp2_int(-600)
+        b = b * exp2_int(-600)
+        k = 600
+        ha = high_word(a)
+        hb = high_word(b)
+    }
+    if hb < 548405248 {
+        // b < 2^-500
+        if hb <= 1048575 {
+            if hb == 0 && low_word(b) == 0 {
+                return a
+            }
+            a = a * exp2_int(1022)
+            b = b * exp2_int(1022)
+            k = k - 1022
+        } else {
+            a = a * exp2_int(600)
+            b = b * exp2_int(600)
+            k = k - 600
+        }
+    }
+    let d = a - b
+    var w = 0.0
+    if d > b {
+        let t1 = high_part(a)
+        let t2 = a - t1
+        w = (t1 * t1 - (b * -b - t2 * (a + t1))).sqrt()
+    } else {
+        let a2 = a + a
+        let y1 = high_part(b)
+        let y2 = b - y1
+        let t1 = high_part(a2)
+        let t2 = a2 - t1
+        w = (t1 * y1 - (d * -d - (t1 * y2 + t2 * b))).sqrt()
+    }
+    if k != 0 {
+        w * exp2_int(k)
+    } else {
+        w
+    }
+}
+
+// A sum or product carried as two doubles, `hi + lo`, with `|lo|` at most
+// half an ulp of `hi`: about 106 bits.
+struct Pair { hi: Float, lo: Float }
+
+// `a + b` as a `Pair`, exactly (Knuth's two-sum).
+fn two_sum(a: Float, b: Float) -> Pair {
+    let s = a + b
+    let v = s - a
+    Pair(hi: s, lo: (a - (s - v)) + (b - v))
+}
+
+// `a + b` as a `Pair`, exactly, when `|a|` is at least `|b|` or `a` is 0.
+fn fast_two_sum(a: Float, b: Float) -> Pair {
+    let s = a + b
+    Pair(hi: s, lo: b - (s - a))
+}
+
+// `a * b` as a `Pair`, exactly: the fused product gives the rounding error.
+fn two_product(a: Float, b: Float) -> Pair {
+    let p = a * b
+    Pair(hi: p, lo: fma(a, b, -p))
+}
+
+// The natural logarithm of a finite `x` above 0, to about 2^-66 relative
+// error, as a `Pair`. It is the algorithm of `ln` with the sum
+// `2 s + s * R(s * s)` carried in a `Pair` (`s = f / (2 + f)` is a `Pair`
+// too, its remainder found with a fused product), with `R` the Taylor
+// series of `2 atanh(s) / s - 2` and its leading term in a `Pair`.
+fn ln_pair(x: Float) -> Pair {
+    var v = x
+    var k = 0
+    if high_word(v) < 1048576 {
+        k = -54
+        v = v * 18014398509481984.0
+    }
+    let hx0 = high_word(v)
+    k = k + hx0 / 1048576 - 1023
+    let hx1 = hx0 % 1048576
+    let i = ((hx1 + 614244) / 1048576) * 1048576
+    v = with_high(v, hx1 + 1072693248 - i)
+    k = k + i / 1048576
+    let f = v - 1.0
+    let kf = k.to_float()
+    let top = kf * LN2_HI
+    let bottom = kf * LN2_LO
+    if f == 0.0 {
+        return fast_two_sum(top, bottom)
+    }
+    // s = f / (2 + f) as a pair.
+    let den = fast_two_sum(2.0, f)
+    let s_hi = f / den.hi
+    let rem = fma(-s_hi, den.hi, f) - s_hi * den.lo
+    let s_lo = rem / den.hi
+    let s = fast_two_sum(s_hi, s_lo)
+    let z = two_product(s.hi, s.hi)
+    let z_lo = z.lo + 2.0 * s.hi * s.lo
+    let w = z.hi * z.hi
+    // The series 2 atanh(s) = 2 s (1 + z / 3 + z^2 / 5 + ...): its terms from
+    // z^2 on are summed in doubles (the first one is under 2^-12 of the
+    // sum) and the term in z in a pair, with 2/3 as a pair. fdlibm's
+    // minimax polynomial would stop the sum 2^-59 short of exact.
+    let q = w * (0.4 + z.hi * (0.2857142857142857 + z.hi * (0.2222222222222222 + z.hi * (0.18181818181818182 + z.hi * (0.15384615384615385 + z.hi * (0.13333333333333333 + z.hi * (0.11764705882352941 + z.hi * (0.10526315789473684 + z.hi * (0.09523809523809523 + z.hi * (0.08695652173913043 + z.hi * (0.08)))))))))))
+    let t_hi = 0.6666666666666666 * z.hi
+    let t_lo = fma(0.6666666666666666, z.hi, -t_hi) + 0.6666666666666666 * z_lo + 3.700743415417188e-17 * z.hi
+    let b_hi = s.hi * t_hi
+    let b_lo = fma(s.hi, t_hi, -b_hi) + s.hi * t_lo + s.lo * t_hi
+    // ln(1 + f) = 2 s + s * Lg1 * z + s * q
+    let head = two_sum(2.0 * s.hi, b_hi)
+    let tail = head.lo + 2.0 * s.lo + b_lo + s.hi * q
+    let log1p = fast_two_sum(head.hi, tail)
+    // + k ln(2)
+    let sum = two_sum(top, log1p.hi)
+    fast_two_sum(sum.hi, sum.lo + log1p.lo + bottom)
+}
+
+// 1 for an odd integer `y`, 2 for an even one, 0 for anything else.
+fn integer_parity(y: Float) -> Int {
+    let a = abs(y)
+    if a >= 9007199254740992.0 {
+        return 2
+    }
+    if a != floor(a) {
+        return 0
+    }
+    if a.to_int() % 2 == 1 { 1 } else { 2 }
+}
+
+// `x` to the power `y`, for `Float`s (the `Int` function is `pow`).
+// Algorithm: `exp(y * ln(x))` with `ln(x)` in about 106 bits (`x` is
+// split as for `ln`, and the series for `ln(1 + f)` is summed in a pair of
+// doubles), the product `y * ln(x)` rounded once into a second pair, and
+// that pair handed to the reduction of `exp`, so the error of the
+// exponent never reaches the last bit. Error bound: less than 1 ulp over
+// results from 2^-1022 to 2^1023, as `exp` has it. The special cases are
+// C99's: `powf(x, 0.0)` and `powf(1.0, y)` are `1.0` for every `x` and `y`,
+// even NaN; `powf(-1.0, inf)` is `1.0`; a negative `x` with a `y` that is
+// not an integer is NaN; `powf(0.0, y)` is `inf` for a negative `y` and `0.0`
+// for a positive one, with the sign of `x` kept when `y` is an odd integer.
+pub fn powf(x: Float, y: Float) -> Float {
+    if y == 0.0 || x == 1.0 {
+        return 1.0
+    }
+    if x != x || y != y {
+        return nan()
+    }
+    let parity = integer_parity(y)
+    let ax = abs(x)
+    let x_negative = (x.to_bits() >> 63) == 1
+    if abs(y) == infinity() {
+        if ax == 1.0 {
+            return 1.0
+        }
+        let grows = (ax > 1.0) == (y > 0.0)
+        return if grows { infinity() } else { 0.0 }
+    }
+    // A negative sign survives for a negative `x` and an odd `y`.
+    let negate = x_negative && parity == 1
+    if ax == 0.0 {
+        let r = if y < 0.0 { infinity() } else { 0.0 }
+        return if negate { -r } else { r }
+    }
+    if ax == infinity() {
+        let r = if y < 0.0 { 0.0 } else { infinity() }
+        return if negate { -r } else { r }
+    }
+    if x_negative && parity == 0 {
+        return nan()
+    }
+    if ax == 1.0 {
+        return if negate { -1.0 } else { 1.0 }
+    }
+    let l = ln_pair(ax)
+    let p_hi = y * l.hi
+    var r = 0.0
+    if p_hi > 709.78271289338397 {
+        r = infinity()
+    } else if p_hi < -745.13321910194111 {
+        r = 0.0
+    } else {
+        let p_lo = fma(y, l.hi, -p_hi) + y * l.lo
+        r = exp_parts(p_hi, p_lo)
+    }
+    if negate { -r } else { r }
+}
+
+// ---------------------------------------------------------------------------
+// The exact tier of the `Float` functions (spec #590, ticket #606).
+//
+// Each `<name>_exact` returns the double nearest the true value, a tie going
+// to the even one (ADR 0027), and gives the same bits as the fast tier
+// except where the fast tier is off by one in the last place. Every one
+// has two paths, after the special cases that it shares with the fast tier:
+//
+// - The fast path evaluates the function in double-double arithmetic (two
+//   doubles, about 106 bits; `Pair`) with a computed error far below the
+//   `MARGIN` of 2^-70 of the result, and answers when `hi + lo` and the
+//   same value moved by the margin round to the same double (Ziv's test).
+// - The slow path runs when they do not: a result within the margin of a
+//   point half way between two doubles. It evaluates the function in fixed
+//   point with 256 fractional bits (`Big`, twelve 32-bit limbs) with an
+//   error below 2^-240, and rounds that once. Or, for `hypot`, in exact
+//   integer arithmetic. A tie, which only `hypot` and `powf` have, is
+//   detected and rounded to even.
+//
+// The proof of each path's error is with the function.
+// ---------------------------------------------------------------------------
+
+const LIMBS: Int = 12
+const FRAC: Int = 256
+const LIMB_MASK: U64 = 4294967295
+// 2^-70: the fast path's answer is trusted when the rounding does not change
+// for a change of this size, relative to the result. The fast paths below
+// prove an error under 2^-71 of the result (most far smaller), so the margin
+// holds with room. A wider margin would send more inputs to the slow path
+// and a narrower one would leave the slow path to inputs no search can find.
+const MARGIN: Float = 8.470329472543003e-22
+
+// -- Double-double arithmetic. A `Pair` is `hi + lo` with `|lo|` at most half
+// an ulp of `hi`. The error of each operation is stated in units of u = 2^-53.
+
+// `a` split into two halves of 26 bits, so that products of halves are exact.
+fn dd_split(a: Float) -> Pair {
+    let t = 134217729.0 * a
+    let hi = t - (t - a)
+    Pair(hi: hi, lo: a - hi)
+}
+
+// `a * b` as a `Pair`, exactly (Dekker, no fused operation), for `a` and `b`
+// below 2^996 in size.
+fn two_prod(a: Float, b: Float) -> Pair {
+    let p = a * b
+    let sa = dd_split(a)
+    let sb = dd_split(b)
+    let lo = ((sa.hi * sb.hi - p) + sa.hi * sb.lo + sa.lo * sb.hi) + sa.lo * sb.lo
+    Pair(hi: p, lo: lo)
+}
+
+// `a + b`, with relative error at most 3 u^2 of the result (Joldes, Muller,
+// Popescu: the accurate sum).
+fn dd_add(a: Pair, b: Pair) -> Pair {
+    let s = two_sum(a.hi, b.hi)
+    let t = two_sum(a.lo, b.lo)
+    let c = s.lo + t.hi
+    let v = fast_two_sum(s.hi, c)
+    let w = t.lo + v.lo
+    fast_two_sum(v.hi, w)
+}
+
+fn dd_add_d(a: Pair, b: Float) -> Pair {
+    let s = two_sum(a.hi, b)
+    fast_two_sum(s.hi, s.lo + a.lo)
+}
+
+fn dd_neg(a: Pair) -> Pair {
+    Pair(hi: -a.hi, lo: -a.lo)
+}
+
+// `a * b`, with relative error at most 7 u^2.
+fn dd_mul(a: Pair, b: Pair) -> Pair {
+    let p = two_prod(a.hi, b.hi)
+    let c = p.lo + (a.hi * b.lo + a.lo * b.hi)
+    fast_two_sum(p.hi, c)
+}
+
+fn dd_mul_d(a: Pair, b: Float) -> Pair {
+    let p = two_prod(a.hi, b)
+    fast_two_sum(p.hi, p.lo + a.lo * b)
+}
+
+// `a / b`, with relative error at most 10 u^2.
+fn dd_div(a: Pair, b: Pair) -> Pair {
+    let q1 = a.hi / b.hi
+    let r1 = dd_add(a, dd_neg(dd_mul_d(b, q1)))
+    let q2 = r1.hi / b.hi
+    let r2 = dd_add(r1, dd_neg(dd_mul_d(b, q2)))
+    let q3 = r2.hi / b.hi
+    dd_add_d(fast_two_sum(q1, q2), q3)
+}
+
+// The sum of `c[i] z^i`: the first coefficients as `Pair`s (`hi[i] + lo[i]`),
+// the rest, in `tail`, as doubles, summed first. The tail terms are far
+// below the sum, so their double rounding error is far below 2^-76.
+fn dd_poly(hi: List<Float>, lo: List<Float>, tail: List<Float>, z: Pair) -> Pair {
+    var t = 0.0
+    var i = tail.len() - 1
+    while i >= 0 {
+        t = t * z.hi + tail.at(i)
+        i = i - 1
+    }
+    var acc = Pair(hi: t, lo: 0.0)
+    var j = hi.len() - 1
+    while j >= 0 {
+        acc = dd_add(dd_mul(acc, z), Pair(hi: hi.at(j), lo: lo.at(j)))
+        j = j - 1
+    }
+    acc
+}
+
+// Ziv's test: the double nearest `v` when `v` and the values within `margin`
+// of it, relative, all round to it; NaN otherwise.
+fn dd_decide(v: Pair, margin: Float) -> Float {
+    let err = abs(v.hi) * margin
+    let above = v.hi + (v.lo + err)
+    let below = v.hi + (v.lo - err)
+    if above == below { above } else { nan() }
+}
+
+// -- Fixed-point arithmetic for the slow path. A `Big` is a `List<U64>` of
+// `LIMBS` limbs of 32 bits, least significant first. As a fixed-point
+// number it is the integer divided by 2^`FRAC`; `big_mul` and `big_div` keep
+// that scale and drop the bits below it (an error of one unit, 2^-256, per
+// operation). As an integer it is what it holds. No operation overflows for
+// the sizes the callers use: below 2^128 as fixed point.
+
+fn big_zeros(n: Int) -> List<U64> {
+    var out: List<U64> = List.new()
+    for _ in 0..n {
+        out.push(0)
+    }
+    out
+}
+
+fn big_zero() -> List<U64> {
+    big_zeros(LIMBS)
+}
+
+// `v` times 2 to the power `shift` (bits shifted below the last place are lost).
+fn big_from_u64(v: U64, shift: Int) -> List<U64> {
+    var a: List<U64> = List.new()
+    a.push(v & LIMB_MASK)
+    a.push(v >> 32)
+    for _ in 2..LIMBS {
+        a.push(0)
+    }
+    if shift >= 0 {
+        big_shl(a, shift)
+    } else {
+        big_shr(a, 0 - shift)
+    }
+}
+
+fn big_one() -> List<U64> {
+    big_from_u64(1, FRAC)
+}
+
+fn big_shl(a: List<U64>, n: Int) -> List<U64> {
+    if n >= LIMBS * 32 {
+        return big_zero()
+    }
+    let ls = n / 32
+    let bs = (n % 32).to_u64()
+    let back = (32 - n % 32).to_u64()
+    var out: List<U64> = List.new()
+    for i in 0..LIMBS {
+        let src = i - ls
+        if src < 0 {
+            out.push(0)
+        } else {
+            var v = (a.at(src) << bs) & LIMB_MASK
+            if src > 0 {
+                v = v | (a.at(src - 1) >> back)
+            }
+            out.push(v)
+        }
+    }
+    out
+}
+
+fn big_shr(a: List<U64>, n: Int) -> List<U64> {
+    if n >= LIMBS * 32 {
+        return big_zero()
+    }
+    let ls = n / 32
+    let bs = (n % 32).to_u64()
+    let back = (32 - n % 32).to_u64()
+    var out: List<U64> = List.new()
+    for i in 0..LIMBS {
+        let src = i + ls
+        if src >= LIMBS {
+            out.push(0)
+        } else {
+            var v = a.at(src) >> bs
+            if src + 1 < LIMBS {
+                v = v | ((a.at(src + 1) << back) & LIMB_MASK)
+            }
+            out.push(v)
+        }
+    }
+    out
+}
+
+// `(a << 1) | bit`, for `bit` 0 or 1.
+fn big_shl1_with(a: List<U64>, bit: U64) -> List<U64> {
+    var out: List<U64> = List.new()
+    var carry = bit
+    for i in 0..LIMBS {
+        let v = a.at(i)
+        out.push(((v << 1) | carry) & LIMB_MASK)
+        carry = v >> 31
+    }
+    out
+}
+
+fn big_add(a: List<U64>, b: List<U64>) -> List<U64> {
+    var out: List<U64> = List.new()
+    var carry: U64 = 0
+    for i in 0..LIMBS {
+        let t = a.at(i) + b.at(i) + carry
+        out.push(t & LIMB_MASK)
+        carry = t >> 32
+    }
+    out
+}
+
+// `a - b`, for `a` at least `b`.
+fn big_sub(a: List<U64>, b: List<U64>) -> List<U64> {
+    var out: List<U64> = List.new()
+    var borrow: U64 = 0
+    for i in 0..LIMBS {
+        let x = a.at(i)
+        let y = b.at(i) + borrow
+        if x >= y {
+            out.push(x - y)
+            borrow = 0
+        } else {
+            out.push(x + 4294967296 - y)
+            borrow = 1
+        }
+    }
+    out
+}
+
+// -1, 0 or 1 as `a` is below, equal to or above `b`.
+fn big_cmp(a: List<U64>, b: List<U64>) -> Int {
+    var i = LIMBS - 1
+    while i >= 0 {
+        let x = a.at(i)
+        let y = b.at(i)
+        if x != y {
+            return if x < y { -1 } else { 1 }
+        }
+        i = i - 1
+    }
+    0
+}
+
+fn big_bit_length(a: List<U64>) -> Int {
+    var i = LIMBS - 1
+    while i >= 0 {
+        let limb = a.at(i)
+        if limb != 0 {
+            return i * 32 + word_length(limb)
+        }
+        i = i - 1
+    }
+    0
+}
+
+fn big_is_zero(a: List<U64>) -> Bool {
+    big_bit_length(a) == 0
+}
+
+fn big_bit(a: List<U64>, i: Int) -> U64 {
+    (a.at(i / 32) >> (i % 32).to_u64()) & 1
+}
+
+fn big_set_bit(a: List<U64>, i: Int) -> List<U64> {
+    var out: List<U64> = List.new()
+    let limb = i / 32
+    let mask: U64 = 1 << (i % 32).to_u64()
+    for k in 0..LIMBS {
+        if k == limb {
+            out.push(a.at(k) | mask)
+        } else {
+            out.push(a.at(k))
+        }
+    }
+    out
+}
+
+// `a * b` as fixed point: the product with its low `FRAC` bits dropped. The
+// columns of the product are summed in two halves, so that no sum passes 2^64.
+fn big_mul(a: List<U64>, b: List<U64>) -> List<U64> {
+    var out: List<U64> = List.new()
+    var carry: U64 = 0
+    var prev_high: U64 = 0
+    let first = FRAC / 32
+    for k in 0..(first + LIMBS) {
+        var low_sum: U64 = 0
+        var high_sum: U64 = 0
+        let first_i = if k >= LIMBS { k - LIMBS + 1 } else { 0 }
+        let last_i = if k < LIMBS { k } else { LIMBS - 1 }
+        for i in first_i..(last_i + 1) {
+            let t = a.at(i) * b.at(k - i)
+            low_sum = low_sum + (t & LIMB_MASK)
+            high_sum = high_sum + (t >> 32)
+        }
+        let total = low_sum + prev_high + carry
+        if k >= first {
+            out.push(total & LIMB_MASK)
+        }
+        carry = total >> 32
+        prev_high = high_sum
+    }
+    out
+}
+
+// `a * m` as integers, for `m` below 2^32.
+fn big_mul_small(a: List<U64>, m: U64) -> List<U64> {
+    var out: List<U64> = List.new()
+    var carry: U64 = 0
+    for i in 0..LIMBS {
+        let t = a.at(i) * m + carry
+        out.push(t & LIMB_MASK)
+        carry = t >> 32
+    }
+    out
+}
+
+// `a * m` as integers, for `m` below 2^64.
+fn big_mul_u64(a: List<U64>, m: U64) -> List<U64> {
+    big_add(big_mul_small(a, m & LIMB_MASK), big_shl(big_mul_small(a, m >> 32), 32))
+}
+
+// `a / d` rounded down, for `d` from 1 to 2^32 - 1.
+fn big_div_small(a: List<U64>, d: U64) -> List<U64> {
+    var top_first: List<U64> = List.new()
+    var rest: U64 = 0
+    var i = LIMBS - 1
+    while i >= 0 {
+        let cur = (rest << 32) | a.at(i)
+        top_first.push(cur / d)
+        rest = cur % d
+        i = i - 1
+    }
+    var out: List<U64> = List.new()
+    for k in 0..LIMBS {
+        out.push(top_first.at(LIMBS - 1 - k))
+    }
+    out
+}
+
+// `a / b` as fixed point, rounded down, for `b` not zero and a quotient
+// below 2^128: binary long division, one quotient bit at a time.
+fn big_div(a: List<U64>, b: List<U64>) -> List<U64> {
+    var q = big_zero()
+    var r = big_zero()
+    var i = big_bit_length(a) + FRAC - 1
+    while i >= 0 {
+        var bit: U64 = 0
+        if i >= FRAC {
+            bit = big_bit(a, i - FRAC)
+        }
+        r = big_shl1_with(r, bit)
+        if big_cmp(r, b) >= 0 {
+            r = big_sub(r, b)
+            q = big_shl1_with(q, 1)
+        } else {
+            q = big_shl1_with(q, 0)
+        }
+        i = i - 1
+    }
+    q
+}
+
+// A double (not below 2^-1000 in size) as the fixed-point number of its
+// magnitude, bits below 2^-256 lost.
+fn big_from_float(x: Float) -> List<U64> {
+    let bits = x.to_bits()
+    big_from_u64(significand(bits), scale(bits) + FRAC)
+}
+
+// About the value of `a` (as fixed point), to 52 bits.
+fn big_to_float(a: List<U64>) -> Float {
+    let l = big_bit_length(a)
+    if l == 0 {
+        return 0.0
+    }
+    let shift = l - 52
+    var m = a
+    if shift >= 0 {
+        m = big_shr(a, shift)
+    } else {
+        m = big_shl(a, 0 - shift)
+    }
+    let mantissa = m.at(0) | (m.at(1) << 32)
+    scale_by_pow2(mantissa.to_int().to_float(), shift - FRAC)
+}
+
+// The bits of the double nearest `a` times 2 to the power `e` (`a` an
+// integer, not zero), with sign bit `sign`: one rounding, to nearest, ties to
+// even, to a normal number, a subnormal, zero or an infinity. With `snap`, a
+// value within 2^-160 of a point half way between two doubles is taken as
+// that point: the error of the working precision is below 2^-240, and the
+// nearest result that is not a tie is farther than that (see `powf_exact`).
+fn big_round(sign: U64, a: List<U64>, e: Int, snap: Bool) -> U64 {
+    var v = a
+    let l = big_bit_length(v)
+    if snap {
+        v = big_snap(v, l, e)
+    }
+    var lo: U64 = 0
+    var hi: U64 = 0
+    var ex = e
+    if l <= 120 {
+        lo = v.at(0) | (v.at(1) << 32)
+        hi = v.at(2) | (v.at(3) << 32)
+    } else {
+        let sh = l - 120
+        let w = big_shr(v, sh)
+        lo = w.at(0) | (w.at(1) << 32)
+        hi = w.at(2) | (w.at(3) << 32)
+        // The bits below the window, as one sticky bit.
+        if big_cmp(big_shl(w, sh), v) != 0 {
+            lo = lo | 1
+        }
+        ex = e + sh
+    }
+    round(sign, Wide(hi: hi, lo: lo), ex)
+}
+
+fn big_snap(a: List<U64>, l: Int, e: Int) -> List<U64> {
+    let top = e + l - 1
+    // The bits the result keeps: 53, or fewer in the subnormal range.
+    let keep = if top < -1022 { top + 1075 } else { 53 }
+    let drop = l - keep
+    if keep < 1 || drop < 200 {
+        return a
+    }
+    let base = big_shl(big_shr(a, drop), drop)
+    let low = big_sub(a, base)
+    let half = big_shl(big_from_u64(1, 0), drop - 1)
+    let diff = if big_cmp(low, half) >= 0 { big_sub(low, half) } else { big_sub(half, low) }
+    if big_bit_length(diff) <= l - 160 {
+        return big_add(base, half)
+    }
+    a
+}
+
+// A fixed-point number with a sign.
+struct SBig { neg: Bool, mag: List<U64> }
+
+// `(-1)^an a + (-1)^bn b`.
+fn sbig_add(an: Bool, a: List<U64>, bn: Bool, b: List<U64>) -> SBig {
+    if an == bn {
+        SBig(neg: an, mag: big_add(a, b))
+    } else if big_cmp(a, b) >= 0 {
+        SBig(neg: an, mag: big_sub(a, b))
+    } else {
+        SBig(neg: bn, mag: big_sub(b, a))
+    }
+}
+
+// The square root of an integer `n`, rounded down, by the digit-by-digit
+// method, and whether the root is exact.
+struct Root { root: List<U64>, exact: Bool }
+
+fn big_isqrt(n: List<U64>) -> Root {
+    var num = n
+    var res = big_zero()
+    let top = (big_bit_length(n) - 1) / 2 * 2
+    var bit = big_shl(big_from_u64(1, 0), if top < 0 { 0 } else { top })
+    if big_is_zero(n) {
+        return Root(root: res, exact: true)
+    }
+    while !big_is_zero(bit) {
+        let trial = big_add(res, bit)
+        if big_cmp(num, trial) >= 0 {
+            num = big_sub(num, trial)
+            res = big_add(big_shr(res, 1), bit)
+        } else {
+            res = big_shr(res, 1)
+        }
+        bit = big_shr(bit, 2)
+    }
+    Root(root: res, exact: big_is_zero(num))
+}
+
+// -- The slow paths. Each rounds once, from a fixed-point value with an error
+// of at most a few hundred units of 2^-256 (stated at each).
+
+struct Scaled { v: List<U64>, k: Int }
+
+// `exp(x)` for `x` of at most about 800 in size, `x` the fixed-point `a` with
+// sign `neg`: the value `v / 2^FRAC * 2^k`, with `v` between 0.7 and 1.5.
+// Method: `x = k ln 2 + r`, `|r|` at most about 0.35, `exp(r)` by its Taylor
+// series, the terms of an alternating sum kept apart so no sign is needed.
+// Error: `k ln 2` is `ln 2` to 2^-256 times at most 1200: 2^-245; each of the
+// 55 terms loses at most 3 units; in all below 2^-240.
+fn exp_big(neg: Bool, a: List<U64>) -> Scaled {
+    let est = big_to_float(a) * DD_INV_LN2 + 0.5
+    let kabs = est.to_int()
+    let kl = big_mul_small(big_ln2(), kabs.to_u64())
+    var r = big_zero()
+    var below = false
+    if big_cmp(a, kl) >= 0 {
+        r = big_sub(a, kl)
+    } else {
+        r = big_sub(kl, a)
+        below = true
+    }
+    // r, as a signed number, is (a - kl) for a positive x and the negation for a negative one.
+    let r_negative = below != neg
+    var plus = big_one()
+    var minus = big_zero()
+    var term = big_one()
+    var n = 1
+    while true {
+        term = big_div_small(big_mul(term, r), n.to_u64())
+        if big_is_zero(term) {
+            break
+        }
+        if r_negative && n % 2 == 1 {
+            minus = big_add(minus, term)
+        } else {
+            plus = big_add(plus, term)
+        }
+        n = n + 1
+    }
+    Scaled(v: big_sub(plus, minus), k: if neg { 0 - kabs } else { kabs })
+}
+
+// `ln(x)` for a finite `x` above 0, not 1, as a signed fixed-point number.
+// Method: `x = 2^k m` with `m` between 0.7 and 1.42, `ln(m) = 2 atanh(s)`
+// with `s = (m - 1) / (m + 1)`, `|s|` below 0.172, summed as the series
+// `2 (s + s^3 / 3 + ...)`. Error: `s` is computed from two integers with one
+// division (1 unit), `s^2` and each power lose 1 unit, each of the 50 terms
+// 1 more, `k ln 2` is 2^-245 off: below 2^-240 in all, and `|ln(x)|` is at
+// least 2^-53, so the relative error is below 2^-187.
+fn ln_big(x: Float) -> SBig {
+    let bits = x.to_bits()
+    var m = significand(bits)
+    var e = scale(bits)
+    while m < HIDDEN {
+        m = m << 1
+        e = e - 1
+    }
+    // x = m 2^e with m from 2^52 to 2^53, so x = (m / 2^52) 2^(e + 52).
+    var k = e + 52
+    var p = 52
+    if m > 6369051672525773 {
+        // m / 2^52 is above sqrt(2): halve it.
+        p = 53
+        k = k + 1
+    }
+    let one: U64 = 1 << p.to_u64()
+    let s_neg = m < one
+    let num = if s_neg { one - m } else { m - one }
+    let s = big_div(big_from_u64(num, 0), big_from_u64(m + one, 0))
+    let s2 = big_mul(s, s)
+    var sum = s
+    var power = s
+    var j = 1
+    while true {
+        power = big_mul(power, s2)
+        if big_is_zero(power) {
+            break
+        }
+        sum = big_add(sum, big_div_small(power, (2 * j + 1).to_u64()))
+        j = j + 1
+    }
+    let ln_m = big_shl(sum, 1)
+    let kl = big_mul_small(big_ln2(), (if k < 0 { 0 - k } else { k }).to_u64())
+    sbig_add(k < 0, kl, s_neg, ln_m)
+}
+
+// `sin` or `cos` of `x`, for `|x|` from 2^-27 to `TRIG_LIMIT`, rounded once.
+// Method: `|x| = n pi / 2 + r` with `|r|` below about 0.8, from the fixed-point
+// `pi / 2`; the Taylor series of `sin` and `cos` of `|r|`, alternating sums
+// kept apart; the quadrant `n mod 4` picks the function and its sign.
+// Error: `n pi / 2` is 2^-256 times at most 2^21 off, 2^-235; the series
+// lose at most 2^-245; below 2^-230 in all, and `|r|` is at least 2^-62 for
+// every double in range (the closest doubles to a multiple of pi / 2 are
+// 2^-62 away), so the relative error is below 2^-168.
+fn trig_big(x: Float, sine: Bool) -> Float {
+    let ax = abs(x)
+    let n = (ax * DD_TWO_OVER_PI + 0.5).to_int()
+    let a = big_from_float(ax)
+    let np = big_mul_small(big_pio2(), n.to_u64())
+    var r = big_zero()
+    var r_neg = false
+    if big_cmp(a, np) >= 0 {
+        r = big_sub(a, np)
+    } else {
+        r = big_sub(np, a)
+        r_neg = true
+    }
+    let q = n % 4
+    let r2 = big_mul(r, r)
+    // sin(|r|) when the result is a sine of r, cos(|r|) when a cosine.
+    let use_sin = (q % 2 == 0) == sine
+    var plus = big_zero()
+    var minus = big_zero()
+    var term = big_zero()
+    var k = 1
+    if use_sin {
+        term = r
+        plus = r
+        while true {
+            term = big_div_small(big_mul(term, r2), ((2 * k) * (2 * k + 1)).to_u64())
+            if big_is_zero(term) {
+                break
+            }
+            if k % 2 == 1 {
+                minus = big_add(minus, term)
+            } else {
+                plus = big_add(plus, term)
+            }
+            k = k + 1
+        }
+    } else {
+        term = big_one()
+        plus = big_one()
+        while true {
+            term = big_div_small(big_mul(term, r2), ((2 * k - 1) * (2 * k)).to_u64())
+            if big_is_zero(term) {
+                break
+            }
+            if k % 2 == 1 {
+                minus = big_add(minus, term)
+            } else {
+                plus = big_add(plus, term)
+            }
+            k = k + 1
+        }
+    }
+    let value = big_sub(plus, minus)
+    var negative = false
+    if sine {
+        // sin x for x >= 0: sin r, cos r, -sin r, -cos r.
+        negative = if q == 0 { r_neg } else if q == 1 { false } else if q == 2 { !r_neg } else { true }
+        if x < 0.0 {
+            negative = !negative
+        }
+    } else {
+        // cos x: cos r, -sin r, -cos r, sin r.
+        negative = if q == 0 { false } else if q == 1 { !r_neg } else if q == 2 { true } else { r_neg }
+    }
+    Float.from_bits(big_round(if negative { 1 } else { 0 }, value, 0 - FRAC, false))
+}
+
+// `atan(t)` for the fixed-point `t` from 0 to 1, as a fixed-point number.
+// Method: `atan(t) = atan(c) + atan(u)` with `c = j / 8` the nearest eighth,
+// `u = (t - c) / (1 + t c)` of size at most 1/16, `atan(c)` a stored
+// constant and `atan(u)` the Taylor series. Error: one division, 25 terms:
+// below 2^-245.
+fn atan_big(t: List<U64>) -> List<U64> {
+    let j = (big_to_float(t) * 8.0 + 0.5).to_int()
+    var u = t
+    var u_neg = false
+    var base = big_zero()
+    if j > 0 {
+        let c = big_from_u64(j.to_u64(), FRAC - 3)
+        var num = big_zero()
+        if big_cmp(t, c) >= 0 {
+            num = big_sub(t, c)
+        } else {
+            num = big_sub(c, t)
+            u_neg = true
+        }
+        u = big_div(num, big_add(big_one(), big_mul(t, c)))
+        base = big_atan_eighths(j)
+    }
+    let w = big_mul(u, u)
+    var plus = u
+    var minus = big_zero()
+    var term = u
+    var k = 1
+    while true {
+        term = big_mul(term, w)
+        if big_is_zero(term) {
+            break
+        }
+        let part = big_div_small(term, (2 * k + 1).to_u64())
+        if k % 2 == 1 {
+            minus = big_add(minus, part)
+        } else {
+            plus = big_add(plus, part)
+        }
+        k = k + 1
+    }
+    let series = big_sub(plus, minus)
+    if u_neg {
+        big_sub(base, series)
+    } else {
+        big_add(base, series)
+    }
+}
+
+// `atan2(y, x)` for finite `x` and `y`, neither zero, rounded once.
+// Method: with `lo` the smaller of `|x|`, `|y|` and `hi` the larger, `t = lo /
+// hi` from one division of the significands; `atan(t)` by `atan_big`, or for
+// a `t` below 2^-30 by `t (1 - t^2 / 3 + ...)` with the series on the
+// fixed-point `t^2` and the factor `t` kept as `Q 2^e` so the result keeps
+// its relative precision; then `pi / 2 - atan(t)` when `|y|` is larger,
+// then the quadrant of `(x, y)`. Error: below 2^-240 absolute, and the
+// result is at least `atan(t)`, so below 2^-190 relative even for the
+// smallest `t` kept in fixed point, and the factor form is relative.
+fn atan2_big(y: Float, x: Float) -> Float {
+    let ay = abs(y)
+    let ax = abs(x)
+    let swap = ay > ax
+    let lo = if swap { ax } else { ay }
+    let hi = if swap { ay } else { ax }
+    let lo_bits = lo.to_bits()
+    let hi_bits = hi.to_bits()
+    var m_lo = significand(lo_bits)
+    var e_lo = scale(lo_bits)
+    while m_lo < HIDDEN {
+        m_lo = m_lo << 1
+        e_lo = e_lo - 1
+    }
+    var m_hi = significand(hi_bits)
+    var e_hi = scale(hi_bits)
+    while m_hi < HIDDEN {
+        m_hi = m_hi << 1
+        e_hi = e_hi - 1
+    }
+    // lo / hi = q 2^e, q from 1/2 to 2.
+    let q = big_div(big_from_u64(m_lo, 0), big_from_u64(m_hi, 0))
+    let e = e_lo - e_hi
+    let x_negative = (x.to_bits() >> 63) == 1
+    let y_sign: U64 = y.to_bits() >> 63
+    if e < -30 {
+        // t = q 2^e is below 2^-29: atan(t) = t (1 - t^2 / 3 + t^4 / 5 - ...).
+        let tt = big_shr(big_mul(q, q), 0 - 2 * e)
+        var plus = big_one()
+        var minus = big_zero()
+        var term = big_one()
+        var k = 1
+        while true {
+            term = big_mul(term, tt)
+            if big_is_zero(term) {
+                break
+            }
+            let part = big_div_small(term, (2 * k + 1).to_u64())
+            if k % 2 == 1 {
+                minus = big_add(minus, part)
+            } else {
+                plus = big_add(plus, part)
+            }
+            k = k + 1
+        }
+        let factor = big_mul(q, big_sub(plus, minus))
+        if !swap && !x_negative {
+            return Float.from_bits(big_round(y_sign, factor, e - FRAC, false))
+        }
+        let z = big_shr(factor, 0 - e)
+        return atan2_finish(z, swap, x_negative, y_sign)
+    }
+    let t = big_shr(q, 0 - e)
+    atan2_finish(atan_big(t), swap, x_negative, y_sign)
+}
+
+// The quadrant step: `z = atan(lo / hi)` in fixed point.
+fn atan2_finish(z: List<U64>, swap: Bool, x_negative: Bool, y_sign: U64) -> Float {
+    var v = z
+    if swap {
+        v = big_sub(big_pio2(), v)
+    }
+    if x_negative {
+        v = big_sub(big_pi(), v)
+    }
+    Float.from_bits(big_round(y_sign, v, 0 - FRAC, false))
+}
+
+// `hypot(a, b)` for finite `a` at least `b` above 0 with `b` not far below
+// `a`, exactly rounded: `a^2 + b^2` as an integer, its square root to 70 bits
+// or more by the digit method, one sticky bit for the remainder. No error:
+// the integer square root is exact, so a tie (a Pythagorean triple whose
+// hypotenuse has 54 bits) is found and rounded to even.
+fn hypot_big(a: Float, b: Float) -> Float {
+    let a_bits = a.to_bits()
+    let b_bits = b.to_bits()
+    let qa = scale(a_bits)
+    let qb = scale(b_bits)
+    let base = if qa < qb { qa } else { qb }
+    let ma = significand(a_bits)
+    let mb = significand(b_bits)
+    let a2 = big_shl(big_mul_u64(big_from_u64(ma, 0), ma), 2 * (qa - base))
+    let b2 = big_shl(big_mul_u64(big_from_u64(mb, 0), mb), 2 * (qb - base))
+    var n = big_add(a2, b2)
+    // n times 4^t has a root of at least 70 bits.
+    let bl = big_bit_length(n)
+    var t = 0
+    if bl < 140 {
+        t = (140 - bl + 1) / 2
+        n = big_shl(n, 2 * t)
+    }
+    let r = big_isqrt(n)
+    var m = big_shl(r.root, 1)
+    if !r.exact {
+        m = big_set_bit(m, 0)
+    }
+    Float.from_bits(big_round(0, m, base - t - 1, false))
+}
+
+// -- The functions.
+
+// The result of `exp_dd`: `exp(x)` is `v * 2^k`, `v` between 0.7 and 1.5.
+struct ExpDd { v: Pair, k: Int }
+
+// `exp(a)` for a `Pair` `a` of at most about 750 in size. Method: `a = k ln 2
+// + r` with `|r|` at most about 0.35 (`k` the nearest integer to `a / ln 2`,
+// `ln 2` as two doubles so `k ln 2` is exact to 2^-107 times `k`), then the
+// Taylor series of `exp(r)`: eight terms in double-double, the next nine in
+// doubles. Error: `k ln 2` is off by at most 1100 * 2^-107 < 2^-96; the
+// series stops after the term `r^16 / 16!`, so the first term left out,
+// `r^17 / 17!`, is below 2^-74, and the double terms, which sum to less than
+// 2^-27, lose at most 2^-77; the double-double steps lose 12 * 2^-104: below
+// 2^-73 of the result in all.
+fn exp_dd(a: Pair) -> ExpDd {
+    let kf = floor(a.hi * DD_INV_LN2 + 0.5)
+    let p = two_prod(kf, DD_LN2_HI)
+    let r1 = dd_add(a, dd_neg(p))
+    let r = dd_add_d(r1, -(kf * DD_LN2_LO))
+    ExpDd(v: dd_poly(exp_head_hi(), exp_head_lo(), exp_tail(), r), k: kf.to_int())
+}
+
+// `e` to the power `x`, correctly rounded. `exp_exact(NaN)` is NaN,
+// `exp_exact(inf)` is `inf`, `exp_exact(-inf)` is `0.0`, and the results that
+// overflow or round to zero are `inf` and `0.0`, as for `exp`. Fast path:
+// `exp_dd`, error below 2^-73 (proof above it), tested at the margin 2^-70.
+// Slow path: `exp_big` on `|x|`, error below 2^-240. A result below
+// 2^-1000 (subnormal, where the rounding point moves) takes the slow path.
+pub fn exp_exact(x: Float) -> Float {
+    if x != x {
+        return x
+    }
+    if x > 710.0 {
+        return infinity()
+    }
+    if x < -746.0 {
+        return 0.0
+    }
+    if x == 0.0 {
+        return 1.0
+    }
+    let e = exp_dd(Pair(hi: x, lo: 0.0))
+    let r = dd_decide(e.v, MARGIN)
+    if r == r && e.k > -1000 {
+        return scale_by_pow2(r, e.k)
+    }
+    Float.from_bits(big_round_exp(x))
+}
+
+fn big_round_exp(x: Float) -> U64 {
+    let s = exp_big(x < 0.0, big_from_float(abs(x)))
+    big_round(0, s.v, s.k - FRAC, false)
+}
+
+// The natural logarithm of a finite `x` above 0 as a `Pair`, to a relative
+// error below 2^-80. Method as for `ln_big`: `x = 2^k m`, `s = (m - 1) / (m
+// + 1)` as a `Pair`, `ln(m) = 2 s (1 + z / 3 + z^2 / 5 + ...)` with `z = s^2`,
+// six terms in double-double and the next eleven in doubles, then `k ln 2`.
+// Error: `m - 1` and `m + 1` are exact, the division loses 10 * 2^-106;
+// the series stops after `z^16 / 33` < 2^-87, the double terms (below 2^-34)
+// lose 2^-85; `k ln 2` is off by 1100 * 2^-107; the sum is of numbers of
+// the same sign or with a cancellation of at most 3, so below 2^-83 of the
+// result in all.
+fn ln_dd(x: Float) -> Pair {
+    var v = x
+    var k = 0
+    if high_word(v) < 1048576 {
+        k = -54
+        v = v * 18014398509481984.0
+    }
+    let hx0 = high_word(v)
+    k = k + hx0 / 1048576 - 1023
+    let hx1 = hx0 % 1048576
+    let i = ((hx1 + 614244) / 1048576) * 1048576
+    v = with_high(v, hx1 + 1072693248 - i)
+    k = k + i / 1048576
+    // m = v is from sqrt(2) / 2 to sqrt(2).
+    let s = dd_div(Pair(hi: v - 1.0, lo: 0.0), two_sum(v, 1.0))
+    let z = dd_mul(s, s)
+    let c = dd_poly(ln_head_hi(), ln_head_lo(), ln_tail(), z)
+    let l = dd_mul(dd_mul_d(s, 2.0), c)
+    if k == 0 {
+        return l
+    }
+    let kf = k.to_float()
+    let p = two_prod(kf, DD_LN2_HI)
+    let kl = dd_add_d(p, kf * DD_LN2_LO)
+    dd_add(kl, l)
+}
+
+// The natural logarithm of `x`, correctly rounded. The special cases are
+// those of `ln`: `ln_exact(1.0)` is `+0.0`, `ln_exact(0.0)` is `-inf`,
+// `ln_exact(inf)` is `inf`, and a negative `x` and NaN give NaN. Fast
+// path: `ln_dd`, error below 2^-83, tested at the margin 2^-70. Slow path:
+// `ln_big`, error below 2^-240.
+pub fn ln_exact(x: Float) -> Float {
+    if x != x {
+        return x
+    }
+    if x < 0.0 {
+        return nan()
+    }
+    if x == 0.0 {
+        return -infinity()
+    }
+    if x == infinity() {
+        return x
+    }
+    if x == 1.0 {
+        return 0.0
+    }
+    let r = dd_decide(ln_dd(x), MARGIN)
+    if r == r {
+        return r
+    }
+    let l = ln_big(x)
+    Float.from_bits(big_round(if l.neg { 1 } else { 0 }, l.mag, 0 - FRAC, false))
+}
+
+// `sin(r)` or `cos(r)` as a `Pair`, for `x` reduced: `sine` chooses the
+// function of `x`. The reduction is `|x| = n pi / 2 + r` with `n` the nearest
+// integer to `|x| 2 / pi`, `pi / 2` as four doubles (212 bits); `n` times each
+// part is a `two_prod`, exact, and the parts are subtracted from the largest
+// down by the accurate sum, so a `|r|` as small as 2^-62 keeps its bits.
+// Then `sin(r) = r (1 - z / 6 + ...)` and `cos(r) = 1 - z / 2 + ...` in
+// `z = r^2`, six terms in double-double and the next six in doubles.
+// Error: `n pi / 2` is off by 2^21 * 2^-212 = 2^-191 absolute, so by 2^-129
+// relative to `|r|` at least 2^-62; each of the three accurate sums loses
+// 2^-103 of its result; the series stop after `z^11` and leave out `z^12 / 25!`
+// < 2^-92 (sin) and `z^12 / 24!` < 2^-91 (cos), the double terms (below 2^-26)
+// lose 2^-77: below 2^-76 of the result in all.
+fn trig_dd(x: Float, sine: Bool) -> Pair {
+    let ax = abs(x)
+    let nf = floor(ax * DD_TWO_OVER_PI + 0.5)
+    let t1 = two_prod(nf, PIO2_1)
+    let t2 = two_prod(nf, PIO2_2)
+    let t3 = two_prod(nf, PIO2_3)
+    var r = two_sum(ax - t1.hi, -t1.lo)
+    r = dd_add(r, dd_neg(t2))
+    r = dd_add(r, dd_neg(t3))
+    r = dd_add_d(r, -(nf * PIO2_4))
+    let q = nf.to_int() % 4
+    let z = dd_mul(r, r)
+    let use_sin = (q % 2 == 0) == sine
+    var v = Pair(hi: 0.0, lo: 0.0)
+    if use_sin {
+        v = dd_mul(r, dd_poly(sin_head_hi(), sin_head_lo(), sin_tail(), z))
+    } else {
+        v = dd_poly(cos_head_hi(), cos_head_lo(), cos_tail(), z)
+    }
+    var negative = false
+    if sine {
+        negative = q >= 2
+        if x < 0.0 {
+            negative = !negative
+        }
+    } else {
+        negative = q == 1 || q == 2
+    }
+    if negative { dd_neg(v) } else { v }
+}
+
+// The sine of `x`, `x` in radians, correctly rounded, for `|x|` up to 1647098
+// (a larger finite `x` is a `requires` failure, `P0006`, as for `sin`).
+// `sin_exact(-0.0)` is `-0.0`, an infinity gives NaN, and so does NaN. Fast
+// path: `trig_dd`, error below 2^-76, tested at the margin 2^-70. Slow path:
+// `trig_big`, error below 2^-168 relative. `sin_exact(x)` is `x` for `|x|`
+// below 2^-27 (the sine is within 2^-54 of `x`, relative, and `x` is a double).
+pub fn sin_exact(x: Float) -> Float
+    requires trig_domain(x)
+{
+    if x != x || abs(x) == infinity() {
+        return nan()
+    }
+    if abs(x) < 7.450580596923828e-09 {
+        return x
+    }
+    let r = dd_decide(trig_dd(x, true), MARGIN)
+    if r == r {
+        return r
+    }
+    trig_big(x, true)
+}
+
+// The cosine of `x`, correctly rounded, for `|x|` up to 1647098. Fast and
+// slow path as for `sin_exact`. `cos_exact(x)` is `1.0` for `|x|` below 2^-27
+// (the cosine is within 2^-55 of 1, below the half gap under 1).
+pub fn cos_exact(x: Float) -> Float
+    requires trig_domain(x)
+{
+    if x != x || abs(x) == infinity() {
+        return nan()
+    }
+    if abs(x) < 7.450580596923828e-09 {
+        return 1.0
+    }
+    let r = dd_decide(trig_dd(x, false), MARGIN)
+    if r == r {
+        return r
+    }
+    trig_big(x, false)
+}
+
+// `atan(t)` for the `Pair` `t` from 0 to 1 (not below 2^-900), to a relative
+// error below 2^-76. Method: `atan(t) = atan(c) + atan(u)` with `c = j / 8` the
+// nearest eighth and `u = (t - c) / (1 + t c)`, of size at most 1/16, `atan(c)`
+// a stored `Pair` and `atan(u) = u (1 - w / 3 + w^2 / 5 - ...)` with `w = u^2`
+// at most 2^-8: three terms in double-double, the next seven in doubles.
+// Error: `u` loses 10 * 2^-106 and the table is exact to 2^-107; the series
+// leaves out the term `w^10 / 21` < 2^-84, the double terms (below 2^-26)
+// lose 2^-78 of `u`; `atan(c)` and `atan(u)` differ by a factor of two at
+// most, so the sum loses no more than 2^-103: below 2^-76 in all.
+fn atan_dd(t: Pair) -> Pair {
+    let j = (t.hi * 8.0 + 0.5).to_int()
+    var u = t
+    var base = Pair(hi: 0.0, lo: 0.0)
+    if j > 0 {
+        let c = j.to_float() * 0.125
+        let num = dd_add_d(t, -c)
+        let den = dd_add_d(dd_mul_d(t, c), 1.0)
+        u = dd_div(num, den)
+        base = Pair(hi: atan_eighths_hi().at(j), lo: atan_eighths_lo().at(j))
+    }
+    let w = dd_mul(u, u)
+    let series = dd_mul(u, dd_poly(atan_head_hi(), atan_head_lo(), atan_tail(), w))
+    dd_add(base, series)
+}
+
+// The angle of the point `(x, y)` from the positive x axis, from -pi to pi,
+// correctly rounded; the special cases are those of `atan2`. Fast path: the
+// ratio `lo / hi` of the smaller to the larger of `|x|`, `|y|` as a `Pair`,
+// `atan_dd` (below 2^-76), then `pi / 2 - atan` when `|y|` is the larger and
+// `pi - atan` for a negative `x`, with `pi` and `pi / 2` as `Pair`s (below
+// 2^-104; the sums add numbers of one sign), tested at the margin 2^-70. A
+// ratio below 2^-900, or an argument subnormal, takes the slow path:
+// `atan2_big`, error below 2^-190 relative.
+pub fn atan2_exact(y: Float, x: Float) -> Float {
+    if x != x || y != y {
+        return nan()
+    }
+    let x_negative = (x.to_bits() >> 63) == 1
+    let y_negative = (y.to_bits() >> 63) == 1
+    let m = (if y_negative { 1 } else { 0 }) + (if x_negative { 2 } else { 0 })
+    if y == 0.0 {
+        if m < 2 {
+            return y
+        }
+        return if m == 2 { PI } else { -PI }
+    }
+    if x == 0.0 {
+        return if y_negative { -PI_2 } else { PI_2 }
+    }
+    if abs(x) == infinity() {
+        if abs(y) == infinity() {
+            if m == 0 { return 7.8539816339744827900e-01 }
+            if m == 1 { return -7.8539816339744827900e-01 }
+            if m == 2 { return 2.3561944901923448370e+00 }
+            return -2.3561944901923448370e+00
+        }
+        if m == 0 { return 0.0 }
+        if m == 1 { return -0.0 }
+        return if m == 2 { PI } else { -PI }
+    }
+    if abs(y) == infinity() {
+        return if y_negative { -PI_2 } else { PI_2 }
+    }
+    let ay = abs(y)
+    let ax = abs(x)
+    let swap = ay > ax
+    let lo = if swap { ax } else { ay }
+    let hi = if swap { ay } else { ax }
+    let e_hi = exponent_field(hi.to_bits())
+    let e_lo = exponent_field(lo.to_bits())
+    if e_hi < 1 || e_lo < 1 || e_hi - e_lo > 900 {
+        return atan2_big(y, x)
+    }
+    // Scale `hi` into [1, 2): exact, and `lo` with it.
+    let sc = e_hi - 1023
+    let t = dd_div(Pair(hi: scale_by_pow2(lo, 0 - sc), lo: 0.0), Pair(hi: scale_by_pow2(hi, 0 - sc), lo: 0.0))
+    var z = atan_dd(t)
+    if swap {
+        z = dd_add(Pair(hi: DD_PIO2_HI, lo: DD_PIO2_LO), dd_neg(z))
+    }
+    if x_negative {
+        z = dd_add(Pair(hi: DD_PI_HI, lo: DD_PI_LO), dd_neg(z))
+    }
+    if y_negative {
+        z = dd_neg(z)
+    }
+    let r = dd_decide(z, MARGIN)
+    if r == r {
+        return r
+    }
+    atan2_big(y, x)
+}
+
+// `sqrt(x * x + y * y)` correctly rounded, without the overflow or underflow
+// of the squares; the special cases are those of `hypot`. Fast path: both
+// arguments scaled by a power of 2 (exact) to put the larger in [1, 2), the
+// squares by `two_prod` (exact) and their sum by `dd_add` (below 2^-103), the
+// square root of that sum `h + c` with `h = sqrt(hi)` and `c` the correction
+// `(hi - h^2 + lo) / (2 h)` from an exact `h^2`, so the error is below 2^-100
+// of the result, tested at the margin 2^-70. A smaller argument more than 60
+// binades below the larger changes the result by less than 2^-110 of it, so
+// the larger is the result. A result below 2^-960 takes the slow path, which
+// is exact: the integer `a^2 + b^2` and its integer square root, so the
+// ties (a Pythagorean triple with a 54-bit hypotenuse) round to even.
+pub fn hypot_exact(x: Float, y: Float) -> Float {
+    var a = abs(x)
+    var b = abs(y)
+    if a == infinity() || b == infinity() {
+        return infinity()
+    }
+    if a != a || b != b {
+        return nan()
+    }
+    if b > a {
+        let t = a
+        a = b
+        b = t
+    }
+    if b == 0.0 {
+        return a
+    }
+    let ea = exponent_field(a.to_bits())
+    let eb = exponent_field(b.to_bits())
+    if ea - (if eb < 1 { 1 } else { eb }) > 60 {
+        return a
+    }
+    if ea < 60 {
+        return hypot_big(a, b)
+    }
+    let sc = ea - 1023
+    let a2 = scale_by_pow2(a, 0 - sc)
+    let b2 = scale_by_pow2(b, 0 - sc)
+    let s = dd_add(two_prod(a2, a2), two_prod(b2, b2))
+    let h = s.hi.sqrt()
+    let hh = two_prod(h, h)
+    let rem = ((s.hi - hh.hi) - hh.lo) + s.lo
+    let v = fast_two_sum(h, rem / (2.0 * h))
+    let r = dd_decide(v, MARGIN)
+    if r == r {
+        return scale_by_pow2(r, sc)
+    }
+    hypot_big(a, b)
+}
+
+// `x` to the power `y` for `x` above 0, exactly rounded, when `y` is an
+// integer from 2 to 64 and the integer `x^y` fits 64 bits: the odd part of
+// `x`'s significand raised to `y` by multiplication, then scaled. The bits of
+// the result are 0 when this does not apply. `done` tells which.
+struct IntPow { done: Bool, bits: U64 }
+
+fn powf_integer(ax: Float, y: Float) -> IntPow {
+    if y != floor(y) || y < 2.0 || y > 64.0 {
+        return IntPow(done: false, bits: 0)
+    }
+    let yi = y.to_int()
+    let bits = ax.to_bits()
+    var m = significand(bits)
+    var q = scale(bits)
+    while m % 2 == 0 {
+        m = m / 2
+        q = q + 1
+    }
+    var v: U64 = 1
+    for _ in 0..yi {
+        if v > 18446744073709551615 / m {
+            return IntPow(done: false, bits: 0)
+        }
+        v = v * m
+    }
+    IntPow(done: true, bits: round(0, Wide(hi: 0, lo: v), q * yi))
+}
+
+// `x` to the power `y` for finite `x` above 0, not 1, and finite `y` not 0,
+// when `y ln x` is below 750 in size: `exp(y ln x)` with `ln x` from `ln_big`
+// times the significand of `y` (exact as an integer product) shifted by its
+// exponent, then `exp_big`, rounded with ties detected. Error: `ln_big`'s
+// 2^-240 absolute times `|y|`: `y ln x` is below 750, and `ln x` at least
+// 2^-53, so `|y|` below 2^62 and the error of `y ln x` below 2^-178; `exp_big`
+// adds 2^-240: below 2^-177 relative in all. A result that is not a tie is at
+// least 2^-170 away from the middle of two doubles, and `big_round` takes
+// anything nearer for the tie it is (an exact tie is a rational `x^y` with
+// 54 significant bits; the closest known non-tie, from the searches of
+// Lefèvre and Muller, is 2^-120 away).
+fn powf_big(ax: Float, y: Float) -> Float {
+    let l = ln_big(ax)
+    let ybits = y.to_bits()
+    let prod = big_mul_u64(l.mag, significand(ybits))
+    let q = scale(ybits)
+    var e = prod
+    if q >= 0 {
+        e = big_shl(prod, q)
+    } else {
+        e = big_shr(prod, 0 - q)
+    }
+    let s = exp_big(l.neg != (y < 0.0), e)
+    Float.from_bits(big_round(0, s.v, s.k - FRAC, true))
+}
+
+// `x` to the power `y`, correctly rounded; the special cases are those of
+// `powf`. Fast path: `ln_dd(|x|)` (below 2^-83) times `y` as a `Pair` (2^-104),
+// so the exponent `y ln |x|`, below 750 in size, is off by at most 2^-73; then
+// `exp_dd` of it (below 2^-73 more): below 2^-72 of the result in all, tested
+// at the margin 2^-70. Slow path:
+// the integer power when `y` is an integer from 2 to 64 and the result fits
+// 64 bits (exact, and rounds a tie to even), else `powf_big`. An exponent
+// above 720 gives `inf`, below -750 gives `0.0`.
+pub fn powf_exact(x: Float, y: Float) -> Float {
+    if y == 0.0 || x == 1.0 {
+        return 1.0
+    }
+    if x != x || y != y {
+        return nan()
+    }
+    let parity = integer_parity(y)
+    let ax = abs(x)
+    let x_negative = (x.to_bits() >> 63) == 1
+    if abs(y) == infinity() {
+        if ax == 1.0 {
+            return 1.0
+        }
+        let grows = (ax > 1.0) == (y > 0.0)
+        return if grows { infinity() } else { 0.0 }
+    }
+    let negate = x_negative && parity == 1
+    if ax == 0.0 {
+        let r = if y < 0.0 { infinity() } else { 0.0 }
+        return if negate { -r } else { r }
+    }
+    if ax == infinity() {
+        let r = if y < 0.0 { 0.0 } else { infinity() }
+        return if negate { -r } else { r }
+    }
+    if x_negative && parity == 0 {
+        return nan()
+    }
+    if ax == 1.0 {
+        return if negate { -1.0 } else { 1.0 }
+    }
+    var r = 0.0
+    let l = ln_dd(ax)
+    let estimate = y * l.hi
+    if estimate > 720.0 {
+        r = infinity()
+    } else if estimate < -750.0 {
+        r = 0.0
+    } else {
+        let e = exp_dd(dd_mul_d(l, y))
+        r = dd_decide(e.v, MARGIN)
+        if r == r && e.k > -1000 {
+            r = scale_by_pow2(r, e.k)
+        } else {
+            let exact = powf_integer(ax, y)
+            if exact.done {
+                r = Float.from_bits(exact.bits)
+            } else {
+                r = powf_big(ax, y)
+            }
+        }
+    }
+    if negate { -r } else { r }
+}
+
+// -- Constants. Written by `crates/oska-run/tests/float_reference/generate_exact.py
+// --constants` from a 700-bit computation.
+//
+// The fixed-point ones are the value times 2^256, as twelve 32-bit limbs, least
+// significant first.
+
+fn big_ln2() -> List<U64> {
+    [2343238187, 2316113755, 1922610733, 1089684262, 66254511, 3387143064, 3520035243, 2977044471, 0, 0, 0, 0]
+}
+
+fn big_pio2() -> List<U64> {
+    [1982281284, 68648268, 349149416, 1376033809, 28850594, 2307704087, 1121027177, 2451551556, 1, 0, 0, 0]
+}
+
+fn big_pi() -> List<U64> {
+    [3964562569, 137296536, 698298832, 2752067618, 57701188, 320440878, 2242054355, 608135816, 3, 0, 0, 0]
+}
+
+// `atan(j / 8)` for j from 1 to 8.
+fn big_atan_eighths(j: Int) -> List<U64> {
+    if j == 1 {
+        [3211625197, 1569876719, 733174564, 4050070267, 3889238494, 1494414099, 2888789446, 534100634, 0, 0, 0, 0]
+    } else if j == 2 {
+        [621963737, 3733888415, 3794591962, 1788865088, 2112390649, 1534191549, 1493285573, 1052175346, 0, 0, 0, 0]
+    } else if j == 3 {
+        [430212208, 597291749, 3609864934, 2663521467, 1853825601, 3310456977, 2474361401, 1540908295, 0, 0, 0, 0]
+    } else if j == 4 {
+        [1957766020, 1902611315, 2467196800, 3070888643, 1578976897, 3086099190, 2263694754, 1991351317, 0, 0, 0, 0]
+    } else if j == 5 {
+        [322477746, 4114457709, 1697331036, 2441766880, 1707358023, 1552113174, 4160069531, 2399165790, 0, 0, 0, 0]
+    } else if j == 6 {
+        [2361716538, 558392933, 4004690407, 3824191113, 1165864094, 430473002, 888604964, 2763816217, 0, 0, 0, 0]
+    } else if j == 7 {
+        [1691018544, 2685539679, 348625536, 1031466177, 279200829, 3408766290, 3258031731, 3087351339, 0, 0, 0, 0]
+    } else if j == 8 {
+        [991140642, 34324134, 2322058356, 688016904, 2161908945, 3301335691, 560513588, 3373259426, 0, 0, 0, 0]
+    } else {
+        big_zero()
+    }
+}
+
+const DD_LN2_HI: Float = 0.6931471805599453
+const DD_LN2_LO: Float = 2.3190468138462996e-17
+const DD_PI_HI: Float = 3.141592653589793
+const DD_PI_LO: Float = 1.2246467991473532e-16
+const DD_PIO2_HI: Float = 1.5707963267948966
+const DD_PIO2_LO: Float = 6.123233995736766e-17
+const DD_INV_LN2: Float = 1.4426950408889634
+const DD_TWO_OVER_PI: Float = 0.6366197723675814
+const PIO2_1: Float = 1.5707963267948966
+const PIO2_2: Float = 6.123233995736766e-17
+const PIO2_3: Float = -1.4973849048591698e-33
+const PIO2_4: Float = 5.562271104316826e-50
+fn exp_head_hi() -> List<Float> {
+    [1.0, 1.0, 0.5, 0.16666666666666666, 0.041666666666666664, 0.008333333333333333, 0.001388888888888889, 0.0001984126984126984]
+}
+
+fn exp_head_lo() -> List<Float> {
+    [0.0, 0.0, 0.0, 9.25185853854297e-18, 2.3129646346357427e-18, 1.1564823173178714e-19, -5.300543954373577e-20, 1.7209558293420705e-22]
+}
+
+fn exp_tail() -> List<Float> {
+    [2.48015873015873e-05, 2.7557319223985893e-06, 2.755731922398589e-07, 2.505210838544172e-08, 2.08767569878681e-09, 1.6059043836821613e-10, 1.1470745597729725e-11, 7.647163731819816e-13, 4.779477332387385e-14]
+}
+
+fn ln_head_hi() -> List<Float> {
+    [1.0, 0.3333333333333333, 0.2, 0.14285714285714285, 0.1111111111111111, 0.09090909090909091]
+}
+
+fn ln_head_lo() -> List<Float> {
+    [0.0, 1.850371707708594e-17, -1.1102230246251566e-17, 7.93016446160826e-18, 6.1679056923619804e-18, -2.523234146875356e-18]
+}
+
+fn ln_tail() -> List<Float> {
+    [0.07692307692307693, 0.06666666666666667, 0.058823529411764705, 0.05263157894736842, 0.047619047619047616, 0.043478260869565216, 0.04, 0.037037037037037035, 0.034482758620689655, 0.03225806451612903, 0.030303030303030304]
+}
+
+fn sin_head_hi() -> List<Float> {
+    [1.0, -0.16666666666666666, 0.008333333333333333, -0.0001984126984126984, 2.7557319223985893e-06, -2.505210838544172e-08]
+}
+
+fn sin_head_lo() -> List<Float> {
+    [0.0, -9.25185853854297e-18, 1.1564823173178714e-19, -1.7209558293420705e-22, -1.858393274046472e-22, 1.448814070935912e-24]
+}
+
+fn sin_tail() -> List<Float> {
+    [1.6059043836821613e-10, -7.647163731819816e-13, 2.8114572543455206e-15, -8.22063524662433e-18, 1.9572941063391263e-20, -3.868170170630684e-23]
+}
+
+fn cos_head_hi() -> List<Float> {
+    [1.0, -0.5, 0.041666666666666664, -0.001388888888888889, 2.48015873015873e-05, -2.755731922398589e-07]
+}
+
+fn cos_head_lo() -> List<Float> {
+    [0.0, 0.0, 2.3129646346357427e-18, 5.300543954373577e-20, 2.1511947866775882e-23, -2.3767714622250297e-23]
+}
+
+fn cos_tail() -> List<Float> {
+    [2.08767569878681e-09, -1.1470745597729725e-11, 4.779477332387385e-14, -1.5619206968586225e-16, 4.110317623312165e-19, -8.896791392450574e-22]
+}
+
+fn atan_head_hi() -> List<Float> {
+    [1.0, -0.3333333333333333, 0.2]
+}
+
+fn atan_head_lo() -> List<Float> {
+    [0.0, -1.850371707708594e-17, -1.1102230246251566e-17]
+}
+
+fn atan_tail() -> List<Float> {
+    [-0.14285714285714285, 0.1111111111111111, -0.09090909090909091, 0.07692307692307693, -0.06666666666666667, 0.058823529411764705, -0.05263157894736842]
+}
+
+fn atan_eighths_hi() -> List<Float> {
+    [0.0, 0.12435499454676144, 0.24497866312686414, 0.35877067027057225, 0.4636476090008061, 0.5585993153435624, 0.6435011087932844, 0.7188299996216245, 0.7853981633974483]
+}
+
+fn atan_eighths_lo() -> List<Float> {
+    [0.0, -3.1253241424539383e-18, 1.0698755618734451e-17, -2.4623815582638635e-17, 2.2698777452961687e-17, -5.4556305485916264e-18, 1.5834785051444286e-17, -2.1478388444456983e-17, 3.061616997868383e-17]
+}
+

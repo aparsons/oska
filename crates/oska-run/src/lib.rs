@@ -47,6 +47,7 @@ mod budget;
 mod bytes;
 mod confine;
 mod data;
+mod float;
 mod host;
 mod html;
 mod int_methods;

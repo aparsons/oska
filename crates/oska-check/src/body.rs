@@ -824,8 +824,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
     /// the `cap` rule stops it, `E0300` when only the trust rule does,
-    /// `E0341` for text where a sink literal is required, `E0220`
-    /// otherwise.
+    /// `E0341` for text where a sink literal is required, `E0237`
+    /// for an integer where a `Float` is required, `E0220` otherwise.
     pub(super) fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
@@ -881,6 +881,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     span,
                 )
             }
+            Mismatch::Types if expected.is_float() && actual.is_integer() => self.error(
+                codes::IMPLICIT_INT_TO_FLOAT,
+                format!(
+                    "expected `Float`, found `{actual}`: there is no implicit conversion from \
+                     an integer to a `Float`, which would round a large value silently; write \
+                     the literal with a decimal point, as `2.0`, or convert a value with \
+                     `.to_float()`, or `.to_float_rounded()` above 2^53"
+                ),
+                span,
+            ),
             Mismatch::Types => self.error(
                 codes::MISMATCH,
                 format!("expected `{expected}`, found `{actual}`"),
@@ -907,6 +917,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 // The value carries its type at runtime, for dispatch.
                 self.defer(expr.span, &ty, Deferred::Int);
                 ty
+            }
+            ExprKind::Float(text) => {
+                self.float_literal_check(text, false, expr.span);
+                Ty::float()
             }
             ExprKind::Str(parts) => {
                 // The string is untrusted when any text in a hole is.
@@ -1095,6 +1109,19 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             self.error(
                 codes::LITERAL_OUT_OF_RANGE,
                 format!("this literal does not fit in `{ty}`, which ranges from {min} to {max}"),
+                span,
+            );
+        }
+    }
+
+    /// Report a float literal that rounds to infinity: it does not fit
+    /// `Float`. A literal too small for a subnormal rounds to zero, and
+    /// that is no error.
+    fn float_literal_check(&mut self, text: &str, negative: bool, span: Span) {
+        if !parse_float_literal(text, negative).is_some_and(f64::is_finite) {
+            self.error(
+                codes::LITERAL_OUT_OF_RANGE,
+                "this literal does not fit in `Float`, whose largest value is about 1.7976931348623157e308",
                 span,
             );
         }
@@ -1484,6 +1511,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ty
             }
             UnaryOp::Neg => {
+                if let ExprKind::Float(text) = &operand.kind {
+                    self.float_literal_check(text, true, operand.span);
+                    self.typed(operand.span, &Ty::float());
+                    return Ty::float();
+                }
                 if let ExprKind::Int(text) = &operand.kind {
                     let ty = self.literal_type(expected);
                     if ty.is_signed_integer() {
@@ -1494,7 +1526,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 }
                 let ty = self.expr(operand, expected);
                 let ty = self.infer.resolve(&ty);
-                if ty.is_error() || ty.is_signed_integer() {
+                if ty.is_error() || ty.is_signed_integer() || ty.is_float() {
                     self.defer(expr.span, &ty, Deferred::Int);
                     return ty;
                 }
@@ -1544,6 +1576,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 let ty = self.numeric_operands(expr, op, lhs, rhs, expected);
+                if op == BinaryOp::Rem && self.infer.resolve(&ty).is_float() {
+                    self.error(
+                        codes::BAD_OPERAND,
+                        "`%` is not defined for `Float`",
+                        expr.span,
+                    );
+                    return Ty::Error;
+                }
                 if !self.is_secret(&ty) {
                     self.defer(expr.span, &ty, Deferred::Int);
                 }
@@ -1626,7 +1666,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Report `op` on a non-number. Returns whether `ty` is acceptable.
     fn require_number(&mut self, op: BinaryOp, ty: &Ty, span: Span) -> bool {
         let ty = self.infer.resolve(ty);
-        if ty.is_error() || ty == Ty::Never || ty.is_integer() {
+        if ty.is_error() || ty == Ty::Never || ty.is_integer() || ty.is_float() {
             return true;
         }
         if let Ty::Var(_) = ty {
@@ -2243,6 +2283,15 @@ fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
     } else {
         (lhs, rhs)
     }
+}
+
+/// The value of a float literal as written, negated when `negative`,
+/// rounded to nearest, ties to even, as `str::parse` does. `None` for text
+/// that is no number.
+pub fn parse_float_literal(text: &str, negative: bool) -> Option<f64> {
+    let digits: String = text.chars().filter(|&c| c != '_').collect();
+    let value = digits.parse::<f64>().ok()?;
+    Some(if negative { -value } else { value })
 }
 
 fn is_int_literal(expr: &Expr) -> bool {

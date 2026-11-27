@@ -14,6 +14,9 @@
 //! - It cannot decide a variable-time instruction or a panic (`E0355`):
 //!   an operand of `/` or `%`, or a shift or rotation amount.
 //! - It cannot be ordered (`E0356`): `<`, `<=`, `>` and `>=`.
+//! - It cannot hold a `Float` (`E0357`): `Secret<Float>` is refused, as a
+//!   written type and as `Secret.new` of a float, because float arithmetic
+//!   is not constant-time on common hardware (ADR 0027).
 //!
 //! A secret integer (`Secret<U8>`, `Secret<U32>`, `Secret<U64>`) has the
 //! wrapping arithmetic and bitwise operators, and a public operand of its
@@ -26,6 +29,7 @@ use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use super::{Body, Deferred};
 use crate::codes;
+use crate::resolve::SECRET_FLOAT;
 use crate::ty::{self, Ty};
 
 /// A trait a secret deliberately lacks, and what is reported when one
@@ -550,6 +554,10 @@ impl Body<'_, '_, '_> {
                  environment",
                 span,
             );
+            return;
+        }
+        if inner.is_float() {
+            self.error(codes::SECRET_FLOAT, SECRET_FLOAT, span);
             return;
         }
         if inner.head().is_some_and(|h| SECRET_TYPES.contains(&h)) {

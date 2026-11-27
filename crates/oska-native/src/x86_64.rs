@@ -48,11 +48,14 @@ mod decode;
 mod encode;
 
 use encode::{
-    Alu, Asm, Mem, Shift, Size, Unary, A, AE, B, BE, E, G, GE, L, LE, NE, O, R10, R11, R12, R13,
-    R14, R15, R8, R9, RAX, RBP, RBX, RCX, RDI, RDX, RSI, RSP,
+    Alu, Asm, Mem, Shift, Size, Unary, A, AE, B, BE, E, G, GE, L, LE, NE, NP, O, P, R10, R11, R12,
+    R13, R14, R15, R8, R9, RAX, RBP, RBX, RCX, RDI, RDX, RSI, RSP,
 };
 
-use crate::ir::{Arith, BinOp, Cond, FnId, Function, Inst, IntKind, Module, Symbol, Temp, Width};
+use crate::ir::{
+    Arith, BinOp, Cond, FloatCond, FloatOp, FnId, Function, Inst, IntKind, Module, Symbol, Temp,
+    Width, CANONICAL_NAN,
+};
 use crate::regalloc::{self, Loc, Registers};
 use crate::target::{Code, Layout};
 
@@ -542,6 +545,13 @@ impl Emitter {
                 self.asm.alu(Alu::Cmp, a, b);
                 self.set(*cond, *dst);
             }
+            Inst::Float { op, dst, lhs, rhs } => self.float(*op, *dst, *lhs, *rhs),
+            Inst::FloatCompare {
+                cond,
+                dst,
+                lhs,
+                rhs,
+            } => self.float_compare(*cond, *dst, *lhs, *rhs),
             Inst::Load {
                 width,
                 dst,
@@ -752,6 +762,70 @@ impl Emitter {
         self.asm.setcc(condition(cond), r);
         self.asm.zero_extend_byte(r);
         self.write(dst, r);
+    }
+
+    /// `dst = lhs op rhs` on the bits of two `Float`s, in `xmm0` and
+    /// `xmm1`, which nothing else uses. A result that is a NaN is made
+    /// the canonical NaN: `ucomisd` sets the parity flag for a NaN.
+    fn float(&mut self, op: FloatOp, dst: Temp, lhs: Temp, rhs: Temp) {
+        let a = self.read(lhs, RAX);
+        self.asm.movq_to_xmm(0, a);
+        match op {
+            FloatOp::Canonical => {}
+            FloatOp::Sqrt => self.asm.sd(0x51, 0, 0),
+            FloatOp::Add | FloatOp::Sub | FloatOp::Mul | FloatOp::Div => {
+                let b = self.read(rhs, RCX);
+                self.asm.movq_to_xmm(1, b);
+                let opcode = match op {
+                    FloatOp::Add => 0x58,
+                    FloatOp::Mul => 0x59,
+                    FloatOp::Sub => 0x5c,
+                    _ => 0x5e,
+                };
+                self.asm.sd(opcode, 0, 1);
+            }
+        }
+        self.asm.ucomisd(0, 0);
+        let ordered = self.asm.jcc8(NP);
+        self.asm.constant(RAX, CANONICAL_NAN as i64);
+        self.asm.movq_to_xmm(0, RAX);
+        self.asm.land8(ordered);
+        let r = self.target(dst, RAX);
+        self.asm.movq_from_xmm(r, 0);
+        self.write(dst, r);
+    }
+
+    /// `dst = 1` when `lhs cond rhs` holds for two `Float`s, else 0, as
+    /// IEEE 754 compares them. `ucomisd` sets `ZF`, `PF` and `CF` all for
+    /// an unordered pair: equality is `ZF` and not `PF`; `<` and `<=` read
+    /// the operands the other way round, so that `CF` set by a NaN makes
+    /// `a` (above) and `ae` (above or equal) false.
+    fn float_compare(&mut self, cond: FloatCond, dst: Temp, lhs: Temp, rhs: Temp) {
+        let a = self.read(lhs, RAX);
+        self.asm.movq_to_xmm(0, a);
+        let b = self.read(rhs, RCX);
+        self.asm.movq_to_xmm(1, b);
+        match cond {
+            FloatCond::Eq | FloatCond::Ne => {
+                self.asm.ucomisd(0, 1);
+                let (equal, unordered, combine) = match cond {
+                    FloatCond::Eq => (E, NP, Alu::And),
+                    _ => (NE, P, Alu::Or),
+                };
+                self.asm.setcc(equal, RAX);
+                self.asm.zero_extend_byte(RAX);
+                self.asm.setcc(unordered, RCX);
+                self.asm.zero_extend_byte(RCX);
+                self.asm.alu(combine, RAX, RCX);
+            }
+            FloatCond::Lt | FloatCond::Le => {
+                self.asm.ucomisd(1, 0);
+                self.asm
+                    .setcc(if cond == FloatCond::Lt { A } else { AE }, RAX);
+                self.asm.zero_extend_byte(RAX);
+            }
+        }
+        self.write(dst, RAX);
     }
 
     /// The memory operand `[base + offset]`: an offset past a 32-bit

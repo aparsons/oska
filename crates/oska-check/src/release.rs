@@ -90,6 +90,7 @@ impl Walk<'_> {
     fn expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Int(_)
+            | ExprKind::Float(_)
             | ExprKind::Str(_)
             | ExprKind::SinkStr { .. }
             | ExprKind::Bool(_)

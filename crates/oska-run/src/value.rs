@@ -35,6 +35,11 @@ pub enum Value {
     /// type is the value's runtime type tag, so generic code dispatches a
     /// `U8` to `U8`'s impl.
     Int(i128, IntType),
+    /// A `Float`, as its bits: so a value stays `Eq`, and a NaN is always
+    /// the canonical one (`float.rs`). Comparing floats goes through
+    /// `float::binary`, which follows IEEE 754 (`-0.0 == 0.0`, a NaN
+    /// equals nothing), not through this type's `==`.
+    Float(u64),
     Str(Rc<str>),
     /// A closure, with what it captured.
     Closure(Rc<ClosureValue>),
@@ -331,6 +336,7 @@ impl Value {
             Value::Unit => "()",
             Value::Bool(_) => builtins::BOOL,
             Value::Int(_, int) => int.name(),
+            Value::Float(_) => builtins::FLOAT,
             Value::Str(_) => builtins::STRING,
             // No impl can name either, but generic code can tell them
             // apart.
@@ -438,6 +444,14 @@ impl Value {
         match self {
             Value::Int(n, _) => *n,
             other => unreachable!("the checker guarantees an integer, found {other:?}"),
+        }
+    }
+
+    /// The `Float` the checker guarantees this is, as a number.
+    pub fn as_float(&self) -> f64 {
+        match self {
+            Value::Float(bits) => f64::from_bits(*bits),
+            other => unreachable!("the checker guarantees a `Float`, found {other:?}"),
         }
     }
 

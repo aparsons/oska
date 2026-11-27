@@ -316,6 +316,7 @@ impl<'a> Uses<'a> {
     fn expr(&mut self, expr: &'a Expr) {
         match &expr.kind {
             ExprKind::Int(_)
+            | ExprKind::Float(_)
             | ExprKind::SinkStr { .. }
             | ExprKind::Bool(_)
             | ExprKind::Unit

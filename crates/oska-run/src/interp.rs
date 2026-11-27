@@ -36,6 +36,7 @@ use oska_syntax::{Frame as StackFrame, Frames, Span, MAX_FRAMES};
 
 use crate::approval::Approvals;
 use crate::budget::Budgets;
+use crate::float;
 use crate::host::Host;
 use crate::intrinsics::{self, Args, Intrinsic};
 use crate::memory;
@@ -696,6 +697,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::Unit => Ok(Value::Unit),
             ExprKind::Int(n, int) => Ok(Value::Int(*n, *int)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
+            ExprKind::Float(bits) => Ok(Value::Float(*bits)),
             ExprKind::Local(slot) => Ok(frame.slots[*slot].clone()),
             ExprKind::Binary { .. } => self.binary(expr, frame),
             ExprKind::If {
@@ -724,6 +726,12 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let operand = self.eval(operand, frame)?;
                 Ok(ops::neg(operand, *int, expr.span)?)
             }
+            ExprKind::FloatBinary { op, lhs, rhs } => {
+                let lhs = self.eval(lhs, frame)?;
+                let rhs = self.eval(rhs, frame)?;
+                Ok(float::binary(*op, &lhs, &rhs))
+            }
+            ExprKind::FloatNeg(operand) => Ok(float::neg(&self.eval(operand, frame)?)),
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::BitNot { operand, int } => Ok(ops::bit_not(self.eval(operand, frame)?, *int)),
             ExprKind::Select { .. } => unreachable!(
@@ -765,6 +773,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::Scope(body) => self.scope(body, frame),
             ExprKind::Unit
             | ExprKind::Int(..)
+            | ExprKind::Float(_)
             | ExprKind::Bool(_)
             | ExprKind::Local(_)
             | ExprKind::Binary { .. }

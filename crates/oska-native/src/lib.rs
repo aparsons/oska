@@ -95,7 +95,7 @@ pub mod codes {
     /// `P0039` is never the program's own: `oskac` stops a native program
     /// at its `--timeout` and reports it, and `P0014` is the test
     /// runner's, after a test has run (`oska_run::snapshots`).
-    pub const PANICS: [&str; 26] = [
+    pub const PANICS: [&str; 31] = [
         "P0001",
         "P0002",
         "P0003",
@@ -122,6 +122,12 @@ pub mod codes {
         "P0043",
         "P0044",
         "P0045",
+        "P0046",
+        // Defined ahead of the functions that panic with them (ADR 0027).
+        "P0047",
+        "P0048",
+        "P0049",
+        "P0050",
     ];
 }
 

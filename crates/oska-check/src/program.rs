@@ -344,6 +344,22 @@ pub enum ExprKind {
     /// An integer literal, negated when written with a leading `-`, of
     /// the integer type the checker gave it.
     Int(i128, IntType),
+    /// A float literal, negated when written with a leading `-`: the
+    /// bits of its value, rounded to nearest, ties to even.
+    Float(u64),
+    /// A float operator: `+ - * /` give a `Float`, and the comparisons
+    /// (`== != < <= > >=`, as IEEE 754 defines them: a NaN is unordered,
+    /// so every comparison with one is false but `!=`) give a `Bool`.
+    /// Every result that is a NaN is the canonical NaN, and no operator
+    /// fuses with another (ADR 0027). `op` is never `%`.
+    FloatBinary {
+        op: BinaryOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    /// Unary `-` on a `Float`: the same number with the opposite sign,
+    /// `-0.0` for `0.0`, and the canonical NaN for a NaN.
+    FloatNeg(Box<Expr>),
     Bool(bool),
     /// A binary operator. `int` is the operands' integer type for
     /// arithmetic (`+ - * / %`), whose result is checked against it, and
@@ -649,6 +665,9 @@ pub enum Type {
     Bool,
     /// An integer type: `Int`, or a sized one.
     Int(IntType),
+    /// `Float`: IEEE 754 binary64, whose results are pinned down to the
+    /// bits (ADR 0027).
+    Float,
     /// Text, trusted or not.
     String,
     /// Any other named type with its arguments: a struct or enum, the
@@ -700,7 +719,9 @@ impl Type {
                 params: params.iter().map(|p| p.substitute(subst)).collect(),
                 ret: Box::new(ret.substitute(subst)),
             },
-            Type::Unit | Type::Bool | Type::Int(_) | Type::String | Type::Never => self.clone(),
+            Type::Unit | Type::Bool | Type::Int(_) | Type::Float | Type::String | Type::Never => {
+                self.clone()
+            }
         }
     }
 
@@ -757,7 +778,9 @@ impl Type {
             Type::Fn { params, ret, .. } => {
                 params.iter().all(Type::is_concrete) && ret.is_concrete()
             }
-            Type::Unit | Type::Bool | Type::Int(_) | Type::String | Type::Never => true,
+            Type::Unit | Type::Bool | Type::Int(_) | Type::Float | Type::String | Type::Never => {
+                true
+            }
         }
     }
 }
@@ -779,6 +802,7 @@ impl std::fmt::Display for Type {
             Type::Unit => write!(f, "()"),
             Type::Bool => write!(f, "Bool"),
             Type::Int(int) => write!(f, "{}", int.name()),
+            Type::Float => write!(f, "Float"),
             Type::String => write!(f, "String"),
             Type::Named { name, args } => {
                 write!(f, "{name}")?;
@@ -1063,6 +1087,7 @@ pub fn walk<'p, B>(
         ExprKind::Unit
         | ExprKind::Str(_)
         | ExprKind::Int(..)
+        | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::Local(_)
         | ExprKind::SelfValue
@@ -1077,6 +1102,7 @@ pub fn walk<'p, B>(
             ControlFlow::Continue(())
         }
         ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::FloatBinary { lhs, rhs, .. }
         | ExprKind::Range {
             start: lhs,
             end: rhs,
@@ -1096,6 +1122,7 @@ pub fn walk<'p, B>(
         ExprKind::Neg { operand, .. }
         | ExprKind::BitNot { operand, .. }
         | ExprKind::Not(operand)
+        | ExprKind::FloatNeg(operand)
         | ExprKind::Scope(operand)
         | ExprKind::Field { base: operand, .. } => walk(operand, visit),
         ExprKind::Try {
