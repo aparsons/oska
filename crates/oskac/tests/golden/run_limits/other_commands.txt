@@ -97,8 +97,9 @@ USAGE:
                                            Ask oskalang.dev whether a newer
                                            release exists, verified against the
                                            pinned release key, and whether this
-                                           binary is the published one; the
-                                           only command that uses the network
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
     oskac self update [--version X [--allow-downgrade] | --rollback]
                       [--keep-previous] [--format=json]
                                            Replace this managed install with
@@ -211,8 +212,9 @@ USAGE:
                                            Ask oskalang.dev whether a newer
                                            release exists, verified against the
                                            pinned release key, and whether this
-                                           binary is the published one; the
-                                           only command that uses the network
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
     oskac self update [--version X [--allow-downgrade] | --rollback]
                       [--keep-previous] [--format=json]
                                            Replace this managed install with
@@ -325,8 +327,9 @@ USAGE:
                                            Ask oskalang.dev whether a newer
                                            release exists, verified against the
                                            pinned release key, and whether this
-                                           binary is the published one; the
-                                           only command that uses the network
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
     oskac self update [--version X [--allow-downgrade] | --rollback]
                       [--keep-previous] [--format=json]
                                            Replace this managed install with
@@ -439,8 +442,9 @@ USAGE:
                                            Ask oskalang.dev whether a newer
                                            release exists, verified against the
                                            pinned release key, and whether this
-                                           binary is the published one; the
-                                           only command that uses the network
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
     oskac self update [--version X [--allow-downgrade] | --rollback]
                       [--keep-previous] [--format=json]
                                            Replace this managed install with

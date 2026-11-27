@@ -268,6 +268,11 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "--uninstall --json",
         "`oskac self uninstall --format=json`",
         "`oskac self info --format=json`",
+        "`oskac self check --format=json`",
+        "`oskac self update --format=json`",
+        "`oskac self update --rollback --format=json`",
+        "`unmanaged_install`",
+        "`no_previous_version`",
         "`downgrade_refused`",
         "https://oskalang.dev/llms.txt",
         // The update step stops as the install step does, and reports the
@@ -436,6 +441,11 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
         // How this oskac was installed, and whether an update exists.
         "oskac self info --format=json",
         "--check --json",
+        // The way to ask whether an update exists and whether the binary is
+        // genuine, and the way to update a managed install.
+        "`oskac self check --format=json`",
+        "`oskac self update`",
+        "`oskac self update --rollback`",
     ] {
         assert!(
             template.contains(line),
@@ -465,6 +475,175 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
     })
     .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+}
+
+/// The usage of each `oskac self <sub>` in `oskac --help`: the flags its
+/// own lines (the line and its continuation) list.
+fn self_usage() -> std::collections::BTreeMap<String, BTreeSet<String>> {
+    let help = stdout_of(&["--help"]);
+    let mut out = std::collections::BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in help.lines() {
+        if let Some(rest) = line.strip_prefix("    oskac ") {
+            current = rest
+                .strip_prefix("self ")
+                .and_then(|r| r.split_whitespace().next())
+                .map(str::to_string);
+            if let Some(sub) = &current {
+                out.insert(sub.clone(), BTreeSet::new());
+            }
+        }
+        // A description line is indented to column 43; the others are
+        // the usage.
+        if line.starts_with(&" ".repeat(43)) {
+            continue;
+        }
+        if let Some(flags) = current.as_ref().and_then(|sub| out.get_mut(sub)) {
+            flags.extend(flags_in(line));
+        }
+    }
+    out
+}
+
+#[test]
+fn every_self_command_and_flag_the_docs_mention_is_in_the_real_usage() {
+    let usage = self_usage();
+    for sub in ["info", "uninstall", "check", "update"] {
+        assert!(usage.contains_key(sub), "oskac self {sub} is not in --help");
+    }
+    let root = repo_root();
+    let mut texts = agent_texts();
+    for page in ["docs/guide/install.md", "docs/guide/cli-reference.md"] {
+        texts.push((page.to_string(), read(&root.join(page))));
+    }
+    let mut seen = BTreeSet::new();
+    for (name, text) in texts {
+        for code in code_lines(&text) {
+            let words: Vec<&str> = code.split_whitespace().collect();
+            for at in 0..words.len() {
+                if words[at] != "oskac" || words.get(at + 1) != Some(&"self") {
+                    continue;
+                }
+                let Some(sub) = words.get(at + 2) else {
+                    continue;
+                };
+                let sub = sub.trim_matches(|c: char| !c.is_ascii_alphabetic());
+                let Some(allowed) = usage.get(sub) else {
+                    panic!("{name}: `oskac self {sub}` is not a command:\n{code}");
+                };
+                let rest = words[at + 3..].join(" ");
+                for flag in flags_in(&rest) {
+                    assert!(
+                        allowed.contains(&flag),
+                        "{name}: `oskac self {sub}` has no {flag}: {allowed:?}\n{code}"
+                    );
+                    seen.insert(format!("{sub} {flag}"));
+                }
+                seen.insert(sub.to_string());
+            }
+        }
+    }
+    for want in [
+        "check",
+        "update",
+        "update --rollback",
+        "update --version",
+        "update --allow-downgrade",
+        "update --keep-previous",
+        "check --no-identify",
+    ] {
+        let found = if let Some((sub, flag)) = want.split_once(' ') {
+            seen.contains(&format!("{sub} {flag}"))
+        } else {
+            seen.contains(want)
+        };
+        assert!(found, "the docs should show oskac self {want}");
+    }
+}
+
+/// The error codes the real `oskac self` commands give for a usage error
+/// and for a refusal that needs no network, and the codes the install guide
+/// lists.
+#[test]
+fn the_self_flags_the_docs_describe_behave_as_described() {
+    // Documented as usage errors (exit code 2, a JSON error with code usage).
+    for args in [
+        &["self", "update", "--allow-downgrade", "--format=json"][..],
+        &[
+            "self",
+            "update",
+            "--rollback",
+            "--version",
+            "0.1.0",
+            "--format=json",
+        ][..],
+        &["self", "check", "--keep-previous", "--format=json"][..],
+        &["self", "update", "--no-identify", "--format=json"][..],
+        &["self", "info", "--rollback", "--format=json"][..],
+    ] {
+        let output = oskac(args);
+        assert_eq!(output.status.code(), Some(2), "oskac {args:?}");
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8");
+        assert!(
+            stdout.contains("\"ok\":false") && stdout.contains("\"error\":\"usage\""),
+            "oskac {args:?}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn the_install_guide_lists_every_error_code_the_self_commands_give() {
+    let guide = read(&repo_root().join("docs/guide/install.md"));
+    let table: Vec<&str> = guide
+        .lines()
+        .filter_map(|l| l.strip_prefix("| `"))
+        .filter_map(|l| l.split('`').next())
+        .collect();
+    for code in [
+        "usage",
+        "bad_index",
+        "stale_index",
+        "rollback_refused",
+        "network_error",
+        "tls_error",
+        "bad_checksums",
+        "checksum_mismatch",
+        "version_mismatch",
+        "downgrade_refused",
+        "unmanaged_install",
+        "replace_failed",
+        "internal",
+        "no_previous_version",
+    ] {
+        assert!(table.contains(&code), "the error table should list {code}");
+    }
+    for text in [
+        "the managed-install rule",
+        "identity.state",
+        "serial_remembered",
+        "--keep-previous",
+        "--rollback",
+        "uses the network only",
+    ] {
+        assert!(
+            guide.to_lowercase().contains(&text.to_lowercase()) || guide.contains(text),
+            "the install guide should say: {text}"
+        );
+    }
+    // The old statement that oskac never uses the network, and that there is
+    // no self-update command, is gone everywhere the docs say it.
+    for (name, text) in agent_texts()
+        .into_iter()
+        .chain([("install.md".to_string(), guide.clone())])
+    {
+        for stale in [
+            "no self-update command",
+            "never uses the network",
+            "the only command that uses the network",
+        ] {
+            assert!(!text.contains(stale), "{name} still says: {stale}");
+        }
+    }
 }
 
 /// The first code span or fenced line of `text` that contains `needle`.
