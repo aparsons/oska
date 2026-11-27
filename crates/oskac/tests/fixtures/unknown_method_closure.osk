@@ -1,0 +1,3 @@
+fn main() {
+    Some(1).map(|x| x + 1)
+}

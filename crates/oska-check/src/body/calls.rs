@@ -866,7 +866,20 @@ impl Body<'_, '_, '_> {
 
     pub(super) fn infer_args(&mut self, args: &[Arg]) {
         for arg in args {
-            self.infer(&arg.value);
+            if let ExprKind::Closure { params, .. } = &arg.value.kind {
+                // Nothing says what the closure's parameters are, and the
+                // call's own error is the one to report: give them the
+                // error type, which no operation on it reports again.
+                let expected = Ty::Fn {
+                    cap: self.infer.fresh_cap(),
+                    scoped: false,
+                    params: vec![Ty::Error; params.len()],
+                    ret: Box::new(Ty::Error),
+                };
+                self.expr(&arg.value, Some(&expected));
+            } else {
+                self.infer(&arg.value);
+            }
         }
     }
 }
