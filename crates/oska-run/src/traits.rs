@@ -45,6 +45,8 @@ pub const INTRINSICS: Table = &[
     ("I8.cmp", Plain(cmp)),
     ("Int.cmp", Plain(cmp)),
     ("String.cmp", Plain(cmp)),
+    ("List.cmp", HigherOrder(items_cmp)),
+    ("Option.cmp", HigherOrder(items_cmp)),
     ("U16.cmp", Plain(cmp)),
     ("U32.cmp", Plain(cmp)),
     ("U64.cmp", Plain(cmp)),
@@ -143,12 +145,60 @@ fn same(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
 /// `cmp(self, other)` for the integers, `Bool` and `String` (ADR 0034): an
 /// `Ordering`.
 fn cmp(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
-    let variant = match crate::ops::order(&args[0], &args[1]) {
+    Ok(ordering(crate::ops::order(&args[0], &args[1])))
+}
+
+/// Wrap an order as the prelude's `Ordering`.
+fn ordering(order: std::cmp::Ordering) -> Value {
+    let variant = match order {
         std::cmp::Ordering::Less => "Less",
         std::cmp::Ordering::Equal => "Equal",
         std::cmp::Ordering::Greater => "Greater",
     };
-    Ok(Value::variant(builtins::ORDERING, variant, Vec::new()))
+    Value::variant(builtins::ORDERING, variant, Vec::new())
+}
+
+/// `cmp(self, other)` for `Option` and `List` (ADR 0034): `None` before
+/// `Some`; lists item by item through `Ord` for the item's type, a prefix
+/// before a longer list.
+fn items_cmp(
+    interp: &mut Interpreter<'_, '_>,
+    args: &mut Args,
+    span: Span,
+) -> Result<Value, Panic> {
+    let (lhs, rhs): (&Rc<Vec<Value>>, &Rc<Vec<Value>>) = match (&args[0], &args[1]) {
+        (Value::List(lhs), Value::List(rhs)) => (lhs, rhs),
+        (
+            Value::Variant {
+                variant: lv,
+                fields: lhs,
+                ..
+            },
+            Value::Variant {
+                variant: rv,
+                fields: rhs,
+                ..
+            },
+        ) => {
+            // `None` is declared before `Some`.
+            if lv != rv {
+                return Ok(ordering(if &**lv == "None" {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }));
+            }
+            (lhs, rhs)
+        }
+        other => unreachable!("the checker guarantees two lists or two variants, found {other:?}"),
+    };
+    for (l, r) in lhs.iter().zip(rhs.iter()) {
+        let order = interp.call_trait(builtins::ORD_CMP, l.clone(), vec![r.clone()], span)?;
+        if !matches!(&order, Value::Variant { variant, .. } if &**variant == "Equal") {
+            return Ok(order);
+        }
+    }
+    Ok(ordering(lhs.len().cmp(&rhs.len())))
 }
 
 /// `IoError.to_string(self)`: its message.

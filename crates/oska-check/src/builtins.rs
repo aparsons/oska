@@ -17,8 +17,8 @@ use crate::collect::field_types;
 use crate::prelude;
 
 pub use crate::ty::{
-    ARGS, BOOL, DISPLAY, EQ, FLOAT, FROM, HASH, INT, LIST, OPTION, RANGE, RESULT, SCOPE, SECRET,
-    STRING, TEST_CONTEXT,
+    ARGS, BOOL, DISPLAY, EQ, FLOAT, FROM, HASH, INT, LIST, OPTION, ORD, RANGE, RESULT, SCOPE,
+    SECRET, STRING, TEST_CONTEXT,
 };
 
 /// The prelude's `Ordering`, which `cmp` returns (ADR 0034).
@@ -65,6 +65,12 @@ pub struct TraitMethod {
 pub const EQ_EQ: TraitMethod = TraitMethod {
     trait_name: EQ,
     method: "eq",
+};
+
+/// `Ord.cmp`: what the `Ord` of an `Option` or a `List` calls on each item.
+pub const ORD_CMP: TraitMethod = TraitMethod {
+    trait_name: ORD,
+    method: "cmp",
 };
 
 /// `Hash.hash`: what a derived `Hash`, and the `Hash` of an `Option` or a

@@ -1271,6 +1271,11 @@ impl Ord for Bool { fn cmp(self, other: Bool) -> Ordering }
 // every platform and backend, with no locale, case folding or normalization.
 // `""` is before every other text, and a prefix before a longer text.
 impl Ord for String { fn cmp(self, other: String) -> Ordering }
+// `None` is before every `Some`; two `Some`s order by their items.
+impl<T: Ord> Ord for Option<T> { fn cmp(self, other: Option<T>) -> Ordering }
+// Lexicographic: the first items that differ decide, and a prefix is before a
+// longer list, so `[]` is before every other list.
+impl<T: Ord> Ord for List<T> { fn cmp(self, other: List<T>) -> Ordering }
 
 // A value that can be hashed.
 pub trait Hash {

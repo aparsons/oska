@@ -202,7 +202,8 @@ fn a_sort_key_is_a_list_and_a_tuple_style_pair_is_an_option() {
             _ => {}
         }
     }
-    io.println(\"{least.len()}\")?
+    let width = least.len()
+    io.println(\"{width}\")?
     var best: Option<Int> = None
     for n in [4, 8, 2, 6] {
         match Some(n).cmp(best) {
@@ -212,8 +213,8 @@ fn a_sort_key_is_a_list_and_a_tuple_style_pair_is_an_option() {
             _ => {}
         }
     }
-    io.println(\"{best}\")?";
-    assert_runs(&program("", body), &[], "0\nSome(8)\n");
+    io.println(best.unwrap_or(-1).to_string())?";
+    assert_runs(&program("", body), &[], "0\n8\n");
 }
 
 #[test]
@@ -222,7 +223,7 @@ fn a_float_item_is_not_ord() {
         "",
         "    let x = Some(1.0).cmp(Some(2.0))\n    io.println(\"no\")?",
     );
-    assert_refused(&src, "E0228");
+    assert_refused(&src, "E0265");
     let src = program(
         "fn most<T: Ord>(a: T, b: T) -> T {\n    match a.cmp(b) {\n        Ordering.Less => b\n        _ => a\n    }\n}\n",
         "    let x = most([1.0], [2.0])\n    io.println(\"no\")?",
@@ -236,5 +237,5 @@ fn an_item_with_no_ordering_is_refused() {
         "struct Point { x: Int }\nimpl Eq for Point {\n    fn eq(self, other: Point) -> Bool { self.x == other.x }\n}\n",
         "    let x = [Point(x: 1)].cmp([Point(x: 2)])\n    io.println(\"no\")?",
     );
-    assert_refused(&src, "E0228");
+    assert_refused(&src, "E0265");
 }
