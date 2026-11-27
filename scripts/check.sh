@@ -138,6 +138,31 @@ deleted=      # once known: the paths among them that were deleted
 diff_base=    # once known: the merge-base with origin/main
 ran_any=      # set once a step's block runs
 fast_decided= # set once a --fast run has decided whether it can be fast
+timed_step=   # the step whose header printed and whose time is running
+timed_from=0  # SECONDS when that step's header printed
+step_times=   # "SECONDS NAME" per finished step, for the slowest-steps summary
+
+# begin_timing NAME / end_timing: time a step from its header to the next
+# step's start (or `finish`), with the shell's SECONDS and no external tool.
+# end_timing prints the step's elapsed seconds and records it.
+begin_timing() {
+  timed_step=$1
+  timed_from=$SECONDS
+}
+end_timing() {
+  [ -n "$timed_step" ] || return 0
+  local took=$((SECONDS - timed_from))
+  printf '(%ss)\n' "$took"
+  step_times="$step_times$took $timed_step"$'\n'
+  timed_step=
+}
+# slowest_steps: the five slowest steps of the run, longest first.
+slowest_steps() {
+  [ -n "$step_times" ] || return 0
+  printf '\nSlowest steps:\n'
+  printf '%s' "$step_times" | sort -rn -k1,1 -s | head -n 5 |
+    while read -r took name; do printf '  %5ss  %s\n' "$took" "$name"; done
+}
 
 # step NAME [--fast] [--fast-when PATTERN]... [--no-slot] [--cargo]
 # [--docs-tests] [--group G]: opens a step's block,
@@ -149,6 +174,7 @@ fast_decided= # set once a --fast run has decided whether it can be fast
 # tags say so (see the top of this file).
 step() {
   local name=$1 fast='' slot=1 cargo='' docs='' when=() group=lint
+  end_timing
   shift
   while [ $# -gt 0 ]; do
     case $1 in
@@ -223,11 +249,13 @@ step() {
     # No cargo input changed: the stamp's tree vouches for the skip.
     if [ "$cargo_mode" = skip ]; then
       printf '\n== %s\n' "$name"
+      begin_timing "$name"
       skip_step "skipped: $cargo_why; CI runs it"
       return 1
     fi
     if [ "$cargo_mode" = docs ] && [ -z "$docs" ]; then
       printf '\n== %s\n' "$name"
+      begin_timing "$name"
       skip_step --no-stamp "skipped: $cargo_why; CI runs it"
       return 1
     fi
@@ -241,6 +269,7 @@ step() {
     . scripts/build-slots/acquire.sh
   fi
   printf '\n== %s\n' "$name"
+  begin_timing "$name"
 }
 
 # skip_step [--no-stamp] REASON: inside a step's block, says why the step did
@@ -475,6 +504,8 @@ finish() {
   if [ "$mode" = list ]; then
     exit 0
   fi
+  end_timing
+  slowest_steps
   if [ -n "$fast_run" ] && [ -z "$ran_any" ]; then
     printf '\n--fast: no steps ran; nothing they check changed. This was NOT the full check: no pass stamp written; scripts/check.sh (and CI) runs every step.\n'
     exit 0

@@ -150,6 +150,49 @@ else
   bad "a run takes the build slot once, after the cheap guards and before cargo fmt" "log: $log"
 fi
 
+# Timing: each step prints its elapsed seconds, and a run ends with the
+# slowest steps, longest first. The cases check the shape, never the values.
+n_headers=$(printf '%s\n' "$out" | grep -c '^== ')
+n_timers=$(printf '%s\n' "$out" | grep -cE '^\([0-9]+s\)$')
+if [ "$n_headers" -gt 0 ] && [ "$n_headers" -eq "$n_timers" ]; then
+  ok "each step prints its duration"
+else
+  bad "each step prints its duration" "$n_headers headers, $n_timers timer lines"
+fi
+# A timer line comes right before the next header or the summary.
+if ! printf '%s\n' "$out" | awk '
+  /^== / { if (open) exit 1; open = 1; next }
+  /^\([0-9]+s\)$/ { if (!open) exit 1; open = 0 }
+  END { exit open }'; then
+  bad "a step's duration follows its own output" "out: $out"
+else
+  ok "a step's duration follows its own output"
+fi
+slowest=$(printf '%s\n' "$out" | sed -n '/^Slowest steps:$/,/^All checks passed\.$/p' | sed -n 's/^ *\([0-9][0-9]*\)s  .*/\1/p')
+if [ -n "$slowest" ] && [ "$slowest" = "$(printf '%s\n' "$slowest" | sort -rn)" ] &&
+  [ "$(printf '%s\n' "$slowest" | wc -l)" -le 5 ]; then
+  ok "a run ends with the slowest steps, longest first"
+else
+  bad "a run ends with the slowest steps, longest first" "got: $slowest; out: $out"
+fi
+for flag in "--group scripts" --fast; do
+  # shellcheck disable=SC2086 # the flag is one or two words
+  check $flag
+  if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -q '^Slowest steps:$' &&
+    ! printf '%s\n' "$out" | grep -q '^\[stamp write'; then
+    ok "$flag prints the slowest steps and writes no stamp"
+  else
+    bad "$flag prints the slowest steps and writes no stamp" "exit $status: $out"
+  fi
+done
+check --list
+if ! printf '%s\n' "$out" | grep -qE '^\([0-9]+s\)$|Slowest'; then
+  ok "--list prints no timing"
+else
+  bad "--list prints no timing" "got: $out"
+fi
+check
+
 # Discovery: every script test suite in the tree, and cargo's fmt, clippy and
 # test, run in a full run. A dropped step fails here.
 missing=
