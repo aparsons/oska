@@ -533,7 +533,16 @@ impl Body<'_, '_, '_> {
                 // intrinsic.
                 let qualified = format!("{type_name}.{}", name.name);
                 let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
-                Some(if intrinsic {
+                // A `List` method whose body is Oska in `std.core` (ADR
+                // 0034) is a call of that function.
+                let core = if intrinsic {
+                    crate::prelude::core_function(&type_name, &name.name)
+                } else {
+                    None
+                };
+                Some(if let Some(function) = core {
+                    Callee::Function(function)
+                } else if intrinsic {
                     Callee::intrinsic(qualified)
                 } else {
                     Callee::Function(qualified)
