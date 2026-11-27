@@ -170,7 +170,9 @@ fn the_module_checks_cleanly_under_the_rules_for_user_code() {
         .lines()
         .filter(|line| !line.trim_start().starts_with("//"))
         .collect();
-    for word in [".expose()", ".assume_trusted()", "Secret"] {
+    // `sign` takes a `Secret` key and returns a `Secret` signature (#828),
+    // so the word is allowed; the module still has no audit site.
+    for word in [".expose()", ".assume_trusted()"] {
         assert!(
             !code.iter().any(|line| line.contains(word)),
             "std.ecdsa uses `{word}`"

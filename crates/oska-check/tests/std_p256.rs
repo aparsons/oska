@@ -140,12 +140,19 @@ fn a_scalar_that_is_not_secret_is_refused() {
 
 #[test]
 fn a_private_helper_cannot_be_used() {
+    // The curve arithmetic is in `std.p256_ops`; `std.p256` has only its two
+    // functions, and the helpers of `std.p256_ops` are private there.
     assert_errors(
         "use std.p256\n\
          fn main() {\n    let _ = p256.invert([])\n}",
+        &[("E0312", "invert")],
+    );
+    assert_errors(
+        "use std.p256_ops\n\
+         fn main() {\n    let _ = p256_ops.invert([])\n}",
         &[("E0360", "invert")],
     );
-    assert_errors("use std.p256.{multiply}", &[("E0360", "multiply")]);
+    assert_errors("use std.p256_ops.{add_points}", &[("E0360", "add_points")]);
 }
 
 // ---- Purity and audit sites ---------------------------------------------------------

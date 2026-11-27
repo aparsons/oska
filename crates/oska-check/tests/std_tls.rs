@@ -325,6 +325,7 @@ fn the_crypto_modules_it_uses_have_no_audit_site() {
         include_str!("../src/std/hmac.osk"),
         include_str!("../src/std/x25519.osk"),
         include_str!("../src/std/p256.osk"),
+        include_str!("../src/std/p256_ops.osk"),
         include_str!("../src/std/chacha20poly1305.osk"),
         include_str!("../src/std/aes128gcm.osk"),
         include_str!("../src/std/sha2.osk"),

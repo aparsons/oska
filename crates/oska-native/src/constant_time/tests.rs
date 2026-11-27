@@ -783,12 +783,53 @@ fn main(io: Stdout, env: Env, args: Args) {
         for target in Target::ALL {
             let inspected = inspect_secret_code(src, target);
             for name in [
-                "pkg.std.p256.mont_mul",
-                "pkg.std.p256.add_mod",
-                "pkg.std.p256.sub_mod",
-                "pkg.std.p256.reduce_once",
-                "pkg.std.p256.select",
-                "pkg.std.p256.multiply",
+                "pkg.std.p256_ops.mont_mul_mod",
+                "pkg.std.p256_ops.add_mod_with",
+                "pkg.std.p256_ops.sub_mod",
+                "pkg.std.p256_ops.reduce_mod",
+                "pkg.std.p256_ops.select",
+                "pkg.std.p256_ops.multiply",
+            ] {
+                assert!(
+                    inspected.get(name).is_some_and(|&n| n > 0),
+                    "{target:?}: nothing in `{name}` inspected: {inspected:?}"
+                );
+            }
+        }
+    }
+
+    /// `std.ecdsa.sign` (#828): the machine code of the signer over the
+    /// secret key and the nonce is branch-free and addresses no memory by a
+    /// secret, on every target that has a trace: the scalar multiplication
+    /// of the nonce, the arithmetic mod the group order (`mont_mul_mod`
+    /// and `add_mod_with`), the nonce's HMAC-SHA-256 generator and
+    /// the verdict on whether the nonce was usable.
+    #[test]
+    fn the_machine_code_of_ecdsa_sign_is_branch_free() {
+        let src = r#"use std.ecdsa
+
+fn main(io: Stdout, env: Env, args: Args) {
+    let key = env.secret("P256_SCALAR").to_bytes()
+    let digest = match args.get(1) {
+        Some(text) => Bytes.from_hex(text).unwrap_or(Bytes.new())
+        None => Bytes.new()
+    }
+    let line = match ecdsa.sign(key, digest) {
+        Some(signature) => signature.expose().to_hex()
+        None => "no signature"
+    }
+    let _ = io.println(line)
+}
+"#;
+        for target in Target::ALL {
+            let inspected = inspect_secret_code(src, target);
+            for name in [
+                "pkg.std.p256_ops.mont_mul_mod",
+                "pkg.std.p256_ops.add_mod_with",
+                "pkg.std.p256_ops.multiply",
+                "pkg.std.p256_ops.sign_with_nonce",
+                "pkg.std.p256_ops.in_range_bit",
+                "pkg.std.ecdsa.hmac_secret",
             ] {
                 assert!(
                     inspected.get(name).is_some_and(|&n| n > 0),

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // `std.ecdsa`: verifying ECDSA signatures (FIPS 186-5, section 6.4.2) on
 // the curves web certificates use, P-256 (secp256r1) and P-384
-// (secp384r1). A module sees it only after `use std.ecdsa`. There is no
-// signing and no key generation.
+// (secp384r1), and signing on P-256. A module sees it only after `use
+// std.ecdsa`. There is no key generation: a P-256 signing key is 32 secret
+// bytes, such as `Random.secure_bytes(32)`, in 1 to n - 1.
 //
 // A key loads from its SEC1 uncompressed point, `0x04` then `x` then `y`
 // (65 bytes on P-256, 97 on P-384), and is refused unless both
@@ -22,15 +23,43 @@
 // the encoding must be the one DER gives (a short-form length, a minimal
 // positive integer, nothing after the sequence).
 //
-// Every input is public, so the arithmetic here is variable-time over
-// public integers: it holds nothing secret. Every function is a pure
-// function, and the module has no audit site: no `expose()` and no
-// `.assume_trusted()`. A `PublicKey` is trusted with no assertion, as it
-// is built from integers read out of the bytes and checked.
+// Verification takes only public inputs, so its arithmetic is
+// variable-time over public integers.
+//
+// `sign(key, digest)` signs the digest of a message with a P-256 `key`,
+// which is a `Secret<Bytes>`, and gives the 64 bytes `r || s` of IEEE P1363
+// (the form `verify` takes, and the one RFC 7518 section 3.4 gives ES256)
+// as a secret, which the caller exposes where it needs the signature in the
+// clear, as with `std.p256`. The digest is the caller's hash of the message
+// (SHA-256 for ES256), any length: it is cut or taken as the integer it is,
+// as `verify` does, so the signer is general over digests. The nonce is
+// never the caller's: there is no parameter for it, so it can be neither
+// repeated nor biased through this API. It is the deterministic nonce of
+// RFC 6979 (section 3.2) with HMAC-SHA-256, so the same key and digest give
+// the same signature, and two different digests give two different
+// nonces, because the nonce is a function of the key and the digest. This
+// is the default and the only mode: a random nonce would depend on
+// the quality of the generator at every signature, which a deterministic
+// one does not. The HMAC is SHA-256 whatever the digest is, as for a
+// P-256 key with SHA-256, the pairing of RFC 6979's own vectors. `s` is
+// not forced to the low one of the two, as with the vectors of the RFC.
+//
+// The key, the nonce and everything computed from them are secret integers
+// (`std.p256_ops`), written so that no branch or memory address depends on
+// a secret bit, which the checker proves and the native backend keeps, as
+// for `std.p256`. The one thing the code reveals about them is a one-byte
+// verdict, compared in constant time: whether the nonce, `r` and `s` were
+// all usable. When they are not (a chance of about 2^-32) the procedure of
+// RFC 6979 draws the next nonce from the same generator. The key never
+// prints, interpolates, logs or compares (the rules for secrets), and the
+// module has no audit site: no `expose()` and no `.assume_trusted()`. Every
+// function is a pure function. A `PublicKey` is trusted with no assertion,
+// as it is built from integers read out of the bytes and checked.
 //
 // This code is hand-written and has not been audited (ADR 0012). It is
-// held by Project Wycheproof's ECDSA vectors, on the interpreter and
-// natively on every supported platform.
+// held by Project Wycheproof's ECDSA vectors, by RFC 6979's signatures and
+// by `verify` accepting every signature `sign` makes, on the interpreter
+// and natively on every supported platform.
 
 // For maintainers: this file is Oska source, checked under the rules for
 // user code and run as Oska by both backends. The comment block directly
@@ -46,6 +75,8 @@
 // and equal points included, so no case needs its own path.
 
 use std.montgomery
+use std.p256_ops
+use std.sha2
 
 // Which curve a key is on.
 pub enum Curve {
@@ -137,6 +168,95 @@ pub fn verify_der(key: PublicKey, digest: Untrusted<Bytes>, signature: Untrusted
     }
 }
 
+// ---- Signing ------------------------------------------------------------------
+
+// The ECDSA signature (FIPS 186-5, section 6.4.1) of the message whose hash
+// is `digest`, under the P-256 private key `key`, as the 64 bytes `r || s`
+// (each a big-endian integer of 32 bytes) of IEEE P1363, which `verify`
+// takes and RFC 7518 section 3.4 gives ES256. It is `None` unless `key` is
+// 32 bytes and in 1 to n - 1; whether it is depends on the key's length and
+// range and nothing else about it. The digest is any length, cut to its
+// leftmost 32 bytes or taken as the integer it is, as in `verify`.
+//
+// The nonce is the deterministic one of RFC 6979 with HMAC-SHA-256: the
+// same key and digest give the same signature, and the caller has no way to
+// pick, repeat or bias a nonce. The key, the nonce and everything computed
+// from them are secret integers, so no branch or memory address depends on
+// them. The signature is returned as a secret, which the caller exposes
+// where it needs it in the clear.
+pub fn sign(key: Secret<Bytes>, digest: Untrusted<Bytes>) -> Option<Secret<Bytes>> {
+    if !p256_ops.scalar_in_range(key) {
+        return None
+    }
+    let e = digest_integer(params(Curve.P256), digest)
+    // RFC 6979 section 3.2: the key and the hash as octets, `int2octets(x)`
+    // and `bits2octets(h1)`, here both 32 bytes.
+    var seed = Secret.new(Bytes.new())
+    seed.append(key)
+    seed.append(Secret.new(montgomery.limbs_to_be(e)))
+    var k_key = Secret.new(Bytes.zeroed(32))
+    var v = Secret.new(filled(32, 1))
+    k_key = hmac_secret(k_key, with_separator(v, 0, seed))
+    v = hmac_secret(k_key, v)
+    k_key = hmac_secret(k_key, with_separator(v, 1, seed))
+    v = hmac_secret(k_key, v)
+    // The nonce candidates: the first that is usable signs. A candidate is
+    // refused with a chance of about 2^-32, which is the draw of RFC 6979
+    // section 3.2 step h.3.
+    while true {
+        v = hmac_secret(k_key, v)
+        let signed = p256_ops.sign_with_nonce(key, v, e)
+        if signed.usable {
+            return Some(signed.signature)
+        }
+        k_key = hmac_secret(k_key, with_separator(v, 0, Secret.new(Bytes.new())))
+        v = hmac_secret(k_key, v)
+    }
+    None
+}
+
+// `n` bytes, each `value`.
+fn filled(n: Int, value: U8) -> Bytes {
+    var out = Bytes.new()
+    for _ in 0..n {
+        out.push(value)
+    }
+    out
+}
+
+// `v`, then the byte `separator`, then `rest`.
+fn with_separator(v: Secret<Bytes>, separator: U8, rest: Secret<Bytes>) -> Secret<Bytes> {
+    var out = Secret.new(Bytes.new())
+    out.append(v)
+    out.push(Secret.new(separator))
+    out.append(rest)
+    out
+}
+
+// HMAC-SHA-256 (RFC 2104) of the secret `message` under the 32-byte secret
+// `key`, in constant time. `std.hmac` takes a public message, and RFC 6979's
+// carries the private key.
+fn hmac_secret(key: Secret<Bytes>, message: Secret<Bytes>) -> Secret<Bytes> {
+    var inner_key = Secret.new(Bytes.new())
+    var outer_key = Secret.new(Bytes.new())
+    let inner_pad: U8 = 54
+    let outer_pad: U8 = 92
+    for i in 0..32 {
+        inner_key.push(key.at(i) ^ inner_pad)
+        outer_key.push(key.at(i) ^ outer_pad)
+    }
+    // The other 32 bytes of the key's block are zeros, so just the pads.
+    inner_key.append(Secret.new(filled(32, inner_pad)))
+    outer_key.append(Secret.new(filled(32, outer_pad)))
+    var inner = sha2.Sha256Secret.new()
+    inner.update(inner_key)
+    inner.update(message)
+    var outer = sha2.Sha256Secret.new()
+    outer.update(outer_key)
+    outer.update(inner.finish())
+    outer.finish()
+}
+
 // ---- DER --------------------------------------------------------------------
 
 // The offset just past the DER `INTEGER` at `at` in `bytes`, or -1 when
@@ -183,6 +303,21 @@ fn der_integer_value(bytes: Untrusted<Bytes>, start: Int, end: Int, width: Int) 
 
 // ---- Verification -------------------------------------------------------------
 
+// `e`: the leftmost `width` bytes of `digest`, as an integer, mod n (FIPS
+// 186-5, section 6.4.1 step 2).
+fn digest_integer(c: Domain, digest: Untrusted<Bytes>) -> List<U64> {
+    let used = if digest.len() < c.width { digest.len() } else { c.width }
+    var e_bytes = Bytes.zeroed(c.width - used)
+    for i in 0..used {
+        e_bytes.push(digest.at(i))
+    }
+    var e = montgomery.limbs_from_be(e_bytes, 0, c.limbs)
+    if !montgomery.less(e, c.n.m) {
+        e = montgomery.sub_limbs(e, c.n.m)
+    }
+    e
+}
+
 // Whether `(r, s)` is a signature of the hash `digest` by `key`: FIPS 186-5,
 // section 6.4.2.
 fn check(key: PublicKey, c: Domain, digest: Untrusted<Bytes>, r: List<U64>, s: List<U64>) -> Bool {
@@ -190,16 +325,7 @@ fn check(key: PublicKey, c: Domain, digest: Untrusted<Bytes>, r: List<U64>, s: L
     if is_zero(r) || is_zero(s) || !montgomery.less(r, n.m) || !montgomery.less(s, n.m) {
         return false
     }
-    // e: the leftmost `width` bytes of the digest, as an integer, mod n.
-    let used = if digest.len() < c.width { digest.len() } else { c.width }
-    var e_bytes = Bytes.zeroed(c.width - used)
-    for i in 0..used {
-        e_bytes.push(digest.at(i))
-    }
-    var e = montgomery.limbs_from_be(e_bytes, 0, c.limbs)
-    if !montgomery.less(e, n.m) {
-        e = montgomery.sub_limbs(e, n.m)
-    }
+    let e = digest_integer(c, digest)
     // w = s^-1 mod n, kept in Montgomery form, which makes `mont_mul` of a
     // plain number and `w` the plain product.
     let w = montgomery.mont_pow(montgomery.mont_mul(s, n.r2, n), montgomery.sub_limbs(n.m, montgomery.small(2, c.limbs)), n)
