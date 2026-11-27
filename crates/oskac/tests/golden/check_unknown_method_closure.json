@@ -1,6 +1,6 @@
 {
   "diagnostics": [
-    {"code":"E0228","message":"`Option<Int>` has no method `map`","path":"crates/oskac/tests/fixtures/unknown_method_closure.osk","span":{"start":24,"end":27},"line":2,"column":13,"end_line":2,"end_column":16,"severity":"error","url":"https://oskalang.dev/codes/E0228","related":[],"suggestions":[]}
+    {"code":"E0228","message":"`Option<Int>` has no method `map`","path":"crates/oskac/tests/fixtures/unknown_method_closure.osk","span":{"start":63,"end":66},"line":3,"column":13,"end_line":3,"end_column":16,"severity":"error","url":"https://oskalang.dev/codes/E0228","related":[],"suggestions":[]}
   ],
   "functions": [
     {"name":"main","authority":[],"via":[],"pure":true}
