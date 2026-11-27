@@ -49,6 +49,12 @@ fn main(io: Stdout, args: Args) -> Result<(), IoError> {
 }
 ```
 
+## Posting a body
+
+`http.Request.post(path, content_type, body)` makes a POST, and `http.post` (same arguments as `http.get`) sends it with `Content-Type` and `Content-Length`. The body is `Untrusted<Bytes>` or `Bytes`. Read `Replay-Nonce`, `Location`, `Retry-After` or `Link` from the response with `response.header("replay-nonce")`: the name matches in any case and the value is `Untrusted<String>`. A program may not set `Content-Type` on a POST itself. `http.send` runs a request of either method.
+
+A body over `http.MAX_BODY`, more than `http.MAX_FIELDS` request headers, or a request head over `http.MAX_HEAD` bytes is `InvalidRequest`, before anything connects.
+
 ## Limits
 
 The body is at most 16 MiB unless `with_max_body(bytes)` says less. A setting over 16 MiB (`http.MAX_BODY`) is `InvalidRequest`, before anything connects. The head of the response is at most 64 KiB and 100 fields. A larger one is `TooLarge`. A connection waits at most 60 seconds for the next bytes.

@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// `std.http`: an HTTPS GET client (RFC 9110 and 9112) over `std.tls`. A
-// module sees it only after `use std.http`.
+// `std.http`: an HTTPS client (RFC 9110 and 9112) over `std.tls`, with `GET`
+// and `POST`. A module sees it only after `use std.http`.
+//
+// `http.post(host, request, tls_config, random, clock)` is `http.get` for a
+// request made with `Request.post(path, content_type, body)`: it sends the
+// body with `Content-Type` and `Content-Length`, and a program may not set
+// `Content-Type` itself on a `POST`. The body is at most `MAX_BODY` bytes, and
+// the request's head (line and headers) at most `MAX_HEAD` bytes and
+// `MAX_FIELDS` headers, as the response's are; a request past either is
+// `InvalidRequest`, before anything connects. `http.send` runs a request of
+// either method. The response is read the same way for both: its headers
+// (`Replay-Nonce`, `Location`, `Retry-After`, `Link`, ...) are read by name
+// with `Response.header`, in any case, and are untrusted text.
 //
 // `http.get(host, request, tls_config, random, clock)` connects to the host
 // and port the `HostConnect` is confined to, runs the TLS 1.3 handshake
@@ -132,17 +143,28 @@ struct Field {
     value: Untrusted<String>,
 }
 
-// A GET request: a path, headers and the largest body to accept.
+// A request: a method, a path, headers, a body to send (a `POST`'s) and the
+// largest body to accept.
 pub struct Request {
+    method: String,
     path: Untrusted<String>,
     fields: List<Field>,
+    content_type: String,
+    body: Untrusted<Bytes>,
     max_body: Int,
 }
 
 impl Request {
     // A GET of `path`, which `http.get` checks (`InvalidRequest`).
     pub fn get(path: Untrusted<String>) -> Request {
-        Request(path: path, fields: [], max_body: MAX_BODY)
+        Request(method: "GET", path: path, fields: [], content_type: "", body: Bytes.new(), max_body: MAX_BODY)
+    }
+
+    // A POST of `body` to `path`, sent with `Content-Type: content_type`
+    // and a `Content-Length`. `http.post` checks it (`InvalidRequest`): the
+    // content type is a header value, and the body at most `MAX_BODY` bytes.
+    pub fn post(path: Untrusted<String>, content_type: String, body: Untrusted<Bytes>) -> Request {
+        Request(method: "POST", path: path, fields: [], content_type: content_type, body: body, max_body: MAX_BODY)
     }
 
     // The request with one more header. The name is a token and the value
@@ -150,13 +172,13 @@ impl Request {
     pub fn with_header(self, name: String, value: Untrusted<String>) -> Request {
         var fields = self.fields
         fields.push(Field(name: name, value: value))
-        Request(path: self.path, fields: fields, max_body: self.max_body)
+        Request(method: self.method, path: self.path, fields: fields, content_type: self.content_type, body: self.body, max_body: self.max_body)
     }
 
     // The request with its largest accepted body, in bytes (from 0 to
     // `MAX_BODY`; `http.get` refuses a setting outside that).
     pub fn with_max_body(self, bytes: Int) -> Request {
-        Request(path: self.path, fields: self.fields, max_body: bytes)
+        Request(method: self.method, path: self.path, fields: self.fields, content_type: self.content_type, body: self.body, max_body: bytes)
     }
 }
 
@@ -255,6 +277,25 @@ fn check_request(request: Request) -> Result<(), HttpError> {
     if request.max_body > MAX_BODY {
         return invalid("the maximum body is over 16777216")
     }
+    let post = request.method == "POST"
+    if request.fields.len() > MAX_FIELDS {
+        return invalid("the request has more than 100 headers")
+    }
+    if post {
+        if request.body.len() > MAX_BODY {
+            return invalid("the request body is over 16777216")
+        }
+        let kind = request.content_type.to_bytes()
+        if kind.len() == 0 {
+            return invalid("the content type is empty")
+        }
+        for i in 0..kind.len() {
+            let b = kind.at(i).to_int()
+            if (b < 32 && b != 9) || b == 127 {
+                return invalid("the content type holds a control character")
+            }
+        }
+    }
     for field in request.fields {
         let name = field.name.to_bytes()
         if name.len() == 0 {
@@ -270,6 +311,9 @@ fn check_request(request: Request) -> Result<(), HttpError> {
                 return invalid("the header {reserved} is set by the client")
             }
         }
+        if post && field.name.to_lowercase() == "content-type" {
+            return invalid("the header content-type is set by the client")
+        }
         let value = field.value.to_bytes()
         for i in 0..value.len() {
             let b = value.at(i).to_int()
@@ -281,9 +325,9 @@ fn check_request(request: Request) -> Result<(), HttpError> {
     Ok(())
 }
 
-// The text of the request: the line, then the headers.
-fn encode_request(name: String, port: Int, request: Request) -> Untrusted<Bytes> {
-    var out: Untrusted<Bytes> = "GET ".to_bytes()
+// The head of the request: the line, then the headers and the blank line.
+fn encode_head(name: String, port: Int, request: Request) -> Untrusted<Bytes> {
+    var out: Untrusted<Bytes> = "{request.method} ".to_bytes()
     out.append(request.path.to_bytes())
     out.append(" HTTP/1.1\r\nHost: ".to_bytes())
     out.append((if name.contains(":") { "[{name}]" } else { name }).to_bytes())
@@ -303,6 +347,11 @@ fn encode_request(name: String, port: Int, request: Request) -> Untrusted<Bytes>
     }
     if !agent {
         out.append("User-Agent: oska\r\n".to_bytes())
+    }
+    if request.method == "POST" {
+        let kind = request.content_type
+        let size = request.body.len()
+        out.append("Content-Type: {kind}\r\nContent-Length: {size}\r\n".to_bytes())
     }
     out.append("\r\n".to_bytes())
     out
@@ -720,8 +769,31 @@ impl Reader {
 // `clock`'s time, and `random` gives the secure randomness. The request is
 // checked first, and nothing is connected if it is refused.
 pub fn get(host: HostConnect, request: Request, tls_config: tls.TlsConfig, random: Random, clock: Clock) -> Result<Response, HttpError> {
+    if request.method != "GET" {
+        return Err(HttpError.InvalidRequest("http.get sends a GET request"))
+    }
+    send(host, request, tls_config, random, clock)
+}
+
+// Send a request made by `Request.post` and read the response, as `get`
+// does for a GET.
+pub fn post(host: HostConnect, request: Request, tls_config: tls.TlsConfig, random: Random, clock: Clock) -> Result<Response, HttpError> {
+    if request.method != "POST" {
+        return Err(HttpError.InvalidRequest("http.post sends a POST request"))
+    }
+    send(host, request, tls_config, random, clock)
+}
+
+// Send a request of either method and read the response.
+pub fn send(host: HostConnect, request: Request, tls_config: tls.TlsConfig, random: Random, clock: Clock) -> Result<Response, HttpError> {
     check_request(request)?
-    let text = encode_request(host.name(), host.port(), request)
+    var text = encode_head(host.name(), host.port(), request)
+    if text.len() > MAX_HEAD {
+        return Err(HttpError.InvalidRequest("the request head is over 65536"))
+    }
+    if request.method == "POST" {
+        text.append(request.body)
+    }
     var stream = match tls.connect(host, tls_config.with_alpn(["http/1.1"]), random, clock) {
         Ok(opened) => opened
         Err(error) => { return Err(HttpError.Tls(error)) }

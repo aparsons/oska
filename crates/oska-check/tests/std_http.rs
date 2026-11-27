@@ -87,6 +87,20 @@ fn a_program_calling_every_item_checks_and_lowers() {
 }
 
 #[test]
+fn post_takes_a_body_and_a_response_header_is_untrusted() {
+    assert_ok(
+        "use std.http\nuse std.tls\n\
+         fn f(host: HostConnect, body: Untrusted<Bytes>, random: Random, clock: Clock) -> Bool {\n    \
+             http.post(host, http.Request.post(\"/\", \"application/jose+json\", body), tls.TlsConfig.default(), random, clock).is_ok()\n}",
+    );
+    assert_errors(
+        "use std.http\n\
+         fn nonce(r: http.Response) -> String {\n    r.header(\"Replay-Nonce\").unwrap_or(\"\")\n}",
+        &[("E0300", "r.header(\"Replay-Nonce\").unwrap_or(\"\")")],
+    );
+}
+
+#[test]
 fn without_its_use_the_module_is_unknown() {
     assert_errors(
         "fn f() -> Int {\n    http.MAX_BODY\n}",
@@ -176,21 +190,23 @@ fn a_request_and_the_parser_state_are_private() {
 // ---- Purity and audit sites ---------------------------------------------------------
 
 #[test]
-fn the_parser_is_pure_and_only_get_has_authority() {
+fn the_parser_is_pure_and_only_the_senders_have_authority() {
     // The report lists only a program's own functions: the module's are the
     // toolchain's code. So authority is checked on the module itself, as a
     // file, where every function it declares, `pub` or not, is named.
     let report = check(include_str!("../src/std/http.osk"));
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     for f in &report.functions {
-        if f.name != "get" {
+        if !["get", "post", "send"].contains(&f.name.as_str()) {
             assert!(f.pure, "`{}` should be pure: {:?}", f.name, f.authority);
         }
     }
-    assert_eq!(
-        function(&report, "get").authority,
-        ["HostConnect", "Random", "Clock"]
-    );
+    for name in ["get", "post", "send"] {
+        assert_eq!(
+            function(&report, name).authority,
+            ["HostConnect", "Random", "Clock"]
+        );
+    }
 }
 
 #[test]

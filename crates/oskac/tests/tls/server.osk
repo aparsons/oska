@@ -896,6 +896,13 @@ impl Session {
         if scenario == "http_echo" {
             let size = asked.byte_len()
             text = "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\n\r\n{asked}"
+        } else if scenario == "http_nonce" {
+            // The headers an ACME server answers a POST with, in odd case.
+            text = "HTTP/1.1 201 Created\r\nreplay-NONCE: n-1\r\nLOCATION: https://ca.test/acct/1\r\nRetry-After: 3\r\nlink: <https://ca.test/dir>;rel=\"index\"\r\nContent-Length: 2\r\n\r\nok"
+        } else if scenario == "http_big_head" {
+            // One header of 70000 bytes: the head is past 64 KiB.
+            let long = pattern(70000).to_text().unwrap_or("")
+            text = "HTTP/1.1 200 OK\r\nX-Big: {long}\r\nContent-Length: 0\r\n\r\n"
         } else if scenario == "http_split" {
             text = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
             piece = 3

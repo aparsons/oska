@@ -11,7 +11,10 @@
 // `error` and the error's wording. Modes: `get` asks for `/index`; `echo`
 // asks for `/a%20b?q=1` with two extra headers, one of them from untrusted
 // text; `large` asks for a big body; `limit` asks for one with a maximum
-// of 30000 bytes; `ceiling` sets one over `http.MAX_BODY`; `default_roots` trusts only Mozilla's roots.
+// of 30000 bytes; `post` POSTs `{"a":1}` (or the sixth argument) to `/order`
+// as `application/jose+json` and prints the status, `Replay-Nonce`, `Location`,
+// `Retry-After` and `Link` and the body; `post_big` POSTs a body one byte over
+// `http.MAX_BODY`; `post_headers` POSTs with 101 headers; `ceiling` sets one over `http.MAX_BODY`; `default_roots` trusts only Mozilla's roots.
 
 use std.http
 use std.x509
@@ -40,13 +43,38 @@ fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Resul
         let outside = args.get(5).unwrap_or("/a%20b?q=1")
         request = http.Request.get(outside).with_header("X-One", "1").with_header("X-Two", args.get(6).unwrap_or("two"))
     }
+    if mode == "post" {
+        let body = args.get(5).unwrap_or("\{\"a\":1\}")
+        request = http.Request.post("/order", "application/jose+json", body.to_bytes())
+    }
+    if mode == "post_big" {
+        request = http.Request.post("/order", "application/jose+json", Bytes.zeroed(http.MAX_BODY + 1))
+    }
+    if mode == "post_headers" {
+        request = http.Request.post("/order", "application/jose+json", "x".to_bytes())
+        for i in 0..101 {
+            request = request.with_header("X-{i}", "v")
+        }
+    }
+    if mode == "post_content_type" {
+        request = http.Request.post("/order", "application/json", "x".to_bytes()).with_header("content-type", "text/plain")
+    }
+    if mode == "post_via_get" {
+        request = http.Request.post("/order", "application/json", "x".to_bytes())
+    }
     if mode == "limit" {
         request = request.with_max_body(30000)
     }
     if mode == "ceiling" {
         request = request.with_max_body(http.MAX_BODY + 1)
     }
-    match http.get(net.restrict_to(name, port), request, config, random, clock) {
+    let host = net.restrict_to(name, port)
+    let result = if mode.starts_with("post") && mode != "post_via_get" {
+        http.post(host, request, config, random, clock)
+    } else {
+        http.get(host, request, config, random, clock)
+    }
+    match result {
         Err(error) => { show(io, error) }
         Ok(response) => {
             let status = response.status
@@ -55,6 +83,14 @@ fn main(io: Stdout, net: Net, random: Random, clock: Clock, args: Args) -> Resul
             io.println("x-test {marked}")?
             let moved = response.header("LOCATION").unwrap_or("none")
             io.println("location {moved}")?
+            if mode == "post" {
+                let nonce = response.header("Replay-Nonce").unwrap_or("none")
+                let wait = response.header("retry-after").unwrap_or("none")
+                let link = response.header("LINK").unwrap_or("none")
+                io.println("nonce {nonce}")?
+                io.println("retry {wait}")?
+                io.println("link {link}")?
+            }
             let body = response.body
             if body.len() > 200 {
                 var sum = 0
