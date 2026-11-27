@@ -867,6 +867,38 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "List.set",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var xs = [1, 2, 3]
+    let before = xs
+    xs.set(1, 20)
+    let a = xs.at(1)
+    let b = before.at(1)
+    io.println("{a} {b}")
+}"#,
+    ),
+    (
+        "List.pop",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var xs = ["a", "b"]
+    let last = xs.pop().unwrap_or("none")
+    let n = xs.len()
+    io.println("{last} {n}")
+}"#,
+    ),
+    (
+        "List.truncate",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var xs = ["a", "b", "c"]
+    xs.truncate(1)
+    let n = xs.len()
+    io.println("{n}")
+}"#,
+    ),
+    (
         "List.map",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {

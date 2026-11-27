@@ -349,6 +349,12 @@ impl Body<'_, '_> {
             return self.list_push(receiver, args, span);
         }
         if let Callee::Intrinsic(name) = callee {
+            match name.as_str() {
+                "List.set" => return self.list_set(receiver, args, span),
+                "List.pop" => return self.list_pop(receiver, span),
+                "List.truncate" => return self.list_truncate(receiver, args, span),
+                _ => {}
+            }
             if let Some(Prelude::Mutating(function, check)) = intrinsics::prelude(name) {
                 return self.bytes_mutation(function, check, receiver, args, span);
             }
