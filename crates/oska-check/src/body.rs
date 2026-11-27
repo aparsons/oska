@@ -423,6 +423,8 @@ enum Deferred {
     Int,
     /// `==` or `!=`: whether the operands are of a built-in type.
     Equality,
+    /// `<`, `<=`, `>` or `>=` on an `Option` or `List`: its `Ord.cmp`.
+    Order,
     /// An interpolation hole: the `Display` implementation of its type.
     Display,
     /// `Secret.new`: the secret it makes, which must be one of the types
@@ -572,6 +574,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                             .map(Resolution::EqualityVia)
                     }
                 }
+                // The checker has required `Ord` of the operands.
+                Deferred::Order => self
+                    .trait_callee(&ty, ty::ORD, "cmp")
+                    .map(Resolution::OrderVia),
                 // The checker has required `Display` of the hole.
                 Deferred::Display => self
                     .trait_callee(&ty, ty::DISPLAY, "to_string")
@@ -1571,7 +1577,22 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                self.numeric_operands(expr, op, lhs, rhs, None);
+                let ty = self.numeric_operands(expr, op, lhs, rhs, None);
+                let ty = self.infer.resolve(&ty);
+                // An `Option` or `List` orders through its `cmp` (ADR 0034).
+                if matches!(ty.head(), Some(ty::OPTION | ty::LIST)) {
+                    self.defer(expr.span, &ty, Deferred::Order);
+                    let what = purity::Reaches::Dispatch {
+                        what: match op {
+                            BinaryOp::Lt => "`<`",
+                            BinaryOp::Le => "`<=`",
+                            BinaryOp::Gt => "`>`",
+                            _ => "`>=`",
+                        },
+                        method: "`Ord.cmp`",
+                    };
+                    self.contract_dispatch(expr.span, what, vec![ty]);
+                }
                 Ty::bool()
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
@@ -1678,6 +1699,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         if orders {
             return true;
         }
+        // An `Option` or `List` of an `Ord` type orders by `cmp`.
+        if matches!(
+            op,
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        ) && matches!(ty.head(), Some(ty::OPTION | ty::LIST))
+        {
+            self.require_trait(&ty, ty::ORD, &[], span, &format!("`{}`", op.text()), false);
+            return true;
+        }
         if let Ty::Var(_) = ty {
             self.error(
                 codes::CANNOT_INFER,
@@ -1692,7 +1722,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             op,
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
         ) {
-            "; `<`, `<=`, `>` and `>=` are defined for the integers, `Float`, `Bool` and `String`"
+            "; `<`, `<=`, `>` and `>=` are defined for the integers, `Float`, `Bool`, `String`, and an `Option` or `List` of an `Ord` type; call `cmp` on any other `Ord` type"
         } else {
             ""
         };

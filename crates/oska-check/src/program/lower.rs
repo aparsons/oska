@@ -82,6 +82,9 @@ pub enum Resolution {
     /// `==` or `!=` through this `Eq` implementation, on a type that is
     /// not built in. Recorded at the comparison.
     EqualityVia(Callee),
+    /// `<`, `<=`, `>` or `>=` through this `cmp`, on an `Option` or `List`.
+    /// Recorded at the comparison.
+    OrderVia(Callee),
     /// Something the checked program cannot express yet, named for the
     /// refusal, such as "a `From`-bound conversion": recorded where the
     /// checker knows why. Recorded at the construct.
@@ -991,6 +994,13 @@ impl Lowering<'_> {
                 span,
             }));
         }
+        if let (
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,
+            Some(Resolution::OrderVia(cmp)),
+        ) = (op, resolved)
+        {
+            return self.order_test(span, op, cmp, lhs, rhs);
+        }
         let int = match op {
             BinaryOp::Add
             | BinaryOp::Sub
@@ -1015,6 +1025,57 @@ impl Lowering<'_> {
             lhs: self.boxed(lhs),
             rhs: self.boxed(rhs),
             int,
+        }
+    }
+
+    /// `lhs op rhs` for an `Option` or `List`, where `op` is `<`, `<=`,
+    /// `>` or `>=`: `match lhs.cmp(rhs)` with `true` for the orderings
+    /// `op` holds for (ADR 0034).
+    fn order_test(
+        &self,
+        span: Span,
+        op: BinaryOp,
+        cmp: &Callee,
+        lhs: &ast::Expr,
+        rhs: &ast::Expr,
+    ) -> ExprKind {
+        let ordering = Type::Named {
+            name: crate::builtins::ORDERING.to_string(),
+            args: Vec::new(),
+        };
+        let at = |kind| Expr {
+            kind,
+            ty: Type::Bool,
+            span,
+        };
+        let holds = |variant: &str| match (op, variant) {
+            (BinaryOp::Lt, "Less") | (BinaryOp::Gt, "Greater") => true,
+            (BinaryOp::Le, "Greater") | (BinaryOp::Ge, "Less") => false,
+            (BinaryOp::Le | BinaryOp::Ge, _) => true,
+            _ => false,
+        };
+        let arm = |variant: &str| Arm {
+            pattern: Pattern::Construct {
+                ctor: Construct {
+                    ty: crate::builtins::ORDERING.to_string(),
+                    variant: Some(variant.to_string()),
+                },
+                fields: Vec::new(),
+            },
+            guard: None,
+            body: at(ExprKind::Bool(holds(variant))),
+        };
+        ExprKind::Match {
+            scrutinee: Box::new(Expr {
+                kind: ExprKind::Call {
+                    callee: cmp.clone(),
+                    type_args: self.type_args_at(span),
+                    args: vec![self.expr(lhs), self.expr(rhs)],
+                },
+                ty: ordering,
+                span,
+            }),
+            arms: vec![arm("Less"), arm("Equal"), arm("Greater")],
         }
     }
 

@@ -239,3 +239,96 @@ fn an_item_with_no_ordering_is_refused() {
     );
     assert_refused(&src, "E0265");
 }
+
+const OPS: &str = "fn yes(b: Bool) -> String {
+    if b { \"T\" } else { \"F\" }
+}
+";
+
+/// Run the pairs, each expecting `TTFF` (`a < b`), `FFTT` (`b < a`) or
+/// `FTFT` (equal),.
+fn check_operators(items: &str, pairs: &[(&str, &str, &str)]) {
+    let mut body = String::new();
+    let mut expected = String::new();
+    for (a, b, order) in pairs {
+        body.push_str(&format!(
+            "    io.println(\"\".join([yes({a} < {b}), yes({a} <= {b}), yes({a} > {b}), yes({a} >= {b})]))?\n"
+        ));
+        let shown = match *order {
+            "<" => "TTFF",
+            ">" => "FFTT",
+            _ => "FTFT",
+        };
+        expected.push_str(&format!("{shown}\n"));
+    }
+    assert_runs(&program(&format!("{OPS}{items}"), &body), &[], &expected);
+}
+
+#[test]
+fn the_operators_order_options_and_lists_through_cmp() {
+    check_operators(
+        "fn some(n: Int) -> Option<Int> { Some(n) }\nfn none() -> Option<Int> { None }\nfn xs(a: List<Int>) -> List<Int> { a }\nfn ws(a: List<String>) -> List<String> { a }\nfn grid(a: List<List<Int>>) -> List<List<Int>> { a }\n",
+        &[
+            ("none()", "some(1)", "<"),
+            ("some(2)", "some(1)", ">"),
+            ("some(7)", "some(7)", "="),
+            ("none()", "none()", "="),
+            ("xs([1])", "xs([2])", "<"),
+            ("xs([])", "xs([0])", "<"),
+            ("xs([1, 2])", "xs([1])", ">"),
+            ("xs([1, 2])", "xs([1, 2])", "="),
+            ("ws([\"b\"])", "ws([\"a\", \"z\"])", ">"),
+            ("grid([[1], [2]])", "grid([[1], [3]])", "<"),
+        ],
+    );
+}
+
+#[test]
+fn the_operators_order_containers_of_a_user_type_with_ord() {
+    let items = "struct V { n: Int }
+impl Eq for V {
+    fn eq(self, other: V) -> Bool { self.n == other.n }
+}
+impl Ord for V {
+    fn cmp(self, other: V) -> Ordering { other.n.cmp(self.n) }
+}
+fn vs(a: List<V>) -> List<V> { a }
+fn maybe(a: Option<V>) -> Option<V> { a }
+";
+    // `V` orders backwards, so the container does too.
+    check_operators(
+        items,
+        &[
+            ("vs([V(n: 2)])", "vs([V(n: 1)])", "<"),
+            ("maybe(Some(V(n: 9)))", "maybe(Some(V(n: 3)))", "<"),
+            ("maybe(None)", "maybe(Some(V(n: 3)))", "<"),
+        ],
+    );
+}
+
+#[test]
+fn the_operators_work_in_a_generic_function_over_ord() {
+    let items = "fn lower<T: Ord>(a: List<T>, b: List<T>) -> Bool { a < b }
+fn opt<T: Ord>(a: Option<T>, b: Option<T>) -> Bool { a >= b }
+";
+    let body = "    io.println(yes(lower([1, 2], [1, 3])))?
+    io.println(yes(lower([\"b\"], [\"a\"])))?
+    io.println(yes(opt(Some(1), None)))?
+    io.println(yes(opt(None, Some(\"x\"))))?";
+    assert_runs(
+        &program(&format!("{OPS}{items}"), body),
+        &[],
+        "T\nF\nT\nF\n",
+    );
+}
+
+#[test]
+fn an_operator_on_containers_without_ord_items_is_refused() {
+    let src = program("", "    let x = [1.0] < [2.0]\n    io.println(\"no\")?");
+    assert_refused(&src, "E0265");
+    let src = program(
+        "struct Point { x: Int }\nimpl Eq for Point {\n    fn eq(self, other: Point) -> Bool { self.x == other.x }\n}\n",
+        "    let x = Some(Point(x: 1)) >= None\n    io.println(\"no\")?",
+    );
+    assert_refused(&src, "E0265");
+}

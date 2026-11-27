@@ -5,7 +5,7 @@
     {"code":"E0356","message":"`<` on a secret: ordering secrets would reveal them through a branch; compare them for equality with `constant_time_eq`, or `ct_eq` on a secret integer, or read the values with `.expose()`","path":"crates/oskac/tests/fixtures/ord/refused.osk","span":{"start":494,"end":499},"line":22,"column":5,"end_line":22,"end_column":10,"severity":"error","url":"https://oskalang.dev/codes/E0356","related":[],"suggestions":[]},
     {"code":"E0356","message":"ordering secrets would reveal them through a branch; compare them for equality with `constant_time_eq`, or `ct_eq` on a secret integer, or read the values with `.expose()`","path":"crates/oskac/tests/fixtures/ord/refused.osk","span":{"start":581,"end":584},"line":26,"column":19,"end_line":26,"end_column":22,"severity":"error","url":"https://oskalang.dev/codes/E0356","related":[],"suggestions":[]},
     {"code":"E0356","message":"ordering secrets would reveal them through a branch; compare them for equality with `constant_time_eq`, or `ct_eq` on a secret integer, or read the values with `.expose()`","path":"crates/oskac/tests/fixtures/ord/refused.osk","span":{"start":671,"end":684},"line":31,"column":5,"end_line":31,"end_column":18,"severity":"error","url":"https://oskalang.dev/codes/E0356","related":[],"suggestions":[]},
-    {"code":"E0223","message":"`<` is not defined for `List<Int>`; `<`, `<=`, `>` and `>=` are defined for the integers, `Float`, `Bool` and `String`","path":"crates/oskac/tests/fixtures/ord/refused.osk","span":{"start":745,"end":750},"line":35,"column":5,"end_line":35,"end_column":10,"severity":"error","url":"https://oskalang.dev/codes/E0223","related":[],"suggestions":[]}
+    {"code":"E0223","message":"`<` is not defined for `Version`; `<`, `<=`, `>` and `>=` are defined for the integers, `Float`, `Bool`, `String`, and an `Option` or `List` of an `Ord` type; call `cmp` on any other `Ord` type","path":"crates/oskac/tests/fixtures/ord/refused.osk","span":{"start":998,"end":1003},"line":51,"column":5,"end_line":51,"end_column":10,"severity":"error","url":"https://oskalang.dev/codes/E0223","related":[],"suggestions":[]}
   ],
   "functions": [
     {"name":"float_cmp","authority":[],"via":[],"pure":true},
@@ -14,6 +14,8 @@
     {"name":"secret_less","authority":[],"via":[],"pure":true},
     {"name":"secret_cmp","authority":[],"via":[],"pure":true},
     {"name":"secret_largest","authority":[],"via":[],"pure":true},
+    {"name":"<Version as Eq>.eq","authority":[],"via":[],"pure":true},
+    {"name":"<Version as Ord>.cmp","authority":[],"via":[],"pure":true},
     {"name":"not_ordered","authority":[],"via":[],"pure":true}
   ],
   "audit": [],

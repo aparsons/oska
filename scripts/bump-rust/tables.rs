@@ -57,31 +57,41 @@ fn escaped() -> String {
 // sorted mapped characters, because the lookup takes the last record that
 // starts at or below a character.
 fn lowercase() -> String {
-    records(|c| c.to_lowercase().collect(), true)
+    records(|c| {
+        // U+0130 has a two-character lower case, which `to_lowercase`
+        // handles apart from this table.
+        if c == '\u{130}' {
+            return None;
+        }
+        let mut lower = c.to_lowercase();
+        let (Some(one), None) = (lower.next(), lower.next()) else {
+            panic!("U+{:X} has no one-character lower case", u32::from(c));
+        };
+        Some(one)
+    })
 }
 
 // The same for upper case. A character whose upper case is several
 // characters (`ß`) is left out: `String.to_uppercase` keeps it as it is.
 fn uppercase() -> String {
-    records(|c| c.to_uppercase().collect(), false)
+    records(|c| {
+        let mut upper = c.to_uppercase();
+        match (upper.next(), upper.next()) {
+            (Some(one), None) => Some(one),
+            _ => None,
+        }
+    })
 }
 
-fn records(map: impl Fn(char) -> Vec<char>, skip_dotted_i: bool) -> String {
+// `map` gives the one character `c` maps to, or `None` to leave `c` out.
+fn records(map: impl Fn(char) -> Option<char>) -> String {
     let mut mapped: Vec<(i64, i64)> = Vec::new();
     for cp in 0..=0x10FFFFu32 {
         let Some(c) = char::from_u32(cp) else {
             continue;
         };
-        if skip_dotted_i && cp == 0x130 {
-            continue;
-        }
-        let lower = map(c);
-        if !skip_dotted_i && lower.len() != 1 {
-            continue;
-        }
-        assert_eq!(lower.len(), 1, "U+{cp:X} maps to {}", lower.len());
-        if lower[0] != c {
-            mapped.push((i64::from(cp), i64::from(lower[0] as u32) - i64::from(cp)));
+        if let Some(to) = map(c).filter(|&to| to != c) {
+            mapped.push((i64::from(cp), i64::from(to as u32) - i64::from(cp)));
         }
     }
     let mut out = String::new();

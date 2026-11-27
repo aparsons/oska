@@ -38,17 +38,15 @@ const NATIVE_NET_ATTEMPTS: &str =
     "a native plain test refuses `t.net` as the interpreter does, but \
 does not record where it was asked to go: `t.net_attempts` is a later ticket of spec #228";
 
-/// The `List`, `Option` and `Result` methods whose bodies are Oska in
-/// `std.core` (ADR 0034): the
-/// checker resolves a call to a function of the program, so there is no
-/// intrinsic to implement. `oska-run`'s `list_methods` and `option_result`
-/// tests run each on both backends.
-const CORE_LIST: &str = "written in Oska in std.core, not an intrinsic";
-
-/// The types, or `Type.method` names, that no backend implements, with
-/// why. A program given a type that has no runtime is refused before it
-/// runs, by the interpreter (`E0370`) and the native backend alike.
-/// `TestContext.net_attempts` has a runtime on the interpreter only.
+/// The types, or `Type.method` names, that not every backend implements,
+/// with why. A program given a type that has no runtime is refused before
+/// it runs, by the interpreter (`E0370`) and the native backend alike.
+/// `TestContext.net_attempts` has a runtime on the interpreter only. A
+/// `List`, `Option` or `Result` method written in Oska in `std.core`
+/// (ADR 0034) is not here: [`required`] skips it by
+/// `builtins::is_core_method`, as `oska-run` does, because a call of it is
+/// a call of a function of the program, and `oska-run`'s `list_methods` and
+/// `option_result` tests run each on both backends.
 /// `std.sql` and `std.proc` have no runtime on either backend either: a
 /// program importing one is refused (`E0371`), so their body-less
 /// functions are not scanned at all.
@@ -56,32 +54,6 @@ const EXEMPT: &[(&str, &str)] = &[
     ("TestContext.net_attempts", NATIVE_NET_ATTEMPTS),
     ("Spawn", "process spawning has no runtime yet"),
     ("Sched", "scheduling has no runtime yet"),
-    ("List.filter", CORE_LIST),
-    ("List.fold", CORE_LIST),
-    ("List.any", CORE_LIST),
-    ("List.all", CORE_LIST),
-    ("List.find", CORE_LIST),
-    ("List.contains", CORE_LIST),
-    ("List.first", CORE_LIST),
-    ("List.last", CORE_LIST),
-    ("List.is_empty", CORE_LIST),
-    ("List.reverse", CORE_LIST),
-    ("List.concat", CORE_LIST),
-    ("Option.is_none", CORE_LIST),
-    ("Option.map", CORE_LIST),
-    ("Option.and_then", CORE_LIST),
-    ("Option.unwrap_or_else", CORE_LIST),
-    ("Option.filter", CORE_LIST),
-    ("Result.is_err", CORE_LIST),
-    ("Result.map", CORE_LIST),
-    ("Result.map_err", CORE_LIST),
-    ("Result.and_then", CORE_LIST),
-    ("Result.unwrap_or_else", CORE_LIST),
-    ("Result.ok", CORE_LIST),
-    ("Result.err", CORE_LIST),
-    ("List.sorted", CORE_LIST),
-    ("List.sorted_by", CORE_LIST),
-    ("List.sort", CORE_LIST),
 ];
 
 /// How a [`CALLS`] program is run.
@@ -2606,9 +2578,11 @@ fn required() -> Vec<String> {
     }
     names.retain(|name| {
         let owner = name.split('.').next().unwrap_or("");
+        let (ty, method) = name.split_once('.').unwrap_or((name, ""));
         !EXEMPT
             .iter()
             .any(|(e, _)| *e == owner || *e == name.as_str())
+            && !oska_check::builtins::is_core_method(ty, method)
     });
     names
 }

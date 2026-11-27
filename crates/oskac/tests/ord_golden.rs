@@ -2,7 +2,7 @@
 //! `oskac check` on the types that have no `Ord` (spec #660, ticket #664,
 //! ADR 0034). `tests/fixtures/ord/refused.osk` has one function per
 //! refusal: `cmp` on a `Float`, `Float` and `Secret` as an `Ord` bound, `<`
-//! and `cmp` on a secret, and `<` on a list. Each message says why and what
+//! and `cmp` on a secret, and `<` on a type of your own. Each message says why and what
 //! to use instead (`total_cmp`, `constant_time_eq`).
 //!
 //! To regenerate the golden file after an intended change, run
