@@ -193,7 +193,7 @@ fn a_lock_on_a_missing_directory_is_an_error_and_runs_nothing() {
         r#"    let store = write.restrict_to("absent")
     match store.with_lock(|dir: DirWrite| 1) {
         Ok(_) => io.println("ran")?
-        Err(e) => io.println("refused: {e.message}")?
+        Err(e) => io.println("refused")?
     }"#,
     );
     assert_eq!(out, "refused\n");

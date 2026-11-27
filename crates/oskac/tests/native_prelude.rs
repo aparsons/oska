@@ -230,6 +230,18 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "DirWrite.with_lock",
+        Run::Main,
+        r#"fn main(io: Stdout, write: FsWrite) -> Result<(), IoError> {
+    let dir = write.restrict_to(".")
+    match dir.with_lock(|d: DirWrite| d.with_lock(|e: DirWrite| 1)) {
+        Ok(Ok(_)) => io.println("second lock taken")
+        Ok(Err(e)) => io.println(e.message)
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
         "FileRead.read_to_string",
         Run::Main,
         r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {

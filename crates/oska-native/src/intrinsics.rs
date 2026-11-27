@@ -1798,6 +1798,7 @@ mod tests {
     let text = read.read_to_string(Path.new("a.txt"))?
     write.write(Path.new("b.txt"), "b")?
     write.create_dir(Path.new("c"))?
+    write.with_lock(|d: DirWrite| 0)?
     let file = fs.write_only().restrict_to_file("root/d.txt")
     file.write("d")?
     let listener = net.listen_only().restrict_to_loopback(0)
@@ -1861,6 +1862,7 @@ mod tests {
             (17, 2),
             (25, 3),
             (29, 3),
+            (32, 2),
             (34, 3),
             (46, 2),
             (56, 4),
@@ -1916,6 +1918,7 @@ mod tests {
             (55, 5),
             (62, 2),
             (72, 3),
+            (73, 2),
             (77, 2),
             (79, 2),
             (131, 2),
