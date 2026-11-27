@@ -85,6 +85,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.base64url",
+        source: include_str!("std/base64url.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.hmac",
         source: include_str!("std/hmac.osk"),
         sink_literal: None,

@@ -270,6 +270,7 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
             "std.proc",
             "std.sha2",
             "std.dns",
+            "std.base64url",
             "std.hmac",
             "std.ed25519",
             "std.sshsig",
