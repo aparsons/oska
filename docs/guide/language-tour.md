@@ -178,7 +178,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 2 3 10
 ```
 
-`List.get` returns an `Option`. `List.at` panics with `P0002` when the index is out of bounds, because that is a bug. A closure is written `|x| expr` or `|x| { ... }`. A closure that captures a capability has the type `cap fn`; see [capabilities](capabilities.md).
+`List` also has `filter`, `fold`, `any`, `all`, `find`, `contains`, `first`, `last`, `is_empty`, `reverse` and `concat`; none changes the list, and `oskac doc List` describes each. `List.get` returns an `Option`. `List.at` panics with `P0002` when the index is out of bounds, because that is a bug. A closure is written `|x| expr` or `|x| { ... }`. A closure that captures a capability has the type `cap fn`; see [capabilities](capabilities.md).
 
 ## Generics and traits
 

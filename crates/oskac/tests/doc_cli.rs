@@ -443,6 +443,44 @@ fn an_item_filter_lists_the_item_and_its_methods() {
 }
 
 #[test]
+fn each_core_list_method_has_its_own_doc_entry() {
+    // Spec #660, ticket #667: the methods whose bodies are in `std.core`
+    // are still listed as methods of `List`, with a signature and a
+    // description.
+    let expected = [
+        (
+            "filter",
+            "pub fn filter(self, keep: fn(T) -> Bool) -> List<T>",
+        ),
+        (
+            "fold",
+            "pub fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A",
+        ),
+        ("any", "pub fn any(self, check: fn(T) -> Bool) -> Bool"),
+        ("all", "pub fn all(self, check: fn(T) -> Bool) -> Bool"),
+        (
+            "find",
+            "pub fn find(self, check: fn(T) -> Bool) -> Option<T>",
+        ),
+        ("contains", "pub fn contains(self, item: T) -> Bool"),
+        ("first", "pub fn first(self) -> Option<T>"),
+        ("last", "pub fn last(self) -> Option<T>"),
+        ("is_empty", "pub fn is_empty(self) -> Bool"),
+        ("reverse", "pub fn reverse(self) -> List<T>"),
+        ("concat", "pub fn concat(self, other: List<T>) -> List<T>"),
+    ];
+    for (method, signature) in expected {
+        let items = json_items(&[&format!("List.{method}")]);
+        assert_eq!(items.len(), 1, "List.{method}");
+        assert_eq!(field(&items[0], "signature"), signature);
+        assert!(!field(&items[0], "description").is_empty());
+        let output = oskac(&["doc", &format!("List.{method}")]);
+        assert_eq!(output.status.code(), Some(0));
+        assert!(text(&output.stdout).contains(signature));
+    }
+}
+
+#[test]
 fn an_unknown_filter_is_a_usage_error() {
     let output = oskac(&["doc", "List.no_such_method"]);
     assert_eq!(output.status.code(), Some(2));

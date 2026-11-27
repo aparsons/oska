@@ -25,6 +25,8 @@ The choice: the **bodies are Oska, in a new `std.core` module** (`written_in_osk
 
 **Fallback.** If resolving a prelude method to a `std.core` function proves too large for one ticket, the same methods are body-less prelude built-ins in `oska-run` and `oska-native`, each under the differential suite with the same output and the same step count. The first ticket that implements a list method records which of the two it used.
 
+**Route taken (ticket #667).** The `std.core` route works, with no fallback. The prelude declares each `List` method body-less (`impl<T> List<T>`, and `impl<T: Eq> List<T>` for `contains`). In `method_call` (`oska-check/src/body/calls.rs`), a call of a method listed in `CORE_METHODS` (`prelude.rs`) on a prelude type resolves to `Callee::Function("pkg.std.core.list_<name>")`, the receiver as first argument, so no backend change is needed. `oska_std_imports` joins `std.core` to a program whose text writes `.<name>` for one of those names (an over-approximation: a `String.contains` call joins it too, which costs nothing else). The functions' type parameters are the impl's then the method's, so a call's type arguments line up. The prelude names are not added to scope: a user function named `filter` is unaffected. `oska-run`'s `list_methods` test and `native_prelude` run each method on both backends. A function written in Oska counts its own call as a step, where a built-in such as `List.map` counts none.
+
 ## Why
 
 An agent writing Oska reaches for `sorted`, `map`, `filter` and `<` on text and finds none of them. Each miss costs a compile-and-fix turn, and a hand-written loop is longer and harder to review. One `Ord` rule gives every sort, every comparison and a later sorted map the same answer.
