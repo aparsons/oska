@@ -591,20 +591,24 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests -
   else
     scripts/temp-leak/run.sh cargo test --all --no-fail-fast
   fi
-fi
-
-if step "no test-site feature in built oskac" --no-slot; then
-  # The binaries cargo built by now (and a release or dist one, if any) must
-  # not hold the `test-site` feature's marker. In CI a run with no binary to
-  # inspect fails, so the check cannot pass by looking at nothing.
-  binaries=()
-  for built in target/debug/oskac target/dist/oskac target/release/oskac; do
-    [ -f "$built" ] && binaries+=("$built")
-  done
-  if [ -n "${CI:-}" ]; then
-    scripts/test-site-guard/guard.sh --require-binary . ${binaries[@]+"${binaries[@]}"}
-  else
-    scripts/test-site-guard/guard.sh . ${binaries[@]+"${binaries[@]}"}
+  if [ "$cargo_mode" != docs ] && [ "$tier" != fast ]; then
+    # The `oskac` built with default features (what a plain build ships) must
+    # not hold the `test-site` feature's marker, nor a release or dist one
+    # already built. Built here if this job has not, so every job that runs
+    # this step has a binary to inspect (the self_check tests build their
+    # test-site `oskac` into a directory of their own, not this one). A CI
+    # run with no binary fails, so the check cannot pass by looking at
+    # nothing.
+    cargo build --quiet -p oskac
+    binaries=(target/debug/oskac)
+    for built in target/dist/oskac target/release/oskac; do
+      [ -f "$built" ] && binaries+=("$built")
+    done
+    if [ -n "${CI:-}" ]; then
+      scripts/test-site-guard/guard.sh --require-binary . "${binaries[@]}"
+    else
+      scripts/test-site-guard/guard.sh . "${binaries[@]}"
+    fi
   fi
 fi
 
