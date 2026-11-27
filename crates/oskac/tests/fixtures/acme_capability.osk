@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+// Every way a program narrows `Acme`, for the golden tests of the authority
+// report (spec #824, ticket #840): a literal domain, a domain named by a
+// constant, and a domain only known when the program runs.
+
+const SITE: String = "example.com"
+
+fn site(acme: Acme) -> AcmeDomain {
+    acme.restrict_to("example.com")
+}
+
+fn named(acme: Acme) -> AcmeDomain {
+    acme.restrict_to(SITE)
+}
+
+fn pick(acme: Acme, name: String) -> AcmeDomain {
+    acme.restrict_to(name)
+}
+
+fn main(acme: Acme) {
+    let blog = acme.restrict_to("blog.example.org")
+    let domain = site(acme)
+}

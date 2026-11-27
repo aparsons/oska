@@ -269,7 +269,7 @@ impl Names {
 /// The directory, file and network capabilities that only attenuation
 /// makes. The runtime has no root, host or port to give one, so `main`
 /// cannot declare it (ADR 0008, ADR 0025).
-const CONFINED: [&str; 7] = [
+const CONFINED: [&str; 8] = [
     "Dir",
     "DirRead",
     "DirWrite",
@@ -277,6 +277,7 @@ const CONFINED: [&str; 7] = [
     "FileWrite",
     "HostConnect",
     "LoopbackListen",
+    "AcmeDomain",
 ];
 
 /// `main` is the root of authority: it takes only built-in capabilities
@@ -300,8 +301,8 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
                 format!(
                     "`main` cannot take `{name}`: only attenuation makes a directory, file or \
                      network capability: `restrict_to` or `restrict_to_file` on `Fs`, `FsRead` \
-                     or `FsWrite`, `restrict_to` on `Net` or `NetConnect`, or \
-                     `restrict_to_loopback` on `NetListen`, so declare one of those and narrow \
+                     or `FsWrite`, `restrict_to` on `Net` or `NetConnect`, `restrict_to_loopback` on \
+                     `NetListen`, or `restrict_to` on `Acme`, so declare one of those and narrow \
                      it"
                 ),
                 param.ty.span,

@@ -266,6 +266,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         "NetListen.restrict_to_loopback",
         Prelude::Runtime("net_restrict_to_loopback"),
     ),
+    // `Acme` holds nothing and only attenuates; its narrowing is a `Sock`
+    // that holds the domain and no socket (`std.rt`).
+    ("Acme.restrict_to", Prelude::Runtime("acme_restrict_to")),
+    ("AcmeDomain.domain", Prelude::Runtime("acme_domain")),
     ("HostConnect.connect", Prelude::Runtime("host_connect")),
     (
         "HostConnect.exchange_datagram",

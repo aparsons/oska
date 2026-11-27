@@ -1,0 +1,8 @@
+fn site: Acme (acme)
+  crates/oskac/tests/fixtures/acme_capability.osk:9:5: Acme -> AcmeDomain: restrict_to "example.com" (bytes 327..358)
+fn named: Acme (acme)
+  crates/oskac/tests/fixtures/acme_capability.osk:13:5: Acme -> AcmeDomain: restrict_to "example.com" (bytes 403..425)
+fn pick: Acme (acme)
+  crates/oskac/tests/fixtures/acme_capability.osk:17:5: Acme -> AcmeDomain: restrict_to computed at runtime (bytes 483..505)
+fn main: Acme (acme)
+  crates/oskac/tests/fixtures/acme_capability.osk:21:16: Acme -> AcmeDomain: restrict_to "blog.example.org" (bytes 546..582)

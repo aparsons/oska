@@ -122,6 +122,12 @@ pub enum Capability {
     Host(HostCap),
     /// A loopback listener, `LoopbackListen`. Only attenuation makes one.
     Loopback(LoopbackCap),
+    /// `Acme`: it only attenuates, so a certificate is ordered only for a
+    /// name an [`Capability::AcmeDomain`] permits (`std.acme`).
+    Acme,
+    /// An `AcmeDomain`: the one domain, as the program gave it, whose
+    /// names `std.acme` may order. Only attenuation makes one.
+    AcmeDomain(Rc<str>),
 }
 
 /// Which of the network capabilities that only attenuate a value is.
@@ -236,6 +242,8 @@ enum Kind {
     Net(NetCap),
     Host,
     Loopback,
+    Acme,
+    AcmeDomain,
 }
 
 /// Each capability the runtime implements, by the name of its type: the
@@ -263,6 +271,8 @@ const IMPLEMENTED: &[(&str, Kind)] = &[
     ("NetListen", Kind::Net(NetCap::Listen)),
     ("HostConnect", Kind::Host),
     ("LoopbackListen", Kind::Loopback),
+    ("Acme", Kind::Acme),
+    ("AcmeDomain", Kind::AcmeDomain),
 ];
 
 impl Capability {
@@ -291,7 +301,10 @@ impl Capability {
                 access,
             }),
             Kind::Net(net) => Capability::Net(net),
-            Kind::Dir(_) | Kind::File(_) | Kind::Host | Kind::Loopback => return None,
+            Kind::Acme => Capability::Acme,
+            Kind::Dir(_) | Kind::File(_) | Kind::Host | Kind::Loopback | Kind::AcmeDomain => {
+                return None
+            }
         })
     }
 
@@ -310,6 +323,8 @@ impl Capability {
             Capability::Net(net) => Kind::Net(*net),
             Capability::Host(_) => Kind::Host,
             Capability::Loopback(_) => Kind::Loopback,
+            Capability::Acme => Kind::Acme,
+            Capability::AcmeDomain(_) => Kind::AcmeDomain,
         }
     }
 
@@ -539,6 +554,7 @@ mod tests {
                 Kind::Loopback => {
                     Capability::Loopback(super::LoopbackCap(Err(Rc::from("no listener"))))
                 }
+                Kind::AcmeDomain => Capability::AcmeDomain(Rc::from("example.com")),
                 _ => Capability::granted(name).expect("granted"),
             };
             assert_eq!(capability.type_name(), *name);
@@ -547,11 +563,11 @@ mod tests {
 
     #[test]
     fn a_host_or_loopback_capability_is_never_granted_but_net_is() {
-        for name in ["HostConnect", "LoopbackListen"] {
+        for name in ["HostConnect", "LoopbackListen", "AcmeDomain"] {
             assert!(Capability::implemented(name));
             assert_eq!(Capability::granted(name), None);
         }
-        for name in ["Net", "NetConnect", "NetListen"] {
+        for name in ["Net", "NetConnect", "NetListen", "Acme"] {
             assert!(Capability::granted(name).is_some(), "{name}");
         }
     }

@@ -24,6 +24,8 @@ use crate::value::{Capability, HostCap, LoopbackCap, NetCap, StreamHandle, Value
 const CHUNK: usize = 64 * 1024;
 
 pub const INTRINSICS: Table = &[
+    ("Acme.restrict_to", Plain(acme_restrict_to)),
+    ("AcmeDomain.domain", Plain(acme_domain)),
     ("Connection.close", Plain(connection_close)),
     ("Connection.host", Plain(connection_host)),
     ("Connection.receive", Plain(connection_receive)),
@@ -49,6 +51,29 @@ pub const INTRINSICS: Table = &[
         Plain(restrict_to_loopback),
     ),
 ];
+
+/// `Acme.restrict_to(self, domain)`: the capability for `domain`. Attenuation
+/// never fails: a domain that is not a plain DNS name permits no name, which
+/// `std.acme` decides.
+fn acme_restrict_to(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    let Value::Str(domain) = &args[1] else {
+        unreachable!(
+            "the checker guarantees a string domain, found {:?}",
+            args[1]
+        );
+    };
+    Ok(Value::Capability(Capability::AcmeDomain(Rc::from(
+        &**domain,
+    ))))
+}
+
+/// `AcmeDomain.domain(self)`.
+fn acme_domain(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    match &args[0] {
+        Value::Capability(Capability::AcmeDomain(domain)) => memory::text(domain, span),
+        other => unreachable!("the checker guarantees an ACME domain, found {other:?}"),
+    }
+}
 
 /// `Net.connect_only(self)`.
 fn connect_only(_: &mut dyn Host, _: &mut Args, _: Span) -> Result<Value, Panic> {

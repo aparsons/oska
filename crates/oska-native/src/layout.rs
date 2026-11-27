@@ -122,12 +122,12 @@ pub fn is_directory(ty: &Type) -> bool {
 }
 
 /// Whether `ty` is a network capability that is an object: a host
-/// capability or a loopback listener, `std.rt`'s `Sock`, which holds a
+/// capability, a loopback listener or an ACME domain, `std.rt`'s `Sock`, which holds a
 /// socket and is released by `std.rt`'s `sock_drop`.
 pub fn is_socket(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, .. } if builtins::is_capability(name) && matches!(
         name.as_str(),
-        "HostConnect" | "LoopbackListen"
+        "HostConnect" | "LoopbackListen" | "AcmeDomain"
     ))
 }
 

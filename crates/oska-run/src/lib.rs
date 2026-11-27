@@ -281,6 +281,7 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
         let (kind, how) = match param.as_str() {
             "HostConnect" => ("host", "`restrict_to` on `Net` or `NetConnect`"),
             "LoopbackListen" => ("loopback listener", "`restrict_to_loopback` on `NetListen`"),
+            "AcmeDomain" => ("domain", "`restrict_to` on `Acme`"),
             _ if param.starts_with("File") => (
                 "file",
                 "`restrict_to_file` on `FsRead`, `FsWrite` or a directory capability",

@@ -1,0 +1,17 @@
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"site","authority":["Acme"],"via":[{"param":"acme","capabilities":["Acme"]}],"pure":false},
+    {"name":"named","authority":["Acme"],"via":[{"param":"acme","capabilities":["Acme"]}],"pure":false},
+    {"name":"pick","authority":["Acme"],"via":[{"param":"acme","capabilities":["Acme"]}],"pure":false},
+    {"name":"main","authority":["Acme"],"via":[{"param":"acme","capabilities":["Acme"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [
+    {"function":"site","method":"restrict_to","path":"crates/oskac/tests/fixtures/acme_capability.osk","span":{"start":327,"end":358},"source":"Acme","result":"AcmeDomain","root":"example.com"},
+    {"function":"named","method":"restrict_to","path":"crates/oskac/tests/fixtures/acme_capability.osk","span":{"start":403,"end":425},"source":"Acme","result":"AcmeDomain","root":"example.com"},
+    {"function":"pick","method":"restrict_to","path":"crates/oskac/tests/fixtures/acme_capability.osk","span":{"start":483,"end":505},"source":"Acme","result":"AcmeDomain","root":null},
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/acme_capability.osk","span":{"start":546,"end":582},"source":"Acme","result":"AcmeDomain","root":"blog.example.org"}
+  ],
+  "verdict": "ok"
+}

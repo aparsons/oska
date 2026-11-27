@@ -13,6 +13,7 @@ Oska has no **ambient authority**. Reading a file, opening a connection, reading
 | `Random` | Pseudo-random numbers: `next_int()`, and secure bytes for keys: `secure_bytes(n)` | Yes |
 | `Budget` | Spending model tokens and calls. Unlimited in `main`; attenuates to a smaller `Budget` with `limit(tokens, calls)`. See [Budgets](#budgets). | Yes |
 | `Net` | The network, but only to attenuate: it connects to nothing itself. Attenuates to `NetConnect`, `NetListen`, or a host capability (`HostConnect`). | Every host; native on Linux, macOS and Windows |
+| `Acme` | Certificates from an ACME certificate authority (`std.acme`), but only to attenuate: `restrict_to("example.com")` gives an `AcmeDomain` that permits that name and the names beneath it. `main` cannot declare `AcmeDomain`. Every narrowing is in the authority report. | Every host; native on Linux, macOS and Windows |
 | `Sched` | Channels and `select` | No: `E0370` |
 | `Spawn` | Starting OS processes | No: `E0370` |
 

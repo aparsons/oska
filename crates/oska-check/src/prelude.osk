@@ -322,6 +322,33 @@ impl LoopbackListen {
     pub fn port(self) -> Int
 }
 
+// The capability to get certificates from an ACME certificate authority
+// (`std.acme`), as `main` declares it. Like `Net`, it grants nothing
+// itself: it only attenuates (ADR 0025). `restrict_to` names the domain a
+// program may order certificates for, and every narrowing is listed in
+// the authority report.
+#[capability]
+pub struct Acme { handle: Int }
+
+impl Acme {
+    // The capability for `domain` and the names beneath it: `example.com`
+    // permits `example.com` and `www.example.com`, not `other.org`. It is
+    // structural: untrusted text can't choose the domain without a trust
+    // assertion, which `oskac audit` lists. Attenuation never fails: a
+    // domain that is not a plain DNS name permits no name.
+    pub fn restrict_to(self, domain: String) -> AcmeDomain
+}
+
+// The names one `restrict_to` of `Acme` permits. `std.acme` refuses an
+// order for a name outside it before any network call.
+#[capability]
+pub struct AcmeDomain { handle: Int }
+
+impl AcmeDomain {
+    // The domain this capability is confined to, as it was given.
+    pub fn domain(self) -> String
+}
+
 // The process environment: its variables and its secrets.
 #[capability]
 pub struct Env { handle: Int }

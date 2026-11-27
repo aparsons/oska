@@ -727,6 +727,75 @@ impl Identifier {
     }
 }
 
+// ---- Names an `AcmeDomain` permits ----------------------------------------------------
+
+// Whether `root`, the domain an `Acme.restrict_to` gave, permits a
+// certificate for `name`: `name` is the domain or a name beneath it
+// (`example.com` permits `example.com` and `www.example.com`, not
+// `other.org` or `notexample.com`), compared without regard to case. A
+// wildcard `*.example.com` is permitted when `example.com` is. A root that
+// is not a plain DNS name (empty, a wildcard, a leading or trailing dot, a
+// space) permits nothing.
+fn within(root: String, name: String) -> Bool {
+    let base = root.to_lowercase()
+    if base.len() == 0 || base.starts_with(".") || base.ends_with(".") || base.contains("*") || base.contains(" ") || base.contains("..") {
+        return false
+    }
+    var host = name.to_lowercase()
+    if host.starts_with("*.") {
+        host = host.slice(2, host.len())
+    }
+    if host.len() == 0 || host.starts_with(".") || host.contains("*") || host.contains(" ") || host.contains("..") {
+        return false
+    }
+    host == base || host.ends_with(".{base}")
+}
+
+fn all_within(root: String, names: List<String>) -> Bool {
+    for name in names {
+        if !within(root, name) {
+            return false
+        }
+    }
+    true
+}
+
+// Whether `domain` permits a certificate for `name` (see `within`'s rule
+// above). It makes no network call.
+pub fn permits(domain: AcmeDomain, name: String) -> Bool {
+    within(domain.domain(), name)
+}
+
+// Whether `domain` permits every one of `names`.
+pub fn permits_all(domain: AcmeDomain, names: List<String>) -> Bool {
+    all_within(domain.domain(), names)
+}
+
+// `names` for `root`, unchanged. A name outside it is a bug of the caller,
+// and stops the program with `P0006` (a `requires` clause failed).
+fn names_within(root: String, names: List<String>) -> List<String>
+    requires all_within(root, names)
+{
+    names
+}
+
+// `names`, unchanged, when `domain` permits each. A name it does not
+// permit stops the program with `P0006` before any request is made:
+// ordering outside the capability is a bug of the caller, as a read
+// outside a directory capability is.
+pub fn require_names(domain: AcmeDomain, names: List<String>) -> List<String> {
+    names_within(domain.domain(), names)
+}
+
+impl Client {
+    // `issue` for the names `domain` permits and no others: a name outside
+    // it stops with `P0006` before the first request (`require_names`).
+    pub fn issue_within<T: Transport, R: Responder, W: Waiter>(var self, domain: AcmeDomain, transport: T, responder: R, waiter: W, random: Random, names: List<String>, kind: ChallengeKind, max_polls: Int) -> Result<Issued, AcmeError> {
+        let allowed = require_names(domain, names)
+        self.issue(transport, responder, waiter, random, allowed, kind, max_polls)
+    }
+}
+
 // The status of an order (RFC 8555 section 7.1.3).
 pub enum OrderStatus {
     Pending,

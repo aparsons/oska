@@ -3479,7 +3479,7 @@ fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),
         "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Budget" | "Args"
-            | "Fs" | "FsRead" | "FsWrite" | "Net" | "NetConnect" | "NetListen"
+            | "Fs" | "FsRead" | "FsWrite" | "Net" | "NetConnect" | "NetListen" | "Acme"
     ))
 }
 

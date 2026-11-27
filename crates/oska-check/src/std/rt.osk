@@ -7213,6 +7213,17 @@ pub fn net_restrict_to(net: Int, host: String, port: Int) -> Int {
     sock_new(-1, host, port, "")
 }
 
+// `Acme.restrict_to(domain)`: the capability for `domain`, a `Sock` that
+// holds the domain, no socket and port 0. Attenuation never fails.
+pub fn acme_restrict_to(acme: Int, domain: String) -> Int {
+    sock_new(-1, domain, 0, "")
+}
+
+// `AcmeDomain.domain`.
+pub fn acme_domain(domain: Int) -> String {
+    sock_text(domain, 16)
+}
+
 // `HostConnect.name`.
 pub fn host_name(host: Int) -> String {
     sock_text(host, 16)

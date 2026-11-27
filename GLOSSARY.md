@@ -26,6 +26,10 @@ _Avoid_: restricted Fs, sandboxed filesystem
 **File capability**:
 A capability confined to a single file, such as `FileRead`. Using it takes no path.
 
+**Acme capability**:
+`Acme`, which grants nothing itself and only attenuates: `restrict_to(domain)` gives an `AcmeDomain`, which permits that domain and the names beneath it. `std.acme` refuses an order for any other name before a request is made, and `oskac check` lists each narrowing with its domain (ADR 0025, ADR 0036).
+_Avoid_: certificate permission
+
 **Host capability**:
 A capability confined to one host and one port, `HostConnect`. It alone can connect, and `connect()` takes no destination. `Net` and `NetConnect` only attenuate to one, with `restrict_to(host, port)` (ADR 0025). A loopback listener, `LoopbackListen`, is the listening counterpart, for a local test server.
 _Avoid_: restricted NetConnect, connect-to-any
