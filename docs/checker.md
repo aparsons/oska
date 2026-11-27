@@ -103,6 +103,7 @@ A `std.*` module is a file `crates/oska-check/src/std/<name>.osk`, registered in
 | `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
 | `std.sha2` | `sha256`, `sha384`, `sha512`, `sha256_secret`, `Sha256`, `Sha512`, `Sha256Secret` (each `new`, `update`, `finish`) | None |
 | `std.dns` | `resolve`, `Exchange` (`query_id`, `datagram`, `stream`), `NetExchange` (`new`, `on_port`), `Config` (`new`), `load_config`, `build_query`, `parse_response`, `Answer`, `DnsError`, `parse_ip`, `Ip`, `parse_hosts`, `lookup_hosts`, `HostsEntry`, `parse_resolv_conf`, `ResolvConf`, `candidates`, `valid_name`, and the constants `TYPE_A`, `TYPE_AAAA` and `MAX_CONFIG_BYTES` | None |
+| `std.jws` | `sign_jwk`, `sign_kid`, `jwk`, `thumbprint`, `thumbprint_of_jwk`, `public_key`, `JwsError` | None |
 | `std.base64url` | `encode`, `decode`, `es256_raw`, `es256_raw_from_der`, `Base64UrlError` | None |
 | `std.hmac` | `sha256`, `verify_sha256` | None |
 | `std.ed25519` | `PublicKey` (`from_bytes`, `to_bytes`), `verify` | None |
