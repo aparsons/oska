@@ -810,6 +810,7 @@ fi
 check --group scripts --list
 group_steps=$out
 audit=$repo_root/docs/agents/check-concurrency.md
+# shellcheck disable=SC2016 # sed's backticks are literal here
 rows=$(sed -n 's/^| `\([^`]*\)` |.*/\1/p' "$audit" 2>/dev/null || true)
 missing_rows=
 while IFS= read -r step_name; do
@@ -831,6 +832,7 @@ if [ -z "$stale_rows" ]; then
 else
   bad "every row of the concurrency audit names a scripts group step" "not a step:$stale_rows"
 fi
+# shellcheck disable=SC2016 # awk's $4 and $5 are fields, not shell variables
 bad_rows=$(awk -F'|' '/^\| `/ {
   v = $4; r = $5
   gsub(/^ +| +$/, "", v); gsub(/^ +| +$/, "", r)
