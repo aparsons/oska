@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// The update checker `oskac` carries (spec #230). `oskac`'s build script
+// compiles this program with the in-repo checker and native backend and
+// embeds the executable, so nothing is compiled when `oskac` runs.
+//
+// For now the verdict is a fixed stub: the real check, which reads the
+// release channel and verifies it, comes with #258.
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("up-to-date")
+}

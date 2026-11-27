@@ -46,6 +46,7 @@ mod release;
 mod self_cmd;
 mod sha256;
 mod stdin;
+mod update_checker;
 mod verdict;
 
 const USAGE: &str = "\
