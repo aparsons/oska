@@ -746,6 +746,34 @@ impl Lowering<'_> {
                         ast::ExprKind::Field { base, .. },
                         Some(Resolution::MutatingMethod(callee)),
                     ) => match self.place(base) {
+                        // `List.sort` is `list_sorted` of the receiver,
+                        // assigned back when it has returned, so a panic
+                        // in the sort leaves the list as it was.
+                        Some(receiver) if matches!(callee, Callee::Function(f) if f == "pkg.std.core.list_sorted") =>
+                        {
+                            let ty = self.type_at(base.span);
+                            let read = Expr {
+                                kind: self.expr(base).kind,
+                                ty,
+                                span: base.span,
+                            };
+                            ExprKind::Block {
+                                stmts: vec![Stmt::Assign {
+                                    place: receiver,
+                                    value: Expr {
+                                        kind: ExprKind::Call {
+                                            callee: callee.clone(),
+                                            type_args: self.type_args_at(expr.span),
+                                            args: vec![read.clone()],
+                                        },
+                                        ty: read.ty.clone(),
+                                        span: expr.span,
+                                    },
+                                    span: expr.span,
+                                }],
+                                value: None,
+                            }
+                        }
                         Some(receiver) => ExprKind::MutatingCall {
                             callee: callee.clone(),
                             type_args: self.type_args_at(expr.span),

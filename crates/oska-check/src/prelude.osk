@@ -826,6 +826,30 @@ impl<T> List<T> {
     pub fn reverse(self) -> List<T>
     // A new list of the items of this list, then those of `other`.
     pub fn concat(self, other: List<T>) -> List<T>
+    // A new list of the items ordered by `cmp`, which says how its first
+    // argument orders against its second. The sort is stable: items that
+    // `cmp` calls equal keep their order. It takes O(n log n) time and one
+    // extra list. A `cmp` that is not a total order gives some order of the
+    // same items and never reads out of bounds. This list is not changed,
+    // so a `cmp` that panics leaves it as it was.
+    //
+    //     let words = ["pear", "fig", "apple"]
+    //     words.sorted_by(|a, b| a.len().cmp(b.len()))  // ["fig", "pear", "apple"]
+    pub fn sorted_by(self, cmp: fn(T, T) -> Ordering) -> List<T>
+}
+
+impl<T: Ord> List<T> {
+    // A new list of the items in ascending order. The sort is stable and
+    // takes O(n log n) time. This list is not changed.
+    //
+    //     [3, 1, 2].sorted()  // [1, 2, 3]
+    pub fn sorted(self) -> List<T>
+    // Put the items in ascending order, as `sorted` does. The list must be
+    // a `var`. It is changed only when the sort has finished.
+    //
+    //     var xs = [3, 1, 2]
+    //     xs.sort()  // xs is [1, 2, 3]
+    pub fn sort(var self)
 }
 
 impl<T: Eq> List<T> {

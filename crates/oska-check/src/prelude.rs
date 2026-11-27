@@ -223,8 +223,20 @@ pub const CORE_METHODS: &[(&str, &[&str])] = &[
     (
         "List",
         &[
-            "filter", "fold", "any", "all", "find", "contains", "first", "last", "is_empty",
-            "reverse", "concat",
+            "filter",
+            "fold",
+            "any",
+            "all",
+            "find",
+            "contains",
+            "first",
+            "last",
+            "is_empty",
+            "reverse",
+            "concat",
+            "sorted",
+            "sorted_by",
+            "sort",
         ],
     ),
     (
@@ -248,10 +260,17 @@ pub const CORE_METHODS: &[(&str, &[&str])] = &[
 /// The `std.core` function that the prelude method `Type.method` calls,
 /// by its key in a program, if its body is in `std.core`.
 pub fn core_function(type_name: &str, method: &str) -> Option<String> {
+    // `sort` changes its receiver: it is `list_sorted`, with the result
+    // assigned back (`program/lower.rs`).
+    let function = if type_name == "List" && method == "sort" {
+        "sorted"
+    } else {
+        method
+    };
     CORE_METHODS
         .iter()
         .find(|(ty, methods)| *ty == type_name && methods.contains(&method))
-        .map(|_| format!("pkg.std.core.{}_{method}", type_name.to_lowercase()))
+        .map(|_| format!("pkg.std.core.{}_{function}", type_name.to_lowercase()))
 }
 
 /// Whether `source` writes a call of a method named `name`: `.name`, with

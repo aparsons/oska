@@ -79,6 +79,9 @@ const EXEMPT: &[(&str, &str)] = &[
     ("Result.unwrap_or_else", CORE_LIST),
     ("Result.ok", CORE_LIST),
     ("Result.err", CORE_LIST),
+    ("List.sorted", CORE_LIST),
+    ("List.sorted_by", CORE_LIST),
+    ("List.sort", CORE_LIST),
 ];
 
 /// How a [`CALLS`] program is run.
