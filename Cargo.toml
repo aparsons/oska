@@ -55,3 +55,9 @@ opt-level = 1
 
 [profile.dev.package.oska-native]
 opt-level = 1
+
+# `oska-sys` holds the x86_64 musl build's `memcpy` and `memmove` (ADR 0009),
+# which every test binary of that build calls. Unoptimised, they are several
+# times slower than musl's own and made the musl `rest` shard time out.
+[profile.dev.package.oska-sys]
+opt-level = 3
