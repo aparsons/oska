@@ -50,7 +50,8 @@
 
 use std::sync::Arc;
 
-use oska_check::program::{Callee, Closure, Expr, ExprKind, Type};
+use oska_check::builtins;
+use oska_check::program::{Callee, Closure, Expr, ExprKind, IntType, Type};
 use oska_syntax::{Diagnostic, Span};
 
 use super::{body_end, panics, Body, Instance, Receiver, Slot, Source};
@@ -345,6 +346,69 @@ impl Body<'_, '_> {
         self.push(Inst::Label(exit));
         self.store(mapped, layout::LIST_LEN, length);
         Ok(mapped)
+    }
+
+    /// `DirWrite.with_lock(root, function)` for `expr`: `std.rt`'s
+    /// `dir_lock` takes the lock, and gives the `Err` to return as it is
+    /// or the lock's handle, which `function` is called under, with the
+    /// same capability, before `dir_unlock` releases it and the result is
+    /// `Ok` of what `function` gave. A panic in `function` ends the
+    /// process, and the system releases the lock then.
+    pub(super) fn dir_with_lock(
+        &mut self,
+        root: Temp,
+        function: Temp,
+        expr: &Expr,
+    ) -> Result<Temp, Diagnostic> {
+        let span = expr.span;
+        let Type::Named { args, .. } = self.ty(&expr.ty) else {
+            return Err(self.refuse(span, "a `with_lock` that gives no `Result`"));
+        };
+        let Some(error_ty) = args.get(1).cloned() else {
+            return Err(self.refuse(span, "a `with_lock` that gives no error type"));
+        };
+        let lock_ty = Type::Named {
+            name: builtins::RESULT.to_string(),
+            args: vec![Type::Int(IntType::Int), error_ty],
+        };
+        let ok = self.variant(builtins::RESULT, builtins::OK, span)? as i64;
+        let err = self.variant(builtins::RESULT, builtins::ERR, span)? as i64;
+        let result = self.temp();
+        let (failed, end) = (self.label(), self.label());
+        let lock = self.call_runtime("dir_lock", vec![root], NOWHERE)?;
+        let tag = self.load(lock, layout::ENUM_TAG);
+        let refused = self.constant(err);
+        self.push(Inst::Branch {
+            cond: Cond::Eq,
+            lhs: tag,
+            rhs: refused,
+            target: failed,
+        });
+        let handle = self.load(lock, layout::enum_field(0));
+        self.release(lock, &lock_ty)?;
+        let value = self.invoke(function, &[root], span)?;
+        self.call_runtime("dir_unlock", vec![root, handle], NOWHERE)?;
+        let object = self.alloc(layout::variant_size(1))?;
+        let done = self.constant(ok);
+        self.store(object, layout::ENUM_TAG, done);
+        self.store(object, layout::enum_field(0), value);
+        self.push(Inst::Copy {
+            dst: result,
+            src: object,
+        });
+        self.push(Inst::Jump(end));
+        self.push(Inst::Label(failed));
+        // The `Err` the lock gave is the result: `Result<Int, IoError>`
+        // and `Result<T, IoError>` lay their `Err` out alike.
+        self.push(Inst::Copy {
+            dst: result,
+            src: lock,
+        });
+        self.push(Inst::Label(end));
+        self.consume(root)?;
+        self.consume(function)?;
+        self.own(result, &expr.ty);
+        Ok(result)
     }
 
     // ---- The code of function values ----------------------------------

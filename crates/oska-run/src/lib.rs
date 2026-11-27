@@ -67,7 +67,7 @@ mod testing;
 mod traits;
 mod value;
 
-pub use host::{FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
+pub use host::{DirLock, FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;
 pub use panics::codes;

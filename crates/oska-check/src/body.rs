@@ -619,11 +619,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .items
             .traits
             .get(trait_name)
-            .map_or(true, |t| !t.generics.is_empty());
+            .is_none_or(|t| !t.generics.is_empty());
         if generic {
             return None;
         }
-        let in_prelude = |name: &str| self.decls().get(name).map_or(true, |d| d.in_prelude);
+        let in_prelude = |name: &str| self.decls().get(name).is_none_or(|d| d.in_prelude);
         match ty {
             Ty::Param(_) => Some(Callee::Trait {
                 trait_name: trait_name.to_string(),

@@ -68,13 +68,10 @@ impl Sha256 {
             self.compress(&block);
             self.filled = 0;
         }
-        let mut blocks = data.chunks_exact(64);
-        for block in &mut blocks {
-            let mut whole = [0u8; 64];
-            whole.copy_from_slice(block);
-            self.compress(&whole);
+        let (blocks, rest) = data.as_chunks::<64>();
+        for block in blocks {
+            self.compress(block);
         }
-        let rest = blocks.remainder();
         self.block[..rest.len()].copy_from_slice(rest);
         self.filled = rest.len();
     }
@@ -88,7 +85,7 @@ impl Sha256 {
         }
         self.update(&bits.to_be_bytes());
         let mut digest = [0u8; 32];
-        for (out, word) in digest.chunks_exact_mut(4).zip(self.state) {
+        for (out, word) in digest.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
             out.copy_from_slice(&word.to_be_bytes());
         }
         digest
@@ -97,8 +94,8 @@ impl Sha256 {
     /// The compression function, on one 64-byte block.
     fn compress(&mut self, block: &[u8; 64]) {
         let mut w = [0u32; 64];
-        for (word, bytes) in w.iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        for (word, bytes) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*bytes);
         }
         for t in 16..64 {
             let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3);

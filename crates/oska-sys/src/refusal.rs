@@ -95,3 +95,17 @@ pub(crate) fn empty_path() -> io::Error {
         "an empty path names no directory",
     )
 }
+
+/// The error for [`crate::Dir::lock`] when another holder has the lock:
+/// the code `L0001` and the lock's name, in the words the native runtime
+/// uses (`std.rt`'s `lock_held`).
+pub(crate) fn lock_held() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        format!(
+            "{}: the directory lock `{}` is already held",
+            crate::LOCK_CODE,
+            crate::LOCK_NAME
+        ),
+    )
+}

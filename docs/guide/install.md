@@ -320,7 +320,7 @@ The site publishes a copy-and-paste prompt that has an AI coding agent install O
 
 ## Build from source
 
-You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
+You need a stable Rust toolchain, version 1.89 or newer, and a checkout of the repository:
 
 ```sh
 cargo build --release -p oskac

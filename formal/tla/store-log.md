@@ -45,6 +45,6 @@ The prelude needs these confined capability methods (ADR 0008), each on the inte
    5. Only then remove the log's front.
 4. **Open**: read the snapshot if its checksum holds, then read the log from the record after it, and stop at the first record whose checksum or chain link fails. `VerifyChecksum` is this rule.
 
-So the primitives are: `append`, file `sync`, `rename` inside one capability, directory `sync`, `remove_file`, and the exclusive lock that gives one writer. `append`, `rename` and `remove_file` are ticket #679; file `sync` and directory `sync` are the next ticket of the spec; the lock is the one after.
+So the primitives are: `append`, file `sync`, `rename` inside one capability, directory `sync`, `remove_file`, and the exclusive lock that gives one writer. `append`, `rename` and `remove_file` are ticket #679; file `sync` and directory `sync` are the next ticket of the spec; the lock is `DirWrite.with_lock(f)` (#846): scoped, because Oska has no destructors, it holds `.oska-lock` in the directory for the length of `f`, and a second lock fails with `L0001`.
 
 The model has one writer. The lock capability is what makes that true, and a second writer is out of scope for the first version.

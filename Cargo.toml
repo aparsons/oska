@@ -7,7 +7,7 @@ version = "0.6.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/aparsons/oska"
-rust-version = "1.77"
+rust-version = "1.89"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

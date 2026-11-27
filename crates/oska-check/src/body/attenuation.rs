@@ -27,6 +27,9 @@ pub(crate) const METHODS: &[(&str, bool)] = &[
     ("connect_only", false),
     ("listen_only", false),
     ("limit", false),
+    // `DirWrite.with_lock(f)` gives `f` the same capability, locked: the
+    // result is a `Result`, so the report names the capability itself.
+    ("with_lock", false),
 ];
 
 impl Body<'_, '_, '_> {
@@ -42,7 +45,10 @@ impl Body<'_, '_, '_> {
         let Some(&(method, takes_root)) = METHODS.iter().find(|(name, _)| *name == sig.name) else {
             return;
         };
-        let Some(result) = sig.ret.head() else {
+        let Some(result) = (match method {
+            "with_lock" => Some(type_name),
+            _ => sig.ret.head(),
+        }) else {
             return;
         };
         if !(self.is_builtin_capability(type_name) && self.is_builtin_capability(result)) {

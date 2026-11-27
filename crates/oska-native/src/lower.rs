@@ -1283,7 +1283,7 @@ impl<'l, 'p> Body<'l, 'p> {
     fn release_held(&mut self, loops: Option<usize>) -> Result<(), Diagnostic> {
         let held: Vec<Held> = self.held.clone();
         for value in held.iter().rev() {
-            if loops.map_or(true, |open| value.loops >= open) {
+            if loops.is_none_or(|open| value.loops >= open) {
                 if value.scope {
                     self.finish_scope(value.temp)?;
                 }
@@ -2743,6 +2743,10 @@ impl<'l, 'p> Body<'l, 'p> {
                     if let Some(value) = self.task_intrinsic(name, &values, expr)? {
                         return Ok(value);
                     }
+                    if let ("DirWrite.with_lock", &[root, function]) = (name.as_str(), &values[..])
+                    {
+                        return self.dir_with_lock(root, function, expr);
+                    }
                     if let Some(value) = self.html_intrinsic(name, &values, expr)? {
                         return Ok(value);
                     }
@@ -3276,7 +3280,7 @@ impl<'l, 'p> Body<'l, 'p> {
         let mut offsets: Vec<u32> = (0..size / 8).map(|k| data + 8 * k).collect();
         if size < 8 {
             offsets.push(data);
-        } else if size % 8 != 0 {
+        } else if !size.is_multiple_of(8) {
             offsets.push(data + size - 8);
         }
         for offset in offsets {

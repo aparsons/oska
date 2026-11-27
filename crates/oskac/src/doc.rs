@@ -106,7 +106,7 @@ pub fn select(entries: Vec<Entry>, filter: &str) -> Option<Vec<Entry>> {
     };
     let selected: Vec<Entry> = entries
         .into_iter()
-        .filter(|e| module.map_or(true, |m| e.item.module == m))
+        .filter(|e| module.is_none_or(|m| e.item.module == m))
         .filter(|e| e.item.kind != Kind::Module)
         .filter(|e| {
             [e.item.name.clone(), e.item.unqualified_name()]
@@ -172,7 +172,7 @@ fn modules_run(entries: &[Entry], module: &str) -> bool {
     entries
         .iter()
         .find(|e| e.item.module == module)
-        .map_or(true, |e| e.refused != Some(Refusal::Module))
+        .is_none_or(|e| e.refused != Some(Refusal::Module))
 }
 
 /// The JSON form: `{"items": [...]}`, one object per item and per line,
