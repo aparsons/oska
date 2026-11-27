@@ -177,6 +177,31 @@ fn a_panicking_comparison_stops_the_sort_and_never_changes_the_receiver() {
     assert_eq!(outcome.stdout, "");
 }
 
+/// A comparison that panics only once the sort is under way: the items
+/// before the one it panics on have already been compared.
+const PANICS_MIDWAY: &str = "fn main(io: Stdout) -> Result<(), IoError> {
+    var xs = [4, 2, 1, 7, 3, 9, 5]
+    let none: List<Int> = []
+    let n = xs.len()
+    io.println(\"before {n}\")?
+    xs = xs.sorted_by(|a, b| if a == 9 { none.at(0).cmp(b) } else { a.cmp(b) })
+    let m = xs.len()
+    io.println(\"after {m}\")?
+    Ok(())
+}
+";
+
+#[test]
+fn a_comparison_that_panics_midway_ends_the_program_before_anything_uses_the_list() {
+    // A panic ends the program, so the list cannot be seen half sorted:
+    // the run prints what came before the sort and nothing after. The
+    // receiver is never written, because `sorted_by` makes a new list.
+    let outcome = common::run_fake(PANICS_MIDWAY, &[]);
+    let panic = outcome.panic.as_ref().expect("the comparison panics");
+    assert_eq!(panic.code, "P0002", "{outcome:#?}");
+    assert_eq!(outcome.stdout, "before 7\n");
+}
+
 /// A program that sorts `n` numbers in descending order.
 fn big_sort(n: i64) -> String {
     format!(

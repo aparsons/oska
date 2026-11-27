@@ -31,6 +31,22 @@ fn secret_largest(k: Secret<U32>, j: Secret<U32>) -> Secret<U32> {
     largest(k, j)
 }
 
-fn not_ordered(a: List<Int>, b: List<Int>) -> Bool {
+struct Version {
+    major: Int
+}
+
+impl Eq for Version {
+    fn eq(self, other: Version) -> Bool {
+        self.major == other.major
+    }
+}
+
+impl Ord for Version {
+    fn cmp(self, other: Version) -> Ordering {
+        self.major.cmp(other.major)
+    }
+}
+
+fn not_ordered(a: Version, b: Version) -> Bool {
     a < b
 }

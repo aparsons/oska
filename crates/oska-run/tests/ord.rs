@@ -196,7 +196,20 @@ fn a_secret_is_not_ordered() {
 }
 
 #[test]
-fn a_type_with_no_ordering_is_refused_by_the_operator() {
-    let src = program("", "    let x = [1] < [2]\n    io.println(\"no\")?");
+fn an_operator_on_a_user_type_is_refused_even_with_impl_ord() {
+    // Operators on a user type with `impl Ord` are not defined yet: only
+    // `cmp` is.
+    let items = "struct Version { major: Int }
+impl Eq for Version {
+    fn eq(self, other: Version) -> Bool { self.major == other.major }
+}
+impl Ord for Version {
+    fn cmp(self, other: Version) -> Ordering { self.major.cmp(other.major) }
+}
+";
+    let src = program(
+        items,
+        "    let x = Version(major: 1) < Version(major: 2)\n    io.println(\"no\")?",
+    );
     assert_refused(&src, "E0223");
 }
