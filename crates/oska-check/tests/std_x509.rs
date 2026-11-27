@@ -17,12 +17,14 @@ use oska_check::CheckReport;
 
 /// The public functions and methods of `std.x509`, as the authority report
 /// names them.
-const FUNCTIONS: [&str; 24] = [
+const FUNCTIONS: [&str; 26] = [
     "std.x509.Certificate.parse",
     "std.x509.Certificate.to_der",
     "std.x509.Certificate.subject",
     "std.x509.Certificate.issuer",
     "std.x509.Certificate.serial",
+    "std.x509.Certificate.authority_key_id",
+    "std.x509.Certificate.ari_id",
     "std.x509.Certificate.not_before",
     "std.x509.Certificate.not_after",
     "std.x509.Certificate.signed_by",
@@ -65,6 +67,8 @@ fn main(io: Stdout, args: Args) {
             let _ = io.println(cert.subject().len().to_string())
             let _ = io.println(cert.issuer().len().to_string())
             let _ = io.println(cert.serial().len().to_string())
+            let _ = io.println(if cert.authority_key_id().is_ok() { "aki" } else { "no aki" })
+            let _ = io.println(if cert.ari_id().is_ok() { "ari" } else { "no ari" })
             let _ = io.println(cert.to_der().len().to_string())
             let _ = io.println(if store.contains(cert) { "root" } else { "not a root" })
             let _ = io.println(if cert.signed_by(cert).is_ok() { "self-signed" } else { "not self-signed" })

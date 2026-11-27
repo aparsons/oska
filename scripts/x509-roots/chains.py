@@ -484,6 +484,7 @@ fn kind(error: x509.X509Error) -> String {
         x509.X509Error.DistrustedRoot => "DistrustedRoot"
         x509.X509Error.HostMismatch => "HostMismatch"
         x509.X509Error.LimitExceeded => "LimitExceeded"
+        x509.X509Error.NoAuthorityKeyId => "NoAuthorityKeyId"
     }
 }
 

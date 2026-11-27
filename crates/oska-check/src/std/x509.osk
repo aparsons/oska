@@ -67,6 +67,7 @@ use std.ecdsa
 use std.rsa
 use std.ed25519
 use std.x509_roots
+use std.base64url
 
 // Why a certificate or a chain was refused. The kinds are stable: a
 // program may match on them.
@@ -110,6 +111,9 @@ pub enum X509Error {
     // Building a path took more than 64 signature checks, which bounds the
     // work a hostile set of certificates can cause.
     LimitExceeded,
+    // The certificate has no authority key identifier with a key
+    // identifier in it (`authority_key_id`, `ari_id`).
+    NoAuthorityKeyId,
 }
 
 impl Display for X509Error {
@@ -131,6 +135,7 @@ impl Display for X509Error {
             X509Error.DistrustedRoot => "the root does not trust certificates issued after its distrust date"
             X509Error.HostMismatch => "the certificate is not for this host name"
             X509Error.LimitExceeded => "building the certificate path took too many signature checks"
+            X509Error.NoAuthorityKeyId => "the certificate has no authority key identifier"
         }
     }
 }
@@ -235,6 +240,30 @@ impl Certificate {
     // The serial number's content bytes.
     pub fn serial(self) -> Bytes {
         self.serial
+    }
+
+    // The key identifier of the certificate's Authority Key Identifier
+    // extension: the bytes of its `keyIdentifier`. A certificate with no
+    // such extension, or one that holds no key identifier (only an issuer
+    // name and serial), is `NoAuthorityKeyId`; there is no default.
+    pub fn authority_key_id(self) -> Result<Bytes, X509Error> {
+        if self.ext.aki.len() == 0 {
+            return Err(X509Error.NoAuthorityKeyId)
+        }
+        Ok(self.ext.aki)
+    }
+
+    // The path component of the ACME renewal information URL for this
+    // certificate (RFC 9773, section 4.1): the unpadded base64url of the
+    // authority key identifier's key identifier, a dot, and the unpadded
+    // base64url of the serial number's DER content bytes (so a leading
+    // zero byte that keeps the integer positive is part of it).
+    // `NoAuthorityKeyId` when the certificate has no key identifier.
+    pub fn ari_id(self) -> Result<String, X509Error> {
+        let key_id = self.authority_key_id()?
+        let key_text = base64url.encode(key_id)
+        let serial_text = base64url.encode(self.serial)
+        Ok("{key_text}.{serial_text}")
     }
 
     // When the certificate becomes valid, in seconds since 1970.
