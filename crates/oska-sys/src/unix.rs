@@ -171,6 +171,9 @@ mod c {
     /// The mode of a new file and a new directory, before the umask.
     pub const FILE_MODE: Mode = 0o666;
     pub const DIR_MODE: Mode = 0o777;
+
+    /// The mode of a new private file (a key), before the umask.
+    pub const PRIVATE_FILE_MODE: Mode = 0o600;
 }
 
 /// The effective user ID of this process: the owner `oskac` requires of
@@ -264,18 +267,51 @@ impl Dir {
     /// never goes through one. Names are as for [`Dir::open_dir`]; there
     /// must be one.
     pub fn create_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
+        self.create_file_with(names, c::FILE_MODE, false)
+    }
+
+    /// [`Dir::create_file`] for a file that holds a secret: created with
+    /// mode `0o600`, and refused, before anything is written, when it
+    /// already exists with any permission for its group or for others, so
+    /// a key is never written into a file others can read.
+    pub fn create_private_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
+        self.create_file_with(names, c::PRIVATE_FILE_MODE, true)
+    }
+
+    fn create_file_with<N: AsRef<OsStr>>(
+        &self,
+        names: &[N],
+        mode: c::Mode,
+        private: bool,
+    ) -> io::Result<File> {
         let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
         let parent = self.walk(parents)?;
-        let fd = open_name(
-            parent.as_ref().unwrap_or(self),
-            last.as_ref(),
-            c::FILE_WRITE,
-        )
-        .map_err(|error| refused(error, &refusal::joined(names), "file"))?;
+        let fd = plain_name(last.as_ref())
+            .and_then(|name| {
+                open_at(
+                    parent.as_ref().unwrap_or(self).fd.as_raw_fd(),
+                    &name,
+                    c::FILE_WRITE,
+                    mode,
+                )
+            })
+            .map_err(|error| refused(error, &refusal::joined(names), "file"))?;
         // Emptied only once it is known to be a regular file with one
         // link: never a device or a FIFO, or a file outside reached by a
         // hard link.
         let file = lone_file(File::from(fd), names)?;
+        if private {
+            let held = file.metadata()?.mode() & 0o077;
+            if held != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "`{}` is accessible to its group or to others, and a private file never is: remove it or run chmod 600 on it",
+                        refusal::joined(names)
+                    ),
+                ));
+            }
+        }
         file.set_len(0)?;
         Ok(file)
     }

@@ -205,6 +205,12 @@ impl FileWrite {
     pub fn write(self, contents: Untrusted<String>) -> Result<(), IoError>
     // `write` with bytes: the file holds exactly `contents`.
     pub fn write_bytes(self, contents: Untrusted<Bytes>) -> Result<(), IoError>
+    // `write_bytes` for a file that holds a secret, such as a key. A file
+    // this makes has mode 0o600 on Linux and macOS, and a file that is
+    // already there with any permission for its group or for others is an
+    // `IoError`, with nothing written. Windows has no mode: the file keeps
+    // the access control list it inherits from its directory.
+    pub fn write_private_bytes(self, contents: Untrusted<Bytes>) -> Result<(), IoError>
 }
 
 // Network access, as `main` declares it. `Net`, `NetConnect` and

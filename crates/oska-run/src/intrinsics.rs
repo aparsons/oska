@@ -106,6 +106,10 @@ pub const INTRINSICS: Table = &[
     ("FileRead.read_to_string", Plain(file_read_to_string)),
     ("FileWrite.write", Plain(file_write)),
     ("FileWrite.write_bytes", Plain(file_write_bytes)),
+    (
+        "FileWrite.write_private_bytes",
+        Plain(file_write_private_bytes),
+    ),
     ("Fs.read_only", Plain(fs_read_only)),
     ("Fs.restrict_to", Plain(fs_restrict_to)),
     ("Fs.write_only", Plain(fs_write_only)),
@@ -882,6 +886,20 @@ fn file_write(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value,
 fn file_write_bytes(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let contents = bytes_arg(args, 1);
     let result = file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], contents));
+    io_unit(result, span)
+}
+
+/// `FileWrite.write_private_bytes(self, contents)`: `write_bytes` for a
+/// file that holds a secret (mode `0o600`; a file others can read is
+/// refused).
+fn file_write_private_bytes(
+    host: &mut dyn Host,
+    args: &mut Args,
+    span: Span,
+) -> Result<Value, Panic> {
+    let contents = bytes_arg(args, 1);
+    let result =
+        file_root(&args[0]).and_then(|root| host.write_private_file_beneath(root, &[], contents));
     io_unit(result, span)
 }
 

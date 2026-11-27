@@ -114,6 +114,23 @@ pub trait Host: Send {
         contents: &[u8],
     ) -> io::Result<()>;
 
+    /// [`Host::write_file_beneath`] for a file that holds a secret: a
+    /// file made here has mode `0o600` on Unix, and one that already
+    /// exists with any permission for its group or for others is refused,
+    /// before anything is written. A host that cannot keep a file private
+    /// refuses.
+    fn write_private_file_beneath(
+        &mut self,
+        _root: &RootHandle,
+        _names: &[String],
+        _contents: &[u8],
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot keep a file private",
+        ))
+    }
+
     /// Create the directory reached by walking `names` beneath `root`,
     /// none of them a symlink: one name at least, and every name before
     /// the last a directory that exists. A directory already there is
@@ -554,6 +571,20 @@ impl Host for RealHost {
         file.write_all(contents)
     }
 
+    fn write_private_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+        contents: &[u8],
+    ) -> io::Result<()> {
+        let mut file = match &root.file {
+            Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
+            Some(name) => root_dir(root)?.create_private_file(&[name])?,
+            None => checked_names(root, names)?.create_private_file(names)?,
+        };
+        file.write_all(contents)
+    }
+
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
         if root.is_file() {
             return Err(a_file_root(root));
@@ -740,6 +771,8 @@ pub struct FakeWorld {
     pub env: BTreeMap<String, String>,
     /// Every file, by absolute path, with its bytes.
     pub files: BTreeMap<PathBuf, Vec<u8>>,
+    /// The files, among `files`, only their owner may use (mode `0o600`).
+    pub private: BTreeSet<PathBuf>,
     /// Directories that exist though no file lies under them.
     pub dirs: BTreeSet<PathBuf>,
     /// Symlinks, by their absolute path, to their target's.
@@ -769,6 +802,9 @@ pub struct FakeHost {
     stdin: VecDeque<String>,
     env: BTreeMap<String, String>,
     files: BTreeMap<PathBuf, Vec<u8>>,
+    /// The files only their owner may use (mode `0o600`); every other
+    /// file has mode `0o644`.
+    private: BTreeSet<PathBuf>,
     /// Directories that exist though no file lies under them.
     dirs: BTreeSet<PathBuf>,
     /// Symlinks, by their path, to their target's.
@@ -787,6 +823,7 @@ impl Default for FakeHost {
             stdin: VecDeque::new(),
             env: BTreeMap::new(),
             files: BTreeMap::new(),
+            private: BTreeSet::new(),
             dirs: BTreeSet::new(),
             links: BTreeMap::new(),
             random: SplitMix64::new(FAKE_SEED),
@@ -824,6 +861,29 @@ impl FakeHost {
         self.files
             .insert(normalize(Path::new(path)), contents.to_vec());
         self
+    }
+
+    /// The host with a file at `path`, relative to `/`, holding the bytes
+    /// `contents`, that only its owner may use (mode `0o600`).
+    pub fn with_private_file_bytes(mut self, path: &str, contents: &[u8]) -> Self {
+        let path = normalize(Path::new(path));
+        self.files.insert(path.clone(), contents.to_vec());
+        self.private.insert(path);
+        self
+    }
+
+    /// The permission bits of the file at `path`, relative to `/`: `0o600`
+    /// for a file only its owner may use, `0o644` for any other. `None`
+    /// when there is no file.
+    pub fn file_mode(&self, path: &str) -> Option<u32> {
+        let path = normalize(Path::new(path));
+        self.files.contains_key(&path).then(|| {
+            if self.private.contains(&path) {
+                0o600
+            } else {
+                0o644
+            }
+        })
     }
 
     /// The host with an empty directory at `path`, relative to `/`.
@@ -869,6 +929,7 @@ impl FakeHost {
             stdin: self.stdin.iter().cloned().collect(),
             env: self.env.clone(),
             files: self.files.clone(),
+            private: self.private.clone(),
             dirs: self.dirs.clone(),
             links: self.links.clone(),
         }
@@ -1203,6 +1264,35 @@ impl Host for FakeHost {
         }
         let path = self.walk_file(root, names)?;
         self.put_file(path, contents)
+    }
+
+    fn write_private_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+        contents: &[u8],
+    ) -> io::Result<()> {
+        if !root.is_file() && names.is_empty() {
+            return Err(no_name());
+        }
+        let path = self.walk_file(root, names)?;
+        if self.files.contains_key(&path) && !self.private.contains(&path) {
+            // Named as the real host names it: by the names walked, which
+            // for a file capability is the file's own name.
+            let named = match &root.file {
+                Some(name) => name.to_string_lossy().into_owned(),
+                None => names.join("/"),
+            };
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "`{named}` is accessible to its group or to others, and a private file never is: remove it or run chmod 600 on it"
+                ),
+            ));
+        }
+        self.put_file(path.clone(), contents)?;
+        self.private.insert(path);
+        Ok(())
     }
 
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {

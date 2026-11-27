@@ -390,6 +390,15 @@ impl Dir {
         Ok(file)
     }
 
+    /// [`Dir::create_file`] for a file that holds a secret. Windows has no
+    /// mode to set: the file keeps the access control list it inherits
+    /// from the directory that holds it, which is as private as that
+    /// directory (the user's profile folders are readable by the user,
+    /// the system and administrators only). Nothing more is promised.
+    pub fn create_private_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
+        self.create_file(names)
+    }
+
     /// Create the directory reached by walking `names` beneath this one.
     /// A directory already there is kept; anything else there, a reparse
     /// point included, is an error. Every name before the last is a

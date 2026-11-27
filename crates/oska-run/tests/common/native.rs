@@ -27,7 +27,7 @@
 //! What cannot be reproduced is in the one skip list,
 //! [`super::skips::SKIPS`], by test, each with its reason.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -91,7 +91,7 @@ pub fn compare_program(
     let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {
         return;
     };
-    let native = sandbox.run(&bytes, &args[1..], &stdin_text(before));
+    let mut native = sandbox.run(&bytes, &args[1..], &stdin_text(before));
     let mut stderr = outcome.stderr.clone();
     if let Some(panic) = &outcome.panic {
         stderr.push_str(&report(panic));
@@ -101,7 +101,26 @@ pub fn compare_program(
         stderr,
         exit_code: Some(outcome.exit_code),
         tree: sandbox.has_world().then(|| expected_tree(after)),
+        owner_only: BTreeSet::new(),
     };
+    // Every file the interpreter made private is owner-only natively too.
+    if sandbox.has_world() {
+        let want: BTreeSet<String> = after
+            .private
+            .iter()
+            .map(|path| expected_name(path))
+            .collect();
+        if !want.is_subset(&native.owner_only) {
+            fail(
+                src,
+                &format!(
+                    "the backends differ: private on the interpreter, readable natively: {:?}",
+                    want.difference(&native.owner_only).collect::<Vec<_>>()
+                ),
+            );
+        }
+    }
+    native.owner_only.clear();
     if native != interpreted {
         fail(
             src,
@@ -277,6 +296,11 @@ struct Run {
     exit_code: Option<i32>,
     /// The filesystem afterwards, when the process had one of its own.
     tree: Option<BTreeMap<String, Entry>>,
+    /// The files of `tree` only their owner may use. Which other files are
+    /// is the process's umask, so only the files the interpreter made
+    /// private are compared (`compare_program`), and this stays empty on
+    /// the interpreter's side.
+    owner_only: BTreeSet<String>,
 }
 
 /// One entry of a filesystem tree.
@@ -290,17 +314,20 @@ enum Entry {
     Other,
 }
 
+/// `path`, absolute, as a tree names it: relative to `/`.
+fn expected_name(path: &Path) -> String {
+    path.strip_prefix("/")
+        .unwrap_or(path)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// The tree a fake host holding `world` has: its files, its symlinks, and
 /// every directory, by path relative to `/`.
 fn expected_tree(world: &FakeWorld) -> BTreeMap<String, Entry> {
-    let name = |path: &Path| -> String {
-        path.strip_prefix("/")
-            .unwrap_or(path)
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/")
-    };
+    let name = expected_name;
     let mut tree = BTreeMap::new();
     let dir = |path: &Path, tree: &mut BTreeMap<String, Entry>| {
         for ancestor in path.ancestors().filter(|a| *a != Path::new("/")) {
@@ -380,6 +407,11 @@ impl Sandbox {
                     std::fs::create_dir_all(parent).expect("should create a directory");
                 }
                 std::fs::write(&file, text).expect("should write a file");
+                if world.private.contains(path) {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))
+                        .expect("should make a file private");
+                }
             }
             for (path, target) in &world.links {
                 let link = inside(&root, path);
@@ -439,10 +471,12 @@ impl Sandbox {
             command.env("PATH", "/");
         }
         let (stdout, stderr, exit_code) = spawn(command, stdin);
+        let mut owner_only = BTreeSet::new();
         let tree = self.has_world().then(|| {
             let mut tree = BTreeMap::new();
             read_tree(&self.root(), "", &mut tree);
             tree.remove(PROGRAM);
+            read_owner_only(&self.root(), "", &mut owner_only);
             tree
         });
         Run {
@@ -450,6 +484,7 @@ impl Sandbox {
             stderr,
             exit_code,
             tree,
+            owner_only,
         }
     }
 }
@@ -565,6 +600,22 @@ fn is_coverage_profile(path: &Path) -> bool {
 
 /// Every entry under `dir`, by path relative to the root, never following
 /// a symlink.
+/// The regular files beneath `dir` that neither their group nor others
+/// have any permission on, by path relative to the root.
+fn read_owner_only(dir: &Path, prefix: &str, found: &mut BTreeSet<String>) {
+    use std::os::unix::fs::PermissionsExt;
+    for entry in std::fs::read_dir(dir).expect("should list a sandbox directory") {
+        let entry = entry.expect("a directory entry");
+        let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+        let kind = std::fs::symlink_metadata(entry.path()).expect("should stat the entry");
+        if kind.is_dir() {
+            read_owner_only(&entry.path(), &format!("{name}/"), found);
+        } else if kind.is_file() && kind.permissions().mode() & 0o077 == 0 {
+            found.insert(name);
+        }
+    }
+}
+
 fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Entry>) {
     let entries = std::fs::read_dir(dir).expect("should list a sandbox directory");
     for entry in entries {

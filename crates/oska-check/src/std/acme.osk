@@ -1702,3 +1702,248 @@ impl Client {
         Ok(Issued(chain: chain, key: key))
     }
 }
+
+// ---- Storage (#838) --------------------------------------------------------------------
+
+// Why a `Store` step failed.
+pub enum StoreError {
+    // The file system said no. The text is the `IoError`'s own, so it is
+    // untrusted; it names a path inside the store's directory and never a
+    // key.
+    Io(Untrusted<String>),
+    // A stored file is not what this module wrote: the file's name, and
+    // what is wrong (a fixed text).
+    Corrupt(String),
+    // A certificate label is not 1 to 64 letters, digits, `_` or `-`.
+    InvalidLabel,
+    // An ACME step failed while the store made an account.
+    Acme(AcmeError),
+}
+
+impl Display for StoreError {
+    // Fixed text only: no key, no text from the file system or the CA.
+    fn to_string(self) -> String {
+        match self {
+            StoreError.Io(_) => "storage failed"
+            StoreError.Corrupt(why) => "stored state is not valid: {why}"
+            StoreError.InvalidLabel => "a certificate label is 1 to 64 letters, digits, _ or -"
+            StoreError.Acme(_) => "an ACME step failed"
+        }
+    }
+}
+
+const ACCOUNT_KEY: String = "account.key"
+const ACCOUNT_URL: String = "account.url"
+
+// Where an ACME client keeps what must survive a restart, in one directory,
+// so that a restarted program reuses its account and its certificate and
+// asks the CA for neither again. It holds two capabilities for that one
+// directory, a `DirRead` and a `DirWrite`, so it reads and writes nothing
+// outside it: a name is a fixed file name or a validated label, and the
+// capability refuses a symlink, `..` and an absolute path besides.
+//
+// Files (flat, in the directory): `account.key` (the 32 bytes of the
+// account's P-256 private key), `account.url` (the account URL),
+// `cert-<label>.key` (the certificate's private key, 32 bytes) and
+// `cert-<label>.pem` (its chain, as the CA sent it). Both key files are
+// written through `FileWrite.write_private_bytes`: mode 0o600 on Linux and
+// macOS, and a key file that already exists with any permission for its
+// group or for others is refused with nothing written. On Windows there is
+// no mode: a file keeps the access control list it inherits from the
+// directory, so give the store a directory only its user (and
+// administrators) can read, such as one under the user's profile. A write
+// replaces a file in place; a crash in the middle leaves a file that
+// `load_*` refuses as `Corrupt` rather than a wrong key.
+//
+// The keys are `Secret` values. The two `expose` calls of this module are
+// in `write_key`, which is the only place a key becomes bytes.
+pub cap struct Store {
+    read: DirRead,
+    write: DirWrite,
+}
+
+// Whether `label` is 1 to 64 bytes of letters, digits, `_` and `-`.
+fn valid_label(label: String) -> Bool {
+    let bytes = label.to_bytes()
+    if bytes.len() < 1 || bytes.len() > 64 {
+        return false
+    }
+    for i in 0..bytes.len() {
+        let b = bytes.at(i)
+        let ok = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95 || b == 45
+        if !ok {
+            return false
+        }
+    }
+    true
+}
+
+// Whether `name` is one of the entries of the store's directory.
+fn has_entry(read: DirRead, name: String) -> Result<Bool, StoreError> {
+    match read.list_dir(Path.new(".")) {
+        Ok(entries) => {
+            for entry in entries {
+                if same(entry, name) {
+                    return Ok(true)
+                }
+            }
+            Ok(false)
+        }
+        Err(error) => Err(StoreError.Io(error.message))
+    }
+}
+
+// The bytes of the 32-byte private key in the file `name`, as a `Secret`,
+// when it is a valid P-256 key.
+fn read_key(read: DirRead, name: String) -> Result<Secret<Bytes>, StoreError> {
+    let raw = match read.read_bytes(Path.new(name)) {
+        Ok(bytes) => bytes
+        Err(error) => { return Err(StoreError.Io(error.message)) }
+    }
+    if raw.len() != 32 {
+        return Err(StoreError.Corrupt("{name} is not a 32-byte key"))
+    }
+    let key = Secret.new(vouch_bytes(raw))
+    match jws.public_key(key) {
+        Ok(_) => Ok(key)
+        Err(_) => Err(StoreError.Corrupt("{name} is not a valid P-256 key"))
+    }
+}
+
+// Write `key` to the file `name` through a file capability that is
+// private. The one place a key is exposed, to hand it to the runtime.
+fn write_key(write: DirWrite, name: String, key: Secret<Bytes>) -> Result<(), StoreError> {
+    let file = write.restrict_to_file(Path.new(name))
+    match file.write_private_bytes(key.expose()) {
+        Ok(_) => Ok(())
+        Err(error) => Err(StoreError.Io(error.message))
+    }
+}
+
+// Write `text` to the file `name` through a file capability.
+fn write_text(write: DirWrite, name: String, text: String) -> Result<(), StoreError> {
+    let file = write.restrict_to_file(Path.new(name))
+    match file.write(text) {
+        Ok(_) => Ok(())
+        Err(error) => Err(StoreError.Io(error.message))
+    }
+}
+
+impl Store {
+    // A store in the directory that `read` and `write` reach. Make both from
+    // one `Dir` (`dir.read_only()` and `dir.write_only()`), so they name one
+    // directory; the directory must exist.
+    pub fn new(read: DirRead, write: DirWrite) -> Store {
+        Store(read: read, write: write)
+    }
+
+    // The stored account key, or `None` when there is none.
+    pub fn load_account_key(self) -> Result<Option<Secret<Bytes>>, StoreError> {
+        if !has_entry(self.read, ACCOUNT_KEY)? {
+            return Ok(None)
+        }
+        Ok(Some(read_key(self.read, ACCOUNT_KEY)?))
+    }
+
+    // Keep the account key, private (see `Store`).
+    pub fn save_account_key(self, key: Secret<Bytes>) -> Result<(), StoreError> {
+        write_key(self.write, ACCOUNT_KEY, key)
+    }
+
+    // The stored account URL, checked as every URL is (`allow_loopback`
+    // for a test CA), or `None` when there is none.
+    pub fn load_account_url(self, allow_loopback: Bool) -> Result<Option<Url>, StoreError> {
+        if !has_entry(self.read, ACCOUNT_URL)? {
+            return Ok(None)
+        }
+        let text = match self.read.read_to_string(Path.new(ACCOUNT_URL)) {
+            Ok(t) => t
+            Err(error) => { return Err(StoreError.Io(error.message)) }
+        }
+        match parse_url(text.trim(), allow_loopback) {
+            Ok(url) => Ok(Some(url))
+            Err(_) => Err(StoreError.Corrupt("{ACCOUNT_URL} is not a valid URL"))
+        }
+    }
+
+    // Keep the account URL.
+    pub fn save_account_url(self, url: Url) -> Result<(), StoreError> {
+        write_text(self.write, ACCOUNT_URL, url.text)
+    }
+
+    // The client for the account this directory holds, making what is
+    // missing. With no stored key, a new one is made from `random` and kept
+    // before anything is sent. With a stored account URL the client has
+    // that account and no request is made: a restarted program reuses its
+    // account. Otherwise the CA is asked for the account of the key
+    // (`new_account`: it makes one, or finds the existing one when
+    // `terms_agreed` is not needed), and the URL it gives is kept.
+    pub fn open_client<T: Transport>(self, transport: T, directory: Directory, random: Random, contact: List<String>, terms_agreed: Bool, allow_loopback: Bool) -> Result<Client, StoreError> {
+        let key = match self.load_account_key()? {
+            Some(k) => k
+            None => {
+                let fresh = match new_key(random) {
+                    Ok(k) => k
+                    Err(error) => { return Err(StoreError.Acme(error)) }
+                }
+                self.save_account_key(fresh)?
+                fresh
+            }
+        }
+        var client = match Client.new(directory, key, allow_loopback) {
+            Ok(c) => c
+            Err(error) => { return Err(StoreError.Acme(error)) }
+        }
+        match self.load_account_url(allow_loopback)? {
+            Some(url) => { return Ok(client.with_account(url)) }
+            None => {}
+        }
+        let account = match client.new_account(transport, contact, terms_agreed, false) {
+            Ok(a) => a
+            Err(error) => { return Err(StoreError.Acme(error)) }
+        }
+        self.save_account_url(account.url)?
+        Ok(client)
+    }
+
+    // Keep `issued` under `label`: its private key (private, see `Store`)
+    // and its chain. The key is written first, so a chain is never stored
+    // without its key.
+    pub fn save_certificate(self, label: String, issued: Issued) -> Result<(), StoreError> {
+        if !valid_label(label) {
+            return Err(StoreError.InvalidLabel)
+        }
+        write_key(self.write, "cert-{label}.key", issued.key)?
+        write_text(self.write, "cert-{label}.pem", issued.chain.pem)
+    }
+
+    // The certificate kept under `label`, when there is one that names
+    // every one of `names` (a wildcard as written) and does not expire
+    // within `renew_before` seconds of `now` (seconds since 1970); `None`
+    // when there is none, or it is due for renewal, so the caller issues a
+    // new one. A chain or key that is there but not valid is `Corrupt`.
+    pub fn load_certificate(self, label: String, names: List<String>, now: Int, renew_before: Int) -> Result<Option<Issued>, StoreError> {
+        if !valid_label(label) {
+            return Err(StoreError.InvalidLabel)
+        }
+        let key_name = "cert-{label}.key"
+        let pem_name = "cert-{label}.pem"
+        if !has_entry(self.read, key_name)? || !has_entry(self.read, pem_name)? {
+            return Ok(None)
+        }
+        let key = read_key(self.read, key_name)?
+        let pem = match self.read.read_bytes(Path.new(pem_name)) {
+            Ok(bytes) => bytes
+            Err(error) => { return Err(StoreError.Io(error.message)) }
+        }
+        let response = http.Response(status: 200, headers: [], body: vouch_bytes(pem))
+        let chain = match parse_certificate_chain(response, names) {
+            Ok(c) => c
+            Err(_) => { return Err(StoreError.Corrupt("{pem_name} is not a chain for these names")) }
+        }
+        if chain.certificates.at(0).not_after() - renew_before <= now {
+            return Ok(None)
+        }
+        Ok(Some(Issued(chain: chain, key: key)))
+    }
+}

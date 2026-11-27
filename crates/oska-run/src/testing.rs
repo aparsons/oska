@@ -599,6 +599,16 @@ impl Host for TestHost<'_> {
         self.world().write_file_beneath(root, names, contents)
     }
 
+    fn write_private_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+        contents: &[u8],
+    ) -> io::Result<()> {
+        self.world()
+            .write_private_file_beneath(root, names, contents)
+    }
+
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
         self.world().create_dir_beneath(root, names)
     }

@@ -5111,6 +5111,12 @@ fn c_string(text: String) -> Int {
 // retried when a signal interrupts it: the new descriptor, or minus the
 // `errno` (`nul_in_name` for a name holding a NUL byte).
 fn open_name(dirfd: Int, name: String, flags: Int) -> Int {
+    open_name_mode(dirfd, name, flags, 438)
+}
+
+// `open_name` with `mode` (0o600 is 384) for a file it creates. Windows has
+// no mode: a file there keeps the access list it inherits.
+fn open_name_mode(dirfd: Int, name: String, flags: Int, mode: Int) -> Int {
     if on_windows() {
         return win_open_name(dirfd, name, flags)
     }
@@ -5118,9 +5124,9 @@ fn open_name(dirfd: Int, name: String, flags: Int) -> Int {
     if path == 0 {
         return 0 - nul_in_name()
     }
-    var fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
+    var fd = rt_sys_openat(dirfd, text_data(path), flags, mode)
     while interrupted(fd) {
-        fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
+        fd = rt_sys_openat(dirfd, text_data(path), flags, mode)
     }
     free(path)
     fd
@@ -5772,9 +5778,14 @@ fn open_dir(root: Int, names: List<String>) -> Result<Int, IoError> {
 // `root`, open with `flags`: every name before the last a directory, and
 // none a symlink, the last included. The file has one link (`lone_file`).
 fn open_file(root: Int, names: List<String>, flags: Int) -> Result<Int, IoError> {
+    open_file_mode(root, names, flags, 438)
+}
+
+// `open_file` that makes a file with `mode`.
+fn open_file_mode(root: Int, names: List<String>, flags: Int, mode: Int) -> Result<Int, IoError> {
     let count = names.len()
     let parent = walk(root, names, count - 1)?
-    let fd = open_name(parent, names.at(count - 1), flags)
+    let fd = open_name_mode(parent, names.at(count - 1), flags, mode)
     if parent != root {
         close(parent)
     }
@@ -5828,6 +5839,29 @@ fn lone_file(fd: Int, names: List<String>) -> Result<(), IoError> {
     }
     if links > 1 {
         return Err(io_error_text("`{path}` has more than one hard link, and confined access never opens one"))
+    }
+    Ok(())
+}
+
+// Whether the open `fd`, reached by `names`, has no permission for its group
+// or for others. Windows has no mode, so nothing there is refused.
+fn private_file(fd: Int, names: List<String>) -> Result<(), IoError> {
+    if on_windows() {
+        return Ok(())
+    }
+    let platform = rt_mem_platform()
+    let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
+    let stat = rt_mem_add(buffer, 8)
+    let result = rt_sys_fstat(fd, stat)
+    let mode = load_bits(rt_mem_add(stat, platform.stat_mode), platform.stat_mode_bits)
+    free(buffer)
+    if result < 0 {
+        return Err(io_error(0 - result))
+    }
+    // The group's and the others' permission bits, 0o077.
+    if rt_mem_and(mode, 63) != 0 {
+        let path = joined(names, names.len())
+        return Err(io_error_text("`{path}` is accessible to its group or to others, and a private file never is: remove it or run chmod 600 on it"))
     }
     Ok(())
 }
@@ -5938,18 +5972,36 @@ fn read_all(fd: Int, bytes: Bool) -> Result<Int, IoError> {
 // emptied only once it is known to be a regular one with one link.
 fn write_beneath(root: Int, names: List<String>, contents: String) -> Result<(), IoError> {
     let object = rt_mem_text(contents)
-    write_raw_beneath(root, names, text_data(object), text_length(object))
+    write_raw_beneath(root, names, text_data(object), text_length(object), false)
 }
 
 // `write_beneath` with bytes.
 fn write_bytes_beneath(root: Int, names: List<String>, contents: Bytes) -> Result<(), IoError> {
     let object = rt_mem_bytes(contents)
-    write_raw_beneath(root, names, bytes_data(object), bytes_length(object))
+    write_raw_beneath(root, names, bytes_data(object), bytes_length(object), false)
 }
 
-// `write_beneath` with the `count` bytes at `data`.
-fn write_raw_beneath(root: Int, names: List<String>, data: Int, count: Int) -> Result<(), IoError> {
-    let fd = open_file(root, names, file_write_flags())?
+// `write_bytes_beneath` for a file that holds a secret: made with mode 0o600,
+// and refused, with nothing written, when it is there with any permission
+// for its group or for others.
+fn write_private_bytes_beneath(root: Int, names: List<String>, contents: Bytes) -> Result<(), IoError> {
+    let object = rt_mem_bytes(contents)
+    write_raw_beneath(root, names, bytes_data(object), bytes_length(object), true)
+}
+
+// `write_beneath` with the `count` bytes at `data`, `private` for a file
+// that holds a secret.
+fn write_raw_beneath(root: Int, names: List<String>, data: Int, count: Int, private: Bool) -> Result<(), IoError> {
+    let fd = open_file_mode(root, names, file_write_flags(), if private { 384 } else { 438 })?
+    if private {
+        match private_file(fd, names) {
+            Ok(_) => {}
+            Err(e) => {
+                close(fd)
+                return Err(e)
+            }
+        }
+    }
     // On Windows the handle is at the file's start: it ends there.
     var emptied = if on_windows() { rt_sys_set_end_of_file(fd) } else { rt_sys_ftruncate(fd, 0) }
     while interrupted(emptied) {
@@ -6493,6 +6545,15 @@ pub fn file_write_bytes(root: Root, contents: Bytes) -> Result<(), IoError> {
         return fake_put_file(root.path, raw_text_of(contents))
     }
     write_bytes_beneath(root.handle, file_names(root), contents)
+}
+
+// `FileWrite.write_private_bytes(contents)`.
+pub fn file_write_private_bytes(root: Root, contents: Bytes) -> Result<(), IoError> {
+    usable(root)?
+    if faking() {
+        return fake_put_private_file(root.path, raw_text_of(contents))
+    }
+    write_private_bytes_beneath(root.handle, file_names(root), contents)
 }
 
 // The test host keeps a file's bytes in a text object, UTF-8 or not: the
@@ -8280,6 +8341,40 @@ fn fake_put_file(path: String, contents: String) -> Result<(), IoError> {
         i = i + 1
     }
     put_word_list(37, kept)
+    Ok(())
+}
+
+// A file only its owner may use is marked by an entry of word 38 (the
+// made directories) that is this prefix and its path, which no directory's
+// path can equal.
+fn fake_private_mark(path: String) -> String {
+    "private {path}"
+}
+
+// Whether the file at `path` is private.
+fn fake_is_private(path: String) -> Bool {
+    let mark = fake_private_mark(path)
+    for entry in word_list(38) {
+        if entry == mark {
+            return true
+        }
+    }
+    false
+}
+
+// `fake_put_file` for a file that holds a secret: a file there that is not
+// private is refused, and the file is private afterwards.
+fn fake_put_private_file(path: String, contents: String) -> Result<(), IoError> {
+    if fake_file(path) >= 0 && !fake_is_private(path) {
+        let name = fake_names(path).at(fake_names(path).len() - 1)
+        return Err(io_error_text("`{name}` is accessible to its group or to others, and a private file never is: remove it or run chmod 600 on it"))
+    }
+    fake_put_file(path, contents)?
+    if !fake_is_private(path) {
+        var dirs = take_word_list(38)
+        dirs.push(fake_private_mark(path))
+        put_word_list(38, dirs)
+    }
     Ok(())
 }
 

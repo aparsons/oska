@@ -234,6 +234,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         "FileWrite.write_bytes",
         Prelude::Runtime("file_write_bytes"),
     ),
+    (
+        "FileWrite.write_private_bytes",
+        Prelude::Runtime("file_write_private_bytes"),
+    ),
     ("TestContext.printed", Prelude::Runtime("test_printed")),
     (
         "TestContext.answer_approval",
