@@ -630,12 +630,12 @@ run_queue() {
           echo "1 0" >"$q_tmp/$i.rc"
         fi
       fi
-      state[i]=done
+      state[i]="done"
       running=$((running - 1))
       [ -z "${queue_conc[i]}" ] && serial_running=
       moved=1
     done
-    while [ "$next" -lt "$n" ] && [ "${state[next]}" = done ]; do
+    while [ "$next" -lt "$n" ] && [ "${state[next]}" = "done" ]; do
       read -r rc took <"$q_tmp/$next.rc"
       cat "$q_tmp/$next.out"
       step_times="$step_times$took ${queue_names[next]}"$'\n'

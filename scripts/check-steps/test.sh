@@ -946,6 +946,7 @@ done
 reset_stub "$install_stub"
 reset_stub "$kill_stub"
 rm -f "$work"/log.*
+# shellcheck disable=SC2016 # the stub body is expanded later, by the stub
 serial_body='echo start >>"$STUB_LOG.ser"; sleep 0.3; echo end >>"$STUB_LOG.ser"'
 set_stub "$eval_stub" "#!/usr/bin/env bash
 $serial_body"
@@ -963,6 +964,7 @@ reset_stub "$release_stub"
 # Buffered output sits in a private (0700) directory under TMPDIR, removed on
 # exit, a failing run included.
 mkdir "$work/conc-tmp"
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
 set_stub "$install_stub" '#!/usr/bin/env bash
 for d in "$TMPDIR"/*/; do ls -ld "$d" | cut -c1-10 >>"$STUB_LOG.mode"; done'
 rm -f "$work"/log.*
