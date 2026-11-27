@@ -14,6 +14,7 @@
 #   - a tracked file runs `cargo build`, `install`, `publish`, `package` or
 #     `rustc` with `--all-features` or with the `test-site` feature (a
 #     `cargo check`, `clippy` or `test` may: they ship nothing);
+#     (a command continued with a trailing backslash counts as one line);
 #   - a BINARY given on the command line holds the feature's marker
 #     (`OSKAC_TEST_SITE_`), which only a test build's code mentions.
 #
@@ -50,19 +51,31 @@ if grep -v '^test-site' <<<"$features" | grep -q 'test-site'; then
 fi
 
 # Builds that ship something must not turn features on wholesale or this one.
-while IFS= read -r line; do
-  file=${line%%:*}
+# A command continued with a trailing backslash is one command: its lines are
+# joined before they are scanned.
+joined() {
+  awk '
+    { line = $0
+      while (line ~ /\\[ \t]*$/ && (getline more) > 0) {
+        sub(/\\[ \t]*$/, " ", line)
+        line = line more
+      }
+      print FNR ":" line }
+  ' "$1"
+}
+while IFS= read -r file; do
   case "$file" in
     scripts/test-site-guard/*) continue ;;
   esac
-  text=${line#*:}
-  text=${text#*:}
-  if grep -Eq 'cargo( +\+[^ ]+)? +(build|install|publish|package|rustc|run)( |$)' <<<"$text" &&
-    grep -Eq -- '--all-features|test-site|oskac/test' <<<"$text"; then
-    printf 'test-site-guard: %s builds with all features or test-site: %s\n' "$file" "$text" >&2
-    bad=1
-  fi
-done < <(git -C "$root" grep -n -I -E -- '--all-features|test-site|oskac/test' -- . || true)
+  while IFS= read -r text; do
+    text=${text#*:}
+    if grep -Eq 'cargo( +\+[^ ]+)? +(build|install|publish|package|rustc|run)( |$)' <<<"$text" &&
+      grep -Eq -- '--all-features|test-site|oskac/test' <<<"$text"; then
+      printf 'test-site-guard: %s builds with all features or test-site: %s\n' "$file" "$text" >&2
+      bad=1
+    fi
+  done < <(joined "$root/$file")
+done < <(git -C "$root" grep -l -I -E -- '--all-features|test-site|oskac/test' -- . || true)
 
 if [ $# -eq 0 ]; then
   if [ "$require" -eq 1 ]; then

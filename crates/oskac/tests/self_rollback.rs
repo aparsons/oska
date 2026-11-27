@@ -194,6 +194,44 @@ mod site {
     }
 
     #[test]
+    fn rollback_after_an_allow_downgrade_goes_up_and_is_still_reported_as_downgraded() {
+        // 0.7.0 downgraded to 0.6.0 records 0.7.0 as the previous version, so
+        // the rollback target is newer than what is installed. It is a
+        // rollback all the same: `downgraded`, with its source.
+        let scene = Scene::new("rollback-up", "0.7.0");
+        scene.receipt(3);
+        let (code, out, _) = scene.against(
+            "site",
+            "update",
+            5,
+            &[
+                "update",
+                "--version",
+                "0.6.0",
+                "--allow-downgrade",
+                "--format=json",
+            ],
+        );
+        assert_eq!(code, 0, "{out}");
+        let scene = Scene {
+            version: "0.6.0",
+            ..scene
+        };
+        let (code, out, _) = scene.against(
+            "site",
+            "update",
+            5,
+            &["update", "--rollback", "--format=json"],
+        );
+        assert_eq!(code, 0, "{out}");
+        let v = json(&out);
+        assert_eq!(str_of(&v, "action"), "downgraded");
+        assert_eq!(str_of(&v, "source"), "downloaded");
+        assert_eq!(str_of(&v, "from"), "0.6.0");
+        assert_eq!(str_of(&v, "to"), "0.7.0");
+    }
+
+    #[test]
     fn a_tampered_kept_copy_is_ignored_and_the_release_is_downloaded() {
         let scene = kept_scene("rollback-tampered");
         let path = scene.bin.join(KEPT_NAME);

@@ -40,8 +40,9 @@
 //             downloads the release as an install does
 //
 // Its authority is visible in its signature: a network connection that it
-// narrows to one host and port, the read of one file (the running
-// executable, named relative to the working directory), the write of one
+// narrows to one host and port, the read of files named relative to the
+// working directory (the running executable, and for `update` also the kept
+// copy of the previous release, when a rollback names one), the write of one
 // file (the staging file, named the same way, and only for `update`), the
 // clock and secure randomness for TLS, and standard output. It imports no
 // system-call layer, has no environment, no directory listing and no spawn,

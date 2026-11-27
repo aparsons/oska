@@ -266,12 +266,17 @@ fn run(request: &Request) -> Result<Done, Failed> {
         staging: staging.name(),
         kept: use_kept.as_ref().map(|(n, s)| (n.as_str(), s.as_str())),
     };
-    let updated = match update_checker::update(&ask) {
+    let mut updated = match update_checker::update(&ask) {
         Ok(UpdateVerdict::Done(updated)) => updated,
         Ok(UpdateVerdict::Refused { code, message }) => return Err(Failed { code, message }),
         Err(why) => return Err(failed("internal", why.0)),
     };
     agrees(&updated, &version, requested, allow_downgrade)?;
+    // A rollback is always reported as one, even when the release it returns
+    // to is newer than the installed one (after an `--allow-downgrade`).
+    if request.rollback && updated.action == "updated" {
+        updated.action = "downgraded".to_string();
+    }
     let mut notes = Vec::new();
     if updated.action == "current" {
         if let Err(why) = crate::self_check::raise_serial(&receipt, updated.serial) {

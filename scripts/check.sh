@@ -601,7 +601,8 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests -
     # nothing.
     cargo build --quiet -p oskac
     binaries=(target/debug/oskac)
-    for built in target/dist/oskac target/release/oskac; do
+    # Shipped binaries are built with --target, so those count too.
+    for built in target/dist/oskac target/release/oskac target/*/dist/oskac target/*/release/oskac; do
       [ -f "$built" ] && binaries+=("$built")
     done
     if [ -n "${CI:-}" ]; then
