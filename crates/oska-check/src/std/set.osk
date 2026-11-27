@@ -19,9 +19,13 @@
 // past the limit panics with `P0044`, and items that collide under every
 // hash panic with `P0045`, as for a `Map`.
 //
+// `union`, `intersection` and `difference` build a new set from two (the
+// result of `a.union(b)` is `a`'s items, then `b`'s new ones; the other two
+// keep `a`'s order).
+//
 // A `Secret` item is refused by the checker (`E0351`, `E0354`), and a type
-// that is not `Eq` and `Hash` is `E0266`; a `Float` item will be refused
-// once `Float` exists.
+// that is not `Eq` and `Hash` is `E0266`, `Float` included (it has no
+// `Hash`).
 
 // For maintainers: a set is a struct over one `Map<T, Bool>`: the item is
 // the key and the value is always `true`. It has no table code of its
@@ -92,6 +96,44 @@ impl<T: Eq + Hash> Set<T> {
     // Every item, in insertion order.
     pub fn to_list(self) -> List<T> {
         self.items.keys()
+    }
+
+    // The items of `self` in order, then the items of `other` that `self`
+    // does not hold, in `other`'s order. A new set that keeps `self`'s
+    // entry limit; neither operand changes. A result past the limit
+    // panics with `P0044`.
+    pub fn union(self, other: Set<T>) -> Set<T> {
+        var made: Set<T> = self
+        for item in other.to_list() {
+            made.add(item)
+        }
+        made
+    }
+
+    // The items of `self` that `other` also holds, in `self`'s order. A
+    // new set that keeps `self`'s entry limit; neither operand changes.
+    // It starts from a copy of `self` and takes out the others, so it
+    // cannot pass the limit.
+    pub fn intersection(self, other: Set<T>) -> Set<T> {
+        var made: Set<T> = self
+        for item in self.to_list() {
+            if !other.contains(item) {
+                made.remove(item)
+            }
+        }
+        made
+    }
+
+    // The items of `self` that `other` does not hold, in `self`'s order.
+    // A new set that keeps `self`'s entry limit; neither operand changes.
+    pub fn difference(self, other: Set<T>) -> Set<T> {
+        var made: Set<T> = self
+        for item in self.to_list() {
+            if other.contains(item) {
+                made.remove(item)
+            }
+        }
+        made
     }
 }
 

@@ -147,3 +147,39 @@ fn a_generic_function_over_an_item_type_is_told_the_bounds() {
         report.diagnostics
     );
 }
+
+#[test]
+fn the_set_operations_check_for_an_item_type_with_eq_and_hash() {
+    assert_ok(&program(
+        "String",
+        "",
+        "    let u = s.union(s)\n    let i = s.intersection(u)\n    let d = s.difference(i)\n    let n = d.len()",
+    ));
+}
+
+#[test]
+fn the_set_operations_refuse_a_secret_item_as_the_core_does() {
+    let body = "    let u = s.union(s)\n    let i = s.intersection(s)\n    let d = s.difference(s)";
+    let src = program("Secret<Bytes>", "", body);
+    let codes: Vec<&str> = check(&src).diagnostics.iter().map(|d| d.code).collect();
+    assert!(
+        codes.iter().all(|c| ["E0351", "E0354"].contains(c)),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&"E0351") && codes.contains(&"E0354"),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn the_set_operations_refuse_a_float_item_with_e0266() {
+    let body = "    let u = s.union(s)\n    let i = s.intersection(s)\n    let d = s.difference(s)";
+    let src = program("Float", "", body);
+    let diagnostics = check(&src).diagnostics;
+    assert!(!diagnostics.is_empty());
+    assert!(
+        diagnostics.iter().all(|d| d.code == "E0266"),
+        "{diagnostics:#?}"
+    );
+}
