@@ -50,7 +50,7 @@ shards_of() {
 }
 heavy_of() { # SET SHARD
   case "$1 $2" in
-    "musl sites-1") echo "oska-run:site_api oska-run:site_home oska-run:site_meta" ;;
+    "musl sites-1") echo "oska-run:site_api oska-run:site_home oska-run:site_meta oska-run:acme_issue" ;;
     "musl sites-2") echo "oska-run:site_links oska-run:site_corpus oska-run:site_compliance" ;;
     "linux site") echo "oska-run:site oska-run:site_api oska-run:site_links oska-run:site_corpus oska-run:site_compliance oska-run:site_home oska-run:site_meta" ;;
     # Linux `rest` is some 14 minutes of test binaries, one after another, so
