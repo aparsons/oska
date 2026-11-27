@@ -12,6 +12,8 @@
 //! intended change, run `UPDATE_GOLDEN=1 cargo test -p oskac --test
 //! doc_cli` and review the diff.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -477,6 +479,122 @@ fn each_core_list_method_has_its_own_doc_entry() {
         let output = oskac(&["doc", &format!("List.{method}")]);
         assert_eq!(output.status.code(), Some(0));
         assert!(text(&output.stdout).contains(signature));
+    }
+}
+
+/// Every method that spec #660 added, with the example its entry shows.
+const EXAMPLE_METHODS: &[&str] = &[
+    "List.filter",
+    "List.fold",
+    "List.any",
+    "List.all",
+    "List.find",
+    "List.contains",
+    "List.first",
+    "List.last",
+    "List.is_empty",
+    "List.reverse",
+    "List.concat",
+    "List.sorted",
+    "List.sorted_by",
+    "List.sort",
+    "Option.is_none",
+    "Option.map",
+    "Option.and_then",
+    "Option.unwrap_or_else",
+    "Option.filter",
+    "Result.is_err",
+    "Result.map",
+    "Result.map_err",
+    "Result.and_then",
+    "Result.unwrap_or_else",
+    "Result.ok",
+    "Result.err",
+    "String.to_uppercase",
+    "String.trim_start",
+    "String.trim_end",
+    "String.find",
+    "String.split_once",
+    "String.strip_prefix",
+    "String.strip_suffix",
+    "String.is_empty",
+    "Ord.cmp",
+];
+
+/// The example of an entry: its indented line, as `(code, result)`, split
+/// at the last `  // `.
+fn example_of(name: &str) -> (String, String) {
+    let items = json_items(&[name]);
+    assert_eq!(items.len(), 1, "{name}");
+    let description = field(&items[0], "description");
+    let line = description
+        .lines()
+        .find(|l| l.starts_with("    "))
+        .unwrap_or_else(|| panic!("{name} has no indented example in: {description}"));
+    let (code, result) = line
+        .trim()
+        .rsplit_once("  // ")
+        .unwrap_or_else(|| panic!("{name}: the example needs a `  // result`: {line}"));
+    (code.to_string(), result.to_string())
+}
+
+#[test]
+fn every_new_method_shows_an_example_that_runs_to_the_result_it_states() {
+    // One program of a check per example, run on both backends: each
+    // prints `ok NAME` when the code gives the result the entry states.
+    let mut checks = String::new();
+    for name in EXAMPLE_METHODS {
+        let (code, result) = example_of(name);
+        let test = if *name == "List.sort" {
+            // `sort` changes a `var`: the example is the call, on `xs`.
+            assert_eq!(code, "xs.sort()", "{name}");
+            "{\n        var xs = [3, 1, 2]\n        xs.sort()\n        xs == [1, 2, 3]\n    }"
+                .to_string()
+        } else if let Some(variant) = result.strip_prefix("Ordering.") {
+            format!("name_of({code}) == \"{variant}\"")
+        } else {
+            format!("{code} == {result}")
+        };
+        checks.push_str(&format!("    check(io, \"{name}\", {test})?\n"));
+    }
+    let src = format!(
+        "fn name_of(o: Ordering) -> String {{
+    match o {{
+        Ordering.Less => \"Less\"
+        Ordering.Equal => \"Equal\"
+        Ordering.Greater => \"Greater\"
+    }}
+}}
+
+fn check(io: Stdout, name: String, ok: Bool) -> Result<(), IoError> {{
+    if ok {{
+        io.println(\"ok {{name}}\")
+    }} else {{
+        io.println(\"FAIL {{name}}\")
+    }}
+}}
+
+fn main(io: Stdout) -> Result<(), IoError> {{
+{checks}    Ok(())
+}}
+"
+    );
+    let dir = common::run_limits::program("doc_examples", &src);
+    let expected: String = EXAMPLE_METHODS
+        .iter()
+        .map(|n| format!("ok {n}\n"))
+        .collect();
+    for flags in [
+        &["run", "--interpret", "main.osk"][..],
+        &["run", "main.osk"][..],
+    ] {
+        let output = common::run_limits::oskac_in(&dir, flags);
+        assert_eq!(
+            text(&output.stdout),
+            expected,
+            "{flags:?}: {}",
+            text(&output.stderr)
+        );
     }
 }
 

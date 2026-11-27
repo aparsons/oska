@@ -226,3 +226,24 @@ fn string_methods_count_the_same_steps() {
 "#,
     );
 }
+
+#[test]
+fn a_comparison_that_panics_midway_panics_the_same_on_both_backends() {
+    // The sort has compared some pairs when `cmp` panics: both backends
+    // print the same text before it, report the same panic and exit 101.
+    let src = r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var xs = [4, 2, 1, 7, 3, 9, 5]
+    let none: List<Int> = []
+    let n = xs.len()
+    io.println("before {n}")?
+    xs = xs.sorted_by(|a, b| if a == 9 { none.at(0).cmp(b) } else { a.cmp(b) })
+    let m = xs.len()
+    io.println("after {m}")?
+    Ok(())
+}
+"#;
+    let outcome = assert_same(&Case::file("core_sort_panics_midway", src));
+    assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
+    assert_eq!(outcome.stdout, "before 7\n");
+    assert!(outcome.stderr.contains("P0002"), "{outcome:#?}");
+}
