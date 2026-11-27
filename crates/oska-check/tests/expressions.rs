@@ -579,3 +579,13 @@ fn the_examples_check_cleanly() {
     assert_ok(include_str!("../../../examples/hello.osk"));
     assert_ok(include_str!("../../../examples/capabilities.osk"));
 }
+
+// ---- An unknown method reports once ----------------------------------------
+
+#[test]
+fn an_unknown_method_does_not_check_its_closure_into_a_second_error() {
+    assert_errors(
+        "fn f() {\n    Some(1).map(|x| x + 1)\n}",
+        &[("E0228", "map")],
+    );
+}
