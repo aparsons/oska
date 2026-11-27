@@ -161,6 +161,23 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("String.starts_with", Prelude::Runtime("string_starts_with")),
     ("String.ends_with", Prelude::Runtime("string_ends_with")),
     ("String.trim", Prelude::Runtime("string_trim")),
+    ("String.trim_start", Prelude::Runtime("string_trim_start")),
+    ("String.trim_end", Prelude::Runtime("string_trim_end")),
+    (
+        "String.to_uppercase",
+        Prelude::Runtime("string_to_uppercase"),
+    ),
+    ("String.find", Prelude::Runtime("string_find")),
+    ("String.split_once", Prelude::Runtime("string_split_once")),
+    (
+        "String.strip_prefix",
+        Prelude::Runtime("string_strip_prefix"),
+    ),
+    (
+        "String.strip_suffix",
+        Prelude::Runtime("string_strip_suffix"),
+    ),
+    ("String.is_empty", Prelude::Runtime("string_is_empty")),
     (
         "String.to_lowercase",
         Prelude::Runtime("string_to_lowercase"),

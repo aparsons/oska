@@ -438,6 +438,43 @@ fn the_lowercase_table_is_rusts_for_every_character() {
     }
 }
 
+/// The table in `std.rt` is Rust's `char::to_uppercase` for every
+/// character whose upper case is one character other than itself. A
+/// character with a longer upper case (`ß`) has no record.
+#[test]
+fn the_uppercase_table_is_rusts_for_every_character() {
+    let source = oska_check::STD_RT_SOURCE;
+    let head = "fn uppercase_table() -> String {\n    \"";
+    let start = source.find(head).expect("the table") + head.len();
+    let table = &source[start..start + source[start..].find('"').expect("its end")];
+    assert_eq!(table.len() % 13, 0);
+    let hex = |from: usize, digits: usize| {
+        i64::from_str_radix(&table[from..from + digits], 16).expect("hex digits")
+    };
+    let mut mapped = std::collections::BTreeMap::new();
+    for record in 0..table.len() / 13 {
+        let at = record * 13;
+        let (first, count, step, delta) = (
+            hex(at, 5),
+            hex(at + 5, 2),
+            hex(at + 7, 1),
+            hex(at + 8, 5) - 0x40000,
+        );
+        for k in 0..count {
+            let c = first + k * step;
+            assert!(mapped.insert(c, c + delta).is_none(), "U+{c:X} twice");
+        }
+    }
+    for cp in 0..=0x10FFFFu32 {
+        let Some(c) = char::from_u32(cp) else {
+            continue;
+        };
+        let upper: Vec<char> = c.to_uppercase().collect();
+        let expected = (upper.len() == 1 && upper[0] != c).then_some(upper[0] as i64);
+        assert_eq!(mapped.get(&i64::from(cp)).copied(), expected, "U+{cp:X}");
+    }
+}
+
 #[test]
 fn untrusted_text_has_the_same_operations() {
     let src = format!(
