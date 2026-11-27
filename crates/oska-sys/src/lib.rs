@@ -21,7 +21,10 @@
 //! which paths are opened one component at a time without following a
 //! symlink, or on Windows any other reparse point (a junction or a mount
 //! point), to read a file, write one, create a directory or list one, and
-//! on Unix to rename or remove a file within one directory.
+//! on Unix to rename or remove a file within one directory, and to take
+//! an exclusive lock on the directory ([`Dir::lock`]): `flock` on Unix, a
+//! share-less open on Windows, both released by the system when the
+//! process ends.
 //! A file with more than one link is refused. Because every component is
 //! opened relative to the handle of the one before, and none is followed,
 //! there is no separate check for another process to race: a symlink or
@@ -44,6 +47,14 @@
 //!   crate. Nothing `unsafe` is public, except the methods of the
 //!   standard `GlobalAlloc` trait on [`SizeClassAlloc`] (ADR 0009), which
 //!   only the compiler's `#[global_allocator]` glue calls.
+
+/// The name of the lock file `Dir::lock` takes the lock on, which lives
+/// in the locked directory (ADR 0008).
+pub const LOCK_NAME: &str = ".oska-lock";
+
+/// The stable code an `IoError` begins with when a directory lock is
+/// already held.
+pub const LOCK_CODE: &str = "L0001";
 
 mod heap;
 #[cfg(target_arch = "x86_64")]

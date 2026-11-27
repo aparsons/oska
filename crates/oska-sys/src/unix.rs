@@ -350,6 +350,27 @@ impl Dir {
         .map_err(|error| refusal::at(&name.to_string_lossy(), error))
     }
 
+    /// Take an exclusive lock on this directory: the lock file
+    /// [`crate::LOCK_NAME`] beneath it, created when it is missing and
+    /// never emptied, opened like any file written beneath a `Dir` (no
+    /// symlink, one link, a regular file) and locked with `flock`
+    /// without waiting. Dropping the returned file releases the lock,
+    /// and the system releases it when the process ends. A lock another
+    /// open file of this process holds conflicts as one from another
+    /// process does. A lock already held is the error
+    /// [`refusal::lock_held`].
+    pub fn lock(&self) -> io::Result<File> {
+        let names = [crate::LOCK_NAME];
+        let fd = open_name(self, OsStr::new(crate::LOCK_NAME), c::FILE_WRITE)
+            .map_err(|error| refused(error, crate::LOCK_NAME, "file"))?;
+        let file = lone_file(File::from(fd), &names)?;
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => Err(refusal::lock_held()),
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        }
+    }
+
     /// The names of the entries of this directory, in the order the
     /// directory gives them, without `.` and `..`. No entry is followed:
     /// a symlink is listed by its own name.

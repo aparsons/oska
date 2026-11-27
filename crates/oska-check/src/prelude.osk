@@ -176,6 +176,19 @@ impl DirWrite {
     // already there is kept, with everything in it, and anything else
     // there is an error. A symlink at `path` is never followed.
     pub fn create_dir(self, path: Path) -> Result<(), IoError>
+    // Take an exclusive lock on this directory, call `f` with the same
+    // directory capability while the lock is held, and release the lock
+    // when `f` returns or panics: `Ok` of what `f` returned. It is the way
+    // to make one writer at a time of a directory such as a store. The
+    // lock is the file `.oska-lock` in the directory, which is created if
+    // it is missing and left in place afterwards; the operating system
+    // holds the lock, so it is freed too when the program exits or
+    // crashes. A second lock on the same directory, from this program or
+    // another, fails at once, without waiting, with an `IoError` that
+    // begins `L0001` and names the lock; `f` is not called. A lock is
+    // scoped, not a value, because Oska has no destructors. It is a
+    // narrowing: it gives `f` no authority that this capability lacks.
+    pub fn with_lock<T>(self, f: cap fn(DirWrite) -> T) -> Result<T, IoError>
 }
 
 // A file capability: it reaches exactly one file, and takes no path. It

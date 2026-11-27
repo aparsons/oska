@@ -280,6 +280,10 @@ mod nt {
     /// not found.
     pub const ERROR_DIRECTORY: i32 = 267;
 
+    /// `ERROR_SHARING_VIOLATION`: an open that another open's sharing
+    /// forbids.
+    pub const ERROR_SHARING_VIOLATION: i32 = 32;
+
     // Statuses, as the `NTSTATUS` bits.
     pub const STATUS_NO_MORE_FILES: NtStatus = 0x8000_0006_u32 as NtStatus;
     pub const STATUS_NO_SUCH_FILE: NtStatus = 0xC000_000F_u32 as NtStatus;
@@ -412,6 +416,30 @@ impl Dir {
         }
     }
 
+    /// Take an exclusive lock on this directory: the lock file
+    /// [`crate::LOCK_NAME`] beneath it, created when it is missing and
+    /// never emptied, opened like any file written beneath a `Dir` and
+    /// with no sharing, so no other open of it succeeds while the
+    /// returned file lives. Dropping the file releases the lock, and the
+    /// system releases it when the process ends. A lock already held is
+    /// the error [`refusal::lock_held`].
+    pub fn lock(&self) -> io::Result<File> {
+        let names = [crate::LOCK_NAME];
+        let name = plain_name(OsStr::new(crate::LOCK_NAME))?;
+        let handle = match open_at(self, &name, Open::LOCK) {
+            Ok(handle) => handle,
+            Err(error) if error.raw_os_error() == Some(nt::ERROR_SHARING_VIOLATION) => {
+                return Err(refusal::lock_held())
+            }
+            Err(error) => return Err(refused(self, OsStr::new(crate::LOCK_NAME), error, &names)),
+        };
+        let info = info(&handle)?;
+        if info.is_reparse_point() {
+            return Err(refusal::symlink(crate::LOCK_NAME));
+        }
+        lone_file(handle, info, &names)
+    }
+
     /// The names of the entries of this directory, in the order the
     /// directory gives them, without `.` and `..`. No entry is followed:
     /// a reparse point is listed by its own name.
@@ -494,6 +522,8 @@ struct Open {
     access: u32,
     disposition: u32,
     options: u32,
+    /// What other opens may do while this one lives.
+    share: u32,
 }
 
 impl Open {
@@ -502,6 +532,7 @@ impl Open {
         access: nt::DIRECTORY,
         disposition: nt::FILE_OPEN,
         options: 0,
+        share: nt::FILE_SHARE_ALL,
     };
 
     /// A new directory, and an error if anything is at its name.
@@ -509,6 +540,7 @@ impl Open {
         access: nt::DIRECTORY,
         disposition: nt::FILE_CREATE,
         options: nt::FILE_DIRECTORY_FILE,
+        share: nt::FILE_SHARE_ALL,
     };
 
     /// An existing file, to read.
@@ -516,6 +548,7 @@ impl Open {
         access: nt::FILE_READ,
         disposition: nt::FILE_OPEN,
         options: 0,
+        share: nt::FILE_SHARE_ALL,
     };
 
     /// A file to write, created when nothing is at its name. Not
@@ -525,6 +558,16 @@ impl Open {
         access: nt::FILE_WRITE,
         disposition: nt::FILE_OPEN_IF,
         options: 0,
+        share: nt::FILE_SHARE_ALL,
+    };
+
+    /// The lock file: as [`Open::FILE_WRITE`], but no other open of it
+    /// may share it, so a second open fails while this one lives.
+    const LOCK: Open = Open {
+        access: nt::FILE_WRITE,
+        disposition: nt::FILE_OPEN_IF,
+        options: 0,
+        share: 0,
     };
 
     /// Whatever is at a name, only to read its attributes.
@@ -532,6 +575,7 @@ impl Open {
         access: nt::ATTRIBUTES_ONLY,
         disposition: nt::FILE_OPEN,
         options: 0,
+        share: nt::FILE_SHARE_ALL,
     };
 }
 
@@ -640,7 +684,7 @@ fn open_at(parent: &Dir, name: &[u16], how: Open) -> io::Result<OwnedHandle> {
             &mut status,
             std::ptr::null(),
             nt::FILE_ATTRIBUTE_NORMAL,
-            nt::FILE_SHARE_ALL,
+            how.share,
             how.disposition,
             how.options | nt::FILE_SYNCHRONOUS_IO_NONALERT | nt::FILE_OPEN_REPARSE_POINT,
             std::ptr::null_mut(),

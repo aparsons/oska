@@ -2743,6 +2743,10 @@ impl<'l, 'p> Body<'l, 'p> {
                     if let Some(value) = self.task_intrinsic(name, &values, expr)? {
                         return Ok(value);
                     }
+                    if let ("DirWrite.with_lock", &[root, function]) = (name.as_str(), &values[..])
+                    {
+                        return self.dir_with_lock(root, function, expr);
+                    }
                     if let Some(value) = self.html_intrinsic(name, &values, expr)? {
                         return Ok(value);
                     }

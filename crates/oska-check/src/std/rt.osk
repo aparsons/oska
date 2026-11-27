@@ -36,6 +36,8 @@ pub fn rt_sys_readlinkat(dirfd: Int, path: Int, buf: Int, size: Int) -> Int
 // at `buf`: on success a result >= 0, which says nothing more.
 pub fn rt_sys_getcwd(buf: Int, size: Int) -> Int
 pub fn rt_sys_fcntl(fd: Int, command: Int, arg: Int) -> Int
+// `flock(fd, operation)`: Unix only. 0 on success, else `-errno`.
+pub fn rt_sys_flock(fd: Int, operation: Int) -> Int
 pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int
 pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
 pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
@@ -6422,6 +6424,116 @@ fn path_beneath_or_at(root: String, names: List<String>) -> String {
     path_beneath(root, names)
 }
 
+// ---- Directory locks (`DirWrite.with_lock`) -------------------------------
+
+// The lock file's name, which sits in the locked directory: on Unix it is
+// locked with `flock` (`LOCK_EX | LOCK_NB`, 6), on Windows opened with no
+// sharing, and either way the system releases it when the process ends.
+fn lock_name() -> String {
+    ".oska-lock"
+}
+
+// The error for a lock already held: its code and the lock's name, worded
+// as `oska-sys` and `FakeHost` word it.
+fn lock_held() -> IoError {
+    io_error_text("L0001: the directory lock `.oska-lock` is already held")
+}
+
+// Take the lock on the directory `root` reaches, for `DirWrite.with_lock`
+// (the code calling the closure is `Body::dir_with_lock`): the handle of
+// the open lock file, which `dir_unlock` closes, or why not.
+pub fn dir_lock(root: Root) -> Result<Int, IoError> {
+    usable(root)?
+    if faking() {
+        return fake_lock(root.path)
+    }
+    lock_open(root.handle)
+}
+
+// Release the lock `dir_lock` took on `root`, whose handle is `lock`.
+pub fn dir_unlock(root: Root, lock: Int) {
+    if faking() {
+        fake_unlock(root.path)
+        return
+    }
+    close(lock)
+}
+
+// The open lock file in the directory `root`: created when missing, never
+// emptied, one regular file with one link, no symlink. On Unix it is
+// locked without waiting; a lock held is `lock_held`.
+fn lock_open(root: Int) -> Result<Int, IoError> {
+    let name = lock_name()
+    let flags = if on_windows() { win_file_lock() } else { file_write_flags() }
+    let fd = open_name(root, name, flags)
+    if fd < 0 {
+        // `ERROR_SHARING_VIOLATION`: another open holds the lock file.
+        if on_windows() && fd == -32 {
+            return Err(lock_held())
+        }
+        return Err(refusal(0 - fd, name, false))
+    }
+    match lone_file(fd, [name]) {
+        Ok(_) => {}
+        Err(e) => {
+            close(fd)
+            return Err(e)
+        }
+    }
+    if on_windows() {
+        return Ok(fd)
+    }
+    // `LOCK_EX | LOCK_NB`.
+    var locked = rt_sys_flock(fd, 6)
+    while interrupted(locked) {
+        locked = rt_sys_flock(fd, 6)
+    }
+    if locked < 0 {
+        close(fd)
+        if 0 - locked == rt_mem_platform().e_would_block {
+            return Err(lock_held())
+        }
+        return Err(io_error(0 - locked))
+    }
+    Ok(fd)
+}
+
+// The test host's lock on the directory `dir`: its lock file is made
+// empty when missing and left, as the real OS leaves it, and the lock is
+// a marker in the directories (word 38), `lock ` and the path, which is
+// no path, so no directory lists or finds it.
+fn fake_lock(dir: String) -> Result<Int, IoError> {
+    let file = fake_join(dir, lock_name())
+    if fake_is_dir(file) {
+        return Err(io_error_text("`.oska-lock` is not a regular file"))
+    }
+    if fake_file(file) < 0 {
+        fake_put_file(file, "")?
+    }
+    let marker = "lock {dir}"
+    for held in word_list(38) {
+        if held == marker {
+            return Err(lock_held())
+        }
+    }
+    var dirs = take_word_list(38)
+    dirs.push(marker)
+    put_word_list(38, dirs)
+    Ok(0)
+}
+
+// Drop the marker `fake_lock` made for `dir`.
+fn fake_unlock(dir: String) {
+    let marker = "lock {dir}"
+    var kept: List<String> = []
+    for held in take_word_list(38) {
+        if held != marker {
+            kept.push(held)
+        }
+    }
+    put_word_list(38, kept)
+}
+
 // `DirWrite.write(path, contents)`.
 pub fn dir_write(root: Root, path: Path, contents: String) -> Result<(), IoError> {
     usable(root)?
@@ -8587,6 +8699,11 @@ fn win_file_write() -> Int {
     4
 }
 
+// The lock file: opened as `win_file_write` opens, sharing nothing.
+fn win_file_lock() -> Int {
+    5
+}
+
 // No Win32 error: what `win_open_name` gives, negated, for a name that is
 // not one plain component (empty, `.`, `..`, or holding `/`, `\`, `:` or
 // NUL), which Windows refuses before any call.
@@ -8668,7 +8785,7 @@ fn win_wide(text: String) -> Int {
 // `disposition` and `options`, never following a reparse point, for
 // synchronous I/O, names matched as Windows matches them: the handle, or a
 // Win32 error, negated.
-fn win_nt_open(parent: Int, units: Int, bytes: Int, access: Int, disposition: Int, options: Int) -> Int {
+fn win_nt_open(parent: Int, units: Int, bytes: Int, access: Int, disposition: Int, options: Int, share: Int) -> Int {
     if bytes > 65535 {
         return 0 - name_too_long()
     }
@@ -8691,9 +8808,10 @@ fn win_nt_open(parent: Int, units: Int, bytes: Int, access: Int, disposition: In
     rt_mem_store64(rt_mem_add(attributes, 24), 64)
     rt_mem_store64(rt_mem_add(attributes, 32), 0)
     rt_mem_store64(rt_mem_add(attributes, 40), 0)
-    // `FILE_ATTRIBUTE_NORMAL`, share read, write and delete, and the
+    // `FILE_ATTRIBUTE_NORMAL`, the `share` mode (7, read, write and
+    // delete, but for the lock file's 0), and the
     // options with `FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT`.
-    let result = rt_sys_nt_create_file(handle, access, attributes, status, 0, 128, 7, disposition, rt_mem_or(options, 2097184))
+    let result = rt_sys_nt_create_file(handle, access, attributes, status, 0, 128, share, disposition, rt_mem_or(options, 2097184))
     let opened = rt_mem_load64(handle)
     free(block)
     if result < 0 {
@@ -8770,7 +8888,7 @@ fn win_single_name(name: String) -> Bool {
 // fail for its own reasons, so what is there is said plainly.
 fn win_reparse_point_at(parent: Int, units: Int, bytes: Int) -> Bool {
     // Read attributes and synchronize; an existing name.
-    let there = win_nt_open(parent, units, bytes, 1048704, 1, 0)
+    let there = win_nt_open(parent, units, bytes, 1048704, 1, 0, 7)
     if there < 0 {
         return false
     }
@@ -8789,7 +8907,13 @@ fn win_open_name(dirfd: Int, name: String, kind: Int) -> Int {
     }
     var access = 1048737
     var disposition = 1
-    if kind == win_file_read() {
+    var share = 7
+    if kind == win_file_lock() {
+        // As a file to write, but no other open may share it.
+        access = 1180054
+        disposition = 3
+        share = 0
+    } else if kind == win_file_read() {
         // `FILE_GENERIC_READ`.
         access = 1179785
     } else if kind == win_file_write() {
@@ -8799,7 +8923,7 @@ fn win_open_name(dirfd: Int, name: String, kind: Int) -> Int {
     }
     var handle = 0
     if name == "." {
-        handle = win_nt_open(dirfd, 0, 0, access, disposition, 0)
+        handle = win_nt_open(dirfd, 0, 0, access, disposition, 0, share)
     } else {
         if !win_single_name(name) {
             return 0 - not_single_name()
@@ -8807,7 +8931,7 @@ fn win_open_name(dirfd: Int, name: String, kind: Int) -> Int {
         let wide = win_wide(name)
         let units = rt_mem_add(wide, 16)
         let bytes = rt_mem_shl(rt_mem_load64(rt_mem_add(wide, 8)), 1)
-        handle = win_nt_open(dirfd, units, bytes, access, disposition, 0)
+        handle = win_nt_open(dirfd, units, bytes, access, disposition, 0, share)
         if handle < 0 && win_reparse_point_at(dirfd, units, bytes) {
             handle = 0 - eloop()
         }
@@ -8932,7 +9056,7 @@ fn win_make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
     let units = rt_mem_add(wide, 16)
     let bytes = rt_mem_shl(rt_mem_load64(rt_mem_add(wide, 8)), 1)
     // `FILE_CREATE`, `FILE_DIRECTORY_FILE`.
-    let made = win_nt_open(parent, units, bytes, 1048737, 2, 1)
+    let made = win_nt_open(parent, units, bytes, 1048737, 2, 1, 7)
     var there = false
     if made < 0 && made != -183 && made != -80 {
         there = win_reparse_point_at(parent, units, bytes)

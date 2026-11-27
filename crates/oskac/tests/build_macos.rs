@@ -429,7 +429,7 @@ fn segments_of(mac: &Mac) {
 
 /// The functions every `macos-aarch64` executable imports from
 /// `libSystem`, in the order of its import table.
-const IMPORTS: [&str; 35] = [
+const IMPORTS: [&str; 36] = [
     "___error",
     "_read",
     "_write",
@@ -444,6 +444,7 @@ const IMPORTS: [&str; 35] = [
     "_readlinkat",
     "_getcwd",
     "_fcntl",
+    "_flock",
     "_mmap",
     "_munmap",
     "_clock_gettime",
@@ -470,7 +471,7 @@ const IMPORTS: [&str; 35] = [
 /// [`IMPORTS`] for `macos-x86_64`: the same, but the functions that take
 /// or give a `struct stat` or `struct dirent` are their 64-bit-inode
 /// variants, which C's headers select on x86_64 and arm64 has alone.
-const IMPORTS_X86_64: [&str; 35] = [
+const IMPORTS_X86_64: [&str; 36] = [
     "___error",
     "_read",
     "_write",
@@ -485,6 +486,7 @@ const IMPORTS_X86_64: [&str; 35] = [
     "_readlinkat",
     "_getcwd",
     "_fcntl",
+    "_flock",
     "_mmap",
     "_munmap",
     "_clock_gettime",

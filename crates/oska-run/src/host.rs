@@ -20,7 +20,7 @@ use std::ffi::OsStr;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::prng::SplitMix64;
@@ -120,6 +120,21 @@ pub trait Host: Send {
     /// kept; anything else there, a symlink included, is an error.
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()>;
 
+    /// Take an exclusive lock on the directory `root`, for
+    /// `DirWrite.with_lock`: the lock file [`oska_sys::LOCK_NAME`]
+    /// beneath it, which is created if it is missing and kept. A lock
+    /// that is already held, by this program or another process, fails at
+    /// once with [`lock_held`]. The lock is released when the returned
+    /// [`DirLock`] is dropped; a real host's is the operating system's,
+    /// so it is also released when the process ends, however it ends.
+    fn lock_beneath(&mut self, root: &RootHandle) -> io::Result<DirLock> {
+        let _ = root;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot lock a directory",
+        ))
+    }
+
     /// The names of the entries of the directory reached by walking
     /// `names` beneath `root`, none of them a symlink, sorted by their
     /// bytes so the order is the same on every host. A name is the
@@ -191,6 +206,33 @@ pub trait Host: Send {
 /// message on every platform, so a test can assert it.
 fn no_network() -> io::Error {
     io::Error::other("network access is not available here: a plain test is offline")
+}
+
+/// A directory lock a host holds (`Host::lock_beneath`): dropping it
+/// releases the lock.
+pub struct DirLock {
+    _held: Box<dyn std::any::Any>,
+}
+
+impl DirLock {
+    fn new(held: impl std::any::Any) -> DirLock {
+        DirLock {
+            _held: Box::new(held),
+        }
+    }
+}
+
+/// The error for a directory lock that is already held: its code and the
+/// lock's name, worded as `oska_sys` words it and `std.rt` does.
+pub fn lock_held() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        format!(
+            "{}: the directory lock `{}` is already held",
+            oska_sys::LOCK_CODE,
+            oska_sys::LOCK_NAME
+        ),
+    )
 }
 
 /// The root of a directory or file capability, as a host opened it: a directory,
@@ -561,6 +603,13 @@ impl Host for RealHost {
         checked_names(root, names)?.create_dir(names)
     }
 
+    fn lock_beneath(&mut self, root: &RootHandle) -> io::Result<DirLock> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        Ok(DirLock::new(root_dir(root)?.lock()?))
+    }
+
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
         if root.is_file() {
             return Err(a_file_root(root));
@@ -777,6 +826,24 @@ pub struct FakeHost {
     /// Where the program tried to connect or listen, which this host
     /// refused.
     net_attempts: Vec<String>,
+    /// The directories whose lock is held, shared with each [`DirLock`]
+    /// that releases its own on drop.
+    locked: Arc<Mutex<BTreeSet<PathBuf>>>,
+}
+
+/// What a [`FakeHost`]'s lock holds: the directory, released on drop.
+struct FakeLock {
+    locked: Arc<Mutex<BTreeSet<PathBuf>>>,
+    dir: PathBuf,
+}
+
+impl Drop for FakeLock {
+    fn drop(&mut self) {
+        self.locked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.dir);
+    }
 }
 
 impl Default for FakeHost {
@@ -791,6 +858,7 @@ impl Default for FakeHost {
             links: BTreeMap::new(),
             random: SplitMix64::new(FAKE_SEED),
             net_attempts: Vec::new(),
+            locked: Arc::default(),
         }
     }
 }
@@ -895,6 +963,37 @@ impl FakeHost {
         self.files
             .get(&normalize(Path::new(path)))
             .map(Vec::as_slice)
+    }
+
+    /// Take the lock on the directory `dir`: its lock file is made
+    /// empty if missing, and left, as a real host leaves it. A directory
+    /// or a symlink there is refused as a real host refuses it.
+    fn fake_lock(&mut self, dir: PathBuf) -> io::Result<DirLock> {
+        let file = dir.join(oska_sys::LOCK_NAME);
+        if self.links.contains_key(&file) {
+            return Err(fake_symlink(oska_sys::LOCK_NAME));
+        }
+        if self.is_dir(&file) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("`{}` is not a regular file", oska_sys::LOCK_NAME),
+            ));
+        }
+        if !self.files.contains_key(&file) {
+            self.put_file(file, &[])?;
+        }
+        let fresh = self
+            .locked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(dir.clone());
+        if !fresh {
+            return Err(lock_held());
+        }
+        Ok(DirLock::new(FakeLock {
+            locked: Arc::clone(&self.locked),
+            dir,
+        }))
     }
 
     /// A directory root at `path`, already normalized.
@@ -1214,6 +1313,13 @@ impl Host for FakeHost {
         }
         let path = self.walk(root, names)?;
         self.put_dir(path)
+    }
+
+    fn lock_beneath(&mut self, root: &RootHandle) -> io::Result<DirLock> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        self.fake_lock(root.path.to_path_buf())
     }
 
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {

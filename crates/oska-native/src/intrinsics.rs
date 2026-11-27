@@ -224,6 +224,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("DirWrite.write", Prelude::Runtime("dir_write")),
     ("DirWrite.write_bytes", Prelude::Runtime("dir_write_bytes")),
     ("DirWrite.create_dir", Prelude::Runtime("dir_create_dir")),
+    // Lowered by `Body::dir_with_lock`, which calls `std.rt`'s `dir_lock`
+    // and `dir_unlock` around the closure: the name here only makes the
+    // method a known intrinsic.
+    ("DirWrite.with_lock", Prelude::Runtime("dir_lock")),
     (
         "FileRead.read_to_string",
         Prelude::Runtime("file_read_to_string"),
@@ -501,6 +505,10 @@ pub enum Sys {
     Readlinkat,
     Getcwd,
     Fcntl,
+    // `flock(fd, operation)`: Linux's call, and `libSystem`'s on macOS.
+    // Windows has none: its directory lock is an open that shares nothing
+    // (`std.rt`'s `lock_open`).
+    Flock,
     Mmap,
     Munmap,
     ClockGettime,
@@ -762,6 +770,7 @@ fn linux_aarch64_syscall(call: Sys) -> Option<u16> {
         Sys::Readlinkat => 78,
         Sys::Getcwd => 17,
         Sys::Fcntl => 25,
+        Sys::Flock => 32,
         Sys::Mmap => 222,
         Sys::Munmap => 215,
         Sys::ClockGettime => 113,
@@ -819,6 +828,7 @@ fn linux_x86_64_syscall(call: Sys) -> Option<u16> {
         Sys::Readlinkat => 267,
         Sys::Getcwd => 79,
         Sys::Fcntl => 72,
+        Sys::Flock => 73,
         Sys::Mmap => 9,
         Sys::Munmap => 11,
         Sys::ClockGettime => 228,
@@ -948,6 +958,8 @@ const FCNTL: Import = Import {
     fixed: 2,
     ..plain("_fcntl", 3)
 };
+/// `flock(fd, operation)`.
+const FLOCK: Import = plain("_flock", 2);
 /// `mmap`: an address, or `MAP_FAILED` (-1).
 const MMAP: Import = Import {
     wide: true,
@@ -1010,7 +1022,7 @@ const POLL: Import = plain("_poll", 3);
 /// Every function a macOS executable imports from `libSystem`: always
 /// all of them, whatever the program calls, so the import table depends
 /// on the target alone. [`ERROR`] is first ([`Platform::errno`]).
-const MACOS_IMPORTS: [&Import; 35] = [
+const MACOS_IMPORTS: [&Import; 36] = [
     &ERROR,
     &READ,
     &WRITE,
@@ -1025,6 +1037,7 @@ const MACOS_IMPORTS: [&Import; 35] = [
     &READLINKAT,
     &GETCWD,
     &FCNTL,
+    &FLOCK,
     &MMAP,
     &MUNMAP,
     &CLOCK_GETTIME,
@@ -1050,7 +1063,7 @@ const MACOS_IMPORTS: [&Import; 35] = [
 
 /// [`MACOS_IMPORTS`] with the `$INODE64` functions of x86_64's
 /// `libSystem` in place of the plain ones, in the same slots.
-const MACOS_X86_64_IMPORTS: [&Import; 35] = [
+const MACOS_X86_64_IMPORTS: [&Import; 36] = [
     &ERROR,
     &READ,
     &WRITE,
@@ -1065,6 +1078,7 @@ const MACOS_X86_64_IMPORTS: [&Import; 35] = [
     &READLINKAT,
     &GETCWD,
     &FCNTL,
+    &FLOCK,
     &MMAP,
     &MUNMAP,
     &CLOCK_GETTIME,
@@ -1109,6 +1123,7 @@ fn macos_call(call: Sys) -> OsCall {
         Sys::Readlinkat => &READLINKAT,
         Sys::Getcwd => &GETCWD,
         Sys::Fcntl => &FCNTL,
+        Sys::Flock => &FLOCK,
         Sys::Mmap => &MMAP,
         Sys::Munmap => &MUNMAP,
         Sys::ClockGettime => &CLOCK_GETTIME,
@@ -1504,6 +1519,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_readlinkat", Runtime::Syscall(Sys::Readlinkat)),
     ("rt_sys_getcwd", Runtime::Syscall(Sys::Getcwd)),
     ("rt_sys_fcntl", Runtime::Syscall(Sys::Fcntl)),
+    ("rt_sys_flock", Runtime::Syscall(Sys::Flock)),
     ("rt_sys_mmap", Runtime::Syscall(Sys::Mmap)),
     ("rt_sys_munmap", Runtime::Syscall(Sys::Munmap)),
     ("rt_sys_clock_gettime", Runtime::Syscall(Sys::ClockGettime)),
@@ -1710,6 +1726,7 @@ mod tests {
             ("rt_sys_readlinkat", 78, 267, &[]),
             ("rt_sys_getcwd", 17, 79, &[]),
             ("rt_sys_fcntl", 25, 72, &[]),
+            ("rt_sys_flock", 32, 73, &[]),
             ("rt_sys_mmap", 222, 9, &[]),
             ("rt_sys_munmap", 215, 11, &[]),
             ("rt_sys_clock_gettime", 113, 228, &[]),
@@ -1966,6 +1983,7 @@ mod tests {
             ),
             ("rt_sys_getcwd", "_getcwd", 2, 2, true, Null, &[]),
             ("rt_sys_fcntl", "_fcntl", 3, 2, false, MinusOne, &[]),
+            ("rt_sys_flock", "_flock", 2, 2, false, MinusOne, &[]),
             ("rt_sys_mmap", "_mmap", 6, 6, true, MinusOne, &[]),
             ("rt_sys_munmap", "_munmap", 2, 2, false, MinusOne, &[]),
             (

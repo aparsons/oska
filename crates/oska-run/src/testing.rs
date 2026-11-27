@@ -603,6 +603,10 @@ impl Host for TestHost<'_> {
         self.world().create_dir_beneath(root, names)
     }
 
+    fn lock_beneath(&mut self, root: &RootHandle) -> io::Result<crate::host::DirLock> {
+        self.world().lock_beneath(root)
+    }
+
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
         self.world().list_dir_beneath(root, names)
     }

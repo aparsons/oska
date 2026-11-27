@@ -98,6 +98,7 @@ pub const INTRINSICS: Table = &[
     ("DirWrite.create_dir", Plain(fs_create_dir)),
     ("DirWrite.restrict_to", Plain(dir_restrict_to)),
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
+    ("DirWrite.with_lock", HigherOrder(fs_with_lock)),
     ("DirWrite.write", Plain(fs_write)),
     ("DirWrite.write_bytes", Plain(fs_write_bytes)),
     ("Env.get", Plain(env_get)),
@@ -855,6 +856,27 @@ fn fs_create_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Val
         host.create_dir_beneath(root, &names)
     });
     io_unit(result, span)
+}
+
+/// `DirWrite.with_lock(self, f)`: take the host's exclusive lock on the
+/// directory (`Host::lock_beneath`), call `f` with this same capability,
+/// and release the lock when `f` returns or panics (the guard drops as
+/// the result leaves this function). A lock already held, or one that
+/// cannot be taken, is `Err(IoError)` and `f` is not called.
+fn fs_with_lock(
+    interp: &mut Interpreter<'_, '_>,
+    args: &mut Args,
+    span: Span,
+) -> Result<Value, Panic> {
+    let locked =
+        root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| interp.host().lock_beneath(root));
+    let _lock = match locked {
+        Ok(lock) => lock,
+        Err(err) => return io_failure(&err, span),
+    };
+    let capability = args[0].clone();
+    let result = interp.call_value(&args[1], vec![capability], span)?;
+    Ok(Value::ok(result))
 }
 
 /// `FileRead.read_to_string(self)`: the file's text, opened by its name
