@@ -16,7 +16,7 @@ set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: scripts/step-ca/run.sh OSKAC" >&2; exit 2; }
 oskac=$(realpath "$1")
 here=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=scripts/step-ca/pin.env
+# shellcheck source=/dev/null
 . "$here/pin.env"
 # shellcheck source=scripts/step-ca/urls.sh
 . "$here/urls.sh"
@@ -82,7 +82,7 @@ fi
 mkdir -p "$work/run/www/.well-known/acme-challenge" "$work/run/out"
 cp "$STEPPATH/certs/root_ca.crt" "$work/run/root.crt"
 echo '127.0.0.1 acme-ci.test' | sudo tee -a /etc/hosts >/dev/null
-sudo python3 -m http.server 80 --bind 127.0.0.1 --directory "$work/run/www" >"$work/web.log" 2>&1 &
+sudo bash -c 'exec python3 -m http.server 80 --bind 127.0.0.1 --directory "$1" >"$2" 2>&1' _ "$work/run/www" "$work/web.log" &
 web_pid=$!
 sleep 1
 
