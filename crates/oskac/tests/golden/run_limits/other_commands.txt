@@ -93,6 +93,12 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; the
+                                           only command that uses the network
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -192,6 +198,12 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; the
+                                           only command that uses the network
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -291,6 +303,12 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; the
+                                           only command that uses the network
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -390,6 +408,12 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; the
+                                           only command that uses the network
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)

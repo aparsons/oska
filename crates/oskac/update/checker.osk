@@ -1,11 +1,688 @@
 // SPDX-License-Identifier: Apache-2.0
 // The update checker `oskac` carries (spec #230). `oskac`'s build script
 // compiles this program with the in-repo checker and native backend and
-// embeds the executable, so nothing is compiled when `oskac` runs.
+// embeds the executable, so nothing is compiled when `oskac` runs. `oskac
+// self check` writes it to a private directory, runs it, and reads the one
+// JSON object it prints.
 //
-// For now the verdict is a fixed stub: the real check, which reads the
-// release channel and verifies it, comes with #258.
+// It fetches the signed release index from the Oska site over HTTPS (Oska's
+// own TLS, `std.http`), verifies it with Oska's own SSHSIG and SHA-256
+// (`std.sshsig`, `std.sha2`), and, unless told not to, compares the SHA-256
+// of the running `oskac` with its entry in the release's signed SHA256SUMS.
+// Every trust decision is made here: the TLS handshake and certificate
+// check, the signature and its namespace, the expiry, the serial, the
+// digest. `oskac` supplies inputs and prints the verdict.
+//
+//   checker <command> <version> <now> <serial> <identify> <file> <assets>
+//
+//   command   `check`
+//   version   the running `oskac`'s version, `X.Y.Z` or with a pre-release
+//   now       the host clock, in seconds since 1970 (expiry is judged by it)
+//   serial    the highest index serial remembered, 0 for none
+//   identify  `1` to identify the running binary, `0` to skip it
+//   file      the name of the running executable, in the working directory
+//   assets    the release file names this build may be, best first, split
+//             by commas
+//
+// Its authority is visible in its signature: a network connection that it
+// narrows to one host and port, the read of one file (the running
+// executable, named relative to the working directory), the clock and
+// secure randomness for TLS, and standard output. It imports no system-call layer, has no
+// environment, no directory listing, no write and no spawn.
+//
+// It prints exactly one line, a JSON object, on success or on refusal:
+//
+//   {"ok":true,"latest":"X.Y.Z","tag":"vX.Y.Z","index_serial":N,
+//    "index_issued":"...","index_expires":"...","warnings":["..."],
+//    "identity":{"state":"genuine"|"modified"|"unknown_release"|"skipped",
+//                "sha256":"..."|null,"expected_sha256":"..."|null,
+//                "source":"..."|null}}
+//   {"ok":false,"code":"bad_index","message":"..."}
+//
+// Text that came from the network is printed with every byte outside
+// printable ASCII replaced by `?`. It exits with 0 for either line, and
+// with 1 when it cannot print.
 
-fn main(io: Stdout) -> Result<(), IoError> {
-    io.println("up-to-date")
+use std.http
+use std.tls
+use std.x509
+use std.sha2
+use std.sshsig
+
+// The most the index, its signature and the signed checksums may be, in
+// bytes. They are a few hundred bytes to a few kilobytes in practice.
+const MAX_INDEX: Int = 16384
+const MAX_SIGNATURE: Int = 8192
+const MAX_SUMS: Int = 65536
+
+// The index's warning when this little of it is left: 30 days.
+const WARN_SECONDS: Int = 2592000
+
+// ---- What is pinned -----------------------------------------------------------
+//
+// The site, the release key and the roots are the only trust inputs, and
+// in a release build they are these literals. `oskac`'s build script
+// replaces the block between the two marks with `update/test_site.osk` only
+// when the test-only feature `test-site` is on (spec #230); nothing else
+// changes them. A test compares the key with `site/oska-release.pub`.
+
+// BEGIN pinned
+fn site_host(args: Args) -> String {
+    "oskalang.dev"
+}
+
+fn site_port(args: Args) -> Int {
+    443
+}
+
+// The release key, pinned as a literal: the whole line of
+// site/oska-release.pub.
+fn release_key(args: Args) -> String {
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK1mgi1PCfr+Xc7xB/1TjH8haBMmfNwJO0VSKdmFyPWL oska-release"
+}
+
+// The roots the TLS connection trusts: the pinned Mozilla store.
+fn trust_config(args: Args) -> Result<x509.TrustConfig, String> {
+    Ok(x509.TrustConfig.default())
+}
+// END pinned
+
+// ---- Refusals and printing ------------------------------------------------------
+
+// Why a check failed: a stable code, and what was wrong.
+struct Refusal { code: String, why: Untrusted<String> }
+
+fn refuse(code: String, why: Untrusted<String>) -> Refusal {
+    Refusal(code: code, why: why)
+}
+
+// `text` with every byte outside printable ASCII (0x20 to 0x7e) replaced by
+// `?`.
+fn safe(text: Untrusted<String>) -> Untrusted<String> {
+    let bytes = text.to_bytes()
+    var out = Bytes.new()
+    for i in 0..bytes.len() {
+        let byte = bytes.at(i)
+        if byte >= 32 && byte <= 126 {
+            out.push(byte)
+        } else {
+            out.push(63)
+        }
+    }
+    out.to_text().unwrap_or("?")
+}
+
+// `text` as a JSON string, quotes included.
+fn quoted(text: Untrusted<String>) -> Untrusted<String> {
+    let plain = safe(text).replace("\\", "\\\\").replace("\"", "\\\"")
+    "\"{plain}\""
+}
+
+fn quoted_or_null(text: Option<Untrusted<String>>) -> Untrusted<String> {
+    match text {
+        Some(value) => quoted(value)
+        None => "null"
+    }
+}
+
+fn refusal_json(refusal: Refusal) -> Untrusted<String> {
+    let code = refusal.code
+    let why = quoted(refusal.why)
+    "\{\"ok\":false,\"code\":\"{code}\",\"message\":{why}\}"
+}
+
+// ---- Bytes and text -----------------------------------------------------------
+
+fn is_digit(byte: U8) -> Bool {
+    byte >= 48 && byte <= 57
+}
+
+fn is_hex(byte: U8) -> Bool {
+    is_digit(byte) || (byte >= 97 && byte <= 102)
+}
+
+// A file name SHA256SUMS may list: letters, digits, `.`, `_` and `-`.
+fn is_name_byte(byte: U8) -> Bool {
+    is_digit(byte) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 46 || byte == 95 || byte == 45
+}
+
+// Whether `text` is a version this program will put in a path: letters,
+// digits, `.`, `-` and `+`, starting with a digit, with no empty or dotted
+// part to climb out with.
+fn is_version(text: Untrusted<String>) -> Bool {
+    let bytes = text.to_bytes()
+    if bytes.len() == 0 || bytes.len() > 64 || !is_digit(bytes.at(0)) {
+        return false
+    }
+    for i in 0..bytes.len() {
+        let byte = bytes.at(i)
+        let plain = is_name_byte(byte) || byte == 43
+        if !plain {
+            return false
+        }
+    }
+    !text.contains("..")
+}
+
+// The lines of SHA256SUMS: split at each LF, and a final LF ends the last
+// line instead of starting an empty one. A CR is part of a line, so a line
+// that ends in one is refused.
+fn sums_lines(text: Untrusted<String>) -> List<Untrusted<String>> {
+    var lines: List<Untrusted<String>> = List.new()
+    for piece in text.split("\n") {
+        lines.push(piece)
+    }
+    if lines.len() > 0 && lines.at(lines.len() - 1) == "" {
+        var kept: List<Untrusted<String>> = List.new()
+        for i in 0..lines.len() - 1 {
+            kept.push(lines.at(i))
+        }
+        return kept
+    }
+    lines
+}
+
+// One checksum line: 64 lower-case hex digits, two spaces and a name.
+struct SumLine { digest: Untrusted<String>, name: Untrusted<String> }
+
+fn parse_entry(line: Untrusted<String>) -> Option<SumLine> {
+    let bytes = line.to_bytes()
+    if bytes.len() < 67 || bytes.at(64) != 32 || bytes.at(65) != 32 {
+        return None
+    }
+    for i in 0..64 {
+        if !is_hex(bytes.at(i)) {
+            return None
+        }
+    }
+    for i in 66..bytes.len() {
+        if !is_name_byte(bytes.at(i)) {
+            return None
+        }
+    }
+    Some(SumLine(digest: line.slice(0, 64), name: line.slice(66, line.len())))
+}
+
+// ---- Time ---------------------------------------------------------------------
+
+// The days from 1970-01-01 to the civil date, for any date from 1970 on.
+fn days_from_civil(year: Int, month: Int, day: Int) -> Int {
+    let y = if month <= 2 { year - 1 } else { year }
+    let era = y / 400
+    let yoe = y - era * 400
+    let shifted = if month > 2 { month - 3 } else { month + 9 }
+    let doy = (153 * shifted + 2) / 5 + day - 1
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    era * 146097 + doe - 719468
+}
+
+fn digits_at(bytes: Untrusted<Bytes>, at: Int, count: Int) -> Int {
+    var value = 0
+    for i in at..at + count {
+        value = value * 10 + (bytes.at(i) - 48).to_int()
+    }
+    value
+}
+
+// Whether `text` is `YYYY-MM-DDTHH:MM:SSZ`.
+fn is_time(text: Untrusted<String>) -> Bool {
+    let bytes = text.to_bytes()
+    if bytes.len() != 20 {
+        return false
+    }
+    for i in 0..20 {
+        let byte = bytes.at(i)
+        if i == 4 || i == 7 {
+            if byte != 45 { return false }
+        } else if i == 13 || i == 16 {
+            if byte != 58 { return false }
+        } else if i == 10 {
+            if byte != 84 { return false }
+        } else if i == 19 {
+            if byte != 90 { return false }
+        } else if !is_digit(byte) {
+            return false
+        }
+    }
+    let month = digits_at(bytes, 5, 2)
+    let day = digits_at(bytes, 8, 2)
+    month >= 1 && month <= 12 && day >= 1 && day <= 31 && digits_at(bytes, 11, 2) <= 23 && digits_at(bytes, 14, 2) <= 59 && digits_at(bytes, 17, 2) <= 60
+}
+
+// Seconds since 1970 of an `is_time` text.
+fn epoch_of(text: Untrusted<String>) -> Int {
+    let bytes = text.to_bytes()
+    let days = days_from_civil(digits_at(bytes, 0, 4), digits_at(bytes, 5, 2), digits_at(bytes, 8, 2))
+    days * 86400 + digits_at(bytes, 11, 2) * 3600 + digits_at(bytes, 14, 2) * 60 + digits_at(bytes, 17, 2)
+}
+
+// ---- The release index ----------------------------------------------------------
+
+// The fields of a release index, as the signed file spells them.
+struct Index {
+    serial: Int,
+    issued: Untrusted<String>,
+    expires: Untrusted<String>,
+    tag: Untrusted<String>,
+    version: Untrusted<String>,
+}
+
+fn skip_space(bytes: Untrusted<Bytes>, start: Int) -> Int {
+    var at = start
+    while at < bytes.len() && (bytes.at(at) == 32 || bytes.at(at) == 10 || bytes.at(at) == 13 || bytes.at(at) == 9) {
+        at = at + 1
+    }
+    at
+}
+
+// The position after `mark` (skipping space before it), or `None`.
+fn mark_at(bytes: Untrusted<Bytes>, start: Int, mark: U8) -> Option<Int> {
+    let at = skip_space(bytes, start)
+    if at < bytes.len() && bytes.at(at) == mark {
+        Some(at + 1)
+    } else {
+        None
+    }
+}
+
+struct Text { value: Untrusted<String>, next: Int }
+
+// A JSON string with no escape and only printable ASCII in it, after
+// skipping space.
+fn string_at(bytes: Untrusted<Bytes>, start: Int) -> Option<Text> {
+    let open = mark_at(bytes, start, 34)?
+    var at = open
+    while at < bytes.len() && bytes.at(at) != 34 {
+        let byte = bytes.at(at)
+        if byte < 32 || byte > 126 || byte == 92 {
+            return None
+        }
+        at = at + 1
+    }
+    if at >= bytes.len() {
+        return None
+    }
+    let inner = bytes.slice(open, at).to_text()?
+    Some(Text(value: inner, next: at + 1))
+}
+
+struct Number { value: Int, next: Int }
+
+// A non-negative JSON integer of 1 to 15 digits and no leading zero, after
+// skipping space.
+fn number_at(bytes: Untrusted<Bytes>, start: Int) -> Option<Number> {
+    let from = skip_space(bytes, start)
+    var at = from
+    while at < bytes.len() && is_digit(bytes.at(at)) {
+        at = at + 1
+    }
+    let width = at - from
+    if width < 1 || width > 15 || (width > 1 && bytes.at(from) == 48) {
+        return None
+    }
+    let value = bytes.slice(from, at).to_text()?.parse_int()?
+    Some(Number(value: value, next: at))
+}
+
+// Whether `tag` is `v` and three numbers separated by dots, and `version`
+// is the same without the `v`.
+fn is_tag_and_version(tag: Untrusted<String>, version: Untrusted<String>) -> Bool {
+    let bytes = tag.to_bytes()
+    if bytes.len() < 6 || bytes.at(0) != 118 {
+        return false
+    }
+    var dots = 0
+    var digits = 0
+    for i in 1..bytes.len() {
+        let byte = bytes.at(i)
+        if byte == 46 {
+            if digits == 0 { return false }
+            dots = dots + 1
+            digits = 0
+        } else if is_digit(byte) {
+            digits = digits + 1
+        } else {
+            return false
+        }
+    }
+    dots == 2 && digits > 0 && version.to_bytes() == bytes.slice(1, bytes.len())
+}
+
+struct Latest { tag: Untrusted<String>, version: Untrusted<String>, next: Int }
+
+// `{"tag": "...", "version": "..."}`, with the two keys in either order.
+fn latest_at(bytes: Untrusted<Bytes>, start: Int) -> Option<Latest> {
+    var at = mark_at(bytes, start, 123)?
+    var tag: Option<Untrusted<String>> = None
+    var version: Option<Untrusted<String>> = None
+    for round in 0..2 {
+        if round == 1 {
+            at = mark_at(bytes, at, 44)?
+        }
+        let key = string_at(bytes, at)?
+        at = mark_at(bytes, key.next, 58)?
+        let value = string_at(bytes, at)?
+        at = value.next
+        if key.value == "tag" && !tag.is_some() {
+            tag = Some(value.value)
+        } else if key.value == "version" && !version.is_some() {
+            version = Some(value.value)
+        } else {
+            return None
+        }
+    }
+    at = mark_at(bytes, at, 125)?
+    Some(Latest(tag: tag?, version: version?, next: at))
+}
+
+// The index, if it is a schema-1 release index: an object with exactly the
+// keys `schema` (1), `serial` (1 to 999999999999999), `issued` and
+// `expires` (UTC times, `expires` after `issued`) and `latest` (a tag
+// `vX.Y.Z` and its version), nothing before or after it but space. The
+// same format `scripts/release/verify-index.sh` checks, spelled as strictly
+// as `scripts/release/verify.osk` does.
+fn parse_index(bytes: Untrusted<Bytes>) -> Option<Index> {
+    var at = mark_at(bytes, 0, 123)?
+    var schema: Option<Int> = None
+    var serial: Option<Int> = None
+    var issued: Option<Untrusted<String>> = None
+    var expires: Option<Untrusted<String>> = None
+    var latest: Option<Latest> = None
+    for round in 0..5 {
+        if round > 0 {
+            at = mark_at(bytes, at, 44)?
+        }
+        let key = string_at(bytes, at)?
+        at = mark_at(bytes, key.next, 58)?
+        if key.value == "schema" && !schema.is_some() {
+            let number = number_at(bytes, at)?
+            schema = Some(number.value)
+            at = number.next
+        } else if key.value == "serial" && !serial.is_some() {
+            let number = number_at(bytes, at)?
+            serial = Some(number.value)
+            at = number.next
+        } else if key.value == "issued" && !issued.is_some() {
+            let text = string_at(bytes, at)?
+            issued = Some(text.value)
+            at = text.next
+        } else if key.value == "expires" && !expires.is_some() {
+            let text = string_at(bytes, at)?
+            expires = Some(text.value)
+            at = text.next
+        } else if key.value == "latest" && !latest.is_some() {
+            let found = latest_at(bytes, at)?
+            latest = Some(found)
+            at = found.next
+        } else {
+            return None
+        }
+    }
+    at = mark_at(bytes, at, 125)?
+    if skip_space(bytes, at) != bytes.len() {
+        return None
+    }
+    let found = latest?
+    let from = issued?
+    let until = expires?
+    if schema? != 1 || serial? < 1 || !is_time(from) || !is_time(until) || epoch_of(from) >= epoch_of(until) {
+        return None
+    }
+    if !is_tag_and_version(found.tag, found.version) {
+        return None
+    }
+    Some(Index(serial: serial?, issued: from, expires: until, tag: found.tag, version: found.version))
+}
+
+// ---- The network ------------------------------------------------------------------
+
+// A refusal for a failed fetch of `what`. A failure below TLS, or a response
+// this client does not accept, is the network's (`network_error`); a
+// failure of the handshake, the certificate or the protocol is TLS's
+// (`tls_error`), and is never reported as "no update".
+fn failed(what: String, error: http.HttpError) -> Refusal {
+    let why = error.to_string()
+    match error {
+        http.HttpError.Tls(inner) => match inner {
+            tls.TlsError.Io(_) => refuse("network_error", "cannot fetch {what}: {why}; check the network connection")
+            tls.TlsError.Truncated => refuse("network_error", "cannot fetch {what}: {why}; check the network connection")
+            tls.TlsError.Certificate(_) => refuse("tls_error", "cannot fetch {what}: {why}; the site's certificate was refused, which a wrong system clock can cause, as can an intercepted connection")
+            _ => refuse("tls_error", "cannot fetch {what}: {why}")
+        }
+        http.HttpError.Malformed(_) => refuse("network_error", "cannot fetch {what}: {why}")
+        http.HttpError.TooLarge => refuse("network_error", "cannot fetch {what}: {why}")
+        http.HttpError.InvalidRequest(_) => refuse("internal", "cannot fetch {what}: {why}")
+    }
+}
+
+// What the program needs to reach the site: its capabilities and the user
+// agent. A capability is not a field of a plain struct, so the program
+// passes them as parameters.
+fn get(net: NetConnect, args: Args, random: Random, clock: Clock, agent: Untrusted<String>, path: Untrusted<String>, max: Int, what: String) -> Result<http.Response, Refusal> {
+    let trust = match trust_config(args) {
+        Ok(trust) => trust
+        Err(why) => { return Err(refuse("internal", why)) }
+    }
+    let config = tls.TlsConfig.default().with_trust(trust)
+    let request = http.Request.get(path).with_header("User-Agent", agent).with_max_body(max)
+    match http.get(net.restrict_to(site_host(args), site_port(args)), request, config, random, clock) {
+        Ok(response) => Ok(response)
+        Err(error) => Err(failed(what, error))
+    }
+}
+
+// The status must be 200: a redirect is refused and never followed, so the
+// program never talks to a host it holds no capability for.
+fn body_of(response: http.Response, what: String) -> Result<Untrusted<Bytes>, Refusal> {
+    if response.status == 200 {
+        return Ok(response.body)
+    }
+    let status = response.status
+    if status >= 300 && status < 400 {
+        return Err(refuse("network_error", "the site answered {what} with the redirect {status}, and redirects are refused"))
+    }
+    Err(refuse("network_error", "the site answered {what} with the status {status}"))
+}
+
+// ---- Signatures -------------------------------------------------------------------
+
+fn pinned_key(args: Args) -> Result<sshsig.PublicKey, Refusal> {
+    match sshsig.PublicKey.parse(release_key(args)) {
+        Ok(key) => Ok(key)
+        Err(error) => {
+            let why = error.to_string()
+            Err(refuse("internal", "the pinned release key is unusable: {why}"))
+        }
+    }
+}
+
+// Verifies `signature` over `message` in `namespace` by the pinned key.
+fn check_signature(args: Args, message: Untrusted<Bytes>, signature: Untrusted<Bytes>, namespace: String, code: String, what: String) -> Result<(), Refusal> {
+    let key = pinned_key(args)?
+    let text = match signature.to_text() {
+        Some(text) => text
+        None => { return Err(refuse(code, "the signature of {what} is not text")) }
+    }
+    match sshsig.verify(text, message, namespace, key) {
+        Ok(_) => Ok(())
+        Err(error) => {
+            let why = error.to_string()
+            Err(refuse(code, "{what} is not signed by the Oska release key in the namespace {namespace}: {why}"))
+        }
+    }
+}
+
+// ---- The check ----------------------------------------------------------------------
+
+// The identity of the running binary.
+struct Identity {
+    state: String,
+    sha256: Option<String>,
+    expected: Option<Untrusted<String>>,
+    source: Option<Untrusted<String>>,
+}
+
+fn identity_json(identity: Identity) -> Untrusted<String> {
+    let state = identity.state
+    let sha = quoted_or_null(identity.sha256)
+    let expected = quoted_or_null(identity.expected)
+    let source = quoted_or_null(identity.source)
+    "\{\"state\":\"{state}\",\"sha256\":{sha},\"expected_sha256\":{expected},\"source\":{source}\}"
+}
+
+fn skipped() -> Identity {
+    Identity(state: "skipped", sha256: None, expected: None, source: None)
+}
+
+// The index: fetched, signed by the release key in the namespace
+// `oska-index` before it is parsed, parsed, not expired, and not older
+// than the serial remembered. Also a warning when under 30 days remain.
+fn verified_index(net: NetConnect, args: Args, random: Random, clock: Clock, agent: Untrusted<String>, now: Int, remembered: Int, warnings: List<String>) -> Result<Index, Refusal> {
+    let index_response = get(net, args, random, clock, agent, "/release-index.json", MAX_INDEX, "the release index")?
+    let index_bytes = body_of(index_response, "the release index")?
+    let sig_response = get(net, args, random, clock, agent, "/release-index.json.sig", MAX_SIGNATURE, "the release index signature")?
+    let sig_bytes = body_of(sig_response, "the release index signature")?
+    check_signature(args, index_bytes, sig_bytes, "oska-index", "bad_index", "the release index")?
+    match parse_index(index_bytes) {
+        None => Err(refuse("bad_index", "the release index is signed but is not a schema-1 release index"))
+        Some(index) => {
+            let expires = epoch_of(index.expires)
+            if now >= expires {
+                let when = safe(index.expires)
+                return Err(refuse("stale_index", "the release index expired at {when}; if that is not long ago, check the system clock, else the site has stopped publishing a fresh one"))
+            }
+            if index.serial < remembered {
+                let serial = index.serial
+                return Err(refuse("rollback_refused", "the release index has serial {serial}, below {remembered}, which this install has already accepted; an older index is refused"))
+            }
+            Ok(index)
+        }
+    }
+}
+
+// The identity of the running binary, from the signed SHA256SUMS of the
+// release it says it is. No published release by that version is
+// `unknown_release`, which is no error.
+fn identify(net: NetConnect, args: Args, random: Random, clock: Clock, read: FsRead, agent: Untrusted<String>, version: Untrusted<String>, file: Untrusted<String>, assets: Untrusted<String>) -> Result<Identity, Refusal> {
+    let tag = "v{version}"
+    let base = "/releases/{tag}"
+    let sums_response = get(net, args, random, clock, agent, "{base}/SHA256SUMS", MAX_SUMS, "SHA256SUMS")?
+    if sums_response.status == 404 {
+        return Ok(Identity(state: "unknown_release", sha256: None, expected: None, source: None))
+    }
+    let sums = body_of(sums_response, "SHA256SUMS")?
+    let sig_response = get(net, args, random, clock, agent, "{base}/SHA256SUMS.sig", MAX_SIGNATURE, "the SHA256SUMS signature")?
+    let sig = body_of(sig_response, "the SHA256SUMS signature")?
+    check_signature(args, sums, sig, "oska-release", "bad_checksums", "SHA256SUMS")?
+    let text = match sums.to_text() {
+        Some(text) => text
+        None => { return Err(refuse("bad_checksums", "SHA256SUMS is not text")) }
+    }
+    let lines = sums_lines(text)
+    let signed = lines.get(0).unwrap_or("")
+    if signed != "# oska-release {tag}" {
+        let shown = safe(signed)
+        return Err(refuse("bad_checksums", "SHA256SUMS is signed for '{shown}', not for {tag}"))
+    }
+    var entries: List<SumLine> = List.new()
+    for i in 1..lines.len() {
+        match parse_entry(lines.at(i)) {
+            Some(entry) => entries.push(entry)
+            None => { return Err(refuse("bad_checksums", "SHA256SUMS has a line that is not a SHA-256 digest and a file name")) }
+        }
+    }
+    // The first of this build's names that the release lists, exactly once.
+    var expected: Option<Untrusted<String>> = None
+    var chosen = ""
+    for candidate in assets.split(",") {
+        if !expected.is_some() {
+            var count = 0
+            var digest: Option<Untrusted<String>> = None
+            for entry in entries {
+                if entry.name == candidate {
+                    count = count + 1
+                    digest = Some(entry.digest)
+                }
+            }
+            if count > 1 {
+                return Err(refuse("bad_checksums", "SHA256SUMS lists {candidate} more than once"))
+            }
+            if count == 1 {
+                expected = digest
+                chosen = candidate
+            }
+        }
+    }
+    let source = "the signed SHA256SUMS of {tag}"
+    let want = match expected {
+        Some(digest) => digest
+        None => { return Ok(Identity(state: "unknown_release", sha256: None, expected: None, source: Some(source))) }
+    }
+    let bytes = match read.restrict_to(".").restrict_to_file(Path.from(file)).read_bytes() {
+        Ok(bytes) => bytes
+        Err(error) => {
+            let why = error.message
+            return Err(refuse("internal", "cannot read the running executable: {why}"))
+        }
+    }
+    let actual = sha2.sha256(bytes).to_hex()
+    let state = if actual == want { "genuine" } else { "modified" }
+    Ok(Identity(state: state, sha256: Some(actual), expected: Some(want), source: Some(source)))
+}
+
+fn warnings_json(warnings: List<String>) -> Untrusted<String> {
+    var out: Untrusted<String> = "["
+    var first = true
+    for warning in warnings {
+        let piece = quoted(warning)
+        out = if first { "{out}{piece}" } else { "{out},{piece}" }
+        first = false
+    }
+    "{out}]"
+}
+
+fn check(net: NetConnect, args: Args, random: Random, clock: Clock, read: FsRead) -> Result<Untrusted<String>, Refusal> {
+    let version = args.get(2).unwrap_or("")
+    let now = args.get(3).unwrap_or("").parse_int().unwrap_or(-1)
+    let remembered = args.get(4).unwrap_or("").parse_int().unwrap_or(-1)
+    let identifying = args.get(5).unwrap_or("")
+    let file = args.get(6).unwrap_or("")
+    let assets = args.get(7).unwrap_or("")
+    if !is_version(version) || now < 0 || remembered < 0 || (identifying != "0" && identifying != "1") {
+        return Err(refuse("internal", "the update checker was started with arguments it does not accept"))
+    }
+    let agent = "oskac {version}"
+    var warnings: List<String> = List.new()
+    let index = verified_index(net, args, random, clock, agent, now, remembered, warnings)?
+    let left = epoch_of(index.expires) - now
+    if left < WARN_SECONDS {
+        let days = left / 86400
+        warnings.push("the release index expires in {days} days; the monthly re-signing may be failing")
+    }
+    let identity = if identifying == "1" {
+        identify(net, args, random, clock, read, agent, version, file, assets)?
+    } else {
+        skipped()
+    }
+    let latest = quoted(index.version)
+    let tag = quoted(index.tag)
+    let serial = index.serial
+    let issued = quoted(index.issued)
+    let expires = quoted(index.expires)
+    let notes = warnings_json(warnings)
+    let who = identity_json(identity)
+    Ok("\{\"ok\":true,\"latest\":{latest},\"tag\":{tag},\"index_serial\":{serial},\"index_issued\":{issued},\"index_expires\":{expires},\"warnings\":{notes},\"identity\":{who}\}")
+}
+
+fn main(args: Args, out: Stdout, net: NetConnect, read: FsRead, random: Random, clock: Clock) -> Result<(), IoError> {
+    let command = args.get(1).unwrap_or("")
+    let result = if command == "check" {
+        check(net, args, random, clock, read)
+    } else {
+        Err(refuse("internal", "the update checker was started with a command it does not know"))
+    }
+    match result {
+        Ok(line) => out.println(line)
+        Err(refusal) => out.println(refusal_json(refusal))
+    }
 }

@@ -10,6 +10,9 @@
 
 use std::path::PathBuf;
 
+#[path = "update/assemble.rs"]
+mod assemble;
+
 use oska_native::{Locate, Target};
 use oska_syntax::{Diagnostic, Frame};
 
@@ -64,6 +67,18 @@ fn main() {
 
     let src = std::fs::read_to_string(&source)
         .unwrap_or_else(|e| fail(format!("cannot read {}: {e}", source.display())));
+    // The test-only feature swaps the pinned site, key and roots for the
+    // loopback test server's (`update/test_site.osk`); a release has none.
+    let test_site_path = dir.join("update").join("test_site.osk");
+    println!("cargo:rerun-if-changed={}", test_site_path.display());
+    println!("cargo:rerun-if-changed=update/assemble.rs");
+    let test_site = std::fs::read_to_string(&test_site_path)
+        .unwrap_or_else(|e| fail(format!("cannot read {}: {e}", test_site_path.display())));
+    let src = assemble::checker_source(
+        &src,
+        &test_site,
+        std::env::var_os("CARGO_FEATURE_TEST_SITE").is_some(),
+    );
     let report = oska_check::check_file(SOURCE, &src, oska_check::CheckOptions::default());
     let program = match report
         .program

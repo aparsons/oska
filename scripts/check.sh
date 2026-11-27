@@ -530,6 +530,14 @@ if step "SPDX headers and NOTICE" --no-slot --fast-when 'scripts/spdx-guard/*'; 
   scripts/spdx-guard/guard.sh
 fi
 
+if step "test-site feature kept out of releases" --no-slot --fast-when 'crates/oskac/Cargo.toml' --fast-when 'scripts/test-site-guard/*' --fast-when '.github/*'; then
+  # `oskac`'s test-only `test-site` feature (spec #230) points the update
+  # checker at a loopback server and a test key. It must never be a default
+  # feature, be turned on by another, or reach a build that ships. The
+  # binaries are inspected after the build, by the step below.
+  scripts/test-site-guard/guard.sh
+fi
+
 if step "every workflow job has a timeout" --no-slot; then
   # GitHub lets a job run 360 minutes unless it says otherwise. The guard fails
   # a job with no `timeout-minutes`, a non-literal value, or one above 60.
@@ -582,6 +590,25 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests -
     scripts/temp-leak/run.sh scripts/test-shard.sh "${OSKA_TEST_SET:?OSKA_TEST_SHARD needs OSKA_TEST_SET}" "$OSKA_TEST_SHARD"
   else
     scripts/temp-leak/run.sh cargo test --all --no-fail-fast
+  fi
+  if [ "$cargo_mode" != docs ] && [ "$tier" != fast ]; then
+    # The `oskac` built with default features (what a plain build ships) must
+    # not hold the `test-site` feature's marker, nor a release or dist one
+    # already built. Built here if this job has not, so every job that runs
+    # this step has a binary to inspect (the self_check tests build their
+    # test-site `oskac` into a directory of their own, not this one). A CI
+    # run with no binary fails, so the check cannot pass by looking at
+    # nothing.
+    cargo build --quiet -p oskac
+    binaries=(target/debug/oskac)
+    for built in target/dist/oskac target/release/oskac; do
+      [ -f "$built" ] && binaries+=("$built")
+    done
+    if [ -n "${CI:-}" ]; then
+      scripts/test-site-guard/guard.sh --require-binary . "${binaries[@]}"
+    else
+      scripts/test-site-guard/guard.sh . "${binaries[@]}"
+    fi
   fi
 fi
 
@@ -668,6 +695,10 @@ fi
 
 if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*' --group scripts; then
   bash scripts/spdx-guard/test.sh
+fi
+
+if step "test-site guard tests" --fast-when 'scripts/test-site-guard/*' --group scripts; then
+  bash scripts/test-site-guard/test.sh
 fi
 
 if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json --group scripts; then

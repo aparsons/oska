@@ -431,7 +431,12 @@ pub struct Executable {
 impl Executable {
     /// Write `bytes` as a new executable in a new private directory.
     pub fn create(bytes: &[u8]) -> std::io::Result<Executable> {
-        let dir = private_dir()?;
+        Executable::create_in(&std::env::temp_dir(), bytes)
+    }
+
+    /// [`Executable::create`] with the private directory under `base`.
+    pub fn create_in(base: &Path, bytes: &[u8]) -> std::io::Result<Executable> {
+        let dir = private_dir(base)?;
         let exe = Executable {
             // Windows runs a file by its extension.
             path: dir.join(format!("program{}", std::env::consts::EXE_SUFFIX)),
@@ -458,6 +463,15 @@ impl Executable {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Remove the file and its directory now, while the program runs from
+    /// it: a running executable's file can go on Unix, and the program
+    /// keeps running. Anything left (on Windows) goes when it is dropped.
+    #[cfg(unix)]
+    pub fn unlink(&self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(&self.dir);
+    }
 }
 
 impl Drop for Executable {
@@ -472,14 +486,13 @@ impl Drop for Executable {
 /// A new directory, mode 0700, under the temporary directory, with a
 /// name no one can predict. An existing entry of that name, a symlink
 /// included, is never used: another name is tried.
-fn private_dir() -> std::io::Result<PathBuf> {
+fn private_dir(base: &Path) -> std::io::Result<PathBuf> {
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    let base = std::env::temp_dir();
     let mut last = None;
     for _ in 0..16 {
         let dir = base.join(format!("oskac-{:016x}", random()));

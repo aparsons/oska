@@ -78,6 +78,10 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `bad_index` | The release index is not signed by the release key in the `oska-index` namespace, has no signature, or is not in the index format. |
 | `stale_index` | The release index has expired. A named release still installs with `--version`. |
 | `rollback_refused` | The release index's serial is lower than the one this install already accepted, recorded in the receipt. |
+| `network_error` | `oskac self check`: no route, DNS failure, timeout, refused connection, a redirect, a status other than 200, or a response past its size cap. |
+| `tls_error` | `oskac self check`: the TLS handshake or the site's certificate was refused (an untrusted or expired certificate, a wrong host, a bad handshake). A wrong system clock can cause it. |
+| `bad_checksums` | `oskac self check`: the release's `SHA256SUMS` is not signed by the release key in the `oska-release` namespace, is for another release, or is not in the checksum format. |
+| `internal` | `oskac self check`: the update checker could not be run or its answer was not understood. |
 | `install_failed` | The binary or the receipt could not be written into place, or neither `OSKA_HOME` nor a home directory is set. |
 | `not_installed` | `--uninstall` found no install receipt in the Oska home, or there is no Oska home because neither `OSKA_HOME` nor a home directory is set. Nothing was removed. |
 | `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, in a `.config/oska` directory, reached through a symlink anywhere in its path, or containing `..`, or a receipt it cannot read. Nothing was removed. |
@@ -243,7 +247,7 @@ Re-run the installer. It installs the latest release over the old one, and with 
 curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.2.0 --allow-downgrade
 ```
 
-There is no self-update command: `oskac self` only reports on the install and uninstalls it (see [`oskac self`](cli-reference.md#oskac-self)). To see whether an update exists before you run the installer, use [`--check`](#check-for-an-update).
+There is no self-update command yet: `oskac self` reports on the install, [checks for an update](#check-with-oskac-self-check) and uninstalls it (see [`oskac self`](cli-reference.md#oskac-self)). To see whether an update exists before you run the installer, use `oskac self check` or the installer's [`--check`](#check-for-an-update).
 
 ### Check for an update
 
@@ -260,6 +264,26 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --check --json
 - `installed` is `null` when no `oskac` is installed.
 - `update_available` is `true` when the latest release is newer than the installed one, or nothing is installed. It exits 0 either way.
 - It takes the latest release from the signed index, with the same checks as an install, so it fails with `bad_index`, `stale_index` or `rollback_refused` as an install would. Before the site publishes an index, it reads `latest.json`, and `index_verified`, `index_serial` and `index_expires` are `false`, `null` and `null`.
+
+### Check with `oskac self check`
+
+`oskac self check` answers "is there a newer Oska, and is this binary a genuine one?" with no curl, no `ssh-keygen` and no system TLS library: `oskac` runs its built-in update checker, a program written in Oska, which uses Oska's own TLS client, SHA-256 and SSH signature verification. It is read-only, and it uses the network only when you run it.
+
+```sh
+oskac self check --format=json
+```
+
+```json
+{"ok":true,"action":"checked","installed":"0.6.0","latest":"0.7.0","tag":"v0.7.0","comparison":"behind","update_available":true,"index_serial":5,"index_expires":"2027-02-18T14:38:45Z","serial_remembered":true,"site":"https://oskalang.dev","warnings":[],"identity":{"state":"genuine","sha256":"<SHA-256 of this oskac>","expected_sha256":"<the same, from the signed SHA256SUMS>","source":"the signed SHA256SUMS of v0.6.0","matches_receipt":true}}
+```
+
+- It always uses `https://oskalang.dev`, the release key and the root certificates built into `oskac`. No flag, variable or setting changes them in a release build. The request carries only the user agent `oskac <version>`.
+- It verifies the signed release index (the signature in the `oska-index` namespace before the index is read, then the expiry) and refuses one whose serial is below the highest this install has accepted. It exits 0 whether or not an update exists; an answer it could not verify is an error, never "no update".
+- `comparison` is `behind`, `current` or `ahead` by semver precedence, and `update_available` is true only when behind. The human output ends with the command to run when an update exists: `oskac self update` on a managed install (one the installer put in place), the installer command otherwise.
+- `serial_remembered` is `true` when an install receipt exists: after a verified check, `index_serial` in the receipt is raised to the index's serial (never lowered, written atomically). With no receipt (a source build, a copied binary) it is `false`, the rollback guard is not active for this install, and only the expiry bounds a freeze.
+- `identity.state` is `genuine` (this binary's SHA-256 equals its entry in the signed `SHA256SUMS` of the release it reports), `modified` (that release is published, but the digest differs), `unknown_release` (no published release has this version, as for a source build) or `skipped` (`--no-identify`, which also saves two downloads). None is an error. The comparison uses the signed `SHA256SUMS`, not the receipt; `matches_receipt` shows whether the file still has the digest the receipt recorded (`null` when either is missing).
+- `warnings` lists, for example, that the index expires within 30 days.
+- A failure is `{"ok": false, "error": "<code>", "message": "..."}` with exit code 1, and a usage error exits 2. The codes are `bad_index`, `stale_index`, `rollback_refused`, `network_error`, `tls_error`, `bad_checksums` and `internal` (see the table above). If the system clock is wrong, `stale_index` and `tls_error` messages say so.
 
 ### Uninstall
 

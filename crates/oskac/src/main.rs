@@ -43,7 +43,9 @@ mod native_test;
 mod new;
 mod package;
 mod release;
+mod self_check;
 mod self_cmd;
+mod semver;
 mod sha256;
 mod stdin;
 mod update_checker;
@@ -142,6 +144,12 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; the
+                                           only command that uses the network
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -173,6 +181,9 @@ struct Flags {
     /// `--no-agent-files`: `oskac new` leaves out `AGENTS.md` and
     /// `CLAUDE.md`.
     no_agent_files: bool,
+    /// `--no-identify`: `oskac self check` does not compare this binary with
+    /// the release's signed checksums.
+    no_identify: bool,
     /// `--update`: `oskac test` writes new and changed snapshots
     /// (`oska_run::snapshots`) instead of failing on them.
     update: bool,
@@ -286,6 +297,7 @@ impl CommandLine {
                 "--lib" => line.flags.lib = true,
                 "--no-agent-files" => line.flags.no_agent_files = true,
                 "--update" => line.flags.update = true,
+                "--no-identify" => line.flags.no_identify = true,
                 event if event.starts_with("--event=") => {
                     line.event = Some(event["--event=".len()..].to_string());
                 }
@@ -419,6 +431,17 @@ fn main() -> ExitCode {
         }
         return ExitCode::from(2);
     }
+    // Only `self check` skips the identity check.
+    if flags.no_identify && positional.as_slice() != ["self", "check"] {
+        if flags.json {
+            outln!(
+                "{{\"ok\":false,\"error\":\"usage\",\"message\":\"--no-identify belongs to `oskac self check` alone\"}}"
+            );
+        } else {
+            eprint!("{USAGE}");
+        }
+        return ExitCode::from(2);
+    }
     // Only `test` takes a filter or writes snapshots.
     if (line.filter.is_some() || flags.update) && positional.first() != Some(&"test") {
         eprint!("{USAGE}");
@@ -448,6 +471,7 @@ fn main() -> ExitCode {
             match rest {
                 ["info"] if bare => self_cmd::info(flags.json),
                 ["uninstall"] if bare => self_cmd::uninstall(flags.json),
+                ["check"] if bare => self_check::check(flags.json, !flags.no_identify),
                 _ => self_cmd::usage(flags.json),
             }
         }
@@ -1528,6 +1552,7 @@ mod tests {
                 lib: false,
                 no_agent_files: false,
                 update: false,
+                no_identify: false,
             }
         );
         assert!(line.program_args.is_empty());

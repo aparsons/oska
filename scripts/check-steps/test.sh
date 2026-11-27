@@ -272,7 +272,8 @@ fi
 full_cargo='fmt --all --check
 clippy --all-targets -- -D warnings
 check -p oskac --tests --target x86_64-pc-windows-gnu
-test --all --no-fail-fast'
+test --all --no-fail-fast
+build --quiet -p oskac'
 for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
   'echo two >docs/index.md && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qam d'; do
   fresh_clone
