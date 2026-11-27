@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+// `Set<T>`, a collection of distinct items that keeps them in insertion
+// order (ADR 0032). `Set` is in the prelude: write `Set.new()`,
+// `s.add(item)` and `s.contains(item)` with no `use`. This file is the
+// module `std.set`, which `use std.set` still imports.
+//
+// - A set is a value, like a `List`: it is copied on write, and a method
+//   that changes it needs a `var`.
+// - `to_list()` gives the items in insertion order. `add` of an item the
+//   set holds keeps the item's place. `remove` then `add` of the same
+//   item puts it last. Two sets are equal when they hold the same items
+//   in the same order.
+// - An item type needs `Eq` and `Hash`, the keys of `Map` (ADR 0028).
+//   `contains` is O(1) on average, and `remove` of a missing item is
+//   `false`, never a panic.
+//
+// Limits (ADR 0032). A set holds at most the entries a `Map` holds;
+// `Set.with_max_entries(n)` sets a lower limit. An `add` of a new item
+// past the limit panics with `P0044`, and items that collide under every
+// hash panic with `P0045`, as for a `Map`.
+//
+// A `Secret` item is refused by the checker (`E0351`, `E0354`), and a type
+// that is not `Eq` and `Hash` is `E0266`; a `Float` item will be refused
+// once `Float` exists.
+
+// For maintainers: a set is a struct over one `Map<T, Bool>`: the item is
+// the key and the value is always `true`. It has no table code of its
+// own, so the table, the fixed hash, the probe limit and the rebuild are
+// those of `Map`, and the two cannot drift apart (ADR 0032).
+
+// A collection of distinct items, in insertion order.
+pub struct Set<T> {
+    items: Map<T, Bool>,
+}
+
+impl<T: Eq + Hash> Set<T> {
+    // An empty set.
+    pub fn new() -> Set<T> {
+        Set(items: Map.new())
+    }
+
+    // An empty set that holds at most `limit` items (never more than
+    // `new()` allows, and a negative number is 0): an `add` of a new item
+    // past it panics with `P0044`.
+    pub fn with_max_entries(limit: Int) -> Set<T> {
+        Set(items: Map.with_max_entries(limit))
+    }
+
+    // A set of `items`, added in order: an item that occurs again keeps
+    // its first place. More distinct items than the entry limit panics
+    // with `P0044`.
+    pub fn of(items: List<T>) -> Set<T> {
+        var made: Set<T> = Set.new()
+        for item in items {
+            made.add(item)
+        }
+        made
+    }
+
+    // The number of items.
+    pub fn len(self) -> Int {
+        self.items.len()
+    }
+
+    // Whether it holds no item.
+    pub fn is_empty(self) -> Bool {
+        self.items.is_empty()
+    }
+
+    // Whether it holds `item`.
+    pub fn contains(self, item: T) -> Bool {
+        self.items.contains_key(item)
+    }
+
+    // Put `item` in, last, and say whether the set changed: `false` when
+    // it already held the item, which keeps its place. The set must be a
+    // `var`.
+    pub fn add(var self, item: T) -> Bool {
+        if self.items.contains_key(item) {
+            return false
+        }
+        self.items.put(item, true)
+        true
+    }
+
+    // Take `item` out and say whether the set held it. The items left
+    // keep their order. The set must be a `var`.
+    pub fn remove(var self, item: T) -> Bool {
+        self.items.remove(item).is_some()
+    }
+
+    // Every item, in insertion order.
+    pub fn to_list(self) -> List<T> {
+        self.items.keys()
+    }
+}
+
+impl<T: Eq + Hash> Eq for Set<T> {
+    fn eq(self, other: Set<T>) -> Bool {
+        self.items == other.items
+    }
+}
