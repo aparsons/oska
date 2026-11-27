@@ -38,6 +38,7 @@ pub const MODULES: &[&str] = &[
     "std.dns",
     "std.base64url",
     "std.jws",
+    "std.acme",
     "std.hmac",
     "std.ed25519",
     "std.sshsig",

@@ -1,0 +1,1236 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.acme`: the core of an ACME client (RFC 8555), for a program that
+// gets its own certificates (ADR 0036, spec #824). A module sees it only
+// after `use std.acme`. This part reaches the `ready` state of an order:
+// the directory, a fresh nonce, an account, an order, its authorizations
+// and challenges, and polling. Finalizing an order and downloading the
+// certificate come with the next part.
+//
+// Two layers. The first is pure functions over bytes, with no capability:
+// `parse_url`, `parse_directory`, `parse_account`, `parse_order`,
+// `parse_authorization`, `parse_problem`, `error_from_response`,
+// `new_account_body`, `new_order_body`, `key_authorization`, `poll_order`
+// and `poll_authorization`. They take the `http.Response` a CA sent and
+// give a typed value or a typed `AcmeError`, so a recorded transcript of a
+// CA tests them with no network. The second is a thin driver, `Client`,
+// which signs each request (`std.jws`), keeps the replay nonce, retries a
+// `badNonce` once, and sends through a `Transport`. `HttpsTransport` is the
+// `Transport` over `std.http` with the host capability of the CA; a test
+// supplies its own, which replays a transcript.
+//
+// The CA is configuration. No directory URL or root is built in: the
+// caller gives the directory URL and a `HostConnect` for the CA's host. A
+// directory URL that is not `https` is refused (`InsecureUrl`), except a
+// loopback address (`localhost`, `127.x.y.z`, `[::1]`) when the caller
+// says `allow_loopback`, for a test CA. Every other URL the CA sends is
+// held to the same rule, and `HttpsTransport` refuses one that names
+// another host or port than its capability (`ForeignHost`), so a CA
+// cannot send the client elsewhere.
+//
+// Everything a CA sends is `Untrusted`. A URL, a token, a status or an
+// identifier is validated (printable ASCII, no space, quote, backslash or
+// fragment; at most 2048 bytes for a URL) before it becomes the trusted
+// text a result holds. The text of a problem document (`detail`, the
+// `type` URI) stays `Untrusted` in `Problem`, and no `Display` prints it.
+// A response body is at most `MAX_RESPONSE` bytes (`TooLarge`).
+//
+// The account key is a `Secret`. `Client` holds it and has no `Display`;
+// it is never printed, interpolated, logged or compared, and this module
+// calls `expose()` nowhere. The only things that leave are the JWS
+// signatures `std.jws` makes, which are public.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by recorded transcripts of a CA on both backends.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference. The one
+// `assume_trusted` is in `vouch`, and runs only on text a validator above
+// it has checked.
+
+use std.base64url
+use std.http
+use std.json
+use std.jws
+use std.sha2
+use std.tls
+
+// The most bytes of a response body this client reads.
+pub const MAX_RESPONSE: Int = 262144
+
+// The longest URL accepted, in bytes.
+pub const MAX_URL: Int = 2048
+
+// The longest identifier value (a DNS name) accepted, in bytes.
+pub const MAX_IDENTIFIER: Int = 253
+
+// The most items accepted in a list a CA sends (authorizations,
+// challenges, identifiers).
+pub const MAX_ITEMS: Int = 100
+
+// The prefix of the problem types RFC 8555 section 6.7 defines.
+// What `HttpsTransport` says when a URL is not the host it is confined to.
+const FOREIGN: String = "foreign host"
+
+const PROBLEM_PREFIX: String = "urn:ietf:params:acme:error:"
+
+// ---- Errors ---------------------------------------------------------------------
+
+// What a problem document (RFC 7807, RFC 8555 section 6.7) says went
+// wrong, by its `type`.
+pub enum ProblemKind {
+    BadNonce,
+    RateLimited,
+    Unauthorized,
+    Malformed,
+    AccountDoesNotExist,
+    ExternalAccountRequired,
+    UserActionRequired,
+    OrderNotReady,
+    RejectedIdentifier,
+    ServerInternal,
+    // A type this client does not name.
+    Other,
+}
+
+// A problem document, as the CA wrote it. The text is untrusted: show it
+// to a person, never use it as a name, a path or a command.
+pub struct Problem {
+    pub kind: ProblemKind,
+    // The `type` URI as sent.
+    pub uri: Untrusted<String>,
+    // The `detail`, or empty.
+    pub detail: Untrusted<String>,
+    // The HTTP status.
+    pub status: Int,
+    // The `Retry-After` of the response in seconds, when it is a number of
+    // seconds.
+    pub retry_after: Option<Int>,
+}
+
+// Why an ACME step failed.
+pub enum AcmeError {
+    // A URL is not `https` (or loopback when the caller allowed it).
+    InsecureUrl,
+    // A URL is malformed, too long, or has a character it may not.
+    InvalidUrl,
+    // A URL names a host or port other than the one the transport is
+    // confined to.
+    ForeignHost,
+    // The connection failed, and why (the transport's own text).
+    Transport(String),
+    // The response is not what ACME says, and what is wrong (a fixed text).
+    Malformed(String),
+    // A response is over `MAX_RESPONSE` bytes (or the transport's limit).
+    TooLarge,
+    // The CA said `badNonce` twice running: the retry with the fresh nonce
+    // failed too.
+    BadNonce(Problem),
+    // The CA said `rateLimited` (or answered 429).
+    RateLimited(Problem),
+    // The CA said `unauthorized` (or answered 401 or 403).
+    Unauthorized(Problem),
+    // Any other problem document.
+    Problem(Problem),
+    // The account key is not a valid P-256 key, or a request field is not
+    // one a JWS header may hold.
+    Key,
+    // A value the caller gave (a contact, an identifier) is not acceptable.
+    InvalidInput(String),
+    // An order or an authorization became `invalid` (or an authorization
+    // expired, was revoked or deactivated).
+    Failed,
+    // A poll was still pending after the caller's last try.
+    PollLimit,
+    // `Client` has no account yet: `new_account` first.
+    NoAccount,
+}
+
+impl Display for AcmeError {
+    // Fixed text only. No text from the CA is in it.
+    fn to_string(self) -> String {
+        match self {
+            AcmeError.InsecureUrl => "the URL is not https"
+            AcmeError.InvalidUrl => "the URL is malformed"
+            AcmeError.ForeignHost => "the URL names a host or port the connection is not confined to"
+            AcmeError.Transport(why) => "the connection failed: {why}"
+            AcmeError.Malformed(why) => "malformed response: {why}"
+            AcmeError.TooLarge => "the response is too large"
+            AcmeError.BadNonce(_) => "the CA rejected the nonce twice"
+            AcmeError.RateLimited(_) => "the CA says rate limited"
+            AcmeError.Unauthorized(_) => "the CA says unauthorized"
+            AcmeError.Problem(p) => "the CA answered a problem (status {p.status})"
+            AcmeError.Key => "the account key or a request field is not valid"
+            AcmeError.InvalidInput(why) => "invalid input: {why}"
+            AcmeError.Failed => "the order or authorization failed"
+            AcmeError.PollLimit => "still pending after the last poll"
+            AcmeError.NoAccount => "no account yet"
+        }
+    }
+}
+
+// ---- Validated text ---------------------------------------------------------------
+
+// The one trust assertion of the module: `text` has been checked by the
+// validator that calls this.
+fn vouch(text: Untrusted<String>) -> String {
+    text.assume_trusted()
+}
+
+// The bytes of a JSON body this module built from values it checked.
+fn vouch_bytes(bytes: Untrusted<Bytes>) -> Bytes {
+    bytes.assume_trusted()
+}
+
+fn same(text: Untrusted<String>, want: String) -> Bool {
+    text.to_bytes() == want.to_bytes()
+}
+
+// Whether every byte of `text` is printable ASCII (33 to 126) that is not
+// a quote or a backslash, and `text` is 1 to `max` bytes.
+fn printable(text: Untrusted<String>, max: Int) -> Bool {
+    let bytes = text.to_bytes()
+    let n = bytes.len()
+    if n == 0 || n > max {
+        return false
+    }
+    for i in 0..n {
+        let b = bytes.at(i).to_int()
+        if b <= 32 || b >= 127 || b == 34 || b == 92 {
+            return false
+        }
+    }
+    true
+}
+
+// Whether `text` is 1 to 256 bytes of the base64url alphabet, with no
+// padding: a nonce or a challenge token.
+fn is_token(text: Untrusted<String>) -> Bool {
+    let bytes = text.to_bytes()
+    let n = bytes.len()
+    if n == 0 || n > 256 {
+        return false
+    }
+    for i in 0..n {
+        let b = bytes.at(i).to_int()
+        let letter = (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+        let digit = b >= 48 && b <= 57
+        if !letter && !digit && b != 45 && b != 95 {
+            return false
+        }
+    }
+    true
+}
+
+// ---- URLs -------------------------------------------------------------------------
+
+// A URL a CA sent or a caller gave, after it was checked.
+pub struct Url {
+    // The whole URL, as checked.
+    pub text: String,
+    // Whether the scheme is `https`.
+    pub secure: Bool,
+    // The host, lower-case; an IPv6 literal keeps its brackets.
+    pub host: String,
+    // The port: the one written, or the scheme's default.
+    pub port: Int,
+    // The path and query, from the first `/`; `/` when there is none.
+    pub path: String,
+}
+
+// Whether `host` (lower-case, brackets kept) is a loopback address.
+fn is_loopback(host: String) -> Bool {
+    if host == "localhost" || host == "[::1]" {
+        return true
+    }
+    if !host.starts_with("127.") {
+        return false
+    }
+    let parts = host.split(".")
+    if parts.len() != 4 {
+        return false
+    }
+    for part in parts {
+        match part.parse_int() {
+            Some(n) => {
+                if n < 0 || n > 255 || part.len() > 3 {
+                    return false
+                }
+            }
+            None => { return false }
+        }
+    }
+    true
+}
+
+// Whether `text` is a host: a DNS name or IPv4 literal of letters, digits,
+// dots and hyphens, or a bracketed IPv6 literal of hex digits and colons.
+fn is_host(text: Untrusted<String>) -> Bool {
+    let bytes = text.to_bytes()
+    let n = bytes.len()
+    if n == 0 || n > 255 {
+        return false
+    }
+    let first = bytes.at(0).to_int()
+    if first == 91 {
+        if n < 3 || bytes.at(n - 1).to_int() != 93 {
+            return false
+        }
+        for i in 1..(n - 1) {
+            let b = bytes.at(i).to_int()
+            let hex = (b >= 48 && b <= 57) || (b >= 97 && b <= 102) || (b >= 65 && b <= 70)
+            if !hex && b != 58 {
+                return false
+            }
+        }
+        return true
+    }
+    if first == 46 || first == 45 {
+        return false
+    }
+    for i in 0..n {
+        let b = bytes.at(i).to_int()
+        let letter = (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+        let digit = b >= 48 && b <= 57
+        if !letter && !digit && b != 46 && b != 45 {
+            return false
+        }
+    }
+    true
+}
+
+// The URL in `text`, checked: `https` (or, when `allow_loopback`, `http`
+// to a loopback address), a host, an optional port from 1 to 65535, no
+// user information, no fragment, no space, quote, backslash or control
+// character, at most `MAX_URL` bytes. A URL that is well formed but not
+// `https` is `InsecureUrl`; any other fault is `InvalidUrl`.
+pub fn parse_url(text: Untrusted<String>, allow_loopback: Bool) -> Result<Url, AcmeError> {
+    let bytes = text.to_bytes()
+    let n = bytes.len()
+    if n == 0 || n > MAX_URL {
+        return Err(AcmeError.InvalidUrl)
+    }
+    for i in 0..n {
+        let b = bytes.at(i).to_int()
+        // Control and space, DEL and beyond, `"`, `#` and `\`.
+        if b <= 32 || b >= 127 || b == 34 || b == 35 || b == 92 {
+            return Err(AcmeError.InvalidUrl)
+        }
+    }
+    let secure = text.starts_with("https://")
+    if !secure && !text.starts_with("http://") {
+        return Err(AcmeError.InvalidUrl)
+    }
+    let rest = text.slice(if secure { 8 } else { 7 }, n)
+    let rest_bytes = rest.to_bytes()
+    var end = rest_bytes.len()
+    var found = false
+    for i in 0..rest_bytes.len() {
+        let b = rest_bytes.at(i).to_int()
+        if !found && (b == 47 || b == 63) {
+            end = i
+            found = true
+        }
+    }
+    let authority = rest.slice(0, end)
+    let tail = rest.slice(end, rest_bytes.len())
+    if authority.contains("@") {
+        return Err(AcmeError.InvalidUrl)
+    }
+    if tail.len() > 0 && tail.starts_with("?") {
+        return Err(AcmeError.InvalidUrl)
+    }
+    // Host and port. An IPv6 literal's colons are inside brackets.
+    var host_text = authority
+    var port_text = ""
+    var has_port = false
+    if authority.starts_with("[") {
+        if !authority.contains("]") {
+            return Err(AcmeError.InvalidUrl)
+        }
+        let close = authority.split("]")
+        // `[::1]` or `[::1]:8443`: the part after the bracket.
+        let after = close.at(1)
+        if after.len() > 0 {
+            if !after.starts_with(":") {
+                return Err(AcmeError.InvalidUrl)
+            }
+            has_port = true
+            port_text = after.slice(1, after.len())
+            host_text = authority.slice(0, close.at(0).len() + 1)
+        }
+    } else if authority.contains(":") {
+        let parts = authority.split(":")
+        if parts.len() != 2 {
+            return Err(AcmeError.InvalidUrl)
+        }
+        has_port = true
+        host_text = parts.at(0)
+        port_text = parts.at(1)
+    }
+    let host = host_text.to_lowercase()
+    if !is_host(host) {
+        return Err(AcmeError.InvalidUrl)
+    }
+    var port = if secure { 443 } else { 80 }
+    if has_port {
+        let digits = port_text.to_bytes()
+        if digits.len() == 0 || digits.len() > 5 {
+            return Err(AcmeError.InvalidUrl)
+        }
+        for i in 0..digits.len() {
+            let b = digits.at(i).to_int()
+            if b < 48 || b > 57 {
+                return Err(AcmeError.InvalidUrl)
+            }
+        }
+        match port_text.parse_int() {
+            Some(p) => {
+                if p < 1 || p > 65535 {
+                    return Err(AcmeError.InvalidUrl)
+                }
+                port = p
+            }
+            None => { return Err(AcmeError.InvalidUrl) }
+        }
+    }
+    let host_name = vouch(host)
+    if !secure && !(allow_loopback && is_loopback(host_name)) {
+        return Err(AcmeError.InsecureUrl)
+    }
+    let path = if tail.len() == 0 { "/" } else { vouch(tail) }
+    Ok(Url(text: vouch(text), secure: secure, host: host_name, port: port, path: path))
+}
+
+// ---- Responses ---------------------------------------------------------------------
+
+// The JSON object in a response body, or `Malformed`. A body over
+// `MAX_RESPONSE` is `TooLarge`.
+fn body_object(response: http.Response) -> Result<json.Value, AcmeError> {
+    if response.body.len() > MAX_RESPONSE {
+        return Err(AcmeError.TooLarge)
+    }
+    let text = match response.body.to_text() {
+        Some(t) => t
+        None => { return Err(AcmeError.Malformed("the body is not UTF-8")) }
+    }
+    match json.parse(text) {
+        Ok(value) => {
+            if value.as_members().is_some() {
+                Ok(value)
+            } else {
+                Err(AcmeError.Malformed("the body is not a JSON object"))
+            }
+        }
+        Err(_) => Err(AcmeError.Malformed("the body is not JSON"))
+    }
+}
+
+fn required_text(object: json.Value, name: String) -> Result<Untrusted<String>, AcmeError> {
+    match object.text(name) {
+        Some(t) => Ok(t)
+        None => Err(AcmeError.Malformed("a required member is missing or is not text"))
+    }
+}
+
+fn required_url(object: json.Value, name: String, allow_loopback: Bool) -> Result<Url, AcmeError> {
+    parse_url(required_text(object, name)?, allow_loopback)
+}
+
+fn optional_url(object: json.Value, name: String, allow_loopback: Bool) -> Result<Option<Url>, AcmeError> {
+    match object.text(name) {
+        Some(t) => {
+            let url = parse_url(t, allow_loopback)?
+            Ok(Some(url))
+        }
+        None => Ok(None)
+    }
+}
+
+// The `Retry-After` of `response` in seconds, when it is a whole number
+// from 0 to 86400.
+fn retry_after_of(response: http.Response) -> Option<Int> {
+    match response.header("Retry-After") {
+        Some(text) => match text.parse_int() {
+            Some(n) => {
+                if n >= 0 && n <= 86400 {
+                    Some(n)
+                } else {
+                    None
+                }
+            }
+            None => None
+        }
+        None => None
+    }
+}
+
+// The `Replay-Nonce` of `response`, when it has one that is a base64url
+// token.
+fn nonce_of(response: http.Response) -> Option<String> {
+    match response.header("Replay-Nonce") {
+        Some(text) => {
+            if is_token(text) {
+                Some(vouch(text))
+            } else {
+                None
+            }
+        }
+        None => None
+    }
+}
+
+fn kind_of(uri: Untrusted<String>) -> ProblemKind {
+    if !uri.starts_with(PROBLEM_PREFIX) {
+        return ProblemKind.Other
+    }
+    let name = uri.slice(PROBLEM_PREFIX.len(), uri.len())
+    if same(name, "badNonce") {
+        ProblemKind.BadNonce
+    } else if same(name, "rateLimited") {
+        ProblemKind.RateLimited
+    } else if same(name, "unauthorized") {
+        ProblemKind.Unauthorized
+    } else if same(name, "malformed") {
+        ProblemKind.Malformed
+    } else if same(name, "accountDoesNotExist") {
+        ProblemKind.AccountDoesNotExist
+    } else if same(name, "externalAccountRequired") {
+        ProblemKind.ExternalAccountRequired
+    } else if same(name, "userActionRequired") {
+        ProblemKind.UserActionRequired
+    } else if same(name, "orderNotReady") {
+        ProblemKind.OrderNotReady
+    } else if same(name, "rejectedIdentifier") {
+        ProblemKind.RejectedIdentifier
+    } else if same(name, "serverInternal") {
+        ProblemKind.ServerInternal
+    } else {
+        ProblemKind.Other
+    }
+}
+
+// The problem document in `response`, if its body is one: a JSON object
+// with a `type`. `detail` is empty when the CA sent none.
+pub fn parse_problem(response: http.Response) -> Option<Problem> {
+    match body_object(response) {
+        Ok(object) => match object.text("type") {
+            Some(uri) => {
+                let detail = match object.text("detail") {
+                    Some(d) => d
+                    None => ""
+                }
+                Some(Problem(kind: kind_of(uri), uri: uri, detail: detail, status: response.status, retry_after: retry_after_of(response)))
+            }
+            None => None
+        }
+        Err(_) => None
+    }
+}
+
+// The typed error for a response that is not the success the caller
+// expected: a problem document by its type (`BadNonce`, `RateLimited`,
+// `Unauthorized`, else `Problem`); with no problem document, status 429 is
+// `RateLimited`, 401 and 403 are `Unauthorized`, and anything else is
+// `Malformed`.
+pub fn error_from_response(response: http.Response) -> AcmeError {
+    if response.body.len() > MAX_RESPONSE {
+        return AcmeError.TooLarge
+    }
+    match parse_problem(response) {
+        Some(problem) => match problem.kind {
+            ProblemKind.BadNonce => AcmeError.BadNonce(problem)
+            ProblemKind.RateLimited => AcmeError.RateLimited(problem)
+            ProblemKind.Unauthorized => AcmeError.Unauthorized(problem)
+            _ => AcmeError.Problem(problem)
+        }
+        None => {
+            let bare = Problem(kind: ProblemKind.Other, uri: "", detail: "", status: response.status, retry_after: retry_after_of(response))
+            if response.status == 429 {
+                AcmeError.RateLimited(Problem(kind: ProblemKind.RateLimited, uri: "", detail: "", status: response.status, retry_after: bare.retry_after))
+            } else if response.status == 401 || response.status == 403 {
+                AcmeError.Unauthorized(Problem(kind: ProblemKind.Unauthorized, uri: "", detail: "", status: response.status, retry_after: bare.retry_after))
+            } else {
+                AcmeError.Malformed("an error status with no problem document")
+            }
+        }
+    }
+}
+
+fn status_in(response: http.Response, ok: List<Int>) -> Result<(), AcmeError> {
+    for status in ok {
+        if response.status == status {
+            return Ok(())
+        }
+    }
+    Err(error_from_response(response))
+}
+
+fn from_http(error: http.HttpError) -> AcmeError {
+    match error {
+        http.HttpError.TooLarge => AcmeError.TooLarge
+        http.HttpError.Malformed(why) => AcmeError.Malformed(why)
+        http.HttpError.InvalidRequest(why) => {
+            if why == FOREIGN {
+                AcmeError.ForeignHost
+            } else {
+                AcmeError.Transport(why)
+            }
+        }
+        other => AcmeError.Transport(other.to_string())
+    }
+}
+
+// ---- Directory ---------------------------------------------------------------------
+
+// The directory of a CA (RFC 8555 section 7.1.1): where each request goes.
+pub struct Directory {
+    pub new_nonce: Url,
+    pub new_account: Url,
+    pub new_order: Url,
+    pub revoke_cert: Option<Url>,
+    // The ARI endpoint (RFC 9773), when the CA has one.
+    pub renewal_info: Option<Url>,
+    // The terms of service URL, for a person to read. Untrusted.
+    pub terms_of_service: Option<Untrusted<String>>,
+    // Whether `meta.externalAccountRequired` is true.
+    pub external_account_required: Bool,
+}
+
+// The directory in `response` (status 200). `new_nonce`, `new_account` and
+// `new_order` are required; each URL is checked by `parse_url` with
+// `allow_loopback`.
+pub fn parse_directory(response: http.Response, allow_loopback: Bool) -> Result<Directory, AcmeError> {
+    status_in(response, [200])?
+    let object = body_object(response)?
+    var tos: Option<Untrusted<String>> = None
+    var external = false
+    match object.object("meta") {
+        Some(meta) => {
+            tos = meta.text("termsOfService")
+            external = meta.bool("externalAccountRequired").unwrap_or(false)
+        }
+        None => {}
+    }
+    Ok(Directory(
+        new_nonce: required_url(object, "newNonce", allow_loopback)?,
+        new_account: required_url(object, "newAccount", allow_loopback)?,
+        new_order: required_url(object, "newOrder", allow_loopback)?,
+        revoke_cert: optional_url(object, "revokeCert", allow_loopback)?,
+        renewal_info: optional_url(object, "renewalInfo", allow_loopback)?,
+        terms_of_service: tos,
+        external_account_required: external
+    ))
+}
+
+// ---- Account -----------------------------------------------------------------------
+
+// An account the CA made or found: its URL, which is the `kid` of every
+// later request.
+pub struct Account {
+    pub url: Url,
+}
+
+// The JSON body of a `newAccount` request: `contact` (each a URL such as
+// `mailto:admin@example.com`, printable ASCII with no quote or backslash),
+// whether the caller agrees to the terms of service, and
+// `only_return_existing` to look an account up without making one.
+pub fn new_account_body(contact: List<String>, terms_agreed: Bool, only_return_existing: Bool) -> Result<Bytes, AcmeError> {
+    var members: List<json.Member> = []
+    if only_return_existing {
+        members.push(json.Member(key: "onlyReturnExisting", value: json.Value.Bool(true)))
+    } else {
+        if contact.len() > 0 {
+            var items: List<json.Value> = []
+            for c in contact {
+                if !printable(c, 255) {
+                    return Err(AcmeError.InvalidInput("a contact is empty, too long or has a character that is not allowed"))
+                }
+                items.push(json.Value.Text(c))
+            }
+            members.push(json.Member(key: "contact", value: json.Value.List(items)))
+        }
+        if terms_agreed {
+            members.push(json.Member(key: "termsOfServiceAgreed", value: json.Value.Bool(true)))
+        }
+    }
+    Ok(vouch_bytes(json.encode(json.Value.Object(members)).to_bytes()))
+}
+
+// The account in the response to `newAccount` (201 for a new one, 200 for
+// an existing one): its `Location` and a `valid` status.
+pub fn parse_account(response: http.Response, allow_loopback: Bool) -> Result<Account, AcmeError> {
+    status_in(response, [200, 201])?
+    let object = body_object(response)?
+    let status = required_text(object, "status")?
+    if !same(status, "valid") {
+        return Err(AcmeError.Failed)
+    }
+    match response.header("Location") {
+        Some(location) => {
+            let url = parse_url(location, allow_loopback)?
+            Ok(Account(url: url))
+        }
+        None => Err(AcmeError.Malformed("no Location header"))
+    }
+}
+
+// ---- Identifiers and orders ----------------------------------------------------------
+
+// What a certificate is for: a DNS name (`dns`, RFC 8555) or an IP address
+// (`ip`, RFC 8738).
+pub struct Identifier {
+    pub kind: String,
+    pub value: String,
+}
+
+impl Identifier {
+    // A DNS name, such as `example.com` or `*.example.com`.
+    pub fn dns(name: String) -> Identifier {
+        Identifier(kind: "dns", value: name)
+    }
+
+    // An IP address literal.
+    pub fn ip(address: String) -> Identifier {
+        Identifier(kind: "ip", value: address)
+    }
+}
+
+// The status of an order (RFC 8555 section 7.1.3).
+pub enum OrderStatus {
+    Pending,
+    Ready,
+    Processing,
+    Valid,
+    Invalid,
+}
+
+// An order: where it is, its state, what it is for, which authorizations
+// it needs, and where to finalize it.
+pub struct Order {
+    pub url: Url,
+    pub status: OrderStatus,
+    pub identifiers: List<Identifier>,
+    pub authorizations: List<Url>,
+    pub finalize: Url,
+    // Where the certificate is, once the order is `valid`.
+    pub certificate: Option<Url>,
+}
+
+// The JSON body of a `newOrder` request for `identifiers`: 1 to
+// `MAX_ITEMS` of them, each `dns` or `ip` with a printable value.
+pub fn new_order_body(identifiers: List<Identifier>) -> Result<Bytes, AcmeError> {
+    if identifiers.len() == 0 || identifiers.len() > MAX_ITEMS {
+        return Err(AcmeError.InvalidInput("an order needs 1 to 100 identifiers"))
+    }
+    var items: List<json.Value> = []
+    for id in identifiers {
+        if (id.kind != "dns" && id.kind != "ip") || !printable(id.value, MAX_IDENTIFIER) {
+            return Err(AcmeError.InvalidInput("an identifier is not a dns name or an ip address"))
+        }
+        items.push(json.Value.Object([json.Member(key: "type", value: json.Value.Text(id.kind)), json.Member(key: "value", value: json.Value.Text(id.value))]))
+    }
+    Ok(vouch_bytes(json.encode(json.Value.Object([json.Member(key: "identifiers", value: json.Value.List(items))])).to_bytes()))
+}
+
+fn order_status(text: Untrusted<String>) -> Result<OrderStatus, AcmeError> {
+    if same(text, "pending") {
+        Ok(OrderStatus.Pending)
+    } else if same(text, "ready") {
+        Ok(OrderStatus.Ready)
+    } else if same(text, "processing") {
+        Ok(OrderStatus.Processing)
+    } else if same(text, "valid") {
+        Ok(OrderStatus.Valid)
+    } else if same(text, "invalid") {
+        Ok(OrderStatus.Invalid)
+    } else {
+        Err(AcmeError.Malformed("an unknown order status"))
+    }
+}
+
+fn read_identifier(object: json.Value) -> Result<Identifier, AcmeError> {
+    let kind = required_text(object, "type")?
+    let value = required_text(object, "value")?
+    if !printable(value, MAX_IDENTIFIER) {
+        return Err(AcmeError.Malformed("an identifier value is not acceptable"))
+    }
+    if same(kind, "dns") {
+        Ok(Identifier.dns(vouch(value)))
+    } else if same(kind, "ip") {
+        Ok(Identifier.ip(vouch(value)))
+    } else {
+        Err(AcmeError.Malformed("an unknown identifier type"))
+    }
+}
+
+// The order in `response` (status 200 or 201). Its URL is the `Location`
+// header, or `known` (the URL the caller fetched) when there is none.
+pub fn parse_order(response: http.Response, known: Option<Url>, allow_loopback: Bool) -> Result<Order, AcmeError> {
+    status_in(response, [200, 201])?
+    let object = body_object(response)?
+    let status = order_status(required_text(object, "status")?)?
+    var url = known
+    match response.header("Location") {
+        Some(location) => {
+            let located = parse_url(location, allow_loopback)?
+            url = Some(located)
+        }
+        None => {}
+    }
+    let order_url = match url {
+        Some(u) => u
+        None => { return Err(AcmeError.Malformed("no Location header")) }
+    }
+    var identifiers: List<Identifier> = []
+    match object.list("identifiers") {
+        Some(items) => {
+            if items.len() > MAX_ITEMS {
+                return Err(AcmeError.Malformed("too many identifiers"))
+            }
+            for item in items {
+                identifiers.push(read_identifier(item)?)
+            }
+        }
+        None => { return Err(AcmeError.Malformed("an order with no identifiers")) }
+    }
+    var authorizations: List<Url> = []
+    match object.list("authorizations") {
+        Some(items) => {
+            if items.len() > MAX_ITEMS {
+                return Err(AcmeError.Malformed("too many authorizations"))
+            }
+            for item in items {
+                match item.as_text() {
+                    Some(text) => authorizations.push(parse_url(text, allow_loopback)?)
+                    None => { return Err(AcmeError.Malformed("an authorization is not a URL")) }
+                }
+            }
+        }
+        None => { return Err(AcmeError.Malformed("an order with no authorizations")) }
+    }
+    Ok(Order(
+        url: order_url,
+        status: status,
+        identifiers: identifiers,
+        authorizations: authorizations,
+        finalize: required_url(object, "finalize", allow_loopback)?,
+        certificate: optional_url(object, "certificate", allow_loopback)?
+    ))
+}
+
+// ---- Authorizations ------------------------------------------------------------------
+
+// The status of an authorization (RFC 8555 section 7.1.4).
+pub enum AuthzStatus {
+    Pending,
+    Valid,
+    Invalid,
+    Deactivated,
+    Expired,
+    Revoked,
+}
+
+// The kind of a challenge. `Other` is a type this client does not know.
+pub enum ChallengeKind {
+    Http01,
+    Dns01,
+    TlsAlpn01,
+    Other,
+}
+
+// One way to prove control of an identifier: its kind, where to say it is
+// ready, and its token.
+pub struct Challenge {
+    pub kind: ChallengeKind,
+    pub url: Url,
+    // The token: base64url text, safe to use in a path.
+    pub token: String,
+    // Whether the CA has validated this challenge (`valid`).
+    pub valid: Bool,
+}
+
+// An authorization: whose control it proves, its state and its challenges.
+pub struct Authorization {
+    pub status: AuthzStatus,
+    pub identifier: Identifier,
+    pub wildcard: Bool,
+    pub challenges: List<Challenge>,
+}
+
+fn authz_status(text: Untrusted<String>) -> Result<AuthzStatus, AcmeError> {
+    if same(text, "pending") {
+        Ok(AuthzStatus.Pending)
+    } else if same(text, "valid") {
+        Ok(AuthzStatus.Valid)
+    } else if same(text, "invalid") {
+        Ok(AuthzStatus.Invalid)
+    } else if same(text, "deactivated") {
+        Ok(AuthzStatus.Deactivated)
+    } else if same(text, "expired") {
+        Ok(AuthzStatus.Expired)
+    } else if same(text, "revoked") {
+        Ok(AuthzStatus.Revoked)
+    } else {
+        Err(AcmeError.Malformed("an unknown authorization status"))
+    }
+}
+
+fn challenge_kind(text: Untrusted<String>) -> ChallengeKind {
+    if same(text, "http-01") {
+        ChallengeKind.Http01
+    } else if same(text, "dns-01") {
+        ChallengeKind.Dns01
+    } else if same(text, "tls-alpn-01") {
+        ChallengeKind.TlsAlpn01
+    } else {
+        ChallengeKind.Other
+    }
+}
+
+fn read_challenge(object: json.Value, allow_loopback: Bool) -> Result<Challenge, AcmeError> {
+    let kind = challenge_kind(required_text(object, "type")?)
+    let url = required_url(object, "url", allow_loopback)?
+    let token = required_text(object, "token")?
+    if !is_token(token) {
+        return Err(AcmeError.Malformed("a challenge token is not base64url"))
+    }
+    let status = required_text(object, "status")?
+    Ok(Challenge(kind: kind, url: url, token: vouch(token), valid: same(status, "valid")))
+}
+
+// The authorization in `response` (status 200).
+pub fn parse_authorization(response: http.Response, allow_loopback: Bool) -> Result<Authorization, AcmeError> {
+    status_in(response, [200])?
+    let object = body_object(response)?
+    let status = authz_status(required_text(object, "status")?)?
+    let identifier = match object.object("identifier") {
+        Some(i) => read_identifier(i)?
+        None => { return Err(AcmeError.Malformed("an authorization with no identifier")) }
+    }
+    var challenges: List<Challenge> = []
+    match object.list("challenges") {
+        Some(items) => {
+            if items.len() > MAX_ITEMS {
+                return Err(AcmeError.Malformed("too many challenges"))
+            }
+            for item in items {
+                challenges.push(read_challenge(item, allow_loopback)?)
+            }
+        }
+        None => { return Err(AcmeError.Malformed("an authorization with no challenges")) }
+    }
+    Ok(Authorization(status: status, identifier: identifier, wildcard: object.bool("wildcard").unwrap_or(false), challenges: challenges))
+}
+
+// The challenge in `response` (status 200), as answered to the POST that
+// says it is ready.
+pub fn parse_challenge(response: http.Response, allow_loopback: Bool) -> Result<Challenge, AcmeError> {
+    status_in(response, [200])?
+    read_challenge(body_object(response)?, allow_loopback)
+}
+
+// The key authorization of a challenge (RFC 8555 section 8.1): the token,
+// a dot and the account key's thumbprint. The caller serves it for
+// HTTP-01, at `/.well-known/acme-challenge/<token>`.
+pub fn key_authorization(token: String, thumbprint: String) -> String {
+    "{token}.{thumbprint}"
+}
+
+// The TXT record value of a DNS-01 challenge (RFC 8555 section 8.4): the
+// base64url SHA-256 of the key authorization.
+pub fn dns01_value(key_authorization: String) -> String {
+    base64url.encode(sha2.sha256(key_authorization.to_bytes()))
+}
+
+// ---- Polling -------------------------------------------------------------------------
+
+// What to do after a poll: it is done, or wait this many seconds and ask
+// again.
+pub enum Poll {
+    Done,
+    Wait(Int),
+}
+
+// The seconds to wait: the CA's `Retry-After` when it sent one, else 2,
+// held to 1 to 60.
+fn wait_seconds(retry_after: Option<Int>) -> Int {
+    let wanted = retry_after.unwrap_or(2)
+    if wanted < 1 {
+        1
+    } else if wanted > 60 {
+        60
+    } else {
+        wanted
+    }
+}
+
+// What an order's state asks of a caller that waits for it to be `ready`
+// (or `valid`): `Done` for those, `Failed` for `invalid`, and for
+// `pending` and `processing` a wait, or `PollLimit` once `polls_made`
+// reaches `max_polls`. `retry_after` is the response's `Retry-After`.
+pub fn poll_order(order: Order, retry_after: Option<Int>, polls_made: Int, max_polls: Int) -> Result<Poll, AcmeError> {
+    match order.status {
+        OrderStatus.Ready => Ok(Poll.Done)
+        OrderStatus.Valid => Ok(Poll.Done)
+        OrderStatus.Invalid => Err(AcmeError.Failed)
+        _ => {
+            if polls_made >= max_polls {
+                Err(AcmeError.PollLimit)
+            } else {
+                Ok(Poll.Wait(wait_seconds(retry_after)))
+            }
+        }
+    }
+}
+
+// As `poll_order`, for an authorization: `Done` when it is `valid`,
+// `Failed` for `invalid`, `deactivated`, `expired` and `revoked`.
+pub fn poll_authorization(authorization: Authorization, retry_after: Option<Int>, polls_made: Int, max_polls: Int) -> Result<Poll, AcmeError> {
+    match authorization.status {
+        AuthzStatus.Valid => Ok(Poll.Done)
+        AuthzStatus.Pending => {
+            if polls_made >= max_polls {
+                Err(AcmeError.PollLimit)
+            } else {
+                Ok(Poll.Wait(wait_seconds(retry_after)))
+            }
+        }
+        _ => Err(AcmeError.Failed)
+    }
+}
+
+// ---- Transport ------------------------------------------------------------------------
+
+// How a request reaches the CA and its response comes back. A
+// transport that talks to a real CA sends only to the host and port its
+// capability names (`ForeignHost` otherwise). A test's transport replays a
+// recorded transcript.
+pub trait Transport {
+    // GET `url` (the directory and the nonce).
+    fn get(self, url: Url) -> Result<http.Response, http.HttpError>
+
+    // POST `body`, a JWS, to `url` with `Content-Type: application/jose+json`.
+    fn post(self, url: Url, body: Bytes) -> Result<http.Response, http.HttpError>
+}
+
+// The transport over HTTPS (`std.http`), confined to the one host and port
+// of `host`, the capability for the CA. A response body is held to
+// `MAX_RESPONSE` bytes.
+pub cap struct HttpsTransport { host: HostConnect, tls_config: tls.TlsConfig, random: Random, clock: Clock }
+
+impl HttpsTransport {
+    // A transport that connects with `host` and checks the CA's
+    // certificate against `tls_config`'s roots at `clock`'s time.
+    pub fn new(host: HostConnect, tls_config: tls.TlsConfig, random: Random, clock: Clock) -> HttpsTransport {
+        HttpsTransport(host: host, tls_config: tls_config, random: random, clock: clock)
+    }
+
+    fn confined(self, url: Url) -> Bool {
+        url.secure && url.host == self.host.name().to_lowercase() && url.port == self.host.port()
+    }
+}
+
+impl Transport for HttpsTransport {
+    fn get(self, url: Url) -> Result<http.Response, http.HttpError> {
+        if !self.confined(url) {
+            return Err(http.HttpError.InvalidRequest(FOREIGN))
+        }
+        let request = http.Request.get(url.path).with_max_body(MAX_RESPONSE)
+        http.get(self.host, request, self.tls_config, self.random, self.clock)
+    }
+
+    fn post(self, url: Url, body: Bytes) -> Result<http.Response, http.HttpError> {
+        if !self.confined(url) {
+            return Err(http.HttpError.InvalidRequest(FOREIGN))
+        }
+        let request = http.Request.post(url.path, "application/jose+json", body).with_max_body(MAX_RESPONSE)
+        http.post(self.host, request, self.tls_config, self.random, self.clock)
+    }
+}
+
+// ---- The client -----------------------------------------------------------------------
+
+// The directory at `url` (checked by `parse_url` with `allow_loopback`),
+// fetched through `transport`.
+pub fn fetch_directory<T: Transport>(transport: T, url: String, allow_loopback: Bool) -> Result<Directory, AcmeError> {
+    let target = parse_url(url, allow_loopback)?
+    match transport.get(target) {
+        Ok(response) => parse_directory(response, allow_loopback)
+        Err(error) => Err(from_http(error))
+    }
+}
+
+// The nonce in the answer to a GET of `newNonce`. (Not generic over the
+// transport: a binding out of a generic call's `Result<String, _>` reads as
+// untrusted text.)
+fn nonce_from(answer: Result<http.Response, http.HttpError>) -> Result<String, AcmeError> {
+    match answer {
+        Ok(response) => {
+            status_in(response, [200, 204])?
+            match nonce_of(response) {
+                Some(n) => Ok(n)
+                None => Err(AcmeError.Malformed("no Replay-Nonce header"))
+            }
+        }
+        Err(error) => Err(from_http(error))
+    }
+}
+
+// An ACME client: a CA's directory, the account key, the account URL once
+// there is one, and the replay nonce to use next. It has no `Display`, and
+// the key is a `Secret`.
+pub struct Client {
+    directory: Directory,
+    key: Secret<Bytes>,
+    account: Option<Url>,
+    nonce: Option<String>,
+    loopback: Bool,
+}
+
+impl Client {
+    // A client for `directory` that signs with `key`, a P-256 private key
+    // (32 bytes, 1 to n - 1; ES256, ADR 0036). `allow_loopback` is what
+    // `parse_url` takes for every URL the CA sends. A key that is not valid
+    // is `Key`.
+    pub fn new(directory: Directory, key: Secret<Bytes>, allow_loopback: Bool) -> Result<Client, AcmeError> {
+        match jws.public_key(key) {
+            Ok(_) => Ok(Client(directory: directory, key: key, account: None, nonce: None, loopback: allow_loopback))
+            Err(_) => Err(AcmeError.Key)
+        }
+    }
+
+    // The same client, told which account it has (an account URL kept from
+    // an earlier run).
+    pub fn with_account(self, account: Url) -> Client {
+        Client(directory: self.directory, key: self.key, account: Some(account), nonce: self.nonce, loopback: self.loopback)
+    }
+
+    // The account URL, once `new_account` or `with_account` set it.
+    pub fn account_url(self) -> Option<Url> {
+        self.account
+    }
+
+    // The RFC 7638 thumbprint of the account key, for a key
+    // authorization.
+    pub fn thumbprint(self) -> Result<String, AcmeError> {
+        match jws.public_key(self.key) {
+            Ok(public) => match jws.thumbprint(public) {
+                Ok(t) => Ok(t)
+                Err(_) => Err(AcmeError.Key)
+            }
+            Err(_) => Err(AcmeError.Key)
+        }
+    }
+
+    // Send `payload` to `url` signed under the account (`kid`), or under
+    // the key itself (`jwk`) when there is no account yet or `by_jwk`. The
+    // nonce is the one kept, or a fresh one; the response's `Replay-Nonce`
+    // is kept for the next request, whether it succeeded or not. A
+    // `badNonce` is retried once with the nonce of that response (or a
+    // fresh one); a second is `BadNonce`. A status not in `ok` is the typed
+    // error of `error_from_response`.
+    fn signed_post<T: Transport>(var self, transport: T, url: Url, payload: Bytes, ok: List<Int>, by_jwk: Bool) -> Result<http.Response, AcmeError> {
+        var tries = 0
+        while tries < 2 {
+            tries = tries + 1
+            var nonce = ""
+            match self.nonce {
+                Some(n) => { nonce = n }
+                None => {
+                    match nonce_from(transport.get(self.directory.new_nonce)) {
+                        Ok(fresh) => { nonce = fresh }
+                        Err(error) => { return Err(error) }
+                    }
+                }
+            }
+            self.nonce = None
+            let by_kid = match self.account {
+                Some(account) => if by_jwk { None } else { Some(account) }
+                None => None
+            }
+            let signed = match by_kid {
+                Some(account) => jws.sign_kid(self.key, account.text, nonce, url.text, payload)
+                None => jws.sign_jwk(self.key, nonce, url.text, payload)
+            }
+            let body = match signed {
+                Ok(text) => text
+                Err(_) => { return Err(AcmeError.Key) }
+            }
+            let response = match transport.post(url, body.to_bytes()) {
+                Ok(r) => r
+                Err(error) => { return Err(from_http(error)) }
+            }
+            self.nonce = nonce_of(response)
+            match status_in(response, ok) {
+                Ok(_) => { return Ok(response) }
+                Err(AcmeError.BadNonce(problem)) => {
+                    if tries >= 2 {
+                        return Err(AcmeError.BadNonce(problem))
+                    }
+                }
+                Err(error) => { return Err(error) }
+            }
+        }
+        Err(AcmeError.Malformed("unreachable"))
+    }
+
+    // Make an account (RFC 8555 section 7.3), or find the one this key
+    // already has when `only_return_existing`. The request is signed with
+    // the key itself (`jwk`). The client then holds the account URL.
+    pub fn new_account<T: Transport>(var self, transport: T, contact: List<String>, terms_agreed: Bool, only_return_existing: Bool) -> Result<Account, AcmeError> {
+        let body = new_account_body(contact, terms_agreed, only_return_existing)?
+        let response = self.signed_post(transport, self.directory.new_account, body, [200, 201], true)?
+        let account = parse_account(response, self.loopback)?
+        self.account = Some(account.url)
+        Ok(account)
+    }
+
+    // Place an order for `identifiers` (RFC 8555 section 7.4).
+    pub fn new_order<T: Transport>(var self, transport: T, identifiers: List<Identifier>) -> Result<Order, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        let body = new_order_body(identifiers)?
+        let response = self.signed_post(transport, self.directory.new_order, body, [201], false)?
+        parse_order(response, None, self.loopback)
+    }
+
+    // Fetch the order at `url` (POST-as-GET, RFC 8555 section 6.3), with
+    // the response's `Retry-After` in seconds, for `poll_order`.
+    pub fn fetch_order<T: Transport>(var self, transport: T, url: Url) -> Result<Polled<Order>, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        let response = self.signed_post(transport, url, Bytes.new(), [200], false)?
+        let order = parse_order(response, Some(url), self.loopback)?
+        Ok(Polled(value: order, retry_after: retry_after_of(response)))
+    }
+
+    // Fetch the authorization at `url` (POST-as-GET), with `Retry-After`,
+    // for `poll_authorization`.
+    pub fn fetch_authorization<T: Transport>(var self, transport: T, url: Url) -> Result<Polled<Authorization>, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        let response = self.signed_post(transport, url, Bytes.new(), [200], false)?
+        let authorization = parse_authorization(response, self.loopback)?
+        Ok(Polled(value: authorization, retry_after: retry_after_of(response)))
+    }
+
+    // Tell the CA the challenge at `url` is ready to be checked (RFC 8555
+    // section 7.5.1): the caller serves the proof first.
+    pub fn respond_to_challenge<T: Transport>(var self, transport: T, url: Url) -> Result<Challenge, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        let response = self.signed_post(transport, url, "\{\}".to_bytes(), [200], false)?
+        parse_challenge(response, self.loopback)
+    }
+}
+
+// A fetched value with the `Retry-After` of its response.
+pub struct Polled<T> {
+    pub value: T,
+    pub retry_after: Option<Int>,
+}
