@@ -533,13 +533,9 @@ fi
 if step "test-site feature kept out of releases" --no-slot --fast-when 'crates/oskac/Cargo.toml' --fast-when 'scripts/test-site-guard/*' --fast-when '.github/*'; then
   # `oskac`'s test-only `test-site` feature (spec #230) points the update
   # checker at a loopback server and a test key. It must never be a default
-  # feature, be turned on by another, or reach a build that ships; a release
-  # binary already built here must not hold its marker.
-  binaries=()
-  for built in target/dist/oskac target/release/oskac; do
-    [ -f "$built" ] && binaries+=("$built")
-  done
-  scripts/test-site-guard/guard.sh . ${binaries[@]+"${binaries[@]}"}
+  # feature, be turned on by another, or reach a build that ships. The
+  # binaries are inspected after the build, by the step below.
+  scripts/test-site-guard/guard.sh
 fi
 
 if step "every workflow job has a timeout" --no-slot; then
@@ -594,6 +590,21 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests -
     scripts/temp-leak/run.sh scripts/test-shard.sh "${OSKA_TEST_SET:?OSKA_TEST_SHARD needs OSKA_TEST_SET}" "$OSKA_TEST_SHARD"
   else
     scripts/temp-leak/run.sh cargo test --all --no-fail-fast
+  fi
+fi
+
+if step "no test-site feature in built oskac" --no-slot; then
+  # The binaries cargo built by now (and a release or dist one, if any) must
+  # not hold the `test-site` feature's marker. In CI a run with no binary to
+  # inspect fails, so the check cannot pass by looking at nothing.
+  binaries=()
+  for built in target/debug/oskac target/dist/oskac target/release/oskac; do
+    [ -f "$built" ] && binaries+=("$built")
+  done
+  if [ -n "${CI:-}" ]; then
+    scripts/test-site-guard/guard.sh --require-binary . ${binaries[@]+"${binaries[@]}"}
+  else
+    scripts/test-site-guard/guard.sh . ${binaries[@]+"${binaries[@]}"}
   fi
 fi
 

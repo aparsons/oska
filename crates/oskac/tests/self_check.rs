@@ -571,4 +571,21 @@ fn an_unknown_flag_is_a_usage_error_in_json_and_the_flag_belongs_to_self_check_a
     let (code, _, err) = run.oskac(&["info", "--no-identify"]);
     assert_eq!(code, 2);
     assert!(err.contains("oskac self check"), "{err}");
+    // The same misuse under --format=json is a JSON error, on any command.
+    let (code, out, _) = run.oskac(&["info", "--no-identify", "--format=json"]);
+    assert_eq!(code, 2, "{out}");
+    assert_eq!(str_of(&json(&out), "error"), "usage");
+    let mut command = Command::new(test_oskac());
+    command.args(["check", "--no-identify", "--format=json"]);
+    let out = output_of(&mut command);
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(str_of(&json(&text), "error"), "usage", "{text}");
+    // An unknown flag to `self check`, and a second subcommand, likewise.
+    let (code, out, _) = run.oskac(&["check", "--no-identify", "--bogus=1", "--format=json"]);
+    assert_eq!(code, 2, "{out}");
+    assert_eq!(str_of(&json(&out), "error"), "usage");
+    let (code, out, _) = run.oskac(&["check", "extra", "--format=json"]);
+    assert_eq!(code, 2, "{out}");
+    assert_eq!(str_of(&json(&out), "error"), "usage");
 }

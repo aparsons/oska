@@ -161,23 +161,53 @@ pub fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// Write the executable where it can run: the temporary directory, else
-/// the user's cache.
-fn write_executable() -> Result<Executable, Failure> {
-    let first = Executable::create(EXECUTABLE);
-    let err = match first {
-        Ok(exe) => return Ok(exe),
-        Err(err) => err,
-    };
+/// Where the executable may be put, in order: the temporary directory,
+/// then the user's cache, which a `noexec` temporary directory does not
+/// reach.
+fn bases() -> Vec<std::path::PathBuf> {
+    let mut bases = vec![std::env::temp_dir()];
     if let Some(cache) = crate::cache::location() {
-        if std::fs::create_dir_all(&cache).is_ok() {
-            if let Ok(exe) = Executable::create_in(&cache, EXECUTABLE) {
-                return Ok(exe);
+        bases.push(cache);
+    }
+    bases
+}
+
+/// Write the executable to a private directory (mode 0700) under the first
+/// of `bases` where it can be written and started, and start it. A base
+/// that cannot be written to, or that forbids running programs (a spawn
+/// refused with a permission error), is passed over for the next.
+fn launch(
+    bases: &[std::path::PathBuf],
+    args: &[String],
+    dir: &Path,
+) -> Result<(Executable, std::process::Child), Failure> {
+    let mut last = String::from("there is no directory to put it in");
+    for base in bases {
+        if base != &std::env::temp_dir() {
+            let _ = std::fs::create_dir_all(base);
+        }
+        let exe = match Executable::create_in(base, EXECUTABLE) {
+            Ok(exe) => exe,
+            Err(e) => {
+                last = format!("{}: {e}", base.display());
+                continue;
             }
+        };
+        match Command::new(exe.path())
+            .args(args)
+            .env_clear()
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => return Ok((exe, child)),
+            Err(e) => last = format!("{}: {e}", base.display()),
         }
     }
     Err(failure(format!(
-        "cannot write the update checker to a private directory ({err}); set `{}` to a directory you can run programs from",
+        "cannot write and start the update checker in a private directory ({last}); set `{}` to a directory you can run programs from",
         if cfg!(windows) { "TMP" } else { "TMPDIR" }
     )))
 }
@@ -203,21 +233,7 @@ pub fn check(ask: &Ask) -> Result<Verdict, Failure> {
         .and_then(|n| n.to_str())
         .ok_or_else(|| failure("the running executable's name is not text"))?;
     let args = arguments(ask, file)?;
-    let exe = write_executable()?;
-    let mut child = Command::new(exe.path())
-        .args(&args)
-        .env_clear()
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            failure(format!(
-                "cannot start the update checker: {e}; if the temporary directory forbids running programs, set `{}` to one that allows it",
-                if cfg!(windows) { "TMP" } else { "TMPDIR" }
-            ))
-        })?;
+    let (exe, mut child) = launch(&bases(), &args, dir)?;
     // It runs from its file now; on Unix the file can go at once, so that
     // an interrupt leaves nothing behind (Windows removes it on drop).
     #[cfg(unix)]
@@ -477,5 +493,43 @@ mod tests {
         for text in bad {
             assert!(parse(text.as_bytes()).is_err(), "accepted {text:?}");
         }
+    }
+
+    /// The checker runs from a private directory (mode 0700, file 0700),
+    /// and a base that cannot hold it, as a temporary directory that is
+    /// missing or forbids running programs cannot, is passed over for the
+    /// next. (A `noexec` mount cannot be made without privilege, so the
+    /// pass-over is exercised with a base that cannot be written.)
+    #[cfg(unix)]
+    #[test]
+    fn it_runs_from_a_private_0700_directory_and_falls_back_to_the_next_base() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| {
+            std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777
+        };
+        let root = std::env::temp_dir().join(format!("oskac-launch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a root");
+        // A file where the first base's directory should be: it cannot be made.
+        let blocked = root.join("blocked");
+        std::fs::write(&blocked, b"x").expect("a file");
+        let first = blocked.join("under");
+        let second = root.join("cache");
+        let args = vec!["nothing".to_string()];
+        let (exe, mut child) =
+            super::launch(&[first, second.clone()], &args, &root).expect("it falls back");
+        let dir = exe.path().parent().expect("a directory").to_path_buf();
+        assert_eq!(
+            dir.parent(),
+            Some(second.as_path()),
+            "the second base was used"
+        );
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(exe.path()), 0o700);
+        let _ = child.wait();
+        drop(exe);
+        assert!(!dir.exists(), "the directory is removed");
+        assert!(super::launch(&[blocked.join("a")], &args, &root).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

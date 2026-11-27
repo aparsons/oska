@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Keeps the `test-site` feature of `oskac` out of releases (spec #230).
 #
-#   scripts/test-site-guard/guard.sh [ROOT] [BINARY...]
+#   scripts/test-site-guard/guard.sh [--require-binary] [ROOT] [BINARY...]
 #
 # `test-site` points the update checker at a loopback TLS test server and a
 # test key, and reads the site, the root and the key from the environment
@@ -17,10 +17,17 @@
 #   - a BINARY given on the command line holds the feature's marker
 #     (`OSKAC_TEST_SITE_`), which only a test build's code mentions.
 #
-# ROOT is a git work tree (default: the repository this script is in).
+# ROOT is a git work tree (default: the repository this script is in). With
+# --require-binary (CI and release runs), having no BINARY to inspect is a
+# failure; without it, the guard says plainly that it inspected none.
 
 set -euo pipefail
 
+require=0
+if [ "${1:-}" = --require-binary ]; then
+  require=1
+  shift
+fi
 root=${1:-$(cd "$(dirname "$0")/../.." && pwd)}
 [ $# -gt 0 ] && shift
 bad=0
@@ -55,8 +62,16 @@ while IFS= read -r line; do
     printf 'test-site-guard: %s builds with all features or `test-site`: %s\n' "$file" "$text" >&2
     bad=1
   fi
-done < <(git -C "$root" grep -n -I -E -- '--all-features|test-site|oskac/test' -- . ':!crates' ':!docs/research' || true)
+done < <(git -C "$root" grep -n -I -E -- '--all-features|test-site|oskac/test' -- . || true)
 
+if [ $# -eq 0 ]; then
+  if [ "$require" -eq 1 ]; then
+    printf 'test-site-guard: no oskac binary to inspect, and this run requires one\n' >&2
+    bad=1
+  else
+    printf 'test-site-guard: NOTE: no oskac binary was inspected (only the sources and build commands)\n' >&2
+  fi
+fi
 for binary in "$@"; do
   if grep -aq 'OSKAC_TEST_SITE_' "$binary"; then
     printf 'test-site-guard: %s was built with the `test-site` feature\n' "$binary" >&2

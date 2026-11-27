@@ -89,5 +89,28 @@ else
   failures=$((failures + 1))
 fi
 
+dir=$(tree)
+git -C "$dir" add -A
+if out=$("$guard" --require-binary "$dir" 2>&1); then
+  printf 'FAIL no binary where one is required: the guard passed\n' >&2
+  failures=$((failures + 1))
+elif [[ $out == *"requires one"* ]]; then
+  passed=$((passed + 1))
+else
+  printf 'FAIL no binary where one is required: wrong refusal:\n%s\n' "$out" >&2
+  failures=$((failures + 1))
+fi
+if "$guard" --require-binary "$dir" "$work/release-build" >/dev/null 2>&1; then
+  passed=$((passed + 1))
+else
+  printf 'FAIL a required binary that is clean: the guard refused it\n' >&2
+  failures=$((failures + 1))
+fi
+# A build command in a crate's own directory is checked too.
+dir=$(tree)
+mkdir -p "$dir/crates/oskac/ci"
+printf 'cargo build --release --all-features\n' >"$dir/crates/oskac/ci/build.sh"
+expect_refused "a build under crates" "$dir" "all features"
+
 printf 'test-site-guard tests: %s passed, %s failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]

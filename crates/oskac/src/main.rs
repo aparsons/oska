@@ -433,7 +433,13 @@ fn main() -> ExitCode {
     }
     // Only `self check` skips the identity check.
     if flags.no_identify && positional.as_slice() != ["self", "check"] {
-        eprint!("{USAGE}");
+        if flags.json {
+            outln!(
+                "{{\"ok\":false,\"error\":\"usage\",\"message\":\"--no-identify belongs to `oskac self check` alone\"}}"
+            );
+        } else {
+            eprint!("{USAGE}");
+        }
         return ExitCode::from(2);
     }
     // Only `test` takes a filter or writes snapshots.
