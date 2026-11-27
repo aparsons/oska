@@ -749,6 +749,29 @@ The total is 9% above section 11 (7,494,215) because the site it builds has grow
 - **What to measure next on the site build:** the user CPU gap (0.16 s of 2.70 s against 2.54 s) is now larger than the system CPU gap (0.05 s). The two places to look are the 5.7 million one-byte `memcpy` calls and the 47 million `memcmp` calls of section 11, and the extra minor faults (38,483 against 9,045), which the held-block cap of 8 MiB and the 16-block limit per bucket may still leave on the table.
 - **#521's threshold** is not met: the site build is 1.12x. The decision to keep both builds (ADR 0022) does not depend on it.
 
+## 17. `memcpy` and `memmove` in `oska-sys` (2026-11-27, spec #577, ticket #581)
+
+Section 16 left the gate of ticket #581 open: after the allocator (spec #612), `text` was 1.85x and the site build 1.12x, and `memcpy` explained most of both. Adam ran `/implement-spec 581`, so the ticket was built. `crates/oska-sys/src/mem.rs` now defines `memcpy` and `memmove` for the x86_64 musl build only (ADR 0009, last amendment): overlapping loads and stores to 64 bytes, SSE2 above, `rep movsb` from 2 KiB on a CPU with ERMS.
+
+- **Tree and machine:** main at `63c8432` plus the ticket, Rust 1.100.0, the `release` profile (fat LTO, one codegen unit) through `scripts/bench-native.sh 5` (best CPU time of 5 runs). The same x86_64 KVM container as section 13 (Intel Xeon @ 2.10GHz, 4 CPUs), noise about ±10%. The musl builds before and after ran back to back, with the glibc build before and after them; the two glibc runs differ by up to 0.5%.
+- **Not in this table:** aarch64 (ticket #582), a CPU without ERMS. On the fallback path the code is the same SSE2 loop that the tests also run.
+
+Interpreter (`oskac run --interpret`), CPU time:
+
+| Workload | glibc (first / second run) | musl before | musl after | after / glibc (mean of the two runs) |
+| --- | ---: | ---: | ---: | ---: |
+| loop | 450 / 450 ms | 457 ms | 451 ms | 1.00x |
+| text | 33 / 32 ms | 61 ms | 31 ms | 0.95x |
+| bulk-text | 12 / 12 ms | 11 ms | 10 ms | 0.83x |
+| lists | 266 / 265 ms | 273 ms | 281 ms | 1.06x |
+| recursion | 349 / 347 ms | 352 ms | 342 ms | 0.98x |
+| site | 3115 / 3129 ms | 3354 ms | 3281 ms | 1.05x |
+
+- **Every row is at or under 1.10x.** `text` went from 1.88x to 0.95x, the same as the scratch override of section 11 (1.92x to 1.08x). The site build went from 1.08x to 1.05x in this run (it was 1.12x in section 16, whose runs were noisier); the gain is 2%, below the noise, as section 11 predicted (5%). `lists` moved from 1.03x to 1.06x, which is inside the ±10% noise.
+- **Native executables** are the same on both builds, as before (`site` native 320 ms after, 329 ms before, 304 to 320 ms on glibc).
+- **The executable has our symbols.** `crates/oska-sys/tests/mem_symbols.rs` finds `memcpy` and `memmove` defined once and no `__memcpy_fwd`, the label of musl's object, in the test executable's symbol table. The shipped binary is stripped, so the test is the check; `text` halving is the same evidence at the program level.
+- **The gate of #581 is met** (above 1.10x with `memcpy` explaining it, in section 16), the ticket's tests are in, and spec #521's threshold now holds on every row on x86_64 in this run. It was not re-run on aarch64 (it was at the threshold in section 5).
+
 ## Open questions
 
 - ~~The aarch64 profiles (section 5).~~ Measured on 2026-11-21: section 5.
