@@ -102,11 +102,18 @@ fn plus_is_only_for_numbers() {
 fn comparisons_produce_bool() {
     assert_ok("fn f(a: Int, b: Int) -> Bool { a < b && a != b || !(a >= b) }");
     assert_ok("fn f(a: String, b: String) -> Bool { a == b }");
-    // `Bool` and `String` are `Ord` (ADR 0034); a list is not yet.
+    // `Bool`, `String`, and an `Option` or `List` of an `Ord` type are
+    // `Ord` (ADR 0034); a struct is not ordered by an operator yet.
     assert_ok("fn f(a: Bool, b: Bool) -> Bool { a < b }");
     assert_ok("fn f(a: String, b: String) -> Bool { a >= b }");
+    assert_ok("fn f(a: List<Int>, b: List<Int>) -> Bool { a < b }");
+    assert_ok("fn f(a: Option<String>, b: Option<String>) -> Bool { a >= b }");
     assert_errors(
-        "fn f(a: List<Int>, b: List<Int>) -> Bool { a < b }",
+        "fn f(a: List<Float>, b: List<Float>) -> Bool { a < b }",
+        &[("E0265", "a < b")],
+    );
+    assert_errors(
+        "struct P { x: Int }\nfn f(a: P, b: P) -> Bool { a < b }",
         &[("E0223", "a < b")],
     );
     assert_errors(
