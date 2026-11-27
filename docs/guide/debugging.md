@@ -90,6 +90,7 @@ Under the panic's line come its **frames**, the call stack that led to it, inner
 | `P0046` | `Float.to_int()` of a NaN, an infinity or a value `Int` cannot hold. Check the value first. |
 | `P0049` | `Int.to_float()` of a value beyond 2^53 or below -2^53, which a `Float` could not hold exactly. Call `to_float_rounded()` where rounding is meant. |
 | `P0050` | `Float.fmt(digits)` with `digits` below 0 or above 340. |
+| `P0051` | A `std.deque` deque given an item past its item limit (4,194,304, or the lower `Deque.with_max_entries(n)`). |
 
 The full table is in the [runtime notes](../runtime.md#panics).
 

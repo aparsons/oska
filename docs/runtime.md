@@ -161,6 +161,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0048` | A statistic of no input: a mean, a minimum or a maximum of an empty list, which has no value. The message names the function. Spans the call. No function raises it yet, so it has no example. |
 | `P0049` | `Int.to_float()` of a value above 2^53 or below -2^53, which a `Float` could not hold exactly. The runtime refuses instead of rounding; `to_float_rounded()` names the rounding and converts any `Int`. The message names the value. Spans the call. |
 | `P0050` | `Float.fmt(digits)` with `digits` below 0 or above 340. The message names the count. Spans the call. |
+| `P0051` | A `std.deque` deque was given an item past its item limit: `push_back` or `push_front` when it already holds as many items as the limit allows (4,194,304, or the lower `Deque.with_max_entries(n)`). Spans the call. |
 
 ### Panic examples
 
@@ -688,6 +689,26 @@ fn main() {
 fn main() {
     let price = 2.5
     let text = price.fmt(2)
+}
+```
+
+#### `P0051`
+
+```oska error=P0051
+fn main() {
+    var d: Deque<Int> = Deque.with_max_entries(2)
+    d.push_back(1)
+    d.push_back(2)
+    d.push_front(3)
+}
+```
+
+```oska fixed=P0051
+fn main() {
+    var d: Deque<Int> = Deque.with_max_entries(3)
+    d.push_back(1)
+    d.push_back(2)
+    d.push_front(3)
 }
 ```
 

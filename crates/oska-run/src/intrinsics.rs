@@ -144,6 +144,7 @@ pub const INTRINSICS: Table = &[
     ("todo", Plain(todo)),
     ("map_entry_limit", Plain(map_entry_limit)),
     ("map_probe_limit", Plain(map_probe_limit)),
+    ("deque_item_limit", Plain(deque_item_limit)),
 ];
 
 /// The intrinsic named `name`, from every module's table.
@@ -972,6 +973,18 @@ fn map_probe_limit(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, 
         span,
     ))
 }
+
+/// `std.deque`'s `P0051`: an item past the deque's item limit.
+fn deque_item_limit(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
+    Err(Panic::new(
+        codes::DEQUE_ITEM_LIMIT,
+        DEQUE_ITEM_LIMIT_MESSAGE,
+        span,
+    ))
+}
+
+/// The message of `P0051`, the same in the native backend.
+pub const DEQUE_ITEM_LIMIT_MESSAGE: &str = "the deque holds as many items as its limit allows";
 
 /// The messages of `P0044` and `P0045`, the same in the native backend.
 pub const MAP_ENTRY_LIMIT_MESSAGE: &str = "the map holds as many entries as its limit allows";
