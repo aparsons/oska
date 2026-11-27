@@ -968,7 +968,7 @@ if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*' --concurrent --gro
   bash scripts/spdx-guard/test.sh
 fi
 
-if step "test-site guard tests" --fast-when 'scripts/test-site-guard/*' --group scripts; then
+if step "test-site guard tests" --fast-when 'scripts/test-site-guard/*' --concurrent --group scripts; then
   bash scripts/test-site-guard/test.sh
 fi
 
