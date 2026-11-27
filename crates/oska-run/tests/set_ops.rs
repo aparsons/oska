@@ -159,9 +159,10 @@ fn a_big_union_intersection_and_difference_agree_on_both_backends() {
     assert_runs(src, &[], "450 150 150 1 598\n");
 }
 
-#[test]
-fn colliding_items_in_a_union_stop_with_p0045() {
-    let src = r#"struct Key { n: Int }
+/// Items that collide under every hash. One set holds at most 64 of them
+/// (the probe limit of a `Map`), so an operand of 40 builds, and the
+/// operation is what goes past it.
+const KEY: &str = r#"struct Key { n: Int }
 
 impl Eq for Key {
     fn eq(self, other: Key) -> Bool {
@@ -175,63 +176,93 @@ impl Hash for Key {
     }
 }
 
-fn main(io: Stdout) -> Result<(), IoError> {
-    var a: Set<Key> = Set.new()
-    var b: Set<Key> = Set.new()
-    var i = 0
-    while i < 20 {
-        let _x = a.add(Key(n: i))
-        let _y = b.add(Key(n: i + 1000))
-        i = i + 1
-    }
-    var u = a
-    var round = 0
-    while round < 100 {
-        u = u.union(b)
-        let _z = b.add(Key(n: round + 5000))
-        round = round + 1
-    }
-    io.println("unreached")?
-    Ok(())
-}
 "#;
-    let outcome = run_on(FakeHost::new(), src, &[]);
-    let panic = outcome.panic.as_ref().expect("the flood panics");
-    assert_eq!(panic.code, "P0045", "{outcome:#?}");
+
+/// `build(a, b)` makes `a` of `Key(n: 0..na)` and `b` of
+/// `Key(n: 1000..1000+nb)`, prints `built`, then runs `op`.
+fn flood(na: i64, nb: i64, op: &str) -> String {
+    format!(
+        "{KEY}fn main(io: Stdout) -> Result<(), IoError> {{\n    \
+             var a: Set<Key> = Set.new()\n    \
+             var b: Set<Key> = Set.new()\n    \
+             var i = 0\n    \
+             while i < {na} {{\n        \
+                 let _x = a.add(Key(n: i))\n        \
+                 i = i + 1\n    \
+             }}\n    \
+             i = 0\n    \
+             while i < {nb} {{\n        \
+                 let _y = b.add(Key(n: i + 1000))\n        \
+                 i = i + 1\n    \
+             }}\n    \
+             io.println(\"built\")?\n{op}\n    Ok(())\n}}\n"
+    )
 }
 
 #[test]
-fn a_hash_flood_through_intersection_and_difference_stops_with_p0045() {
-    // The operands are small enough to build; the colliding items are what
-    // the operation re-adds.
-    let src = r#"struct Key { n: Int }
-
-impl Eq for Key {
-    fn eq(self, other: Key) -> Bool {
-        self.n == other.n
-    }
+fn a_union_of_colliding_items_stops_with_p0045_after_both_operands_build() {
+    // 40 + 40 colliding items: each operand builds, the union of 80 does not.
+    let src = flood(
+        40,
+        40,
+        "    let u = a.union(b)\n    let n = u.len()\n    io.println(\"unreached {n}\")?",
+    );
+    let outcome = run_on(FakeHost::new(), &src, &[]);
+    assert_eq!(outcome.stdout, "built\n", "{outcome:#?}");
+    let panic = outcome.panic.as_ref().expect("the union floods");
+    assert_eq!(panic.code, "P0045", "{outcome:#?}");
+    assert_eq!(outcome.exit_code, 101);
+    // 30 + 30 fit under the probe limit, so the same union succeeds.
+    let src = flood(
+        30,
+        30,
+        "    let u = a.union(b)\n    let n = u.len()\n    io.println(\"{n}\")?",
+    );
+    assert_runs(&src, &[], "built\n60\n");
 }
 
-impl Hash for Key {
-    fn hash(self) -> Int {
-        7
-    }
+// `intersection` and `difference` cannot flood: each result is a subset of
+// `self`, which already built. What they can do is finish, in `self`'s
+// order, over items that all collide.
+#[test]
+fn intersection_and_difference_of_colliding_items_finish() {
+    let src = flood(
+        40,
+        40,
+        "    let i = a.intersection(b)\n    let d = a.difference(b)\n    let e = b.difference(a)\n    \
+         let il = i.len()\n    let dl = d.len()\n    let el = e.len()\n    \
+         io.println(\"{il} {dl} {el}\")?",
+    );
+    assert_runs(&src, &[], "built\n0 40 40\n");
 }
 
-fn main(io: Stdout) -> Result<(), IoError> {
-    var a: Set<Key> = Set.new()
-    let b: Set<Key> = Set.new()
-    var i = 0
-    while i < 1000 {
-        let _x = a.add(Key(n: i))
-        i = i + 1
-    }
-    let d = a.difference(b)
-    io.println("unreached")?
+/// `a` holds 1, 2, 3 under a limit of 3; `b` holds 2, 3. The `op` result
+/// `r` takes `extra` more new items, and the program prints `ok` after.
+const LIMITED: &str = r#"fn main(io: Stdout) -> Result<(), IoError> {
+    var a: Set<Int> = Set.with_max_entries(3)
+    let _a1 = a.add(1)
+    let _a2 = a.add(2)
+    let _a3 = a.add(3)
+    var b: Set<Int> = Set.new()
+    let _b2 = b.add(2)
+    let _b3 = b.add(3)
+    var r = a.OP(b)
+    let _r1 = r.add(10)
+    let _r2 = r.add(11)
+    let _r3 = r.add(12)
+    io.println("ok")?
     Ok(())
 }
 "#;
-    let outcome = run_on(FakeHost::new(), src, &[]);
-    let panic = outcome.panic.as_ref().expect("the flood panics");
-    assert_eq!(panic.code, "P0045", "{outcome:#?}");
+
+#[test]
+fn intersection_and_difference_keep_the_entry_limit_of_the_left_set() {
+    // The intersection has 2 items and the difference 1, so room for 1 and
+    // 2 more under the limit of 3: a third new item is past it.
+    for op in ["intersection", "difference"] {
+        let outcome = run_on(FakeHost::new(), &LIMITED.replace("OP", op), &[]);
+        assert_eq!(outcome.stdout, "", "{op}: {outcome:#?}");
+        let panic = outcome.panic.as_ref().expect("the result is at its limit");
+        assert_eq!(panic.code, "P0044", "{op}: {outcome:#?}");
+    }
 }

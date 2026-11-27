@@ -24,8 +24,8 @@
 // keep `a`'s order).
 //
 // A `Secret` item is refused by the checker (`E0351`, `E0354`), and a type
-// that is not `Eq` and `Hash` is `E0266`; a `Float` item will be refused
-// once `Float` exists.
+// that is not `Eq` and `Hash` is `E0266`, `Float` included (it has no
+// `Hash`).
 
 // For maintainers: a set is a struct over one `Map<T, Bool>`: the item is
 // the key and the value is always `true`. It has no table code of its
@@ -111,24 +111,26 @@ impl<T: Eq + Hash> Set<T> {
     }
 
     // The items of `self` that `other` also holds, in `self`'s order. A
-    // new set; neither operand changes.
+    // new set that keeps `self`'s entry limit; neither operand changes.
+    // It starts from a copy of `self` and takes out the others, so it
+    // cannot pass the limit.
     pub fn intersection(self, other: Set<T>) -> Set<T> {
-        var made: Set<T> = Set.new()
+        var made: Set<T> = self
         for item in self.to_list() {
-            if other.contains(item) {
-                made.add(item)
+            if !other.contains(item) {
+                made.remove(item)
             }
         }
         made
     }
 
     // The items of `self` that `other` does not hold, in `self`'s order.
-    // A new set; neither operand changes.
+    // A new set that keeps `self`'s entry limit; neither operand changes.
     pub fn difference(self, other: Set<T>) -> Set<T> {
-        var made: Set<T> = Set.new()
+        var made: Set<T> = self
         for item in self.to_list() {
-            if !other.contains(item) {
-                made.add(item)
+            if other.contains(item) {
+                made.remove(item)
             }
         }
         made

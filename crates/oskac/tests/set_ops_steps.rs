@@ -38,7 +38,7 @@ const SET_OPS: &str = r#"fn main(io: Stdout) {
 }
 "#;
 
-const FLOOD: &str = r#"struct Key { n: Int }
+const KEY: &str = r#"struct Key { n: Int }
 
 impl Eq for Key {
     fn eq(self, other: Key) -> Bool {
@@ -52,14 +52,41 @@ impl Hash for Key {
     }
 }
 
-fn main(io: Stdout) {
-    var a: Set<Key> = Set.new()
-    var i = 0
-    while i < 1000 {
-        let _x = a.add(Key(n: i))
-        i = i + 1
-    }
-    let d = a.difference(a)
+"#;
+
+/// Two operands of 40 colliding items each build (one set holds at most 64
+/// under a probe limit), then `OP` runs on them.
+fn flood(op: &str) -> String {
+    format!(
+        "{KEY}fn main(io: Stdout) {{\n    \
+             var a: Set<Key> = Set.new()\n    \
+             var b: Set<Key> = Set.new()\n    \
+             var i = 0\n    \
+             while i < 40 {{\n        \
+                 let _x = a.add(Key(n: i))\n        \
+                 let _y = b.add(Key(n: i + 1000))\n        \
+                 i = i + 1\n    \
+             }}\n    \
+             let _ = io.println(\"built\")\n    \
+             let r = a.{op}(b)\n    \
+             let n = r.len()\n    \
+             let _ = io.println(\"{{n}}\")\n}}\n"
+    )
+}
+
+/// `a` holds 1, 2, 3 under a limit of 3, and `a.OP(b)` is filled past it.
+const LIMITED: &str = r#"fn main(io: Stdout) {
+    var a: Set<Int> = Set.with_max_entries(3)
+    let _a1 = a.add(1)
+    let _a2 = a.add(2)
+    let _a3 = a.add(3)
+    var b: Set<Int> = Set.new()
+    let _b2 = b.add(2)
+    let _b3 = b.add(3)
+    var r = a.OP(b)
+    let _r1 = r.add(10)
+    let _r2 = r.add(11)
+    let _r3 = r.add(12)
     let _ = io.println("unreached")
 }
 "#;
@@ -81,8 +108,37 @@ fn the_operations_stop_at_the_same_step_on_both_backends() {
 }
 
 #[test]
-fn a_hash_flood_stops_with_p0045_on_both_backends() {
-    let outcome = assert_same(&Case::file("set_ops_flood", FLOOD));
+fn a_union_flood_stops_with_p0045_after_the_operands_build_on_both_backends() {
+    let outcome = assert_same(&Case::file("set_ops_flood_union", &flood("union")));
     assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
+    assert_eq!(outcome.stdout, "built\n", "{outcome:#?}");
     assert!(outcome.stderr.contains("error[P0045]"), "{outcome:#?}");
+}
+
+// An intersection and a difference are subsets of the left set, so they
+// cannot flood: they finish over items that all collide.
+#[test]
+fn colliding_intersection_and_difference_finish_on_both_backends() {
+    for (op, expected) in [("intersection", "0"), ("difference", "40")] {
+        let case = Case::file(&format!("set_ops_collide_{op}"), &flood(op));
+        let outcome = assert_same(&case);
+        assert_eq!(outcome.exit_code, Some(0), "{op}: {outcome:#?}");
+        assert_eq!(outcome.stdout, format!("built\n{expected}\n"), "{op}");
+    }
+}
+
+#[test]
+fn every_operation_keeps_the_left_entry_limit_on_both_backends() {
+    for op in ["union", "intersection", "difference"] {
+        let src = LIMITED.replace("OP", op);
+        let outcome = assert_same(&Case::file(&format!("set_ops_limit_{op}"), &src));
+        // The union holds 3 already, so its first new item is past the
+        // limit; the others have room for one or two.
+        assert_eq!(outcome.exit_code, Some(101), "{op}: {outcome:#?}");
+        assert!(
+            outcome.stderr.contains("error[P0044]"),
+            "{op}: {outcome:#?}"
+        );
+        assert_eq!(outcome.stdout, "", "{op}");
+    }
 }
