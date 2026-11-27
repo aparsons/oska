@@ -1062,8 +1062,9 @@ reset_stub "$kill_stub"
 # A shell that was started in the background (as CI does, when this suite is
 # itself a concurrent child) has SIGINT ignored, and a script cannot trap a
 # signal that was ignored on entry. Reset it to the default before the exec.
-reset_int=
-command -v perl >/dev/null 2>&1 && reset_int="perl -e \$SIG{INT}=\"DEFAULT\";exec(@ARGV) --"
+reset_int=(env)
+# shellcheck disable=SC2016 # Perl's $SIG, not a shell variable
+command -v perl >/dev/null 2>&1 && reset_int=(perl -e '$SIG{INT}="DEFAULT";exec(@ARGV)' --)
 for sig in INT TERM; do
   rm -f "$work"/log.*
   rm -rf "$work/sig-tmp"
@@ -1079,9 +1080,8 @@ sleep 60 &
 echo $! >"$STUB_LOG.gc2"
 wait'
   set -m
-  # shellcheck disable=SC2086 # reset_int is a command and its arguments
   (cd "$tree" && PATH="$tree/bin:$PATH" STUB_LOG="$work/log" TMPDIR=$work/sig-tmp OSKA_CHECK_JOBS=4 \
-    exec $reset_int scripts/check.sh --group scripts >"$work/sig.out" 2>&1) &
+    exec "${reset_int[@]}" scripts/check.sh --group scripts >"$work/sig.out" 2>&1) &
   sig_pid=$!
   set +m
   for _ in $(seq 1 100); do
