@@ -98,7 +98,8 @@ fn a_loop_of_container_comparisons_stops_at_the_same_step_on_both_backends() {
     assert!(steps > 100, "the loop takes real work: {steps} steps");
     for limit in [1, steps / 7, steps / 2, steps - 1, steps, steps + 1] {
         let flag = format!("--max-steps={limit}");
-        let case = Case::file(&format!("ord_containers_steps_{limit}"), ORD_LOOP).with_run_flags(&[&flag]);
+        let case =
+            Case::file(&format!("ord_containers_steps_{limit}"), ORD_LOOP).with_run_flags(&[&flag]);
         let outcome = assert_same(&case);
         if limit < steps {
             assert_eq!(outcome.exit_code, Some(101), "{flag}: {outcome:#?}");
