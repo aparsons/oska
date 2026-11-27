@@ -531,10 +531,69 @@ run_docs_tests() {
   done
 }
 
-fail() {
-  printf 'check.sh: %s\n' "$1" >&2
-  exit 1
+# fail MESSAGE / fail_rc CODE MESSAGE: end the run. The failing step's seconds
+# and the slowest steps print first, so a failure is timed like a pass.
+fail() { fail_rc 1 "$1"; }
+fail_rc() {
+  end_timing
+  [ -n "$internal_step" ] || slowest_steps
+  step_times=
+  printf 'check.sh: %s\n' "$2" >&2
+  exit "$1"
 }
+
+# descendants PID: every process below PID, deepest first (ps works on Linux
+# and macOS alike).
+descendants() {
+  local c
+  for c in $(ps -A -o pid= -o ppid= | awk -v p="$1" '$2 == p { print $1 }'); do
+    descendants "$c"
+    printf '%s\n' "$c"
+  done
+}
+
+# The concurrent run's state, global so the EXIT trap can clean up.
+q_tmp=      # the private buffer directory
+q_pids=()   # the launch_step subshell of each queued step, by place
+# queue_cleanup: stops every process the queued steps started (their runners
+# and everything below), waits for them, then removes the buffer directory, so
+# nothing outlives the run or writes into a deleted directory.
+queue_cleanup() {
+  local p all='' left
+  for p in ${q_pids[@]+"${q_pids[@]}"}; do
+    all="$all $(descendants "$p" | tr '\n' ' ') $p"
+  done
+  # shellcheck disable=SC2086 # a list of pids
+  [ -z "${all// /}" ] || kill $all 2>/dev/null || true
+  for p in ${q_pids[@]+"${q_pids[@]}"}; do wait "$p" 2>/dev/null || true; done
+  for p in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    left=
+    for pid in $all; do kill -0 "$pid" 2>/dev/null && left=1; done
+    [ -n "$left" ] || break
+    sleep 0.1
+  done
+  # shellcheck disable=SC2086
+  [ -z "$left" ] || kill -9 $all 2>/dev/null || true
+  q_pids=()
+  [ -z "$q_tmp" ] || rm -rf "$q_tmp"
+  q_tmp=
+}
+
+# on_exit: the EXIT trap. A run that ends non-zero without `fail` (a step's
+# command failed under set -e) still prints the step's seconds and the slowest
+# steps; an interrupt (130, 143) prints neither.
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  queue_cleanup
+  case $rc in 0 | 130 | 143) ;; *)
+    end_timing
+    [ -n "$internal_step" ] || slowest_steps
+    ;;
+  esac
+  exit "$rc"
+}
+trap on_exit EXIT
 
 # run_queue: concurrent mode. Runs the queued steps, each in a child
 # `check.sh --group scripts --internal-step NAME` with its output in a private
@@ -550,37 +609,39 @@ run_queue() {
     have_slot=1
     . scripts/build-slots/acquire.sh
   fi
-  local tmp
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-check.XXXXXX") || fail "cannot make a temporary directory"
-  chmod 700 "$tmp"
-  # pids and states are indexed by the step's place in the queue.
-  local pids=() state=() running=0 serial_running='' next=0 failed='' moved
+  q_tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-check.XXXXXX") || fail "cannot make a temporary directory"
+  chmod 700 "$q_tmp"
+  # states are indexed by the step's place in the queue.
+  local state=() running=0 serial_running='' next=0 failed='' failed_rc=1 moved
   for ((i = 0; i < n; i++)); do state[i]=pending; done
-  # shellcheck disable=SC2317 # run by the traps
-  cleanup() {
-    local p
-    for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
-    for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
-    rm -rf "$tmp"
-  }
-  trap cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   while [ "$next" -lt "$n" ]; do
     moved=
     for ((i = 0; i < n; i++)); do
-      [ "${state[i]}" = running ] && [ -f "$tmp/$i.rc" ] || continue
+      [ "${state[i]}" = running ] || continue
+      if [ ! -f "$q_tmp/$i.rc" ]; then
+        # No result and no runner left (killed, out of memory): a failure,
+        # not something to wait for. The result is checked again in case the
+        # runner wrote it just before it ended.
+        kill -0 "${q_pids[i]}" 2>/dev/null && continue
+        if [ ! -f "$q_tmp/$i.rc" ]; then
+          printf 'check.sh: the runner of step "%s" ended without a result\n' "${queue_names[i]}" >>"$q_tmp/$i.out"
+          echo "1 0" >"$q_tmp/$i.rc"
+        fi
+      fi
       state[i]=done
       running=$((running - 1))
       [ -z "${queue_conc[i]}" ] && serial_running=
       moved=1
     done
     while [ "$next" -lt "$n" ] && [ "${state[next]}" = done ]; do
-      read -r rc took <"$tmp/$next.rc"
-      cat "$tmp/$next.out"
+      read -r rc took <"$q_tmp/$next.rc"
+      cat "$q_tmp/$next.out"
       step_times="$step_times$took ${queue_names[next]}"$'\n'
       if [ "$rc" -ne 0 ] && [ -z "$failed" ]; then
         failed=${queue_names[next]}
+        failed_rc=$rc
       fi
       [ -z "$failed" ] || break
       next=$((next + 1))
@@ -589,9 +650,9 @@ run_queue() {
     if [ -n "$failed" ]; then
       # Let the running children end, so none outlives the run.
       for ((i = 0; i < n; i++)); do
-        [ "${state[i]}" = running ] && wait "${pids[i]}" 2>/dev/null || true
+        [ "${state[i]}" = running ] && wait "${q_pids[i]}" 2>/dev/null || true
       done
-      fail "step \"$failed\" failed (its output is above)"
+      fail_rc "$failed_rc" "step \"$failed\" failed (its output is above)"
     fi
     for ((i = 0; i < n && running < jobs; i++)); do
       [ "${state[i]}" = pending ] || continue
@@ -599,24 +660,22 @@ run_queue() {
       state[i]=running
       running=$((running + 1))
       [ -n "${queue_conc[i]}" ] || serial_running=1
-      launch_step "$tmp" "$i" "${queue_names[i]}" &
-      pids[i]=$!
+      launch_step "$q_tmp" "$i" "${queue_names[i]}" &
+      q_pids[i]=$!
       moved=1
     done
     [ -n "$moved" ] || sleep 0.2
   done
-  trap - EXIT INT TERM
-  cleanup
+  trap - INT TERM
+  queue_cleanup
 }
 
 # launch_step DIR I NAME: run in the background by run_queue. Writes DIR/I.out
 # and, last, DIR/I.rc: "EXIT-CODE SECONDS".
 launch_step() {
-  local dir=$1 i=$2 name=$3 start=$SECONDS cpid rc=0
-  bash scripts/check.sh --group scripts --internal-step "$name" >"$dir/$i.out" 2>&1 &
-  cpid=$!
-  trap 'kill "$cpid" 2>/dev/null' TERM
-  wait "$cpid" || rc=$?
+  local dir=$1 i=$2 name=$3 start=$SECONDS rc=0
+  # run_queue's cleanup stops this subshell and everything below it.
+  bash scripts/check.sh --group scripts --internal-step "$name" >"$dir/$i.out" 2>&1 || rc=$?
   echo "$rc $((SECONDS - start))" >"$dir/$i.rc.tmp"
   mv "$dir/$i.rc.tmp" "$dir/$i.rc"
 }

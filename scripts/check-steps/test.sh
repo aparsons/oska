@@ -999,6 +999,108 @@ for jobs in 0 many -2; do
   fi
 done
 
+# A failing suite's exit code is the group's exit code, serial or concurrent.
+set_stub "$install_stub" '#!/usr/bin/env bash
+exit 3'
+for jobs in 4 1; do
+  OSKA_CHECK_JOBS=$jobs check --group scripts
+  if [ "$status" -eq 3 ]; then
+    ok "a suite that exits 3 makes the group exit 3 (OSKA_CHECK_JOBS=$jobs)"
+  else
+    bad "a suite that exits 3 makes the group exit 3 (OSKA_CHECK_JOBS=$jobs)" "exit $status: $out"
+  fi
+done
+
+# A failing run still says how long the failing suite took and which steps
+# were slowest.
+set_stub "$install_stub" "$(noisy INSTALL 1)"
+for jobs in 4 1; do
+  OSKA_CHECK_JOBS=$jobs check --group scripts
+  if [ "$status" -ne 0 ] && grep -qE '^\([0-9]+s\)$' <<<"$out" && grep -q '^Slowest steps:$' <<<"$out" &&
+    grep -qE '^ +[0-9]+s  installer tests' <<<"$out"; then
+    ok "a failing run prints the failing suite's seconds and the slowest steps (OSKA_CHECK_JOBS=$jobs)"
+  else
+    bad "a failing run prints the failing suite's seconds and the slowest steps (OSKA_CHECK_JOBS=$jobs)" "exit $status: $out"
+  fi
+done
+
+# A suite whose runner dies without a result (SIGKILL, the OOM killer) fails
+# the run; it does not hang it. The stub kills its grandparent, the runner.
+set_stub "$install_stub" '#!/usr/bin/env bash
+kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"
+sleep 1'
+set_stub "$kill_stub" '#!/usr/bin/env bash
+sleep 1'
+mkdir -p "$work/dead-tmp"
+(cd "$tree" && PATH="$tree/bin:$PATH" STUB_LOG="$work/log" TMPDIR=$work/dead-tmp OSKA_CHECK_JOBS=4 \
+  exec scripts/check.sh --group scripts >"$work/dead.out" 2>&1) &
+dead_pid=$!
+for _ in $(seq 1 150); do kill -0 "$dead_pid" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$dead_pid" 2>/dev/null; then
+  kill "$dead_pid" 2>/dev/null || true
+  bad "a suite whose runner is killed fails the run and does not hang it" "still running after 15s"
+else
+  dead_status=0
+  wait "$dead_pid" || dead_status=$?
+  if [ "$dead_status" -ne 0 ] && [ -z "$(ls -A "$work/dead-tmp")" ]; then
+    ok "a suite whose runner is killed fails the run and does not hang it"
+  else
+    bad "a suite whose runner is killed fails the run and does not hang it" "exit $dead_status: $(cat "$work/dead.out")"
+  fi
+fi
+reset_stub "$install_stub"
+reset_stub "$kill_stub"
+
+# INT or TERM in the middle of a concurrent run stops every process the suites
+# started, grandchildren included, and removes the buffer directory.
+for sig in INT TERM; do
+  rm -f "$work"/log.*
+  mkdir -p "$work/sig-tmp"
+  set_stub "$install_stub" '#!/usr/bin/env bash
+sleep 60 &
+echo $! >"$STUB_LOG.gc1"
+wait'
+  set_stub "$kill_stub" '#!/usr/bin/env bash
+sleep 60 &
+echo $! >"$STUB_LOG.gc2"
+wait'
+  set -m
+  (cd "$tree" && PATH="$tree/bin:$PATH" STUB_LOG="$work/log" TMPDIR=$work/sig-tmp OSKA_CHECK_JOBS=4 \
+    exec scripts/check.sh --group scripts >"$work/sig.out" 2>&1) &
+  sig_pid=$!
+  set +m
+  for _ in $(seq 1 100); do
+    [ -s "$work/log.gc1" ] && [ -s "$work/log.gc2" ] && break
+    sleep 0.1
+  done
+  gc1=$(cat "$work/log.gc1" 2>/dev/null || true)
+  gc2=$(cat "$work/log.gc2" 2>/dev/null || true)
+  kill -"$sig" "$sig_pid" 2>/dev/null || true
+  for _ in $(seq 1 100); do kill -0 "$sig_pid" 2>/dev/null || break; sleep 0.1; done
+  sig_status=0
+  if kill -0 "$sig_pid" 2>/dev/null; then
+    kill -9 "$sig_pid" 2>/dev/null || true
+    sig_status=hung
+  else
+    wait "$sig_pid" || sig_status=$?
+  fi
+  alive=
+  for pid in $gc1 $gc2; do
+    for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$pid" 2>/dev/null; then alive="$alive $pid"; kill -9 "$pid" 2>/dev/null || true; fi
+  done
+  want=130
+  [ "$sig" = TERM ] && want=143
+  if [ -n "$gc1" ] && [ -n "$gc2" ] && [ "$sig_status" = "$want" ] && [ -z "$alive" ] &&
+    [ -z "$(ls -A "$work/sig-tmp")" ]; then
+    ok "$sig stops every suite process and removes the buffer directory"
+  else
+    bad "$sig stops every suite process and removes the buffer directory" "exit $sig_status (want $want), alive:$alive, left: $(ls -A "$work/sig-tmp"), gc: $gc1 $gc2"
+  fi
+done
+reset_stub "$install_stub"
+reset_stub "$kill_stub"
+
 # Drift guard: the steps tagged --concurrent in check.sh are the audit's safe
 # rows, so a verdict and the tag cannot disagree.
 tagged=$(sed -n 's/^if step "\([^"]*\)".* --concurrent.*; then$/\1/p' "$repo_root/scripts/check.sh" | sort)
