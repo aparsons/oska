@@ -109,6 +109,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.p256_ops",
+        source: include_str!("std/p256_ops.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.p256",
         source: include_str!("std/p256.osk"),
         sink_literal: None,

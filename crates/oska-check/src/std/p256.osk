@@ -37,31 +37,26 @@
 // user code and run as Oska by both backends. The comment block directly
 // above a `pub` item is its description in the API reference.
 //
-// A number mod the field prime p is a `List<Secret<U64>>` of eight 32-bit
-// limbs, least significant first, so a product of two limbs and the
-// carries fit 64 bits, held in Montgomery form (`a R mod p`, R = 2^256). The
-// prime and the other constants are public. A point is projective, (X : Y
-// : Z), with the identity (0 : 1 : 0) in Montgomery form.
+// The curve arithmetic over secret integers is in the internal module
+// `std.p256_ops`, which `std.ecdsa`'s signing shares: this module is the
+// two public functions and the checks of their inputs.
 
 use std.ecdsa
+use std.p256_ops
 
 // The public point `[k]G` of the secret scalar `scalar`, in SEC1
 // uncompressed form (65 bytes), as a secret, or `None` unless `scalar` is
 // 32 bytes and in 1 to n - 1. The length is public.
 pub fn public_key(scalar: Secret<Bytes>) -> Option<Secret<Bytes>> {
-    if !scalar_in_range(scalar) {
+    if !p256_ops.scalar_in_range(scalar) {
         return None
     }
-    let base = Point(x: secret(to_limbs(GX_MONT)), y: secret(to_limbs(GY_MONT)), z: secret(to_limbs(ONE_MONT)))
-    let point = multiply(scalar, base)
-    let zinv = invert(point.z)
-    let x = from_mont(mont_mul(point.x, zinv))
-    let y = from_mont(mont_mul(point.y, zinv))
+    let point = p256_ops.base_multiply(scalar)
     let four: Secret<U8> = Secret.new(4)
     var out = Secret.new(Bytes.new())
     out.push(four)
-    out.append(to_bytes(x))
-    out.append(to_bytes(y))
+    out.append(point.x)
+    out.append(point.y)
     Some(out)
 }
 
@@ -73,346 +68,11 @@ pub fn public_key(scalar: Secret<Bytes>) -> Option<Secret<Bytes>> {
 // lengths, the peer's point and the scalar's range, never on anything else
 // about the scalar.
 pub fn shared_secret(scalar: Secret<Bytes>, peer: Untrusted<Bytes>) -> Option<Secret<Bytes>> {
-    if !scalar_in_range(scalar) {
+    if !p256_ops.scalar_in_range(scalar) {
         return None
     }
     match ecdsa.PublicKey.from_bytes(ecdsa.Curve.P256, peer) {
-        Some(key) => {
-            let point = key.to_bytes()
-            let x = mont_mul(secret(read_limbs(point, 1)), secret(to_limbs(R2)))
-            let y = mont_mul(secret(read_limbs(point, 33)), secret(to_limbs(R2)))
-            let result = multiply(scalar, Point(x: x, y: y, z: secret(to_limbs(ONE_MONT))))
-            let zinv = invert(result.z)
-            Some(to_bytes(from_mont(mont_mul(result.x, zinv))))
-        }
+        Some(key) => Some(p256_ops.multiply_x(scalar, key.to_bytes()))
         None => None
     }
-}
-
-// Whether `scalar` is 32 bytes and in 1 to n - 1. `scalar - 1` wraps to all
-// ones for 0, so the scalar is in range exactly when `scalar - 1 < n - 1`: one
-// subtraction chain over the limbs, with no branch, whose last borrow is 1
-// then. That borrow goes into a one-byte secret that is compared with 1, the
-// one declassification, of the range and nothing more.
-fn scalar_in_range(scalar: Secret<Bytes>) -> Bool {
-    if scalar.len() != 32 {
-        return false
-    }
-    let limit = to_limbs(ORDER_MINUS_ONE)
-    var below: Secret<U64> = Secret.new(1)
-    var borrow: Secret<U64> = Secret.new(0)
-    for i in 0..8 {
-        let at = 28 - 4 * i
-        let word = (scalar.at(at).to_u64() << 24) | (scalar.at(at + 1).to_u64() << 16) | (scalar.at(at + 2).to_u64() << 8) | scalar.at(at + 3).to_u64()
-        let step = word + 4294967296 - below
-        let decremented = step & MASK
-        below = 1 - (step >> 32)
-        let diff = decremented + 4294967296 - limit.at(i) - borrow
-        borrow = 1 - (diff >> 32)
-    }
-    var flag = Secret.new(Bytes.new())
-    flag.push(borrow.wrapping_to_u8())
-    flag.constant_time_eq(Bytes.from_hex("01").unwrap_or(Bytes.new()))
-}
-
-// ---- Constants --------------------------------------------------------------
-
-const MASK: U64 = 4294967295
-
-// The prime p = 2^256 - 2^224 + 2^192 + 2^96 - 1, as eight 32-bit limbs
-// from the least significant, and the other constants as 64 hex digits.
-// -p^-1 mod 2^32 is 1, as the lowest limb of p is 2^32 - 1.
-const N0: U64 = 1
-const PRIME: String = "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff"
-const PRIME_MINUS_TWO: String = "ffffffff00000001000000000000000000000000fffffffffffffffffffffffd"
-// R mod p, the number 1 in Montgomery form, and R^2 mod p.
-const ONE_MONT: String = "00000000fffffffeffffffffffffffffffffffff000000000000000000000001"
-const R2: String = "00000004fffffffdfffffffffffffffefffffffbffffffff0000000000000003"
-// n - 1, one less than the order of the base point.
-const ORDER_MINUS_ONE: String = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550"
-// The curve constant b and the base point G, in Montgomery form.
-const B_MONT: String = "dc30061d04874834e5a220abf7212ed6acf005cd78843090d89cdf6229c4bddf"
-const GX_MONT: String = "18905f76a53755c679fb732b7762251075ba95fc5fedb60179e730d418a9143c"
-const GY_MONT: String = "8571ff1825885d85d2e88688dd21f3258b4ab8e4ba19e45cddf25357ce95560a"
-
-// The eight limbs of the 64 hex digits `text`.
-fn to_limbs(text: String) -> List<U64> {
-    read_limbs(Bytes.from_hex(text).unwrap_or(Bytes.new()), 0)
-}
-
-// The eight limbs of the big-endian number of 32 bytes at `start` in `bytes`.
-fn read_limbs(bytes: Bytes, start: Int) -> List<U64> {
-    var out: List<U64> = List.new()
-    var i = 7
-    while i >= 0 {
-        out.push(bytes.read_u32_be(start + 4 * i).to_u64())
-        i = i - 1
-    }
-    out
-}
-
-fn secret(limbs: List<U64>) -> List<Secret<U64>> {
-    var out: List<Secret<U64>> = List.new()
-    for limb in limbs {
-        out.push(Secret.new(limb))
-    }
-    out
-}
-
-// The limbs `x` as 32 big-endian bytes.
-fn to_bytes(x: List<Secret<U64>>) -> Secret<Bytes> {
-    var out = Secret.new(Bytes.new())
-    var i = 7
-    while i >= 0 {
-        out.push_u32_be(x.at(i).wrapping_to_u32())
-        i = i - 1
-    }
-    out
-}
-
-// ---- The field ---------------------------------------------------------------
-
-// `x`, below 2p with `top` (0 or 1) the bit above its 256, reduced once
-// mod p: `x + top 2^256` minus p when that is at least p.
-fn reduce_once(x: List<Secret<U64>>, top: Secret<U64>) -> List<Secret<U64>> {
-    let p = to_limbs(PRIME)
-    let zero: Secret<U64> = Secret.new(0)
-    var diff: List<Secret<U64>> = List.new()
-    var borrow: Secret<U64> = Secret.new(0)
-    for i in 0..8 {
-        let limb = x.at(i) + 4294967296 - p.at(i) - borrow
-        diff.push(limb & MASK)
-        borrow = 1 - (limb >> 32)
-    }
-    // Keep `x` only when nothing was carried out of it and subtracting p
-    // borrowed, which is when it was below p.
-    let keep = borrow & (top ^ 1)
-    let take = zero - keep
-    var out: List<Secret<U64>> = List.new()
-    for i in 0..8 {
-        out.push((x.at(i) & take) | (diff.at(i) & ~take))
-    }
-    out
-}
-
-fn add_mod(a: List<Secret<U64>>, b: List<Secret<U64>>) -> List<Secret<U64>> {
-    var sum: List<Secret<U64>> = List.new()
-    var carry: Secret<U64> = Secret.new(0)
-    for i in 0..8 {
-        let limb = a.at(i) + b.at(i) + carry
-        sum.push(limb & MASK)
-        carry = limb >> 32
-    }
-    reduce_once(sum, carry)
-}
-
-fn sub_mod(a: List<Secret<U64>>, b: List<Secret<U64>>) -> List<Secret<U64>> {
-    let p = to_limbs(PRIME)
-    let zero: Secret<U64> = Secret.new(0)
-    var diff: List<Secret<U64>> = List.new()
-    var borrow: Secret<U64> = Secret.new(0)
-    for i in 0..8 {
-        let limb = a.at(i) + 4294967296 - b.at(i) - borrow
-        diff.push(limb & MASK)
-        borrow = 1 - (limb >> 32)
-    }
-    // Add p back, masked in when the subtraction borrowed.
-    let take = zero - borrow
-    var out: List<Secret<U64>> = List.new()
-    var carry: Secret<U64> = Secret.new(0)
-    for i in 0..8 {
-        let limb = diff.at(i) + (take & p.at(i)) + carry
-        out.push(limb & MASK)
-        carry = limb >> 32
-    }
-    out
-}
-
-// The Montgomery product `a b R^-1` mod p of `a` and `b` below p: one pass
-// a limb of `b`, adding `a b_i`, then the multiple of p that clears the
-// lowest limb, and shifting down a limb. Every loop runs a public number of
-// times over a public number of limbs.
-fn mont_mul(a: List<Secret<U64>>, b: List<Secret<U64>>) -> List<Secret<U64>> {
-    let p = to_limbs(PRIME)
-    var t: List<Secret<U64>> = List.new()
-    for _ in 0..9 {
-        t.push(Secret.new(0))
-    }
-    for i in 0..8 {
-        let bi = b.at(i)
-        let s0 = t.at(0) + a.at(0) * bi
-        let q = ((s0 & MASK) * N0) & MASK
-        var c1 = s0 >> 32
-        var c2 = ((s0 & MASK) + q * p.at(0)) >> 32
-        var next: List<Secret<U64>> = List.new()
-        for j in 1..8 {
-            let s = t.at(j) + a.at(j) * bi + c1
-            c1 = s >> 32
-            let s2 = (s & MASK) + q * p.at(j) + c2
-            c2 = s2 >> 32
-            next.push(s2 & MASK)
-        }
-        let top = t.at(8) + c1 + c2
-        next.push(top & MASK)
-        next.push(top >> 32)
-        t = next
-    }
-    var low: List<Secret<U64>> = List.new()
-    for i in 0..8 {
-        low.push(t.at(i))
-    }
-    reduce_once(low, t.at(8))
-}
-
-// `x` out of Montgomery form.
-fn from_mont(x: List<Secret<U64>>) -> List<Secret<U64>> {
-    var one: List<U64> = [1]
-    for _ in 1..8 {
-        one.push(0)
-    }
-    mont_mul(x, secret(one))
-}
-
-// `x` to the power p - 2, which is `1/x` mod p, or 0 for 0. The exponent is a
-// public constant, so the square-and-multiply may branch on its bits.
-fn invert(x: List<Secret<U64>>) -> List<Secret<U64>> {
-    let exp = to_limbs(PRIME_MINUS_TWO)
-    var acc = secret(to_limbs(ONE_MONT))
-    var i = 255
-    while i >= 0 {
-        acc = mont_mul(acc, acc)
-        if ((exp.at(i / 32) >> (i % 32).to_u64()) & 1) == 1 {
-            acc = mont_mul(acc, x)
-        }
-        i = i - 1
-    }
-    acc
-}
-
-// ---- Points ------------------------------------------------------------------
-
-// A point (X : Y : Z), x = X/Z and y = Y/Z, each in Montgomery form.
-struct Point { x: List<Secret<U64>>, y: List<Secret<U64>>, z: List<Secret<U64>> }
-
-// `[scalar]base`, the 32-byte big-endian `scalar` taken a bit at a time from
-// the top: double, add the base, and keep the sum when the bit is set. Both
-// are always computed.
-fn multiply(scalar: Secret<Bytes>, base: Point) -> Point {
-    let zero = secret(to_limbs("0000000000000000000000000000000000000000000000000000000000000000"))
-    var acc = Point(x: zero, y: secret(to_limbs(ONE_MONT)), z: zero)
-    let one: Secret<U64> = Secret.new(1)
-    var i = 255
-    while i >= 0 {
-        acc = double_point(acc)
-        let sum = add_points(acc, base)
-        let byte = scalar.at(31 - i / 8).to_u64()
-        let bit = (byte >> (i % 8).to_u64()) & 1
-        let chosen = bit.ct_eq(one)
-        acc = Point(
-            x: select(chosen, sum.x, acc.x),
-            y: select(chosen, sum.y, acc.y),
-            z: select(chosen, sum.z, acc.z)
-        )
-        i = i - 1
-    }
-    acc
-}
-
-// `a` when `chosen` holds and `b` otherwise, limb by limb.
-fn select(chosen: Secret<Bool>, a: List<Secret<U64>>, b: List<Secret<U64>>) -> List<Secret<U64>> {
-    var out: List<Secret<U64>> = List.new()
-    for i in 0..8 {
-        out.push(chosen.ct_select(a.at(i), b.at(i)))
-    }
-    out
-}
-
-// P + Q (Renes, Costello and Batina, algorithm 4, for a = -3), for any two
-// points, equal ones and the identity included.
-fn add_points(p1: Point, p2: Point) -> Point {
-    let b = secret(to_limbs(B_MONT))
-    var t0 = mont_mul(p1.x, p2.x)
-    var t1 = mont_mul(p1.y, p2.y)
-    var t2 = mont_mul(p1.z, p2.z)
-    var t3 = add_mod(p1.x, p1.y)
-    var t4 = add_mod(p2.x, p2.y)
-    t3 = mont_mul(t3, t4)
-    t4 = add_mod(t0, t1)
-    t3 = sub_mod(t3, t4)
-    t4 = add_mod(p1.y, p1.z)
-    var x3 = add_mod(p2.y, p2.z)
-    t4 = mont_mul(t4, x3)
-    x3 = add_mod(t1, t2)
-    t4 = sub_mod(t4, x3)
-    x3 = add_mod(p1.x, p1.z)
-    var y3 = add_mod(p2.x, p2.z)
-    x3 = mont_mul(x3, y3)
-    y3 = add_mod(t0, t2)
-    y3 = sub_mod(x3, y3)
-    var z3 = mont_mul(b, t2)
-    x3 = sub_mod(y3, z3)
-    z3 = add_mod(x3, x3)
-    x3 = add_mod(x3, z3)
-    z3 = sub_mod(t1, x3)
-    x3 = add_mod(t1, x3)
-    y3 = mont_mul(b, y3)
-    t1 = add_mod(t2, t2)
-    t2 = add_mod(t1, t2)
-    y3 = sub_mod(y3, t2)
-    y3 = sub_mod(y3, t0)
-    t1 = add_mod(y3, y3)
-    y3 = add_mod(t1, y3)
-    t1 = add_mod(t0, t0)
-    t0 = add_mod(t1, t0)
-    t0 = sub_mod(t0, t2)
-    t1 = mont_mul(t4, y3)
-    t2 = mont_mul(t0, y3)
-    y3 = mont_mul(x3, z3)
-    y3 = add_mod(y3, t2)
-    x3 = mont_mul(t3, x3)
-    x3 = sub_mod(x3, t1)
-    z3 = mont_mul(t4, z3)
-    t1 = mont_mul(t3, t0)
-    z3 = add_mod(z3, t1)
-    Point(x: x3, y: y3, z: z3)
-}
-
-// 2P (algorithm 6).
-fn double_point(pt: Point) -> Point {
-    let b = secret(to_limbs(B_MONT))
-    var t0 = mont_mul(pt.x, pt.x)
-    let t1 = mont_mul(pt.y, pt.y)
-    var t2 = mont_mul(pt.z, pt.z)
-    var t3 = mont_mul(pt.x, pt.y)
-    t3 = add_mod(t3, t3)
-    var z3 = mont_mul(pt.x, pt.z)
-    z3 = add_mod(z3, z3)
-    var y3 = mont_mul(b, t2)
-    y3 = sub_mod(y3, z3)
-    var x3 = add_mod(y3, y3)
-    y3 = add_mod(x3, y3)
-    x3 = sub_mod(t1, y3)
-    y3 = add_mod(t1, y3)
-    y3 = mont_mul(x3, y3)
-    x3 = mont_mul(x3, t3)
-    t3 = add_mod(t2, t2)
-    t2 = add_mod(t2, t3)
-    z3 = mont_mul(b, z3)
-    z3 = sub_mod(z3, t2)
-    z3 = sub_mod(z3, t0)
-    t3 = add_mod(z3, z3)
-    z3 = add_mod(z3, t3)
-    t3 = add_mod(t0, t0)
-    t0 = add_mod(t3, t0)
-    t0 = sub_mod(t0, t2)
-    t0 = mont_mul(t0, z3)
-    y3 = add_mod(y3, t0)
-    t0 = mont_mul(pt.y, pt.z)
-    t0 = add_mod(t0, t0)
-    z3 = mont_mul(t0, z3)
-    x3 = sub_mod(x3, z3)
-    z3 = mont_mul(t0, t1)
-    z3 = add_mod(z3, z3)
-    z3 = add_mod(z3, z3)
-    Point(x: x3, y: y3, z: z3)
 }
