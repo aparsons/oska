@@ -156,7 +156,7 @@ fn a_big_union_intersection_and_difference_agree_on_both_backends() {
     Ok(())
 }
 "#;
-    assert_runs(&src, &[], "450 150 150 1 598\n");
+    assert_runs(src, &[], "450 150 150 1 598\n");
 }
 
 #[test]
