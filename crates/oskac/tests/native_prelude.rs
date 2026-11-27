@@ -2104,6 +2104,20 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "Acme.restrict_to",
+        Run::Main,
+        r#"fn main(io: Stdout, acme: Acme) -> Result<(), IoError> {
+    io.println(acme.restrict_to("example.com").domain())
+}"#,
+    ),
+    (
+        "AcmeDomain.domain",
+        Run::Main,
+        r#"fn main(io: Stdout, acme: Acme) -> Result<(), IoError> {
+    io.println(acme.restrict_to("www.example.org").domain())
+}"#,
+    ),
+    (
         "HostConnect.name",
         Run::Main,
         r#"fn main(io: Stdout, net: Net) -> Result<(), IoError> {
