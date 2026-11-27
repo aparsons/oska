@@ -1352,6 +1352,32 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "Option.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = Some("b").cmp(None)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "List.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = [[1, 2], [3]].cmp([[1, 2, 0]])
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
         "Bool.eq",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {

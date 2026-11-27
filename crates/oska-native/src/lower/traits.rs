@@ -277,6 +277,211 @@ impl Body<'_, '_> {
         Ok(())
     }
 
+    // ---- Order ------------------------------------------------------------
+
+    /// `cmp(self, other)` of an `Option` or a `List`, called as the
+    /// intrinsic `name`, evaluated from `args`: an `Ordering`, both
+    /// receivers released. `None` for any other intrinsic.
+    pub(super) fn cmp_intrinsic(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        values: &[Temp],
+        span: Span,
+    ) -> Result<Option<Temp>, Diagnostic> {
+        let Some(tag) = name.strip_suffix(".cmp") else {
+            return Ok(None);
+        };
+        let (true, [lhs, _], &[a, b]) = (matches!(tag, "Option" | "List"), args, values) else {
+            return Ok(None);
+        };
+        let ty = self.ty(&lhs.ty);
+        let order = self.compare(&ty, a, b, span)?;
+        self.consume(a)?;
+        self.consume(b)?;
+        // `Ordering` is a fieldless enum: its variant's index, `Less` first.
+        let one = self.constant(1);
+        Ok(Some(self.binary_op(BinOp::Add, order, one)))
+    }
+
+    /// How `a` orders against `b`, borrowed values of the concrete type
+    /// `ty`, through `Ord` for `ty`: -1, 0 or 1.
+    pub(super) fn compare(
+        &mut self,
+        ty: &Type,
+        a: Temp,
+        b: Temp,
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let Some(tag) = type_tag(ty) else {
+            return Err(self.refuse(span, &format!("ordering values of `{ty}`")));
+        };
+        let user = trait_method(tag, builtins::ORD, "cmp");
+        if let Some(function) = self.program().functions.get(&user) {
+            let type_args = impl_type_args(function, ty, Vec::new());
+            let ordering = self.call_program(&user, type_args, vec![a, b], span)?;
+            let one = self.constant(1);
+            return Ok(self.binary_op(BinOp::Sub, ordering, one));
+        }
+        match ty {
+            Type::Bool | Type::Int(_) => {
+                let unsigned = matches!(ty, Type::Int(int) if int.min() == 0);
+                let (below, above) = if unsigned {
+                    (Cond::Below, Cond::Above)
+                } else {
+                    (Cond::Lt, Cond::Gt)
+                };
+                let (lt, gt) = (self.temp(), self.temp());
+                self.push(Inst::Compare {
+                    cond: below,
+                    dst: lt,
+                    lhs: a,
+                    rhs: b,
+                });
+                self.push(Inst::Compare {
+                    cond: above,
+                    dst: gt,
+                    lhs: a,
+                    rhs: b,
+                });
+                Ok(self.binary_op(BinOp::Sub, gt, lt))
+            }
+            Type::String => self.call_runtime("string_compare", vec![a, b], NOWHERE),
+            Type::Named { name, .. } if name == builtins::OPTION || name == builtins::LIST => {
+                let compare = Instance::Compare(self.source, ty.clone(), self.step_site(span));
+                let id = self.lowering.request(compare, self.origin.unwrap_or(span));
+                self.call_id(id, vec![a, b], span)
+            }
+            _ => Err(self.refuse(span, &format!("`{tag}.cmp`"))),
+        }
+    }
+
+    /// The body of [`Instance::Compare`] for the `Option` or `List` type
+    /// `ty`: -1, 0 or 1 for its two parameters. `None` is before `Some`;
+    /// lists compare item by item, and a prefix is before a longer list.
+    pub(super) fn compare_function(&mut self, ty: &Type, span: Span) -> Result<(), Diagnostic> {
+        let (a, b) = (self.temp(), self.temp());
+        match ty {
+            Type::Named { name, args } if name == builtins::LIST => {
+                let item = args.first().cloned().unwrap_or(Type::Unit);
+                let length = self.load(a, layout::LIST_LEN);
+                let other = self.load(b, layout::LIST_LEN);
+                // The shared length, then the first items that differ.
+                let shared = self.copy(length);
+                let end = self.label();
+                self.push(Inst::Branch {
+                    cond: Cond::Le,
+                    lhs: length,
+                    rhs: other,
+                    target: end,
+                });
+                self.push(Inst::Copy {
+                    dst: shared,
+                    src: other,
+                });
+                self.push(Inst::Label(end));
+                let zero = self.constant(0);
+                let at = self.copy(zero);
+                let (head, done) = (self.label(), self.label());
+                self.push(Inst::Label(head));
+                self.push(Inst::Branch {
+                    cond: Cond::Ge,
+                    lhs: at,
+                    rhs: shared,
+                    target: done,
+                });
+                let x = self.item(a, at);
+                let y = self.item(b, at);
+                let order = self.compare(&item, x, y, span)?;
+                let next = self.label();
+                self.push(Inst::JumpIfZero {
+                    cond: order,
+                    target: next,
+                });
+                self.push(Inst::Return(order));
+                self.push(Inst::Label(next));
+                let one = self.constant(1);
+                self.push(Inst::Binary {
+                    op: BinOp::Add,
+                    dst: at,
+                    lhs: at,
+                    rhs: one,
+                });
+                self.push(Inst::Jump(head));
+                self.push(Inst::Label(done));
+                let (below, above) = (self.temp(), self.temp());
+                self.push(Inst::Compare {
+                    cond: Cond::Lt,
+                    dst: below,
+                    lhs: length,
+                    rhs: other,
+                });
+                self.push(Inst::Compare {
+                    cond: Cond::Gt,
+                    dst: above,
+                    lhs: length,
+                    rhs: other,
+                });
+                let order = self.binary_op(BinOp::Sub, above, below);
+                self.push(Inst::Return(order));
+                Ok(())
+            }
+            _ => {
+                let Some(Fields::Enum(variants)) = self.fields_of(ty) else {
+                    return Err(self.refuse(span, &format!("ordering values of `{ty}`")));
+                };
+                // `Option`: the variant without a field is `None`.
+                let Some(none) = variants.iter().position(Vec::is_empty) else {
+                    return Err(self.refuse(span, &format!("ordering values of `{ty}`")));
+                };
+                let none = self.constant(none as i64);
+                let tag = self.load(a, layout::ENUM_TAG);
+                let other = self.load(b, layout::ENUM_TAG);
+                let same = self.label();
+                self.push(Inst::Branch {
+                    cond: Cond::Eq,
+                    lhs: tag,
+                    rhs: other,
+                    target: same,
+                });
+                // The tags differ: the one that is `None` is first.
+                let (is_none, is_some) = (self.label(), self.label());
+                self.push(Inst::Branch {
+                    cond: Cond::Eq,
+                    lhs: tag,
+                    rhs: none,
+                    target: is_none,
+                });
+                let greater = self.constant(1);
+                self.push(Inst::Return(greater));
+                self.push(Inst::Label(is_none));
+                let less = self.constant(-1);
+                self.push(Inst::Return(less));
+                self.push(Inst::Label(same));
+                // The same variant: two `None`s are equal.
+                self.push(Inst::Branch {
+                    cond: Cond::Ne,
+                    lhs: tag,
+                    rhs: none,
+                    target: is_some,
+                });
+                let equal = self.constant(0);
+                self.push(Inst::Return(equal));
+                self.push(Inst::Label(is_some));
+                let field = variants
+                    .iter()
+                    .find_map(|fields| fields.first())
+                    .cloned()
+                    .unwrap_or(Type::Unit);
+                let x = self.load(a, layout::enum_field(0));
+                let y = self.load(b, layout::enum_field(0));
+                let order = self.compare(&field, x, y, span)?;
+                self.push(Inst::Return(order));
+                Ok(())
+            }
+        }
+    }
+
     // ---- Hash -------------------------------------------------------------
 
     /// `hash(self)` of an `Option`, a `List`, or a struct or enum that

@@ -239,6 +239,10 @@ enum Instance {
     /// type, which derives `Hash` or has the prelude's (`traits.rs`). Under
     /// `--max-steps`, as [`Instance::Equal`].
     Hash(Source, Type, Option<Span>),
+    /// How two values of this `Option` or `List` type order through `Ord`
+    /// for the item's type, as -1, 0 or 1 (`traits.rs`). Under
+    /// `--max-steps`, as [`Instance::Equal`].
+    Compare(Source, Type, Option<Span>),
     /// The check of a function's `requires` clauses, a function of the
     /// same parameters as it: gives 0 when they all hold, else the number
     /// (from 1) of the first that is false. The caller panics with it,
@@ -339,6 +343,7 @@ pub fn program(
                 | Instance::Thunk { .. }
                 | Instance::Equal(..)
                 | Instance::Hash(..)
+                | Instance::Compare(..)
                 | Instance::ListEq(..)
         ) {
             lowering.between_functions.push(id);
@@ -730,6 +735,12 @@ impl<'p> Lowering<'p> {
                 body.hash_function(ty, at.unwrap_or(origin))?;
                 return body.finish(&qualified(instance), 1, NOWHERE);
             }
+            Instance::Compare(source, ty, at) => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                body.compare_function(ty, at.unwrap_or(origin))?;
+                return body.finish(&qualified(instance), 2, NOWHERE);
+            }
             Instance::Closure(index) => {
                 let source = self.closures[*index].source;
                 let runtime_origin = (source == Source::Runtime).then_some(origin);
@@ -878,6 +889,7 @@ fn qualified(instance: &Instance) -> String {
         Instance::Debug(_, ty) => format!("debug<{ty}>"),
         Instance::Equal(_, ty, _) => format!("eq<{ty}>"),
         Instance::Hash(_, ty, _) => format!("hash<{ty}>"),
+        Instance::Compare(_, ty, _) => format!("cmp<{ty}>"),
         Instance::Requires {
             source,
             name,
@@ -2723,6 +2735,9 @@ impl<'l, 'p> Body<'l, 'p> {
                         return Ok(value);
                     }
                     if let Some(value) = self.hash_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.cmp_intrinsic(name, args, &values, span)? {
                         return Ok(value);
                     }
                     if let Some(value) = self.rotation_intrinsic(name, args, &values, span)? {
