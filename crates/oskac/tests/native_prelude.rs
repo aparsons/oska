@@ -38,10 +38,11 @@ const NATIVE_NET_ATTEMPTS: &str =
     "a native plain test refuses `t.net` as the interpreter does, but \
 does not record where it was asked to go: `t.net_attempts` is a later ticket of spec #228";
 
-/// The `List` methods whose bodies are Oska in `std.core` (ADR 0034): the
+/// The `List`, `Option` and `Result` methods whose bodies are Oska in
+/// `std.core` (ADR 0034): the
 /// checker resolves a call to a function of the program, so there is no
-/// intrinsic to implement. `oska-run`'s `list_methods` test runs each on
-/// both backends.
+/// intrinsic to implement. `oska-run`'s `list_methods` and `option_result`
+/// tests run each on both backends.
 const CORE_LIST: &str = "written in Oska in std.core, not an intrinsic";
 
 /// The types, or `Type.method` names, that no backend implements, with
@@ -66,6 +67,18 @@ const EXEMPT: &[(&str, &str)] = &[
     ("List.is_empty", CORE_LIST),
     ("List.reverse", CORE_LIST),
     ("List.concat", CORE_LIST),
+    ("Option.is_none", CORE_LIST),
+    ("Option.map", CORE_LIST),
+    ("Option.and_then", CORE_LIST),
+    ("Option.unwrap_or_else", CORE_LIST),
+    ("Option.filter", CORE_LIST),
+    ("Result.is_err", CORE_LIST),
+    ("Result.map", CORE_LIST),
+    ("Result.map_err", CORE_LIST),
+    ("Result.and_then", CORE_LIST),
+    ("Result.unwrap_or_else", CORE_LIST),
+    ("Result.ok", CORE_LIST),
+    ("Result.err", CORE_LIST),
 ];
 
 /// How a [`CALLS`] program is run.
