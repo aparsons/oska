@@ -145,7 +145,7 @@ pub(crate) fn usage(json: bool) -> ExitCode {
     if json {
         outln!(
             "{{\"ok\":false,\"error\":\"usage\",\"message\":{}}}",
-            quote("the self commands are `oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]` and `oskac self uninstall [--format=json]`")
+            quote("the self commands are `oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]`, `oskac self update [--version X [--allow-downgrade]] [--format=json]` and `oskac self uninstall [--format=json]`")
         );
     } else {
         eprint!("{}", crate::USAGE);

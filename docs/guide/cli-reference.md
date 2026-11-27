@@ -95,17 +95,17 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
-    oskac self update [--version X [--allow-downgrade]] [--format=json]
-                                           Replace this managed install with
-                                           the latest verified release, or
-                                           with release X; an older release
-                                           needs --allow-downgrade
     oskac self check [--format=json] [--no-identify]
                                            Ask oskalang.dev whether a newer
                                            release exists, verified against the
                                            pinned release key, and whether this
                                            binary is the published one; the
                                            only command that uses the network
+    oskac self update [--version X [--allow-downgrade]] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
@@ -115,7 +115,7 @@ USAGE:
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
 - `--target <platform>`, or `--target=<platform>`, is for `oskac build` only: any other command given it prints the usage text to standard error and exits with 2.
-- `--version <X.Y.Z>` and `--key <file>` (or `--version=<X.Y.Z>` and `--key=<file>`) are for `oskac release` only: any other command given `--key` or `--version=` prints the usage text to standard error and exits with 2. `--version` alone, with no command, prints `oskac`'s own version.
+- `--version <X.Y.Z>` and `--key <file>` (or `--version=<X.Y.Z>` and `--key=<file>`) are for `oskac release` only (`--version <X.Y.Z>` is also taken by `oskac self update`): any other command given `--key` or `--version=` prints the usage text to standard error and exits with 2. `--version` alone, with no command, prints `oskac`'s own version.
 - Any `--format=` value other than `json` means the default, human-readable output.
 - An unknown flag is treated as a positional argument, so the command is not recognized. `oskac` then prints the usage text to standard error and exits with 2. Running `oskac` with no arguments does the same.
 - A file that cannot be read prints `error: cannot read <path>: <reason>` to standard error and exits with 1, even with `--format=json`.
@@ -132,6 +132,7 @@ USAGE:
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
 | `--filter=<substring>` | `test` | Run only the tests whose names contain `<substring>`, case-sensitive. Also written `--filter <substring>`, unless the substring starts with `--`. The others are neither run nor reported as tests, and the report says how many were filtered out. A filter that matches no test is an error (exit code 1). A missing or empty substring or a repeated flag is a usage error that says which, `error: --filter ...` on standard error (with `--format=json`, `{"ok":false,"error":"usage","message":"--filter ..."}` on standard output); the flag on any other command prints the usage text. Either exits with 2. |
 | `--update` | `test` | Write each snapshot that `t.assert_snapshot` finds missing or different, instead of failing the test, and list what was written. It never deletes a snapshot. Any other command given it is a usage error (exit code 2). See [snapshots](testing.md#snapshots). |
+| `--allow-downgrade` | `self update` | With `--version X`, install release `X` even if it is older than the installed `oskac`; the action is `downgraded`. Without `--version`, or on any other command, it is a usage error (exit code 2). See [`oskac self`](#oskac-self). |
 | `--no-identify` | `self check` | Skip the comparison of the running `oskac`'s SHA-256 with the release's signed `SHA256SUMS`, and the two extra downloads it needs; `identity.state` is `skipped`. Any other command given it is a usage error (exit code 2). See [`oskac self`](#oskac-self). |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
@@ -409,7 +410,7 @@ On success it prints the files it wrote and exits with 0. With `--format=json` i
 
 ## `oskac self`
 
-`oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation, check it against the signed release index and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`). `info` and `uninstall` make no network connection; `self check` is the one command that does, to `https://oskalang.dev` only, and `oskac` uses the network for nothing else.
+`oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation, check it against the signed release index and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`). `info` and `uninstall` make no network connection; `self check` and `self update` are the only commands that do, to `https://oskalang.dev` only, and `oskac` uses the network for nothing else.
 
 `oskac self check` reports the installed and the latest version and whether the running binary is a genuine release, verified against the release key built into `oskac`. It exits 0 whether or not an update exists. `--no-identify` skips the comparison of the binary's SHA-256 with the release's signed `SHA256SUMS`. The JSON fields, the identity states and the error codes are in [Check with `oskac self check`](install.md#check-with-oskac-self-check). `oskac self update [--version X [--allow-downgrade]]` replaces this `oskac` with the latest release, or with release `X`, after the update checker has verified the signed index, the `SHA256SUMS` signature, the binary's SHA-256 and the version the new binary reports, and only on a managed install (one the installer put in place and recorded in the receipt, at the path of the running `oskac`); any other install is refused with `unmanaged_install` before any network use. It prints `updated`, `current` or `downgraded` (`--format=json`: `ok`, `action`, `from`, `to`, `index_serial`, `site`, `warnings`). A release older than the installed one is refused with `downgrade_refused` unless `--version X --allow-downgrade` names it. A failure leaves the installed `oskac` and the receipt as they were. Any other `self` command or flag is a usage error (exit code 2); with `--format=json` it prints `{"ok":false,"error":"usage","message":"..."}`.
 

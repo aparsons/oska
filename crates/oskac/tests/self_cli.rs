@@ -376,7 +376,7 @@ fn unknown_self_commands_and_flags_are_json_usage_errors_with_format_json() {
     let scratch = new_scratch("usage-json");
     for args in [
         &["self", "--format=json"][..],
-        &["self", "update", "--format=json"],
+        &["self", "upgrade", "--format=json"],
         &["self", "info", "--bogus", "--format=json"],
         &[
             "self",
@@ -405,7 +405,7 @@ fn unknown_self_commands_and_flags_are_json_usage_errors_with_format_json() {
 #[test]
 fn unknown_self_commands_are_usage_errors() {
     let scratch = new_scratch("usage");
-    for args in [&["self"][..], &["self", "update"], &["self", "info", "x"]] {
+    for args in [&["self"][..], &["self", "upgrade"], &["self", "info", "x"]] {
         let output = oskac(scratch.path(), args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         assert!(text(&output.stderr).contains("oskac self info"), "{args:?}");
