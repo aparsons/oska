@@ -46,6 +46,8 @@
 //!   only the compiler's `#[global_allocator]` glue calls.
 
 mod heap;
+#[cfg(target_arch = "x86_64")]
+mod mem;
 mod net;
 mod refusal;
 #[cfg(unix)]
@@ -60,6 +62,9 @@ pub use wording::{
 };
 
 pub use heap::{SizeClassAlloc, HOLD_CAP, HOLD_MAX};
+#[cfg(target_arch = "x86_64")]
+#[doc(hidden)]
+pub use mem::{copy_slice, move_within, MemPath, ERMS_MIN};
 pub use net::{exchange_datagram, NetListener, NetStream};
 #[cfg(unix)]
 pub use unix::system_name_servers;

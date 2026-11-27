@@ -394,6 +394,10 @@ pub struct Body<'c, 'd, 'a> {
     /// types are solved, in [`Body::finish`].
     typed: Vec<(Span, Ty)>,
     typed_args: Vec<(Span, Vec<Ty>)>,
+    /// The `Secret.new` calls whose `let` writes `Secret<Float>`: the
+    /// resolver already reported that type (`E0357`), so the call is not
+    /// reported again.
+    secret_float_written: Vec<Span>,
     /// Closures that captured nothing capability-bearing, but captured a
     /// value whose type was not yet solved. [`Body::finish`] makes each a
     /// `cap fn` if a capture turned out capability-bearing.
@@ -485,6 +489,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             deferred: Vec::new(),
             typed: Vec::new(),
             typed_args: Vec::new(),
+            secret_float_written: Vec::new(),
             open_closures: Vec::new(),
             uses: purity::Uses::default(),
             deriving: std::cell::RefCell::default(),
@@ -583,7 +588,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .trait_callee(&ty, ty::DISPLAY, "to_string")
                     .map(Resolution::Display),
                 Deferred::SecretNew => {
-                    self.secret_made(&ty, span);
+                    if !self.secret_float_written.contains(&span) {
+                        self.secret_made(&ty, span);
+                    }
                     None
                 }
             };
@@ -2207,6 +2214,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     Some(written) => {
                         self.check_written(written);
                         let ty = self.lower.ty(written);
+                        if self.secret_inner(&ty).is_some_and(|inner| inner.is_float()) {
+                            self.secret_float_written.push(value.span);
+                        }
                         self.check(value, &ty);
                         ty
                     }

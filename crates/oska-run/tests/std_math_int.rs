@@ -234,6 +234,43 @@ fn the_one_quotient_that_overflows_panics_with_p0001() {
 }
 
 #[test]
+fn rem_euclid_of_min_by_minus_one_is_zero_on_both_backends() {
+    // #796 expected `P0001` here (the quotient overflows, as in
+    // `floor_div`), but `%` by -1 gives 0 on both backends, which is the
+    // right remainder. Pinned so it stays so.
+    assert_runs(
+        &one("math.rem_euclid(-9223372036854775807 - 1, -1)"),
+        &[],
+        "0\n",
+    );
+}
+
+#[test]
+fn isqrt_and_pow_loops_count_steps() {
+    for call in ["math.isqrt(9223372036854775807)", "math.pow(3, 39)"] {
+        let src = one(call);
+        let run = |max_steps| {
+            run_with_limits(
+                &src,
+                &mut FakeHost::new(),
+                &[PROGRAM_PATH.to_string()],
+                Limits {
+                    max_steps: Some(max_steps),
+                    ..Limits::NONE
+                },
+            )
+        };
+        assert_eq!(run(100_000).panic.map(|p| p.code), None, "{call}");
+        let stopped = run(5);
+        assert_eq!(
+            stopped.panic.expect("the limit stops it").code,
+            "P0038",
+            "{call}"
+        );
+    }
+}
+
+#[test]
 fn a_loop_in_a_helper_counts_steps() {
     let src = one("math.gcd(832040, 514229)");
     let run = |max_steps| {
