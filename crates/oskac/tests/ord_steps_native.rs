@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A loop of comparisons under `--max-steps` (spec #660, ticket #664; ADR
-//! 0021 and 0031): `<` and `cmp` on text, `Bool` and integers count the
+//! 0021 and 0034): `<` and `cmp` on text, `Bool` and integers count the
 //! same steps, and stop at the same step with the same output, on the
 //! interpreter and natively.
 
