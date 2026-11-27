@@ -155,6 +155,14 @@ impl DirRead {
     // root itself), sorted so the order is the same on every host. A name
     // comes from outside the program, so it is untrusted.
     pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
+    // Whether anything is at `path` (`"."` is the root itself, which is
+    // always there). A name or directory that is not there gives
+    // `Ok(false)`; a path that leaves the root, or meets a symlink, is an
+    // `IoError`, as for a read.
+    pub fn exists(self, path: Path) -> Result<Bool, IoError>
+    // The kind and size of what is at `path`. A symlink is refused, and so
+    // is a regular file with another hard link, as for a read.
+    pub fn metadata(self, path: Path) -> Result<Metadata, IoError>
 }
 
 // A directory capability that only writes. See `Dir`.
@@ -176,6 +184,23 @@ impl DirWrite {
     // already there is kept, with everything in it, and anything else
     // there is an error. A symlink at `path` is never followed.
     pub fn create_dir(self, path: Path) -> Result<(), IoError>
+    // Add `contents` to the end of the file at `path`, which is created
+    // when it is not there. Nothing already in it changes. A symlink at
+    // `path` is never followed, and a file with another hard link is
+    // refused, as for `write`.
+    pub fn append(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
+    // Remove the regular file at `path`. A symlink, a directory and a file
+    // with another hard link are refused, as for a read.
+    pub fn remove_file(self, path: Path) -> Result<(), IoError>
+    // Remove the directory at `path`, which must be empty: there is no
+    // recursive remove. A symlink is refused.
+    pub fn remove_dir(self, path: Path) -> Result<(), IoError>
+    // Move the regular file at `from` to `to`, replacing a regular file
+    // there in one step. Both paths are beneath this one root, and the
+    // result stays inside it. A symlink, a directory or a file with
+    // another hard link at either path is refused. Moving a file to its
+    // own path changes nothing.
+    pub fn rename(self, from: Path, to: Path) -> Result<(), IoError>
 }
 
 // A file capability: it reaches exactly one file, and takes no path. It
@@ -194,6 +219,9 @@ impl FileRead {
     pub fn read_to_string(self) -> Result<Untrusted<String>, IoError>
     // The file's bytes, as they are, UTF-8 or not.
     pub fn read_bytes(self) -> Result<Untrusted<Bytes>, IoError>
+    // The kind and size of the file. A file that is not there is an
+    // `IoError`.
+    pub fn metadata(self) -> Result<Metadata, IoError>
 }
 
 // A file capability that only writes. See `FileRead`.
@@ -205,6 +233,28 @@ impl FileWrite {
     pub fn write(self, contents: Untrusted<String>) -> Result<(), IoError>
     // `write` with bytes: the file holds exactly `contents`.
     pub fn write_bytes(self, contents: Untrusted<Bytes>) -> Result<(), IoError>
+    // Add `contents` to the end of the file, creating it when it is not
+    // there.
+    pub fn append(self, contents: Untrusted<String>) -> Result<(), IoError>
+}
+
+// What a name beneath a directory capability is: `DirRead.metadata` and
+// `FileRead.metadata` give it, with the size.
+pub enum FileKind {
+    // A regular file.
+    File,
+    // A directory.
+    Directory,
+    // Anything else, such as a FIFO or a device.
+    Other,
+}
+
+// The kind of a name and the size of a file in bytes (0 for anything
+// that is not a regular file). Times and permissions are left out: they
+// differ on every platform.
+pub struct Metadata {
+    pub kind: FileKind,
+    pub size: Int,
 }
 
 // Network access, as `main` declares it. `Net`, `NetConnect` and

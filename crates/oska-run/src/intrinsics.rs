@@ -90,20 +90,28 @@ pub const INTRINSICS: Table = &[
     ("Dir.read_only", Plain(fs_read_only)),
     ("Dir.restrict_to", Plain(dir_restrict_to)),
     ("Dir.write_only", Plain(fs_write_only)),
+    ("DirRead.exists", Plain(fs_exists)),
     ("DirRead.list_dir", Plain(fs_list_dir)),
+    ("DirRead.metadata", Plain(fs_metadata)),
     ("DirRead.read_bytes", Plain(fs_read_bytes)),
     ("DirRead.read_to_string", Plain(fs_read_to_string)),
     ("DirRead.restrict_to", Plain(dir_restrict_to)),
     ("DirRead.restrict_to_file", Plain(dir_restrict_to_file)),
+    ("DirWrite.append", Plain(fs_append)),
     ("DirWrite.create_dir", Plain(fs_create_dir)),
+    ("DirWrite.remove_dir", Plain(fs_remove_dir)),
+    ("DirWrite.remove_file", Plain(fs_remove_file)),
+    ("DirWrite.rename", Plain(fs_rename)),
     ("DirWrite.restrict_to", Plain(dir_restrict_to)),
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.write", Plain(fs_write)),
     ("DirWrite.write_bytes", Plain(fs_write_bytes)),
     ("Env.get", Plain(env_get)),
     ("Env.secret", HigherOrder(env_secret)),
+    ("FileRead.metadata", Plain(file_metadata)),
     ("FileRead.read_bytes", Plain(file_read_bytes)),
     ("FileRead.read_to_string", Plain(file_read_to_string)),
+    ("FileWrite.append", Plain(file_append)),
     ("FileWrite.write", Plain(file_write)),
     ("FileWrite.write_bytes", Plain(file_write_bytes)),
     ("Fs.read_only", Plain(fs_read_only)),
@@ -853,6 +861,112 @@ fn fs_create_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Val
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
         host.create_dir_beneath(root, &names)
+    });
+    io_unit(result, span)
+}
+
+/// `DirRead.exists(self, path)`: whether anything is at `path`, which
+/// `.` makes the root itself. A path that leaves the root is an error,
+/// not `false`.
+fn fs_exists(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let raw = args[1].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
+        let names = confine::names(raw)?;
+        host.exists_beneath(root, &names)
+    });
+    match result {
+        Ok(there) => Ok(Value::ok(Value::Bool(there))),
+        Err(err) => io_failure(&err, span),
+    }
+}
+
+/// `DirRead.metadata(self, path)`: the kind and size of what is at
+/// `path`.
+fn fs_metadata(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let raw = args[1].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
+        let names = confine::names(raw)?;
+        host.metadata_beneath(root, &names)
+    });
+    metadata_value(result, span)
+}
+
+/// `FileRead.metadata(self)`: the kind and size of the file.
+fn file_metadata(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let result = file_root(&args[0]).and_then(|root| host.metadata_beneath(root, &[]));
+    metadata_value(result, span)
+}
+
+/// The `Metadata` `result` describes, or the failure.
+fn metadata_value(result: io::Result<crate::host::Meta>, span: Span) -> Result<Value, Panic> {
+    use crate::host::Kind;
+    match result {
+        Ok(meta) => {
+            let kind = match meta.kind {
+                Kind::File => "File",
+                Kind::Directory => "Directory",
+                Kind::Other => "Other",
+            };
+            Ok(Value::ok(Value::Struct {
+                ty: "Metadata".into(),
+                fields: Rc::new(vec![
+                    Value::variant("FileKind", kind, Vec::new()),
+                    Value::int(i128::from(meta.size)),
+                ]),
+            }))
+        }
+        Err(err) => io_failure(&err, span),
+    }
+}
+
+/// `DirWrite.append(self, path, contents)`: confined like a write, so
+/// `path` ends in a plain name.
+fn fs_append(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let raw = args[1].fields()[0].as_str();
+    let contents = text(args, 2).as_bytes();
+    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+        let names = confine::names_to_create(raw)?;
+        host.append_file_beneath(root, &names, contents)
+    });
+    io_unit(result, span)
+}
+
+/// `FileWrite.append(self, contents)`.
+fn file_append(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let contents = text(args, 1).as_bytes();
+    let result = file_root(&args[0]).and_then(|root| host.append_file_beneath(root, &[], contents));
+    io_unit(result, span)
+}
+
+/// `DirWrite.remove_file(self, path)`: confined like a write.
+fn fs_remove_file(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let raw = args[1].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+        let names = confine::names_to_create(raw)?;
+        host.remove_file_beneath(root, &names)
+    });
+    io_unit(result, span)
+}
+
+/// `DirWrite.remove_dir(self, path)`: confined like a write.
+fn fs_remove_dir(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let raw = args[1].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+        let names = confine::names_to_create(raw)?;
+        host.remove_dir_beneath(root, &names)
+    });
+    io_unit(result, span)
+}
+
+/// `DirWrite.rename(self, from, to)`: both paths are confined like a
+/// write, and walked beneath this one root.
+fn fs_rename(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let from = args[1].fields()[0].as_str();
+    let to = args[2].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+        let from = confine::names_to_create(from)?;
+        let to = confine::names_to_create(to)?;
+        host.rename_beneath(root, &from, &to)
     });
     io_unit(result, span)
 }

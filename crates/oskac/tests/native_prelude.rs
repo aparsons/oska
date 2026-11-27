@@ -230,6 +230,78 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "DirRead.exists",
+        Run::Main,
+        r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    let there = read.restrict_to(".").exists(Path.new("missing"))?
+    io.println(if there { "yes" } else { "no" })
+}"#,
+    ),
+    (
+        "DirRead.metadata",
+        Run::Main,
+        r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    match read.restrict_to(".").metadata(Path.new("missing")) {
+        Ok(m) => io.println("found")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "DirWrite.append",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to(".").append(Path.new("log.txt"), "line")
+}"#,
+    ),
+    (
+        "DirWrite.remove_file",
+        Run::Main,
+        r#"fn main(io: Stdout, write: FsWrite) -> Result<(), IoError> {
+    match write.restrict_to(".").remove_file(Path.new("missing")) {
+        Ok(_) => io.println("removed")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "DirWrite.remove_dir",
+        Run::Main,
+        r#"fn main(io: Stdout, write: FsWrite) -> Result<(), IoError> {
+    match write.restrict_to(".").remove_dir(Path.new("missing")) {
+        Ok(_) => io.println("removed")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "DirWrite.rename",
+        Run::Main,
+        r#"fn main(io: Stdout, write: FsWrite) -> Result<(), IoError> {
+    match write.restrict_to(".").rename(Path.new("missing"), Path.new("other")) {
+        Ok(_) => io.println("moved")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "FileRead.metadata",
+        Run::Main,
+        r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
+    match read.restrict_to_file("missing.txt").metadata() {
+        Ok(m) => io.println("found")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
+        "FileWrite.append",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to_file("file.txt").append("more")
+}"#,
+    ),
+    (
         "FileRead.read_to_string",
         Run::Main,
         r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
