@@ -1,0 +1,226 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.jws`: the JSON Web Signature (RFC 7515) that ACME (RFC 8555,
+// section 6.2) wraps every request in, the JSON Web Key (RFC 7517) of a
+// P-256 public key, and the JWK thumbprint (RFC 7638). A module sees them
+// only after `use std.jws`.
+//
+// `sign_jwk` and `sign_kid` build the flattened JSON serialization
+// `{"protected":...,"payload":...,"signature":...}` with ES256 (ECDSA on
+// P-256 and SHA-256, RFC 7518 section 3.4). The protected header carries
+// `alg`, `nonce`, `url` and the key as `jwk` (an account's first request)
+// or `kid` (every later one). `alg` is always `ES256`: there is no
+// parameter for it, so a header can never say `none` or a MAC algorithm.
+// The payload is the bytes the caller gives, in base64url; the empty
+// payload (POST-as-GET, RFC 8555 section 6.3) is the empty string, not the
+// encoding of an empty JSON value. The signature is the raw 64-byte
+// `R || S`, deterministic (RFC 6979, see `std.ecdsa`), so the same request
+// signs to the same bytes.
+//
+// `jwk` writes a key's JWK with its members in the lexicographic order
+// RFC 7638 asks of a thumbprint input, and `thumbprint` is the base64url
+// SHA-256 of that text. `thumbprint_of_jwk` computes the thumbprint of a
+// JWK that arrived as text, in any member order and with any whitespace,
+// for an `EC` key on P-256, P-384 or P-521 or an `RSA` key: it reads only
+// the required members and writes them back canonically, so two texts of
+// one key have one thumbprint, and a member it does not need (`kid`,
+// `use`, `alg`) changes nothing.
+//
+// The module holds no secret of its own. The one `expose()` reads a
+// signature, which is public, and the one public key it derives from a
+// private key is public by nature. Every function is a pure function.
+//
+// This code is hand-written and has not been audited (ADR 0012). It is
+// held by RFC 7515's appendix A.3 (an ES256 signature that `std.ecdsa`
+// verifies), RFC 7638's section 3.1 thumbprint, and by every JWS it builds
+// verifying under `std.ecdsa.verify`, on the interpreter and natively on
+// every supported platform.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+
+use std.base64url
+use std.ecdsa
+use std.json
+use std.p256
+use std.sha2
+
+// Why a JWS, a JWK or a thumbprint was not made.
+pub enum JwsError {
+    // The private key is not 32 bytes in 1 to n - 1, or the public key is
+    // not a P-256 key.
+    InvalidKey,
+    // The `nonce`, the `url` or the `kid` is empty or has a character that
+    // would need escaping in JSON (a quote, a backslash or a control
+    // character). Real nonces, URLs and account URLs never do.
+    InvalidField,
+    // The JWK text is not a JSON object, lacks a member its `kty` needs,
+    // has a member that is not base64url, or is of a type or curve this
+    // module does not know.
+    InvalidJwk,
+}
+
+impl Display for JwsError {
+    fn to_string(self) -> String {
+        match self {
+            JwsError.InvalidKey => "the key is not a valid P-256 key"
+            JwsError.InvalidField => "a header field is empty or has a character that needs escaping"
+            JwsError.InvalidJwk => "the JWK is malformed or of an unsupported type"
+        }
+    }
+}
+
+// The P-256 public key of the private key `key` (32 bytes in 1 to n - 1),
+// as `std.ecdsa` loads it.
+pub fn public_key(key: Secret<Bytes>) -> Result<ecdsa.PublicKey, JwsError> {
+    match p256.public_key(key) {
+        Some(point) => match ecdsa.PublicKey.from_bytes(ecdsa.Curve.P256, point.expose()) {
+            Some(k) => Ok(k)
+            None => Err(JwsError.InvalidKey)
+        }
+        None => Err(JwsError.InvalidKey)
+    }
+}
+
+// The JWK text of `kty`, `crv`, `x` and `y` in RFC 7638's order.
+fn ec_text(crv: String, x: String, y: String) -> String {
+    "\{\"crv\":\"{crv}\",\"kty\":\"EC\",\"x\":\"{x}\",\"y\":\"{y}\"\}"
+}
+
+// The JWK of the P-256 public key `key` (RFC 7517, RFC 7518 section
+// 6.2.1): `{"crv":"P-256","kty":"EC","x":...,"y":...}`, with the members in
+// the order a thumbprint hashes them, and no whitespace. A key that is not
+// on P-256 is `InvalidKey`.
+pub fn jwk(key: ecdsa.PublicKey) -> Result<String, JwsError> {
+    let point = key.to_bytes()
+    if point.len() != 65 || point.at(0) != 4 {
+        return Err(JwsError.InvalidKey)
+    }
+    Ok(ec_text("P-256", base64url.encode(point.slice(1, 33)), base64url.encode(point.slice(33, 65))))
+}
+
+// The RFC 7638 thumbprint of the P-256 public key `key`: the unpadded
+// base64url of the SHA-256 of its JWK text. An ACME key authorization
+// (RFC 8555 section 8.1) is the challenge token, a dot and this.
+pub fn thumbprint(key: ecdsa.PublicKey) -> Result<String, JwsError> {
+    let text = jwk(key)?
+    Ok(base64url.encode(sha2.sha256(text.to_bytes())))
+}
+
+// The member `name` of the JWK `object` as canonical base64url: decoded
+// strictly, then encoded again, so what is written is trusted text of the
+// alphabet and never the caller's.
+fn member(object: json.Value, name: String) -> Result<String, JwsError> {
+    match object.text(name) {
+        Some(text) => match base64url.decode(text) {
+            Ok(bytes) => Ok(base64url.encode(bytes))
+            Err(_) => Err(JwsError.InvalidJwk)
+        }
+        None => Err(JwsError.InvalidJwk)
+    }
+}
+
+// The JWK member `name` when it is exactly one of `allowed`, as the
+// trusted constant.
+fn one_of_member(object: json.Value, name: String, allowed: List<String>) -> Result<String, JwsError> {
+    match object.text(name) {
+        Some(text) => {
+            let seen = text.to_bytes()
+            for candidate in allowed {
+                if seen == candidate.to_bytes() {
+                    return Ok(candidate)
+                }
+            }
+            Err(JwsError.InvalidJwk)
+        }
+        None => Err(JwsError.InvalidJwk)
+    }
+}
+
+// The RFC 7638 thumbprint of the JWK in `text`, whatever order its members
+// are in and whatever whitespace it has (RFC 7638 section 3.2: only the
+// required members count). Types: `EC` (members `crv`, `x`, `y`) and `RSA`
+// (`e`, `n`). Anything else, a duplicate member, a required member that is
+// missing or is not strict base64url, or text that is not a JSON object is
+// `InvalidJwk`. Unlike `thumbprint`, the key is not checked to be a point
+// on its curve: the thumbprint names the JWK, as the RFC defines it.
+pub fn thumbprint_of_jwk(text: Untrusted<String>) -> Result<String, JwsError> {
+    match json.parse(text) {
+        Ok(object) => thumbprint_of_object(object)
+        Err(_) => Err(JwsError.InvalidJwk)
+    }
+}
+
+fn thumbprint_of_object(object: json.Value) -> Result<String, JwsError> {
+    if !object.as_members().is_some() {
+        return Err(JwsError.InvalidJwk)
+    }
+    let kty = one_of_member(object, "kty", ["EC", "RSA"])?
+    var canonical = ""
+    if kty == "EC" {
+        let crv = one_of_member(object, "crv", ["P-256", "P-384", "P-521"])?
+        canonical = ec_text(crv, member(object, "x")?, member(object, "y")?)
+    } else {
+        let e = member(object, "e")?
+        let n = member(object, "n")?
+        canonical = "\{\"e\":\"{e}\",\"kty\":\"RSA\",\"n\":\"{n}\"\}"
+    }
+    Ok(base64url.encode(sha2.sha256(canonical.to_bytes())))
+}
+
+// Whether `text` can sit inside a JSON string with no escape: not empty,
+// no quote, no backslash, no control character or DEL.
+fn plain(text: String) -> Bool {
+    let bytes = text.to_bytes()
+    if bytes.len() == 0 {
+        return false
+    }
+    for i in 0..bytes.len() {
+        let b = bytes.at(i).to_int()
+        if b < 32 || b == 34 || b == 92 || b == 127 {
+            return false
+        }
+    }
+    true
+}
+
+// The flattened JWS of `payload` under the protected header text `header`.
+fn seal(key: Secret<Bytes>, header: String, payload: Bytes) -> Result<String, JwsError> {
+    let protected = base64url.encode(header.to_bytes())
+    let body = base64url.encode(payload)
+    let signing_input = "{protected}.{body}"
+    let digest = sha2.sha256(signing_input.to_bytes())
+    match ecdsa.sign(key, digest) {
+        Some(signature) => {
+            let sig = base64url.encode(signature.expose())
+            Ok("\{\"protected\":\"{protected}\",\"payload\":\"{body}\",\"signature\":\"{sig}\"\}")
+        }
+        None => Err(JwsError.InvalidKey)
+    }
+}
+
+// The flattened JWS (RFC 7515 section 7.2.2) of `payload`, signed with the
+// P-256 private key `key`, whose protected header names the key itself as
+// `jwk`: the form of an ACME `newAccount` request and of a revocation
+// signed with the certificate's own key. The header is
+// `{"alg":"ES256","jwk":{...},"nonce":...,"url":...}`. `payload` is the
+// request body, such as JSON text as bytes; it is empty for POST-as-GET.
+// A `nonce` or `url` that is empty or needs a JSON escape is
+// `InvalidField`; a bad key is `InvalidKey`.
+pub fn sign_jwk(key: Secret<Bytes>, nonce: String, url: String, payload: Bytes) -> Result<String, JwsError> {
+    if !plain(nonce) || !plain(url) {
+        return Err(JwsError.InvalidField)
+    }
+    let public = jwk(public_key(key)?)?
+    seal(key, "\{\"alg\":\"ES256\",\"jwk\":{public},\"nonce\":\"{nonce}\",\"url\":\"{url}\"\}", payload)
+}
+
+// As `sign_jwk`, but the protected header names the key by its account URL
+// `kid`: `{"alg":"ES256","kid":...,"nonce":...,"url":...}`, the form of
+// every ACME request after `newAccount`. An empty `kid` is `InvalidField`.
+pub fn sign_kid(key: Secret<Bytes>, kid: String, nonce: String, url: String, payload: Bytes) -> Result<String, JwsError> {
+    if !plain(kid) || !plain(nonce) || !plain(url) {
+        return Err(JwsError.InvalidField)
+    }
+    seal(key, "\{\"alg\":\"ES256\",\"kid\":\"{kid}\",\"nonce\":\"{nonce}\",\"url\":\"{url}\"\}", payload)
+}
