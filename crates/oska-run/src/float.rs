@@ -272,7 +272,9 @@ fn int_to_float(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, 
 }
 
 fn int_to_float_rounded(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
-    // An `as` cast from an integer rounds to nearest, ties to even.
+    // An `as` cast from an integer rounds to nearest, ties to even. This
+    // relies on `Int` being 64-bit: the `as i64` keeps every bit, and the
+    // native `std.rt` version below is written for 64 bits.
     Ok(Value::Float(bits(args[0].as_int() as i64 as f64)))
 }
 

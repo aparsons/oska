@@ -9919,7 +9919,8 @@ pub fn int_fits_float(n: Int) -> Bool {
 }
 
 // `Int.to_float_rounded`, and `Int.to_float` for an `n` it accepts: the
-// nearest `Float`, a tie going to the even significand.
+// nearest `Float`, a tie going to the even significand. It relies on `Int`
+// being 64-bit: the magnitude is a `U64` and `Int.MIN` is handled apart.
 pub fn int_to_float_rounded(n: Int) -> Float {
     if n == 0 {
         return Float.from_bits(0)
