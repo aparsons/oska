@@ -857,5 +857,46 @@ else
   bad "ci.yml's test matrix runs the groups formal, lint, scripts and tests" "matrix groups: $have"
 fi
 
+# The scripts group's concurrency audit (spec #810, ticket #812): every step of
+# the group has a row in docs/agents/check-concurrency.md with a verdict and a
+# reason, so a new suite cannot skip the audit, and no row names a step that is
+# gone. A row is "| `STEP` | shared state | safe or serial | reason |".
+check --group scripts --list
+group_steps=$out
+audit=$repo_root/docs/agents/check-concurrency.md
+# shellcheck disable=SC2016 # sed's backticks are literal here
+rows=$(sed -n 's/^| `\([^`]*\)` |.*/\1/p' "$audit" 2>/dev/null || true)
+missing_rows=
+while IFS= read -r step_name; do
+  [ -n "$step_name" ] || continue
+  printf '%s\n' "$rows" | grep -qxF -- "$step_name" || missing_rows="$missing_rows '$step_name'"
+done <<<"$group_steps"
+if [ -n "$group_steps" ] && [ -z "$missing_rows" ]; then
+  ok "every scripts group step has a row in the concurrency audit"
+else
+  bad "every scripts group step has a row in the concurrency audit" "no row for:$missing_rows"
+fi
+stale_rows=
+while IFS= read -r row_name; do
+  [ -n "$row_name" ] || continue
+  printf '%s\n' "$group_steps" | grep -qxF -- "$row_name" || stale_rows="$stale_rows '$row_name'"
+done <<<"$rows"
+if [ -z "$stale_rows" ]; then
+  ok "every row of the concurrency audit names a scripts group step"
+else
+  bad "every row of the concurrency audit names a scripts group step" "not a step:$stale_rows"
+fi
+# shellcheck disable=SC2016 # awk's $4 and $5 are fields, not shell variables
+bad_rows=$(awk -F'|' '/^\| `/ {
+  v = $4; r = $5
+  gsub(/^ +| +$/, "", v); gsub(/^ +| +$/, "", r)
+  if ((v != "safe" && v != "serial") || r == "") print $2
+}' "$audit" 2>/dev/null || true)
+if [ -z "$bad_rows" ] && [ -n "$rows" ]; then
+  ok "every audit row has a verdict of safe or serial and a reason"
+else
+  bad "every audit row has a verdict of safe or serial and a reason" "bad rows: $bad_rows"
+fi
+
 printf '\n%d passed, %d failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]
