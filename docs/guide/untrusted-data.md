@@ -29,8 +29,8 @@ fn main(io: Stdout, args: Args) -> Result<(), IoError> {
 
 Text operations keep the flag. If any text input is untrusted, every text in the result is untrusted. Results that are not text are trusted, so inspecting untrusted text is free:
 
-- `untrusted.trim()`, `untrusted.lines()`, and `untrusted.split(",")` are untrusted.
-- `untrusted.len()`, `untrusted.contains("@")`, and `untrusted.parse_int()` give a trusted `Int`, `Bool`, or `Option<Int>`.
+- `untrusted.trim()`, `untrusted.lines()`, `untrusted.split(",")`, `untrusted.to_uppercase()` and `untrusted.strip_prefix("x")` are untrusted, and so are the texts in `untrusted.split_once("=")`.
+- `untrusted.len()`, `untrusted.contains("@")`, `untrusted.find("@")`, `untrusted.is_empty()` and `untrusted.parse_int()` give a trusted `Int`, `Bool`, or `Option<Int>`.
 - Interpolating an untrusted value makes the whole string untrusted.
 
 In your own code, a `String` parameter, field, or return type is trusted. Code that accepts raw input declares `Untrusted<String>`. User functions cannot be generic over trust.

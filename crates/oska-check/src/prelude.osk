@@ -989,6 +989,39 @@ impl String {
     // `σ`, wherever it stands.
     #[follows_trust]
     pub fn to_lowercase(self) -> String
+    // Every letter in upper case, one character at a time, by the
+    // character's own Unicode mapping: `"àb".to_uppercase()` is `"ÀB"`.
+    // A character whose upper case is several characters stays as it is,
+    // so `"ß"` is `"ß"`.
+    #[follows_trust]
+    pub fn to_uppercase(self) -> String
+    // Without leading whitespace (Unicode's `White_Space`).
+    #[follows_trust]
+    pub fn trim_start(self) -> String
+    // Without trailing whitespace (Unicode's `White_Space`).
+    #[follows_trust]
+    pub fn trim_end(self) -> String
+    // The position, in characters, of the first place `needle` occurs, or
+    // `None`. The position is a trusted `Int`, whatever the text's trust,
+    // and fits `slice`. An empty `needle` is found at 0, in any text.
+    #[follows_trust]
+    pub fn find(self, needle: String) -> Option<Int>
+    // The text before and after the first `separator`, as a list of
+    // exactly two texts, or `None` when it does not occur. An empty
+    // `separator` is found at the start: `["", text]`.
+    #[follows_trust]
+    pub fn split_once(self, separator: String) -> Option<List<String>>
+    // The text after `prefix`, or `None` when it does not start with it.
+    // An empty `prefix` leaves the text whole.
+    #[follows_trust]
+    pub fn strip_prefix(self, prefix: String) -> Option<String>
+    // The text before `suffix`, or `None` when it does not end with it.
+    // An empty `suffix` leaves the text whole.
+    #[follows_trust]
+    pub fn strip_suffix(self, suffix: String) -> Option<String>
+    // Whether the text has no characters.
+    #[follows_trust]
+    pub fn is_empty(self) -> Bool
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>

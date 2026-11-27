@@ -5,7 +5,7 @@
 #   scripts/bump-rust.sh 1.101.0
 #
 # 1. Sets `channel` in rust-toolchain.toml.
-# 2. Regenerates `escaped_table` and `lowercase_table` in
+# 2. Regenerates `escaped_table`, `lowercase_table` and `uppercase_table` in
 #    crates/oska-check/src/std/rt.osk from that Rust's Unicode
 #    (scripts/bump-rust/tables.rs, built with `rustc +<version>`).
 # 3. Runs scripts/check.sh. If a newer Clippy objects to existing code, the
@@ -73,6 +73,7 @@ splice() {
 
 splice escaped_table escaped
 splice lowercase_table lowercase
+splice uppercase_table uppercase
 
 if [ "${BUMP_RUST_SKIP_CHECK:-}" = 1 ]; then
   exit 0

@@ -270,7 +270,24 @@ Inside a method, a hole may start with `self`, as in `"{self.name}"`. `Bool` has
 
 ## Text
 
-Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `join`, `chars`, `slice`, `repeat`, and `parse_int`. `+` works only on numbers, so build strings by interpolation.
+Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `join`, `chars`, `slice`, `repeat`, `parse_int`, `to_lowercase`, `to_uppercase`, `trim_start`, `trim_end`, `find`, `split_once`, `strip_prefix`, `strip_suffix`, and `is_empty`. `+` works only on numbers, so build strings by interpolation.
+
+`find` gives the position in characters of the first match, which `slice` takes as it is, and an empty needle is found at 0. `split_once` gives the text before and after the first separator as a list of two, `strip_prefix` and `strip_suffix` give the rest of the text, and each of the three gives `None` when the text does not match. `to_uppercase` keeps a character whose upper case is several characters, so `"ß"` stays `"ß"`.
+
+```oska
+fn main(io: Stdout) -> Result<(), IoError> {
+    let line = "  name=Zoë  "
+    let kept = line.trim_start().trim_end()
+    let parts = kept.split_once("=").unwrap_or([])
+    let key = parts.at(0)
+    let at = kept.find("=").unwrap_or(-1)
+    let rest = kept.slice(at + 1, kept.len())
+    let shout = rest.to_uppercase()
+    io.println("{key} {at} {shout}")
+}
+```
+
+This prints `name 4 ZOË`.
 
 Text also carries a trust flag: text from outside the program is an **untrusted value**. That is why a plain `String` parameter is a **structural position**. See [untrusted data and secrets](untrusted-data.md).
 

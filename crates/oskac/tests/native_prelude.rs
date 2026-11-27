@@ -1002,6 +1002,69 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "String.to_uppercase",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("àb ß".to_uppercase())
+}"#,
+    ),
+    (
+        "String.trim_start",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let padded = "  é "
+    let cut = padded.trim_start()
+    io.println("[{cut}]")
+}"#,
+    ),
+    (
+        "String.trim_end",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let padded = "  é "
+    let cut = padded.trim_end()
+    io.println("[{cut}]")
+}"#,
+    ),
+    (
+        "String.find",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let at = "héllo".find("l").unwrap_or(-1)
+    io.println("{at}")
+}"#,
+    ),
+    (
+        "String.split_once",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let parts = "a=b".split_once("=").unwrap_or([])
+    io.println("/".join(parts))
+}"#,
+    ),
+    (
+        "String.strip_prefix",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("foobar".strip_prefix("foo").unwrap_or("none"))
+}"#,
+    ),
+    (
+        "String.strip_suffix",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("foobar".strip_suffix("bar").unwrap_or("none"))
+}"#,
+    ),
+    (
+        "String.is_empty",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let e = shown("".is_empty())
+    io.println(e)
+}"#,
+    ),
+    (
         "String.parse_int",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {
