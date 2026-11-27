@@ -756,6 +756,39 @@ mod tests {
         }
     }
 
+    /// What Windows needs: the live file is a running executable, which
+    /// cannot be overwritten or deleted but can be renamed, so the
+    /// replacement still works while it runs, and nothing of the old file is
+    /// left once it has stopped and been swept.
+    #[cfg(windows)]
+    #[test]
+    fn a_running_executable_is_replaced_by_renaming_it_aside() {
+        let temp = Temp::new("running");
+        let dir = &temp.0;
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let live = dir.join("oskac.exe");
+        std::fs::copy(Path::new(&system).join(r"System32\ping.exe"), &live).expect("a program");
+        let staged = dir.join("staged.exe");
+        std::fs::write(&staged, b"new").expect("staged");
+        // Running, so that it cannot be overwritten.
+        let mut child = Command::new(&live)
+            .args(["-n", "6", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("it runs");
+        assert!(
+            std::fs::write(&live, b"x").is_err(),
+            "a running file is writable"
+        );
+        replace_aside(&staged, &live).expect("replaced while it runs");
+        assert_eq!(std::fs::read(&live).expect("live"), b"new");
+        assert!(!staged.exists());
+        let _ = child.wait();
+        sweep_aside(&live);
+        let left: Vec<_> = std::fs::read_dir(dir).expect("dir").flatten().collect();
+        assert_eq!(left.len(), 1, "{left:?}");
+    }
+
     /// A receipt that cannot be renamed into place puts the version file
     /// back: the two never disagree.
     #[test]
