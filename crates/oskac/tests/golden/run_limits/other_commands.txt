@@ -99,6 +99,11 @@ USAGE:
                                            pinned release key, and whether this
                                            binary is the published one; the
                                            only command that uses the network
+    oskac self update [--version X [--allow-downgrade]] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -204,6 +209,11 @@ USAGE:
                                            pinned release key, and whether this
                                            binary is the published one; the
                                            only command that uses the network
+    oskac self update [--version X [--allow-downgrade]] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -309,6 +319,11 @@ USAGE:
                                            pinned release key, and whether this
                                            binary is the published one; the
                                            only command that uses the network
+    oskac self update [--version X [--allow-downgrade]] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -414,6 +429,11 @@ USAGE:
                                            pinned release key, and whether this
                                            binary is the published one; the
                                            only command that uses the network
+    oskac self update [--version X [--allow-downgrade]] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)

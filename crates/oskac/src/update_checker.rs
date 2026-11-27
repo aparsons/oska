@@ -12,7 +12,13 @@
 //! the program; this side supplies inputs and parses the verdict strictly:
 //! anything it does not understand is [`Failure`], reported as `internal`.
 //!
-//! Only `self_check` starts it (a test, `network_guard`, keeps it so): the
+//! [`update`] runs it for `oskac self update`, with one more grant: write
+//! authority narrowed to one staging file beside the running `oskac`, where
+//! it puts the new binary once it has verified it. It never writes the live
+//! binary, and `oskac` verifies nothing itself: it runs the staged file for
+//! its version and moves it into place (`self_update`).
+//!
+//! Only `self_check` and `self_update` start it (a test keeps it so): the
 //! network is used when the user asks.
 
 use std::io::Read;
@@ -96,13 +102,15 @@ pub enum Verdict {
 pub struct Failure(pub String);
 
 /// The codes the program may refuse with.
-const CODES: [&str; 7] = [
+const CODES: [&str; 9] = [
     "bad_index",
     "stale_index",
     "rollback_refused",
     "network_error",
     "tls_error",
     "bad_checksums",
+    "checksum_mismatch",
+    "downgrade_refused",
     "internal",
 ];
 
@@ -110,10 +118,19 @@ fn failure(why: impl Into<String>) -> Failure {
     Failure(why.into())
 }
 
-/// The arguments after the program's own name.
-fn arguments(ask: &Ask, file: &str) -> Result<Vec<String>, Failure> {
+/// The arguments after the program's own name: the command, the inputs
+/// both commands share (the version, the clock, the serial, whether to
+/// identify, the running file's name, the asset names), then `update`'s
+/// (the release asked for or `-`, the downgrade permission, the staging
+/// file's name or `-`), then a test build's.
+fn arguments(
+    command: &str,
+    ask: &Ask,
+    file: &str,
+    extra: [String; 3],
+) -> Result<Vec<String>, Failure> {
     let mut args = vec![
-        "check".to_string(),
+        command.to_string(),
         ask.version.to_string(),
         ask.now.to_string(),
         ask.remembered.to_string(),
@@ -121,6 +138,7 @@ fn arguments(ask: &Ask, file: &str) -> Result<Vec<String>, Failure> {
         file.to_string(),
         ask.assets.join(","),
     ];
+    args.extend(extra);
     args.extend(test_site()?);
     Ok(args)
 }
@@ -232,19 +250,10 @@ fn drain<R: Read + Send + 'static>(source: R) -> std::thread::JoinHandle<Vec<u8>
     })
 }
 
-/// Run the update checker and read its verdict.
-pub fn check(ask: &Ask) -> Result<Verdict, Failure> {
-    let dir = ask
-        .exe
-        .parent()
-        .ok_or_else(|| failure("the running executable has no directory"))?;
-    let file = ask
-        .exe
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| failure("the running executable's name is not text"))?;
-    let args = arguments(ask, file)?;
-    let (exe, mut child) = launch(&bases(), &args, dir)?;
+/// Run the program with `args` from the directory `dir` and return what it
+/// printed.
+fn run(args: &[String], dir: &Path) -> Result<Vec<u8>, Failure> {
+    let (exe, mut child) = launch(&bases(), args, dir)?;
     // It runs from its file now; on Unix the file can go at once, so that
     // an interrupt leaves nothing behind (Windows removes it on drop).
     #[cfg(unix)]
@@ -269,6 +278,7 @@ pub fn check(ask: &Ask) -> Result<Verdict, Failure> {
     };
     let out = stdout.and_then(|t| t.join().ok()).unwrap_or_default();
     let err = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
+    drop(exe);
     if !status.success() {
         let said = String::from_utf8_lossy(&err);
         let said = said.trim();
@@ -278,7 +288,81 @@ pub fn check(ask: &Ask) -> Result<Verdict, Failure> {
             format!("the update checker ended with {status}: {said}")
         }));
     }
-    parse(&out)
+    Ok(out)
+}
+
+/// The directory and the file name of the running executable.
+fn location(exe: &Path) -> Result<(&Path, &str), Failure> {
+    let dir = exe
+        .parent()
+        .ok_or_else(|| failure("the running executable has no directory"))?;
+    let file = exe
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| failure("the running executable's name is not text"))?;
+    Ok((dir, file))
+}
+
+/// Run the update checker for `self check` and read its verdict.
+pub fn check(ask: &Ask) -> Result<Verdict, Failure> {
+    let (dir, file) = location(ask.exe)?;
+    let none = ["-".to_string(), "0".to_string(), "-".to_string()];
+    let args = arguments("check", ask, file, none)?;
+    parse(&run(&args, dir)?)
+}
+
+/// What `self update` asks the update checker.
+pub struct UpdateAsk<'a> {
+    pub ask: Ask<'a>,
+    /// The release asked for, `X.Y.Z`, or `None` for the latest.
+    pub requested: Option<&'a str>,
+    /// `--allow-downgrade` was given (it needs a release).
+    pub allow_downgrade: bool,
+    /// The name, in the running executable's directory, of the one file
+    /// the program may write.
+    pub staging: &'a str,
+}
+
+/// What the program decided for `self update`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UpdateVerdict {
+    Done(Box<Updated>),
+    /// A refusal, with the program's stable code.
+    Refused {
+        code: String,
+        message: String,
+    },
+}
+
+/// A verified index and release: and, unless `action` is `current`, the
+/// verified binary in the staging file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Updated {
+    /// `updated`, `downgraded` or `current`.
+    pub action: String,
+    pub from: String,
+    pub to: String,
+    pub tag: String,
+    pub serial: u64,
+    pub expires: String,
+    pub warnings: Vec<String>,
+    /// The SHA-256 of the staged binary, which the program checked against
+    /// the signed `SHA256SUMS`; `None` for `current`.
+    pub sha256: Option<String>,
+    /// The release file it came from.
+    pub asset: Option<String>,
+}
+
+/// Run the update checker for `self update` and read its verdict.
+pub fn update(ask: &UpdateAsk) -> Result<UpdateVerdict, Failure> {
+    let (dir, file) = location(ask.ask.exe)?;
+    let extra = [
+        ask.requested.unwrap_or("-").to_string(),
+        if ask.allow_downgrade { "1" } else { "0" }.to_string(),
+        ask.staging.to_string(),
+    ];
+    let args = arguments("update", &ask.ask, file, extra)?;
+    parse_update(&run(&args, dir)?)
 }
 
 /// A string, if `value` is one.
@@ -316,28 +400,108 @@ fn is_digest(text: &str) -> bool {
 }
 
 /// The program's output, strictly: one JSON object and a line break.
-fn parse(out: &[u8]) -> Result<Verdict, Failure> {
+fn one_object(out: &[u8]) -> Result<Json, Failure> {
     let text = std::str::from_utf8(out)
         .map_err(|_| failure("the update checker printed text that is not UTF-8"))?;
     let line = text
         .strip_suffix('\n')
         .filter(|l| !l.contains('\n'))
         .ok_or_else(|| failure("the update checker's output is not one line"))?;
-    let json = Json::parse(line)
-        .map_err(|e| failure(format!("the update checker's output is not JSON: {e}")))?;
+    Json::parse(line).map_err(|e| failure(format!("the update checker's output is not JSON: {e}")))
+}
+
+/// A refusal's code and message, strictly.
+fn refusal(json: &Json) -> Result<(String, String), Failure> {
+    exactly(json, &["ok", "code", "message"])?;
+    let code = string(json.get("code"))?;
+    if !CODES.contains(&code.as_str()) {
+        return Err(failure(format!(
+            "the update checker refused with a code it does not have: {code}"
+        )));
+    }
+    Ok((code, string(json.get("message"))?))
+}
+
+/// An index serial, strictly: 1 to 999999999999999.
+fn serial_of(value: Option<&Json>) -> Result<u64, Failure> {
+    match value {
+        Some(Json::Num(n)) => n
+            .parse::<u64>()
+            .ok()
+            .filter(|s| (1..=999_999_999_999_999).contains(s)),
+        _ => None,
+    }
+    .ok_or_else(|| failure("the update checker's serial is not a serial"))
+}
+
+fn warnings_of(value: Option<&Json>) -> Result<Vec<String>, Failure> {
+    match value {
+        Some(Json::Arr(items)) => items.iter().map(|i| string(Some(i))).collect(),
+        _ => Err(failure("the update checker's warnings are not a list")),
+    }
+}
+
+/// The verdict of `update`, strictly. Its own words must agree: the
+/// versions are versions, the tag is the release's, a real action has a
+/// digest and a file and `current` has neither.
+fn parse_update(out: &[u8]) -> Result<UpdateVerdict, Failure> {
+    let json = one_object(out)?;
     match json.get("ok") {
         Some(Json::Bool(false)) => {
-            exactly(&json, &["ok", "code", "message"])?;
-            let code = string(json.get("code"))?;
-            if !CODES.contains(&code.as_str()) {
-                return Err(failure(format!(
-                    "the update checker refused with a code it does not have: {code}"
-                )));
+            let (code, message) = refusal(&json)?;
+            Ok(UpdateVerdict::Refused { code, message })
+        }
+        Some(Json::Bool(true)) => {
+            exactly(
+                &json,
+                &[
+                    "ok",
+                    "action",
+                    "from",
+                    "to",
+                    "tag",
+                    "index_serial",
+                    "index_expires",
+                    "warnings",
+                    "sha256",
+                    "asset",
+                ],
+            )?;
+            let updated = Updated {
+                action: string(json.get("action"))?,
+                from: string(json.get("from"))?,
+                to: string(json.get("to"))?,
+                tag: string(json.get("tag"))?,
+                serial: serial_of(json.get("index_serial"))?,
+                expires: string(json.get("index_expires"))?,
+                warnings: warnings_of(json.get("warnings"))?,
+                sha256: option_string(json.get("sha256"))?,
+                asset: option_string(json.get("asset"))?,
+            };
+            let real = ["updated", "downgraded"].contains(&updated.action.as_str());
+            let sound = (real || updated.action == "current")
+                && crate::semver::parse(&updated.from).is_some()
+                && crate::semver::parse(&updated.to).is_some()
+                && updated.tag == format!("v{}", updated.to)
+                && (real == updated.sha256.as_deref().is_some_and(is_digest))
+                && (real == updated.asset.is_some())
+                && (real || updated.sha256.is_none());
+            if !sound {
+                return Err(failure("the update checker's answer is not what was asked"));
             }
-            Ok(Verdict::Refused {
-                code,
-                message: string(json.get("message"))?,
-            })
+            Ok(UpdateVerdict::Done(Box::new(updated)))
+        }
+        _ => Err(failure("the update checker's answer has no verdict")),
+    }
+}
+
+/// The verdict of `check`, strictly.
+fn parse(out: &[u8]) -> Result<Verdict, Failure> {
+    let json = one_object(out)?;
+    match json.get("ok") {
+        Some(Json::Bool(false)) => {
+            let (code, message) = refusal(&json)?;
+            Ok(Verdict::Refused { code, message })
         }
         Some(Json::Bool(true)) => {
             exactly(
@@ -353,21 +517,8 @@ fn parse(out: &[u8]) -> Result<Verdict, Failure> {
                     "identity",
                 ],
             )?;
-            let serial = match json.get("index_serial") {
-                Some(Json::Num(n)) => n
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|s| (1..=999_999_999_999_999).contains(s)),
-                _ => None,
-            }
-            .ok_or_else(|| failure("the update checker's serial is not a serial"))?;
-            let warnings = match json.get("warnings") {
-                Some(Json::Arr(items)) => items
-                    .iter()
-                    .map(|i| string(Some(i)))
-                    .collect::<Result<Vec<_>, _>>()?,
-                _ => return Err(failure("the update checker's warnings are not a list")),
-            };
+            let serial = serial_of(json.get("index_serial"))?;
+            let warnings = warnings_of(json.get("warnings"))?;
             let who = json
                 .get("identity")
                 .ok_or_else(|| failure("the update checker gave no identity"))?;
@@ -466,7 +617,7 @@ mod tests {
             src.contains(&format!("\"{}\"", key.trim_end())),
             "the pinned key is not site/oska-release.pub"
         );
-        assert!(!super::source().contains("args.get(8)"));
+        assert!(!super::source().contains("args.get(11)"));
     }
 
     fn done(identity: &str) -> String {

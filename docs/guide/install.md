@@ -81,7 +81,9 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `network_error` | `oskac self check`: no route, DNS failure, timeout, refused connection, a redirect, a status other than 200, or a response past its size cap. |
 | `tls_error` | `oskac self check`: the TLS handshake or the site's certificate was refused (an untrusted or expired certificate, a wrong host, a bad handshake). A wrong system clock can cause it. |
 | `bad_checksums` | `oskac self check`: the release's `SHA256SUMS` is not signed by the release key in the `oska-release` namespace, is for another release, or is not in the checksum format. |
-| `internal` | `oskac self check`: the update checker could not be run or its answer was not understood. |
+| `unmanaged_install` | `oskac self update`: this `oskac` is not a managed install (no receipt, a receipt for another path or version), so it is not replaced. Re-run the installer or rebuild from source. |
+| `replace_failed` | `oskac self update`: the verified binary could not be moved into place; the installed `oskac` is as it was. |
+| `internal` | `oskac self check` and `self update`: the update checker could not be run or its answer was not understood. |
 | `install_failed` | The binary or the receipt could not be written into place, or neither `OSKA_HOME` nor a home directory is set. |
 | `not_installed` | `--uninstall` found no install receipt in the Oska home, or there is no Oska home because neither `OSKA_HOME` nor a home directory is set. Nothing was removed. |
 | `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, in a `.config/oska` directory, reached through a symlink anywhere in its path, or containing `..`, or a receipt it cannot read. Nothing was removed. |

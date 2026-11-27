@@ -540,6 +540,9 @@ fn grant_flags_are_usage_errors_out_of_place() {
     let help = oskac(&dir, &["--help"]);
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(help.contains("--grant=<file>"), "{help}");
+    // `oskac self update --allow-downgrade` (#259) lets a version go back,
+    // which has nothing to do with authority.
+    let help = help.replace("--allow-downgrade", "");
     assert!(
         !help.contains("update-grant") && !help.contains("allow"),
         "{help}"

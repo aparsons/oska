@@ -145,7 +145,7 @@ pub(crate) fn usage(json: bool) -> ExitCode {
     if json {
         outln!(
             "{{\"ok\":false,\"error\":\"usage\",\"message\":{}}}",
-            quote("the self commands are `oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]` and `oskac self uninstall [--format=json]`")
+            quote("the self commands are `oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]`, `oskac self update [--version X [--allow-downgrade]] [--format=json]` and `oskac self uninstall [--format=json]`")
         );
     } else {
         eprint!("{}", crate::USAGE);
@@ -262,11 +262,11 @@ pub(crate) fn read_receipt(path: &Path) -> Result<Json, String> {
 /// Whether this `oskac` is the install the receipt records: the receipt's
 /// version is this version, and one of its binary entries is this
 /// executable, by path.
-pub(crate) fn identity(receipt: &Json, exe: Option<&Path>) -> Result<(), String> {
+pub(crate) fn identity(receipt: &Json, exe: Option<&Path>, running: &str) -> Result<(), String> {
     let version = receipt.get("version").and_then(Json::as_str);
-    if version != Some(VERSION) {
+    if version != Some(running) {
         return Err(format!(
-            "the receipt records version {}, and this oskac is {VERSION}",
+            "the receipt records version {}, and this oskac is {running}",
             version.unwrap_or("none")
         ));
     }
@@ -305,7 +305,7 @@ pub(crate) fn info(json: bool) -> ExitCode {
     }
     let managed = receipt
         .as_ref()
-        .map(|r| identity(r, exe.as_deref()))
+        .map(|r| identity(r, exe.as_deref(), VERSION))
         .unwrap_or_else(|| Err("there is no readable install receipt".to_string()));
 
     if json {
@@ -799,7 +799,7 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
 
     // The binary and the records are this install's only when the receipt
     // records this oskac; otherwise they are skipped, and the rest goes.
-    let managed = identity(&receipt, executable().as_deref());
+    let managed = identity(&receipt, executable().as_deref(), VERSION);
     let mut outcome = Outcome::default();
     // `bin` is handled with the Oska home, after the files.
     let mut acted: HashSet<PathBuf> = HashSet::from([bin_dir.clone()]);

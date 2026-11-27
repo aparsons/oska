@@ -962,7 +962,8 @@ impl Session {
     // The `site` scenarios (#258): the fixture release site. `site` answers
     // a GET of a path with the file of that name beneath the directory (the
     // fifth argument), or 404; `site_redirect` answers every GET with a
-    // redirect; `site_large` claims a body far past any cap.
+    // redirect; `site_large` claims a body far past any cap; `site_cut` cuts the
+    // connection halfway through a binary (#259).
     fn site_reply(var self, request: Bytes) -> Result<(), IoError> {
         let asked = request.slice(1, request.len()).to_text().unwrap_or("")
         var line = ""
@@ -999,12 +1000,26 @@ impl Session {
             }
         }
         var out = head.to_bytes()
-        out.append(body)
+        // `site_cut` cuts the connection in the middle of a download: the
+        // binary's head claims all of it, half of it comes, and the stream
+        // ends without close_notify.
+        let cut = scenario == "site_cut" && path.ends_with("oskac-fixture")
+        if cut {
+            out.append(body.slice(0, body.len() / 2))
+        } else {
+            out.append(body)
+        }
         var at = 0
         while at < out.len() {
             let stop = if at + 16384 > out.len() { out.len() } else { at + 16384 }
             self.put_record(23, out.slice(at, stop))?
             at = stop
+        }
+        if cut {
+            // End the stream with no close_notify, now.
+            self.flush()?
+            self.connection.close()
+            return Ok(())
         }
         self.put_record(21, alert(1, 0))
     }
