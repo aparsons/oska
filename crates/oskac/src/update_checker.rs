@@ -211,15 +211,26 @@ fn launch(
                 continue;
             }
         };
-        match Command::new(exe.path())
+        let mut command = Command::new(exe.path());
+        command
             .args(args)
             .env_clear()
             .current_dir(dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+            .stderr(Stdio::piped());
+        // Windows cannot start Winsock without `SystemRoot`: with an empty
+        // environment every socket call fails (WSAEPROVIDERFAILEDINIT),
+        // which the program reports as an unknown I/O error. It is the one
+        // variable passed on; it names where Windows is, and nothing the
+        // user or an attacker chose for the program.
+        #[cfg(windows)]
+        for name in ["SystemRoot", "windir"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        match command.spawn() {
             Ok(child) => return Ok((exe, child)),
             Err(e) => last = format!("{}: {e}", base.display()),
         }
@@ -247,6 +258,9 @@ fn run(args: &[String], dir: &Path) -> Result<Vec<u8>, Failure> {
     // an interrupt leaves nothing behind (Windows removes it on drop).
     #[cfg(unix)]
     exe.unlink();
+    // Windows keeps the file until `exe` is dropped, after the child ends.
+    #[cfg(not(unix))]
+    let _ = &exe;
     let stdout = child.stdout.take().map(drain);
     let stderr = child.stderr.take().map(drain);
     let started = Instant::now();
