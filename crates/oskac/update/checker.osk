@@ -14,13 +14,15 @@
 // digest. `oskac` supplies inputs and prints the verdict.
 //
 //   checker <command> <version> <now> <serial> <identify> <file> <assets>
-//           <target> <downgrade> <staging>
+//           <target> <downgrade> <staging> <kept>
 //
 //   command   `check` or `update`
 //   version   the running `oskac`'s version, `X.Y.Z` or with a pre-release
 //   now       the host clock, in seconds since 1970 (expiry is judged by it)
 //   serial    the highest index serial remembered, 0 for none
-//   identify  `1` to identify the running binary, `0` to skip it
+//   identify  `1` to identify the running binary, `0` to skip it (`update`
+//             with `1`, for `--keep-previous`, identifies it before it is
+//             replaced, and reports it as `previous`)
 //   file      the name of the running executable, in the working directory
 //   assets    the release file names this build may be, best first, split
 //             by commas
@@ -30,6 +32,12 @@
 //             a target), else `0`
 //   staging   `update` only: the name, in the working directory, of the one
 //             file the program may write; `check` passes `-`
+//   kept      `update` only, for a rollback: `<name>:<sha256>`, the kept
+//             copy of the release asked for (a file in the working
+//             directory) and the SHA-256 the receipt records for it, or `-`.
+//             The program re-hashes the file and uses it only if the digest
+//             is the recorded one; else it ignores it, with a warning, and
+//             downloads the release as an install does
 //
 // Its authority is visible in its signature: a network connection that it
 // narrows to one host and port, the read of one file (the running
@@ -53,7 +61,8 @@
 //
 //   {"ok":true,"action":"updated"|"downgraded"|"current","from":"X.Y.Z",
 //    "to":"X.Y.Z","tag":"vX.Y.Z","index_serial":N,"index_expires":"...",
-//    "warnings":["..."],"sha256":"..."|null,"asset":"..."|null}
+//    "warnings":["..."],"sha256":"..."|null,"asset":"..."|null,
+//    "source":"downloaded"|"kept"|null,"previous":{identity}}
 //
 // where a verified binary (checked against the signed SHA256SUMS, in
 // memory, before a byte is written) is in the staging file unless the
@@ -777,7 +786,7 @@ fn is_staging_name(name: Untrusted<String>) -> Bool {
     !name.contains("..")
 }
 
-fn update_json(action: String, from: Untrusted<String>, to: Untrusted<String>, index: Index, warnings: List<String>, digest: Option<Untrusted<String>>, asset: Option<Untrusted<String>>) -> Untrusted<String> {
+fn update_json(action: String, from: Untrusted<String>, to: Untrusted<String>, index: Index, warnings: List<String>, digest: Option<Untrusted<String>>, asset: Option<Untrusted<String>>, source: Option<String>, previous: Identity) -> Untrusted<String> {
     let from_text = quoted(from)
     let to_text = quoted(to)
     let tag = quoted("v{to}")
@@ -786,52 +795,51 @@ fn update_json(action: String, from: Untrusted<String>, to: Untrusted<String>, i
     let notes = warnings_json(warnings)
     let sha = quoted_or_null(digest)
     let name = quoted_or_null(asset)
-    "\{\"ok\":true,\"action\":\"{action}\",\"from\":{from_text},\"to\":{to_text},\"tag\":{tag},\"index_serial\":{serial},\"index_expires\":{expires},\"warnings\":{notes},\"sha256\":{sha},\"asset\":{name}\}"
+    let origin = match source {
+        Some(value) => "\"{value}\""
+        None => "null"
+    }
+    let before = identity_json(previous)
+    "\{\"ok\":true,\"action\":\"{action}\",\"from\":{from_text},\"to\":{to_text},\"tag\":{tag},\"index_serial\":{serial},\"index_expires\":{expires},\"warnings\":{notes},\"sha256\":{sha},\"asset\":{name},\"source\":{origin},\"previous\":{before}\}"
 }
 
-// `update`: the verified index, the target release (the latest, or the one
-// asked for), the downgrade rule, the release's signed SHA256SUMS, and the
-// binary: downloaded, hashed and compared with its signed digest, in memory,
-// and only then written to the staging file, the one path this program may
-// write. `oskac` runs the staged binary for its version and replaces itself.
-fn update(net: NetConnect, args: Args, random: Random, clock: Clock, write: FsWrite) -> Result<Untrusted<String>, Refusal> {
-    let version = args.get(2).unwrap_or("")
-    let now = args.get(3).unwrap_or("").parse_int().unwrap_or(-1)
-    let remembered = args.get(4).unwrap_or("").parse_int().unwrap_or(-1)
-    let assets = args.get(7).unwrap_or("")
-    let requested = args.get(8).unwrap_or("")
-    let allow = args.get(9).unwrap_or("")
-    let staging = args.get(10).unwrap_or("")
-    let named = requested != "-"
-    if !is_version(version) || now < 0 || remembered < 0 || (allow != "0" && allow != "1") || !is_staging_name(staging) {
-        return Err(refuse("internal", "the update checker was started with arguments it does not accept"))
+// A binary ready to be staged: its bytes, the digest it was checked
+// against, and the name of the file it came from.
+struct Fetched { bytes: Untrusted<Bytes>, digest: Untrusted<String>, name: Untrusted<String> }
+
+// Whether `text` is a SHA-256 digest: 64 lower-case hex digits.
+fn is_digest(text: Untrusted<String>) -> Bool {
+    let bytes = text.to_bytes()
+    if bytes.len() != 64 {
+        return false
     }
-    if named && !is_tag_and_version("v{requested}", requested) {
-        return Err(refuse("internal", "the update checker was started with a release that is not X.Y.Z"))
-    }
-    if allow == "1" && !named {
-        return Err(refuse("internal", "the update checker was started with a downgrade permission and no release"))
-    }
-    let agent = "oskac {version}"
-    var warnings: List<String> = List.new()
-    let index = verified_index(net, args, random, clock, agent, now, remembered, warnings)?
-    let left = epoch_of(index.expires) - now
-    if left < WARN_SECONDS {
-        let days = left / 86400
-        warnings.push("the release index expires in {days} days; the monthly re-signing may be failing")
-    }
-    let target = if named { requested } else { index.version }
-    let tag = "v{target}"
-    let order = newer(version, target)
-    if order == 0 {
-        return Ok(update_json("current", version, target, index, warnings, None, None))
-    }
-    if order < 0 && !(named && allow == "1") {
-        if named {
-            return Err(refuse("downgrade_refused", "oskac {version} is installed, which is newer than {target}; nothing was changed (to downgrade, add --allow-downgrade)"))
+    for i in 0..64 {
+        if !is_hex(bytes.at(i)) {
+            return false
         }
-        return Err(refuse("downgrade_refused", "oskac {version} is installed, which is newer than the latest release, {target}; nothing was changed (to go back, pass --version {target} --allow-downgrade)"))
     }
+    true
+}
+
+// The kept copy, `name:sha256`, whose bytes are taken only if they hash to
+// the digest recorded for them. `None` says why not, in words of this
+// program's own.
+fn kept_copy(read: FsRead, name: Untrusted<String>, want: Untrusted<String>) -> Result<Fetched, String> {
+    let bytes = match read.restrict_to(".").restrict_to_file(Path.from(name)).read_bytes() {
+        Ok(bytes) => bytes
+        Err(_) => { return Err("the kept copy cannot be read, so the release is downloaded instead") }
+    }
+    let actual = sha2.sha256(bytes).to_hex()
+    if actual != want {
+        return Err("the kept copy does not match the SHA-256 recorded for it, so it is ignored and the release is downloaded instead")
+    }
+    Ok(Fetched(bytes: bytes, digest: actual, name: name))
+}
+
+// The release's binary, downloaded: its signed SHA256SUMS, the file for
+// this platform, and the download, hashed and compared with its signed
+// digest, all in memory.
+fn downloaded(net: NetConnect, args: Args, random: Random, clock: Clock, agent: Untrusted<String>, tag: Untrusted<String>, target: Untrusted<String>, assets: Untrusted<String>) -> Result<Fetched, Refusal> {
     let entries = match signed_sums(net, args, random, clock, agent, tag)? {
         Some(entries) => entries
         None => { return Err(refuse("network_error", "no release {target} is published: the site has no SHA256SUMS for {tag}")) }
@@ -847,7 +855,93 @@ fn update(net: NetConnect, args: Args, random: Random, clock: Clock, write: FsWr
     if actual != chosen.digest {
         return Err(refuse("checksum_mismatch", "the downloaded {name} does not match its SHA-256 in the signed SHA256SUMS of {tag}; nothing was changed"))
     }
-    match write.restrict_to(".").restrict_to_file(Path.from(staging)).write_bytes(binary) {
+    Ok(Fetched(bytes: binary, digest: actual, name: name))
+}
+
+// `update`: the verified index, the target release (the latest, or the one
+// asked for), the downgrade rule, and the binary: from the kept copy of it
+// when there is one and its SHA-256 is the recorded one, else the release's
+// signed SHA256SUMS and the binary downloaded, hashed and compared with its
+// signed digest, in memory, and only then written to the staging file, the
+// one path this program may write. `oskac` runs the staged binary for its
+// version and replaces itself. When asked to identify, the running binary is
+// compared with the signed SHA256SUMS of its own release first, so that
+// `oskac` keeps a copy only of a binary that is the published one.
+fn update(net: NetConnect, args: Args, random: Random, clock: Clock, read: FsRead, write: FsWrite) -> Result<Untrusted<String>, Refusal> {
+    let version = args.get(2).unwrap_or("")
+    let now = args.get(3).unwrap_or("").parse_int().unwrap_or(-1)
+    let remembered = args.get(4).unwrap_or("").parse_int().unwrap_or(-1)
+    let identifying = args.get(5).unwrap_or("")
+    let file = args.get(6).unwrap_or("")
+    let assets = args.get(7).unwrap_or("")
+    let requested = args.get(8).unwrap_or("")
+    let allow = args.get(9).unwrap_or("")
+    let staging = args.get(10).unwrap_or("")
+    let kept = args.get(11).unwrap_or("")
+    let named = requested != "-"
+    if !is_version(version) || now < 0 || remembered < 0 || (allow != "0" && allow != "1") || (identifying != "0" && identifying != "1") || !is_staging_name(staging) {
+        return Err(refuse("internal", "the update checker was started with arguments it does not accept"))
+    }
+    if named && !is_tag_and_version("v{requested}", requested) {
+        return Err(refuse("internal", "the update checker was started with a release that is not X.Y.Z"))
+    }
+    if allow == "1" && !named {
+        return Err(refuse("internal", "the update checker was started with a downgrade permission and no release"))
+    }
+    var kept_name = ""
+    var kept_digest = ""
+    if kept != "-" {
+        let parts = kept.split(":")
+        if parts.len() != 2 || !named {
+            return Err(refuse("internal", "the update checker was started with a kept copy it does not accept"))
+        }
+        kept_name = parts.at(0)
+        kept_digest = parts.at(1)
+        if !is_staging_name(kept_name) || !is_digest(kept_digest) || kept_name == staging {
+            return Err(refuse("internal", "the update checker was started with a kept copy it does not accept"))
+        }
+    }
+    let agent = "oskac {version}"
+    var warnings: List<String> = List.new()
+    let index = verified_index(net, args, random, clock, agent, now, remembered, warnings)?
+    let left = epoch_of(index.expires) - now
+    if left < WARN_SECONDS {
+        let days = left / 86400
+        warnings.push("the release index expires in {days} days; the monthly re-signing may be failing")
+    }
+    let target = if named { requested } else { index.version }
+    let tag = "v{target}"
+    let order = newer(version, target)
+    if order == 0 {
+        return Ok(update_json("current", version, target, index, warnings, None, None, None, skipped()))
+    }
+    if order < 0 && !(named && allow == "1") {
+        if named {
+            return Err(refuse("downgrade_refused", "oskac {version} is installed, which is newer than {target}; nothing was changed (to downgrade, add --allow-downgrade)"))
+        }
+        return Err(refuse("downgrade_refused", "oskac {version} is installed, which is newer than the latest release, {target}; nothing was changed (to go back, pass --version {target} --allow-downgrade)"))
+    }
+    let previous = if identifying == "1" {
+        identify(net, args, random, clock, read, agent, version, file, assets)?
+    } else {
+        skipped()
+    }
+    var source = "downloaded"
+    var fetched: Option<Fetched> = None
+    if kept != "-" {
+        match kept_copy(read, kept_name, kept_digest) {
+            Ok(copy) => {
+                fetched = Some(copy)
+                source = "kept"
+            }
+            Err(why) => { warnings.push(why) }
+        }
+    }
+    let got = match fetched {
+        Some(copy) => copy
+        None => downloaded(net, args, random, clock, agent, tag, target, assets)?
+    }
+    match write.restrict_to(".").restrict_to_file(Path.from(staging)).write_bytes(got.bytes) {
         Ok(_) => {}
         Err(error) => {
             let why = error.message
@@ -855,7 +949,7 @@ fn update(net: NetConnect, args: Args, random: Random, clock: Clock, write: FsWr
         }
     }
     let action = if order < 0 { "downgraded" } else { "updated" }
-    Ok(update_json(action, version, target, index, warnings, Some(actual), Some(name)))
+    Ok(update_json(action, version, target, index, warnings, Some(got.digest), Some(got.name), Some(source), previous))
 }
 
 fn main(args: Args, out: Stdout, net: NetConnect, read: FsRead, write: FsWrite, random: Random, clock: Clock) -> Result<(), IoError> {
@@ -863,7 +957,7 @@ fn main(args: Args, out: Stdout, net: NetConnect, read: FsRead, write: FsWrite, 
     let result = if command == "check" {
         check(net, args, random, clock, read)
     } else if command == "update" {
-        update(net, args, random, clock, write)
+        update(net, args, random, clock, read, write)
     } else {
         Err(refuse("internal", "the update checker was started with a command it does not know"))
     }

@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `oskac self update [--version X [--allow-downgrade]] [--format=json]`
-//! (spec #230): replace this `oskac` with a verified release, as the
-//! installer does, and only on a managed install.
+//! `oskac self update [--version X [--allow-downgrade] | --rollback]
+//! [--keep-previous] [--format=json]` (spec #230): replace this `oskac` with
+//! a verified release, as the installer does, and only on a managed install.
+//!
+//! `--rollback` goes back exactly one version, the receipt's
+//! `previous_version`. `--keep-previous` keeps a copy of the binary this
+//! update replaces, for that update only: beside the live binary, recorded
+//! in the receipt (`kept_previous`: version, path and the SHA-256 from the
+//! signed `SHA256SUMS`, and as a `binary` entry of `files`, which the
+//! installers' uninstall and `oskac self uninstall` remove). A rollback uses
+//! the kept copy only if the update checker, which re-hashes it, finds the
+//! recorded digest; otherwise it downloads the release as an install does.
+//! Every update or rollback discards a kept copy it does not keep again.
 //!
 //! The update checker (an Oska program, `update_checker.rs`) does everything
 //! that needs trust and the network: it verifies the signed index, chooses
@@ -30,7 +40,7 @@ use crate::self_check::{
     assets, failed, next_step, receipt, remembered, report_failure, running, version, Failed,
     Receipt, SITE,
 };
-use crate::self_cmd::identity;
+use crate::self_cmd::{display, identity};
 use crate::update_checker::{self, Ask, UpdateAsk, UpdateVerdict, Updated};
 
 /// How long the staged binary may take to say its version.
@@ -39,9 +49,20 @@ const VERSION_DEADLINE: Duration = Duration::from_secs(30);
 /// The marker in the name of a file renamed aside on Windows.
 const ASIDE: &str = ".oskac-old-";
 
+/// What was asked of `oskac self update`.
+pub(crate) struct Request {
+    /// `--version X`.
+    pub(crate) version: Option<String>,
+    pub(crate) allow_downgrade: bool,
+    /// `--rollback`: go back to the receipt's `previous_version`.
+    pub(crate) rollback: bool,
+    /// `--keep-previous`: keep the replaced binary.
+    pub(crate) keep_previous: bool,
+}
+
 /// `oskac self update`.
-pub(crate) fn update(json: bool, requested: Option<String>, allow_downgrade: bool) -> ExitCode {
-    match run(requested.as_deref(), allow_downgrade) {
+pub(crate) fn update(json: bool, request: &Request) -> ExitCode {
+    match run(request) {
         Ok(done) => {
             done.print(json);
             ExitCode::SUCCESS
@@ -53,6 +74,64 @@ pub(crate) fn update(json: bool, requested: Option<String>, allow_downgrade: boo
 struct Done {
     updated: Box<Updated>,
     notes: Vec<String>,
+    rollback: bool,
+    /// `Some` when `--keep-previous` was given: the copy kept, or none.
+    keep: Option<Option<Kept>>,
+}
+
+/// A copy of a replaced binary, as the receipt records it.
+#[derive(Clone)]
+pub(crate) struct Kept {
+    version: String,
+    pub(crate) path: PathBuf,
+    sha256: String,
+}
+
+/// Where the copy of version `version` is kept: beside the live binary, a
+/// name of its own. Anything outside a plain file name is made `_`.
+fn kept_path(exe: &Path, version: &str) -> Option<PathBuf> {
+    let stem = exe.file_stem()?.to_str()?;
+    let plain: String = version
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Some(exe.with_file_name(format!("{stem}-{plain}{}", std::env::consts::EXE_SUFFIX)))
+}
+
+/// Remove a kept copy this `oskac` made: a regular file, never a link
+/// (which could stand for something else), at the name it would give it.
+fn remove_kept(copy: &Kept) {
+    if std::fs::symlink_metadata(&copy.path).is_ok_and(|m| m.is_file()) {
+        let _ = std::fs::remove_file(&copy.path);
+    }
+}
+
+fn is_digest(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The kept copy the receipt records, if what it says is where this
+/// `oskac` would put one (so that a receipt cannot name another file to be
+/// used or deleted).
+pub(crate) fn recorded_kept(receipt: &Json, exe: &Path) -> Option<Kept> {
+    let entry = receipt.get("kept_previous")?;
+    let text = |key: &str| entry.get(key).and_then(Json::as_str).map(str::to_string);
+    let (version, path, sha256) = (text("version")?, text("path")?, text("sha256")?);
+    let path = PathBuf::from(path);
+    (is_digest(&sha256) && Some(&path) == kept_path(exe, &version).as_ref()).then_some(Kept {
+        version,
+        path,
+        sha256,
+    })
 }
 
 /// Why this install is not managed, and what to do about it.
@@ -131,13 +210,46 @@ impl Drop for Staging {
     }
 }
 
-fn run(requested: Option<&str>, allow_downgrade: bool) -> Result<Done, Failed> {
+fn run(request: &Request) -> Result<Done, Failed> {
     let exe =
         running().ok_or_else(|| failed("internal", "this oskac's own path cannot be found"))?;
     // Before any network use.
     let receipt = managed(&exe)?;
     sweep_aside(&exe);
     let version = version();
+    let old_kept = recorded_kept(&receipt.json, &exe);
+    let mut allow_downgrade = request.allow_downgrade;
+    let mut requested = request.version.as_deref();
+    let mut use_kept = None;
+    if request.rollback {
+        let previous = receipt
+            .json
+            .get("previous_version")
+            .and_then(Json::as_str)
+            .filter(|p| crate::semver::parse(p).is_some())
+            .ok_or_else(|| {
+                failed(
+                    "no_previous_version",
+                    "the install receipt records no previous version, so there is nothing to roll back to; nothing was changed. To install an older release, use `oskac self update --version X --allow-downgrade`",
+                )
+            })?;
+        if previous == version {
+            return Err(failed(
+                "no_previous_version",
+                format!("the install receipt's previous version is {version}, the one installed; nothing was changed"),
+            ));
+        }
+        requested = Some(previous);
+        allow_downgrade = true;
+        use_kept = old_kept
+            .as_ref()
+            .filter(|k| k.version == previous)
+            .and_then(|k| {
+                let meta = std::fs::symlink_metadata(&k.path).ok()?;
+                let name = k.path.file_name()?.to_str()?;
+                meta.is_file().then(|| (name.to_string(), k.sha256.clone()))
+            });
+    }
     let assets = assets();
     let staging = Staging::new(&exe)?;
     let ask = UpdateAsk {
@@ -145,13 +257,14 @@ fn run(requested: Option<&str>, allow_downgrade: bool) -> Result<Done, Failed> {
             version: &version,
             now: update_checker::now(),
             remembered: remembered(&receipt),
-            identify: false,
+            identify: request.keep_previous,
             exe: &exe,
             assets: &assets,
         },
         requested,
         allow_downgrade,
         staging: staging.name(),
+        kept: use_kept.as_ref().map(|(n, s)| (n.as_str(), s.as_str())),
     };
     let updated = match update_checker::update(&ask) {
         Ok(UpdateVerdict::Done(updated)) => updated,
@@ -164,7 +277,12 @@ fn run(requested: Option<&str>, allow_downgrade: bool) -> Result<Done, Failed> {
         if let Err(why) = crate::self_check::raise_serial(&receipt, updated.serial) {
             notes.push(format!("the receipt's index serial was not raised: {why}"));
         }
-        return Ok(Done { updated, notes });
+        return Ok(Done {
+            updated,
+            notes,
+            rollback: false,
+            keep: request.keep_previous.then_some(None),
+        });
     }
     let staged = &staging.path;
     ready(staged, &exe)?;
@@ -178,7 +296,31 @@ fn run(requested: Option<&str>, allow_downgrade: bool) -> Result<Done, Failed> {
             ),
         ));
     }
-    let record = Records::prepare(&receipt, &updated, &exe).map_err(|why| {
+    let keep: Option<Option<Kept>> =
+        request
+            .keep_previous
+            .then(|| match keep_copy(&exe, &version, &updated.previous) {
+                Ok(copy) => Some(copy),
+                Err(why) => {
+                    notes.push(format!("the replaced oskac was not kept: {why}"));
+                    None
+                }
+            });
+    let new_kept = keep.clone().flatten();
+    let discard_kept = |path: &Option<Kept>| {
+        if let Some(copy) = path {
+            remove_kept(copy);
+        }
+    };
+    let record = Records::prepare(
+        &receipt,
+        &updated,
+        &exe,
+        old_kept.as_ref(),
+        new_kept.as_ref(),
+    )
+    .map_err(|why| {
+        discard_kept(&new_kept);
         failed(
             "replace_failed",
             format!("cannot prepare the receipt: {why}; the installed oskac is as it was"),
@@ -186,6 +328,7 @@ fn run(requested: Option<&str>, allow_downgrade: bool) -> Result<Done, Failed> {
     })?;
     replace(staged, &exe).map_err(|e| {
         record.discard();
+        discard_kept(&new_kept);
         failed(
             "replace_failed",
             format!(
@@ -196,12 +339,76 @@ fn run(requested: Option<&str>, allow_downgrade: bool) -> Result<Done, Failed> {
     })?;
     // The new binary is in place: it is what is installed, whatever happens
     // to the records.
-    if let Err(why) = record.commit() {
-        notes.push(format!(
-            "oskac was replaced, but the install receipt was not updated ({why}); re-run the installer to repair it"
-        ));
+    match record.commit() {
+        Ok(()) => {
+            // A kept copy not kept again goes, now that the receipt no
+            // longer records it. (Its name is never the new one's.)
+            if let Some(old) = &old_kept {
+                if new_kept.as_ref().map(|k| &k.path) != Some(&old.path) {
+                    remove_kept(old);
+                }
+            }
+        }
+        Err(why) => {
+            discard_kept(&new_kept);
+            notes.push(format!(
+                "oskac was replaced, but the install receipt was not updated ({why}); re-run the installer to repair it"
+            ));
+        }
     }
-    Ok(Done { updated, notes })
+    let keep = keep.map(|_| new_kept.filter(|k| k.path.exists()));
+    Ok(Done {
+        updated,
+        notes,
+        rollback: request.rollback,
+        keep,
+    })
+}
+
+/// Copy the running binary, which the update checker found to be the
+/// published release `version` (state `genuine`, with the digest the signed
+/// `SHA256SUMS` lists), to its kept name, and check the copy has that
+/// digest. Any other binary is not kept: there is no signed digest to record
+/// for it.
+fn keep_copy(
+    exe: &Path,
+    version: &str,
+    identity: &update_checker::Identity,
+) -> Result<Kept, String> {
+    let (true, Some(digest)) = (identity.state == "genuine", identity.sha256.as_deref()) else {
+        return Err(
+            "it is not a binary the signed SHA256SUMS of its release lists, so no SHA-256 from them can be recorded for it".to_string(),
+        );
+    };
+    let kept = kept_path(exe, version).ok_or("its name is not text")?;
+    let tmp = exe.with_file_name(format!(
+        ".oskac-keep-{}{}",
+        std::process::id(),
+        std::env::consts::EXE_SUFFIX
+    ));
+    let _ = std::fs::remove_file(&tmp);
+    crate::crash::track(&tmp);
+    let copied = (|| {
+        // A running executable can be read on every platform, Windows
+        // included, where it can only be renamed, not overwritten.
+        std::fs::copy(exe, &tmp).map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
+        if crate::sha256::hex(&crate::sha256::digest(&bytes)) != digest {
+            return Err("the copy's SHA-256 is not the published one".to_string());
+        }
+        let _ = std::fs::remove_file(&kept);
+        std::fs::rename(&tmp, &kept).map_err(|e| format!("{}: {e}", kept.display()))
+    })();
+    if copied.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    crate::crash::untrack(&tmp);
+    copied?;
+    Ok(Kept {
+        version: version.to_string(),
+        path: kept,
+        sha256: digest.to_string(),
+    })
 }
 
 /// The program's answer must be the one that was asked for, whatever it
@@ -413,7 +620,16 @@ struct Records {
 }
 
 impl Records {
-    fn prepare(old: &Receipt, updated: &Updated, exe: &Path) -> Result<Records, String> {
+    /// `old_kept` is the kept copy the old receipt records, to be dropped
+    /// from the new one; `new_kept` the one this update keeps, to be
+    /// recorded.
+    fn prepare(
+        old: &Receipt,
+        updated: &Updated,
+        exe: &Path,
+        old_kept: Option<&Kept>,
+        new_kept: Option<&Kept>,
+    ) -> Result<Records, String> {
         let digest = updated.sha256.as_deref().ok_or("no digest")?;
         let home = old.path.parent().ok_or("the receipt has no directory")?;
         let mut json = old.json.clone();
@@ -430,6 +646,21 @@ impl Records {
             Json::Str(updated.from.clone()),
             Some("version"),
         );
+        fields.retain(|(k, _)| k != "kept_previous");
+        if let Some(kept) = new_kept {
+            let text = |s: &str| Json::Str(s.to_string());
+            let entry = vec![
+                ("version".to_string(), text(&kept.version)),
+                ("path".to_string(), text(&kept.path.to_string_lossy())),
+                ("sha256".to_string(), text(&kept.sha256)),
+            ];
+            set(
+                fields,
+                "kept_previous",
+                Json::Obj(entry),
+                Some("previous_version"),
+            );
+        }
         if fields.iter().any(|(k, _)| k == "tag") {
             set(fields, "tag", Json::Str(updated.tag.clone()), None);
         }
@@ -441,6 +672,33 @@ impl Records {
             None,
         );
         if let Some((_, Json::Arr(files))) = fields.iter_mut().find(|(k, _)| k == "files") {
+            // The kept copy the receipt recorded goes; the one kept now is
+            // listed as a binary, so that an uninstall removes it, before
+            // the receipt itself.
+            if let Some(gone) = old_kept {
+                let gone = gone.path.to_string_lossy();
+                files.retain(|file| {
+                    let field = |key: &str| file.get(key).and_then(Json::as_str);
+                    !(field("kind") == Some("binary") && field("path") == Some(gone.as_ref()))
+                });
+            }
+            if let Some(kept) = new_kept {
+                let text = |s: &str| Json::Str(s.to_string());
+                let entry = Json::Obj(vec![
+                    ("path".to_string(), text(&kept.path.to_string_lossy())),
+                    ("kind".to_string(), text("binary")),
+                    ("sha256".to_string(), text(&kept.sha256)),
+                ]);
+                let at = files
+                    .iter()
+                    .position(|f| {
+                        f.get("kind").and_then(Json::as_str) == Some("record")
+                            && f.get("path").and_then(Json::as_str)
+                                == Some(old.path.to_string_lossy().as_ref())
+                    })
+                    .unwrap_or(files.len());
+                files.insert(at, entry);
+            }
             for file in files {
                 let Json::Obj(entry) = file else { continue };
                 let text = |key: &str| {
@@ -596,6 +854,7 @@ fn pretty(json: &Json) -> String {
                     format!("[\n{}\n  ]", entries.join(",\n"))
                 }
             }
+            Json::Obj(entry) if key == "kept_previous" => spaced(entry),
             other => {
                 let mut text = String::new();
                 other.write(&mut text);
@@ -617,8 +876,29 @@ impl Done {
                 .chain(&self.notes)
                 .map(|w| quote(w))
                 .collect();
+            let mut extra = String::new();
+            if self.rollback {
+                extra.push_str(&format!(
+                    ",\"source\":{}",
+                    quote(updated.source.as_deref().unwrap_or("downloaded"))
+                ));
+            }
+            if let Some(kept) = &self.keep {
+                let text = kept.as_ref().map_or_else(
+                    || "null".to_string(),
+                    |k| {
+                        format!(
+                            "{{\"version\":{},\"path\":{},\"sha256\":{}}}",
+                            quote(&k.version),
+                            quote(&display(&k.path)),
+                            quote(&k.sha256)
+                        )
+                    },
+                );
+                extra.push_str(&format!(",\"kept_previous\":{text}"));
+            }
             outln!(
-                "{{\"ok\":true,\"action\":{},\"from\":{},\"to\":{},\"index_serial\":{},\"site\":{},\"warnings\":[{}]}}",
+                "{{\"ok\":true,\"action\":{},\"from\":{},\"to\":{},\"index_serial\":{},\"site\":{},\"warnings\":[{}]{extra}}}",
                 quote(&updated.action),
                 quote(&updated.from),
                 quote(&updated.to),
@@ -628,7 +908,18 @@ impl Done {
             );
             return;
         }
+        let kept_source = updated.source.as_deref() == Some("kept");
         match updated.action.as_str() {
+            _ if self.rollback => outln!(
+                "rolled back oskac from {} to {} ({})",
+                updated.from,
+                updated.to,
+                if kept_source {
+                    "from the copy kept by --keep-previous"
+                } else {
+                    "downloaded"
+                }
+            ),
             "updated" => outln!("updated oskac from {} to {}", updated.from, updated.to),
             "downgraded" => outln!(
                 "downgraded oskac from {} to {} (you asked for an older release)",
@@ -645,10 +936,25 @@ impl Done {
             updated.serial,
             updated.expires
         );
-        if updated.action != "current" {
+        if kept_source {
+            outln!(
+                "verified: the kept copy's SHA-256 is the one recorded from the signed SHA256SUMS, and the version it reports"
+            );
+        } else if updated.action != "current" {
             outln!(
                 "verified: the release's SHA256SUMS signature, the binary's SHA-256 and the version it reports"
             );
+        }
+        if let Some(kept) = &self.keep {
+            match kept {
+                Some(k) => outln!(
+                    "kept oskac {} at {} (SHA-256 {}); the next update discards it unless it also passes --keep-previous",
+                    k.version,
+                    display(&k.path),
+                    k.sha256
+                ),
+                None => outln!("no copy of the replaced oskac was kept"),
+            }
         }
         for warning in updated.warnings.iter().chain(&self.notes) {
             outln!("warning: {warning}");

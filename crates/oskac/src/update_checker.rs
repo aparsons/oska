@@ -122,12 +122,13 @@ fn failure(why: impl Into<String>) -> Failure {
 /// both commands share (the version, the clock, the serial, whether to
 /// identify, the running file's name, the asset names), then `update`'s
 /// (the release asked for or `-`, the downgrade permission, the staging
-/// file's name or `-`), then a test build's.
+/// file's name or `-`, the kept copy as `name:sha256` or `-`), then a test
+/// build's.
 fn arguments(
     command: &str,
     ask: &Ask,
     file: &str,
-    extra: [String; 3],
+    extra: [String; 4],
 ) -> Result<Vec<String>, Failure> {
     let mut args = vec![
         command.to_string(),
@@ -306,7 +307,12 @@ fn location(exe: &Path) -> Result<(&Path, &str), Failure> {
 /// Run the update checker for `self check` and read its verdict.
 pub fn check(ask: &Ask) -> Result<Verdict, Failure> {
     let (dir, file) = location(ask.exe)?;
-    let none = ["-".to_string(), "0".to_string(), "-".to_string()];
+    let none = [
+        "-".to_string(),
+        "0".to_string(),
+        "-".to_string(),
+        "-".to_string(),
+    ];
     let args = arguments("check", ask, file, none)?;
     parse(&run(&args, dir)?)
 }
@@ -321,6 +327,10 @@ pub struct UpdateAsk<'a> {
     /// The name, in the running executable's directory, of the one file
     /// the program may write.
     pub staging: &'a str,
+    /// A kept copy of the release asked for, in the running executable's
+    /// directory: its file name and the SHA-256 recorded for it. The
+    /// program re-hashes it and uses it only if the digest is that one.
+    pub kept: Option<(&'a str, &'a str)>,
 }
 
 /// What the program decided for `self update`.
@@ -349,8 +359,15 @@ pub struct Updated {
     /// The SHA-256 of the staged binary, which the program checked against
     /// the signed `SHA256SUMS`; `None` for `current`.
     pub sha256: Option<String>,
-    /// The release file it came from.
+    /// The release file it came from, or the kept copy's name.
     pub asset: Option<String>,
+    /// Where the binary came from: `downloaded` or `kept`; `None` for
+    /// `current`.
+    pub source: Option<String>,
+    /// The running binary against the signed `SHA256SUMS` of its own
+    /// release, asked for with `identify` (`--keep-previous`); `skipped`
+    /// otherwise.
+    pub previous: Identity,
 }
 
 /// Run the update checker for `self update` and read its verdict.
@@ -360,6 +377,8 @@ pub fn update(ask: &UpdateAsk) -> Result<UpdateVerdict, Failure> {
         ask.requested.unwrap_or("-").to_string(),
         if ask.allow_downgrade { "1" } else { "0" }.to_string(),
         ask.staging.to_string(),
+        ask.kept
+            .map_or_else(|| "-".to_string(), |(name, sha)| format!("{name}:{sha}")),
     ];
     let args = arguments("update", &ask.ask, file, extra)?;
     parse_update(&run(&args, dir)?)
@@ -465,6 +484,8 @@ fn parse_update(out: &[u8]) -> Result<UpdateVerdict, Failure> {
                     "warnings",
                     "sha256",
                     "asset",
+                    "source",
+                    "previous",
                 ],
             )?;
             let updated = Updated {
@@ -477,6 +498,8 @@ fn parse_update(out: &[u8]) -> Result<UpdateVerdict, Failure> {
                 warnings: warnings_of(json.get("warnings"))?,
                 sha256: option_string(json.get("sha256"))?,
                 asset: option_string(json.get("asset"))?,
+                source: option_string(json.get("source"))?,
+                previous: identity_of(json.get("previous"))?,
             };
             let real = ["updated", "downgraded"].contains(&updated.action.as_str());
             let sound = (real || updated.action == "current")
@@ -485,6 +508,12 @@ fn parse_update(out: &[u8]) -> Result<UpdateVerdict, Failure> {
                 && updated.tag == format!("v{}", updated.to)
                 && (real == updated.sha256.as_deref().is_some_and(is_digest))
                 && (real == updated.asset.is_some())
+                && (real == updated.source.is_some())
+                && updated
+                    .source
+                    .iter()
+                    .all(|s| s == "downloaded" || s == "kept")
+                && (real || updated.previous.state == "skipped")
                 && (real || updated.sha256.is_none());
             if !sound {
                 return Err(failure("the update checker's answer is not what was asked"));
@@ -493,6 +522,28 @@ fn parse_update(out: &[u8]) -> Result<UpdateVerdict, Failure> {
         }
         _ => Err(failure("the update checker's answer has no verdict")),
     }
+}
+
+/// An identity, strictly.
+fn identity_of(value: Option<&Json>) -> Result<Identity, Failure> {
+    let who = value.ok_or_else(|| failure("the update checker gave no identity"))?;
+    exactly(who, &["state", "sha256", "expected_sha256", "source"])?;
+    let identity = Identity {
+        state: string(who.get("state"))?,
+        sha256: option_string(who.get("sha256"))?,
+        expected_sha256: option_string(who.get("expected_sha256"))?,
+        source: option_string(who.get("source"))?,
+    };
+    if !["genuine", "modified", "unknown_release", "skipped"].contains(&identity.state.as_str())
+        || identity
+            .sha256
+            .iter()
+            .chain(&identity.expected_sha256)
+            .any(|d| !is_digest(d))
+    {
+        return Err(failure("the update checker's identity is not an identity"));
+    }
+    Ok(identity)
 }
 
 /// The verdict of `check`, strictly.
@@ -519,26 +570,7 @@ fn parse(out: &[u8]) -> Result<Verdict, Failure> {
             )?;
             let serial = serial_of(json.get("index_serial"))?;
             let warnings = warnings_of(json.get("warnings"))?;
-            let who = json
-                .get("identity")
-                .ok_or_else(|| failure("the update checker gave no identity"))?;
-            exactly(who, &["state", "sha256", "expected_sha256", "source"])?;
-            let identity = Identity {
-                state: string(who.get("state"))?,
-                sha256: option_string(who.get("sha256"))?,
-                expected_sha256: option_string(who.get("expected_sha256"))?,
-                source: option_string(who.get("source"))?,
-            };
-            if !["genuine", "modified", "unknown_release", "skipped"]
-                .contains(&identity.state.as_str())
-                || identity
-                    .sha256
-                    .iter()
-                    .chain(&identity.expected_sha256)
-                    .any(|d| !is_digest(d))
-            {
-                return Err(failure("the update checker's identity is not an identity"));
-            }
+            let identity = identity_of(json.get("identity"))?;
             let checked = Checked {
                 latest: string(json.get("latest"))?,
                 tag: string(json.get("tag"))?,
@@ -617,7 +649,7 @@ mod tests {
             src.contains(&format!("\"{}\"", key.trim_end())),
             "the pinned key is not site/oska-release.pub"
         );
-        assert!(!super::source().contains("args.get(11)"));
+        assert!(!super::source().contains("args.get(12)"));
     }
 
     fn done(identity: &str) -> String {
