@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // `std.acme`: the core of an ACME client (RFC 8555), for a program that
 // gets its own certificates (ADR 0036, spec #824). A module sees it only
-// after `use std.acme`. This part reaches the `ready` state of an order:
-// the directory, a fresh nonce, an account, an order, its authorizations
-// and challenges, and polling. Finalizing an order and downloading the
-// certificate come with the next part.
+// after `use std.acme`. It covers the whole issuance flow: the directory,
+// a fresh nonce, an account, an order, its authorizations and challenges,
+// polling, finalizing with a CSR and downloading the certificate chain.
 //
 // Two layers. The first is pure functions over bytes, with no capability:
 // `parse_url`, `parse_directory`, `parse_account`, `parse_order`,
@@ -39,6 +38,36 @@
 // calls `expose()` nowhere. The only things that leave are the JWS
 // signatures `std.jws` makes, which are public.
 //
+// Challenges (RFC 8555 section 8, read for this part). The key
+// authorization of a challenge (section 8.1) is `token || "." ||
+// base64url(SHA-256 of the RFC 7638 JWK of the account key)`, with no
+// padding and no other separator: `key_authorization`. The token is
+// base64url text of at least 128 bits the CA chose; it is checked to be
+// base64url and used in a path as it is. HTTP-01 (section 8.3): the CA
+// sends `GET http://<domain>/.well-known/acme-challenge/<token>` to port
+// 80 of the name and expects the key authorization as the body (trailing
+// white space is ignored; `text/plain` or `application/octet-stream` is
+// the recommended type). `Proof.path` is that path and `Proof.key_authorization`
+// the body; the caller serves them on a listener of their own. DNS-01
+// (section 8.4): the CA looks up the TXT record of `_acme-challenge.<domain>`
+// for the value `base64url(SHA-256(key authorization))`. A wildcard order
+// name `*.example.com` has an authorization for `example.com` with
+// `wildcard: true`, and its TXT record is at `_acme-challenge.example.com`
+// (the `*.` is dropped). A wildcard cannot use HTTP-01 (section 7.1.3), so
+// `issue` refuses that before it orders. `Proof` carries these exact
+// values, for an HTTP-01 server or a DNS-01 callback (`Responder`).
+//
+// Finalizing (section 7.4): POST `{"csr": base64url(DER)}` to the order's
+// `finalize` URL, once the order is `ready`; the CSR must name exactly the
+// order's identifiers, which `check_csr` verifies before anything is sent.
+// The order then goes `processing` and `valid`; its `certificate` URL is
+// fetched by POST-as-GET (section 7.4.2) and answers a PEM chain, leaf
+// first. The chain is parsed with `std.x509` (`parse_certificate_chain`),
+// and its leaf must carry every name of the order, before it is returned.
+// The certificate's private key is generated here from `Random.secure_bytes`
+// and is returned as a `Secret` in `Issued`; only a CSR signed by it
+// leaves.
+//
 // This code is hand-written and has not been audited (ADR 0012). It is
 // held by recorded transcripts of a CA on both backends.
 
@@ -54,6 +83,8 @@ use std.json
 use std.jws
 use std.sha2
 use std.tls
+use std.x509
+use std.x509_csr
 
 // The most bytes of a response body this client reads.
 pub const MAX_RESPONSE: Int = 262144
@@ -1233,4 +1264,364 @@ impl Client {
 pub struct Polled<T> {
     pub value: T,
     pub retry_after: Option<Int>,
+}
+
+// ---- Challenge proofs (RFC 8555 section 8) --------------------------------------------
+
+// What the caller must make visible to the CA for one challenge: for
+// HTTP-01 the `path` to serve on port 80 of `domain` with the body
+// `key_authorization`; for DNS-01 the TXT record `txt_name` with the value
+// `txt_value`. The fields a kind does not use are empty.
+pub struct Proof {
+    pub kind: ChallengeKind,
+    // The name being proved, without a `*.`.
+    pub domain: String,
+    // Whether the order asked for `*.<domain>`.
+    pub wildcard: Bool,
+    pub token: String,
+    pub key_authorization: String,
+    // HTTP-01: `/.well-known/acme-challenge/<token>`.
+    pub path: String,
+    // DNS-01: `_acme-challenge.<domain>`.
+    pub txt_name: String,
+    // DNS-01: the base64url SHA-256 of the key authorization.
+    pub txt_value: String,
+}
+
+// The path an HTTP-01 challenge is fetched at (RFC 8555 section 8.3).
+pub fn http01_path(token: String) -> String {
+    "/.well-known/acme-challenge/{token}"
+}
+
+// The name of the TXT record of a DNS-01 challenge for `name` (RFC 8555
+// section 8.4); a leading `*.` is dropped.
+pub fn dns01_name(name: String) -> String {
+    let bare = if name.starts_with("*.") { name.slice(2, name.byte_len()) } else { name }
+    "_acme-challenge.{bare}"
+}
+
+// The proof the caller must publish for `challenge` of `authorization`,
+// with the account key's `thumbprint`. Only HTTP-01 and DNS-01 have one,
+// and a wildcard has no HTTP-01.
+pub fn proof_for(authorization: Authorization, challenge: Challenge, thumbprint: String) -> Result<Proof, AcmeError> {
+    let proof = key_authorization(challenge.token, thumbprint)
+    let domain = authorization.identifier.value
+    match challenge.kind {
+        ChallengeKind.Http01 => {
+            if authorization.wildcard {
+                return Err(AcmeError.InvalidInput("a wildcard name cannot use http-01"))
+            }
+            Ok(Proof(kind: ChallengeKind.Http01, domain: domain, wildcard: false, token: challenge.token, key_authorization: proof, path: http01_path(challenge.token), txt_name: "", txt_value: ""))
+        }
+        ChallengeKind.Dns01 => Ok(Proof(kind: ChallengeKind.Dns01, domain: domain, wildcard: authorization.wildcard, token: challenge.token, key_authorization: proof, path: "", txt_name: dns01_name(domain), txt_value: dns01_value(proof)))
+        _ => Err(AcmeError.InvalidInput("only http-01 and dns-01 have a proof"))
+    }
+}
+
+// ---- Finalize and download ---------------------------------------------------------------
+
+// The JSON body of a finalize request (RFC 8555 section 7.4): the CSR's DER
+// as unpadded base64url.
+pub fn finalize_body(csr_der: Bytes) -> Bytes {
+    vouch_bytes(json.encode(json.Value.Object([json.Member(key: "csr", value: json.Value.Text(base64url.encode(csr_der)))])).to_bytes())
+}
+
+fn has_name(names: List<String>, want: String) -> Bool {
+    for name in names {
+        if name == want {
+            return true
+        }
+    }
+    false
+}
+
+fn lowered(names: List<String>) -> List<String> {
+    var out: List<String> = []
+    for name in names {
+        out.push(name.to_lowercase())
+    }
+    out
+}
+
+// Whether the CSR `csr_der` asks for exactly the names of `order`: the
+// same DNS names (any case, any order), no IP address, and a common name
+// that is one of them or empty. Otherwise `InvalidInput`. A CSR that is
+// not valid is `InvalidInput` too. `finalize` calls this before it sends
+// anything, so a CA never sees a request for names the order did not
+// authorize. An order with an IP identifier is refused: this part issues
+// for DNS names.
+pub fn check_csr(order: Order, csr_der: Bytes) -> Result<(), AcmeError> {
+    let csr = match x509_csr.parse(csr_der) {
+        Ok(c) => c
+        Err(_) => { return Err(AcmeError.InvalidInput("the CSR is not valid")) }
+    }
+    var want: List<String> = []
+    for id in order.identifiers {
+        if id.kind != "dns" {
+            return Err(AcmeError.InvalidInput("finalize supports dns identifiers only"))
+        }
+        want.push(id.value.to_lowercase())
+    }
+    let have = lowered(csr.dns_names())
+    var ok = csr.ip_addresses().len() == 0
+    for name in have {
+        if !has_name(want, name) {
+            ok = false
+        }
+    }
+    for name in want {
+        if !has_name(have, name) {
+            ok = false
+        }
+    }
+    let common = csr.common_name().to_lowercase()
+    if common != "" && !has_name(want, common) {
+        ok = false
+    }
+    if !ok {
+        return Err(AcmeError.InvalidInput("the CSR names differ from the order"))
+    }
+    Ok(())
+}
+
+// A certificate chain a CA issued, leaf first, parsed by `std.x509`, with
+// the PEM text it came in.
+pub struct CertChain {
+    pub certificates: List<x509.Certificate>,
+    pub pem: String,
+}
+
+// The chain in `response` (status 200, a PEM chain, RFC 8555 section
+// 7.4.2), parsed with `std.x509`: it must hold at least one certificate and
+// no other text, and the leaf must carry every one of `names` as a DNS
+// name (a wildcard as written), or it is `Malformed`.
+pub fn parse_certificate_chain(response: http.Response, names: List<String>) -> Result<CertChain, AcmeError> {
+    status_in(response, [200])?
+    if response.body.len() > MAX_RESPONSE {
+        return Err(AcmeError.TooLarge)
+    }
+    let text = match response.body.to_text() {
+        Some(t) => t
+        None => { return Err(AcmeError.Malformed("the certificate is not text")) }
+    }
+    let certificates = match x509.parse_pem(text) {
+        Ok(list) => list
+        Err(_) => { return Err(AcmeError.Malformed("the certificate chain is not valid PEM")) }
+    }
+    if certificates.len() == 0 {
+        return Err(AcmeError.Malformed("the certificate chain is empty"))
+    }
+    var have: List<String> = []
+    for name in certificates.at(0).dns_names() {
+        have.push(vouch(name).to_lowercase())
+    }
+    for name in names {
+        if !has_name(have, name.to_lowercase()) {
+            return Err(AcmeError.Malformed("the certificate does not carry every name of the order"))
+        }
+    }
+    Ok(CertChain(certificates: certificates, pem: vouch(text)))
+}
+
+// ---- Issuing ---------------------------------------------------------------------------
+
+// The caller's side of the challenges: it publishes a proof (serves the
+// HTTP-01 body, or sets the DNS-01 TXT record) and later takes it down.
+// `present` is called before the CA is told to check; `cleanup` after the
+// authorization is decided, whether it passed or not.
+pub trait Responder {
+    // Make `proof` visible, or say why not. The text is for the caller's
+    // own log: `issue` does not repeat it in an error.
+    fn present(self, proof: Proof) -> Result<(), String>
+
+    // Take `proof` down.
+    fn cleanup(self, proof: Proof) -> ()
+}
+
+// How the caller waits between polls (the library has no clock of its
+// own to sleep on).
+pub trait Waiter {
+    // Wait `seconds` (1 to 60).
+    fn wait(self, seconds: Int) -> ()
+}
+
+// An issued certificate: the chain and its private key, a `Secret`.
+pub struct Issued {
+    pub chain: CertChain,
+    pub key: Secret<Bytes>,
+}
+
+// A fresh P-256 private key from the secure random source.
+fn new_key(random: Random) -> Result<Secret<Bytes>, AcmeError> {
+    var tries = 0
+    while tries < 8 {
+        tries = tries + 1
+        let candidate = random.secure_bytes(32)
+        match jws.public_key(candidate) {
+            Ok(_) => { return Ok(candidate) }
+            Err(_) => {}
+        }
+    }
+    Err(AcmeError.Key)
+}
+
+fn is_valid(order: Order) -> Bool {
+    match order.status {
+        OrderStatus.Valid => true
+        _ => false
+    }
+}
+
+fn is_pending(authorization: Authorization) -> Bool {
+    match authorization.status {
+        AuthzStatus.Pending => true
+        _ => false
+    }
+}
+
+fn is_dns01(kind: ChallengeKind) -> Bool {
+    match kind {
+        ChallengeKind.Dns01 => true
+        _ => false
+    }
+}
+
+fn is_kind(challenge: Challenge, kind: ChallengeKind) -> Bool {
+    match kind {
+        ChallengeKind.Http01 => match challenge.kind {
+            ChallengeKind.Http01 => true
+            _ => false
+        }
+        ChallengeKind.Dns01 => match challenge.kind {
+            ChallengeKind.Dns01 => true
+            _ => false
+        }
+        _ => false
+    }
+}
+
+impl Client {
+    // Finalize `order` (it must be `ready`) with the CSR `csr_der`, which
+    // must name exactly the order's identifiers (`check_csr`; nothing is
+    // sent otherwise). The answer is the order, `processing` or `valid`
+    // (RFC 8555 section 7.4).
+    pub fn finalize<T: Transport>(var self, transport: T, order: Order, csr_der: Bytes) -> Result<Order, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        check_csr(order, csr_der)?
+        let response = self.signed_post(transport, order.finalize, finalize_body(csr_der), [200], false)?
+        parse_order(response, Some(order.url), self.loopback)
+    }
+
+    // Download the certificate chain at `url` (POST-as-GET), checked by
+    // `parse_certificate_chain` against `names`.
+    pub fn download_certificate<T: Transport>(var self, transport: T, url: Url, names: List<String>) -> Result<CertChain, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        let response = self.signed_post(transport, url, Bytes.new(), [200], false)?
+        parse_certificate_chain(response, names)
+    }
+
+    // Tell the CA to check the challenge, then wait for its authorization
+    // to be decided, at most `max_polls` polls.
+    fn prove<T: Transport, W: Waiter>(var self, transport: T, waiter: W, challenge: Challenge, authorization_url: Url, max_polls: Int) -> Result<(), AcmeError> {
+        self.respond_to_challenge(transport, challenge.url)?
+        var polls = 0
+        while true {
+            let got = self.fetch_authorization(transport, authorization_url)?
+            match poll_authorization(got.value, got.retry_after, polls, max_polls)? {
+                Poll.Done => { return Ok(()) }
+                Poll.Wait(seconds) => { waiter.wait(seconds) }
+            }
+            polls = polls + 1
+        }
+        Ok(())
+    }
+
+    // Wait for the order at `url` to be `ready`, or `valid` when
+    // `want_valid`, at most `max_polls` polls.
+    fn wait_order<T: Transport, W: Waiter>(var self, transport: T, waiter: W, url: Url, want_valid: Bool, max_polls: Int) -> Result<Order, AcmeError> {
+        var polls = 0
+        while true {
+            let got = self.fetch_order(transport, url)?
+            let order = got.value
+            match poll_order(order, got.retry_after, polls, max_polls)? {
+                Poll.Done => {
+                    if is_valid(order) || !want_valid {
+                        return Ok(order)
+                    }
+                    waiter.wait(wait_seconds(got.retry_after))
+                }
+                Poll.Wait(seconds) => { waiter.wait(seconds) }
+            }
+            polls = polls + 1
+        }
+        Err(AcmeError.PollLimit)
+    }
+
+    // Get a certificate for `names` (DNS names; a wildcard needs
+    // `ChallengeKind.Dns01`) and return it with its new private key. The
+    // account must exist (`new_account` or `with_account`). Steps: order,
+    // a key and CSR, for each authorization `responder.present` of the
+    // proof of `kind`, tell the CA, poll, `responder.cleanup`; then wait
+    // for `ready`, finalize, wait for `valid`, download, and parse the
+    // chain with `std.x509`. Each wait is at most `max_polls` polls, with
+    // `waiter.wait` between them.
+    pub fn issue<T: Transport, R: Responder, W: Waiter>(var self, transport: T, responder: R, waiter: W, random: Random, names: List<String>, kind: ChallengeKind, max_polls: Int) -> Result<Issued, AcmeError> {
+        if !self.account.is_some() {
+            return Err(AcmeError.NoAccount)
+        }
+        var identifiers: List<Identifier> = []
+        for name in names {
+            if name.starts_with("*.") && !is_dns01(kind) {
+                return Err(AcmeError.InvalidInput("a wildcard name needs dns-01"))
+            }
+            identifiers.push(Identifier.dns(name))
+        }
+        let order = self.new_order(transport, identifiers)?
+        let key = new_key(random)?
+        let csr = match x509_csr.create(key, names) {
+            Ok(der) => der
+            Err(_) => { return Err(AcmeError.InvalidInput("a name cannot go in a certificate request")) }
+        }
+        let thumbprint = self.thumbprint()?
+        for url in order.authorizations {
+            let authorization = self.fetch_authorization(transport, url)?.value
+            if !is_pending(authorization) {
+                match poll_authorization(authorization, None, 0, 1)? {
+                    Poll.Done => { continue }
+                    Poll.Wait(_) => {}
+                }
+            }
+            var chosen: Option<Challenge> = None
+            for challenge in authorization.challenges {
+                if is_kind(challenge, kind) {
+                    chosen = Some(challenge)
+                }
+            }
+            let challenge = match chosen {
+                Some(c) => c
+                None => { return Err(AcmeError.InvalidInput("the CA offers no challenge of that kind")) }
+            }
+            let proof = proof_for(authorization, challenge, thumbprint)?
+            match responder.present(proof) {
+                Ok(_) => {}
+                Err(_) => { return Err(AcmeError.InvalidInput("the responder could not publish the proof")) }
+            }
+            let outcome = self.prove(transport, waiter, challenge, url, max_polls)
+            responder.cleanup(proof)
+            outcome?
+        }
+        let ready = self.wait_order(transport, waiter, order.url, false, max_polls)?
+        let finalized = self.finalize(transport, ready, csr)?
+        let done = if is_valid(finalized) { finalized } else { self.wait_order(transport, waiter, order.url, true, max_polls)? }
+        let location = match done.certificate {
+            Some(u) => u
+            None => { return Err(AcmeError.Malformed("a valid order with no certificate URL")) }
+        }
+        let chain = self.download_certificate(transport, location, names)?
+        Ok(Issued(chain: chain, key: key))
+    }
 }
