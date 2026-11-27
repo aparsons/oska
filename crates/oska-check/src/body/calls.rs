@@ -684,6 +684,21 @@ impl Body<'_, '_, '_> {
             );
             return None;
         }
+        if matches!(name.name.as_str(), "unwrap" | "expect")
+            && matches!(type_name, "Option" | "Result")
+        {
+            self.error(
+                codes::NO_MEMBER,
+                format!(
+                    "`{type_name}` has no `{}`: it would crash where the type does not show it; \
+                     propagate the failure with `?`, give a default with `unwrap_or`, or handle \
+                     each case with `match`",
+                    name.name
+                ),
+                name.span,
+            );
+            return None;
+        }
         let candidates = self.items.method_names(type_name);
         let message = format!("`{receiver}` has no method `{}`", name.name);
         self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);

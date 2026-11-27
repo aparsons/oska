@@ -181,6 +181,31 @@ fn main(io: Stdout) -> Result<(), IoError> {
 
 `List` also has `filter`, `fold`, `any`, `all`, `find`, `contains`, `first`, `last`, `is_empty`, `reverse` and `concat`; none changes the list, and `oskac doc List` describes each. `List.get` returns an `Option`. `List.at` panics with `P0002` when the index is out of bounds, because that is a bug. A closure is written `|x| expr` or `|x| { ... }`. A closure that captures a capability has the type `cap fn`; see [capabilities](capabilities.md).
 
+### `Option` and `Result` methods
+
+`Option` has `map`, `and_then`, `filter`, `unwrap_or`, `unwrap_or_else`, `is_some` and `is_none`; `Result` has `map`, `map_err`, `and_then`, `unwrap_or`, `unwrap_or_else`, `is_ok`, `is_err`, `ok` and `err`. There is no `unwrap` or `expect`: a call of one is `E0228`, and the message lists the three ways that keep the failure in the type, `?`, `unwrap_or` and `match`.
+
+```oska
+fn parse_port(text: String) -> Result<Int, String> {
+    if text == "80" { Ok(80) } else { Err("not a port: {text}") }
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let port = parse_port("80").map(|p| p + 1).unwrap_or_else(|why| why.len())
+    let bad = parse_port("x").map_err(|why| "bad input ({why})").err()
+    let shown = match bad {
+        Some(why) => why
+        None => "fine"
+    }
+    io.println("{port} {shown}")?
+    Ok(())
+}
+```
+
+```console cmd=run
+81 bad input (not a port: x)
+```
+
 ## Generics and traits
 
 Traits are explicitly implemented interfaces. They can provide default methods. There are no trait objects, so all dispatch is static, and there is no inheritance or overloading. Bounds are written inline.

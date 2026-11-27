@@ -741,6 +741,17 @@ impl<T> Option<T> {
     pub fn is_some(self) -> Bool
     // The value, or `default` when there is none.
     pub fn unwrap_or(self, default: T) -> T
+    // Whether there is no value.
+    pub fn is_none(self) -> Bool
+    // `Some(f(value))`, or `None` when there is none.
+    pub fn map<U>(self, f: fn(T) -> U) -> Option<U>
+    // `f(value)`, or `None` when there is none: `f` may itself give `None`.
+    pub fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U>
+    // The value, or what `f()` gives when there is none. `f` runs only
+    // then.
+    pub fn unwrap_or_else(self, f: fn() -> T) -> T
+    // The value if `keep` is true for it, otherwise `None`.
+    pub fn filter(self, keep: fn(T) -> Bool) -> Option<T>
 }
 
 // The outcome of an operation that can fail: `Ok(value)`, or `Err(error)`.
@@ -755,6 +766,20 @@ impl<T, E> Result<T, E> {
     pub fn is_ok(self) -> Bool
     // The `Ok` value, or `default` for an `Err`.
     pub fn unwrap_or(self, default: T) -> T
+    // Whether it is `Err`.
+    pub fn is_err(self) -> Bool
+    // `Ok(f(value))` for an `Ok`, the `Err` unchanged otherwise.
+    pub fn map<U>(self, f: fn(T) -> U) -> Result<U, E>
+    // `Err(f(error))` for an `Err`, the `Ok` unchanged otherwise.
+    pub fn map_err<F>(self, f: fn(E) -> F) -> Result<T, F>
+    // `f(value)` for an `Ok`, the `Err` unchanged otherwise.
+    pub fn and_then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E>
+    // The `Ok` value, or what `f(error)` gives for an `Err`.
+    pub fn unwrap_or_else(self, f: fn(E) -> T) -> T
+    // `Some(value)` for an `Ok`, `None` for an `Err`.
+    pub fn ok(self) -> Option<T>
+    // `Some(error)` for an `Err`, `None` for an `Ok`.
+    pub fn err(self) -> Option<E>
 }
 
 // A growable list. `[a, b, c]` makes one, and `for item in list` visits

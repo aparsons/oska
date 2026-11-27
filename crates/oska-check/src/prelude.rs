@@ -214,25 +214,47 @@ pub static STD_MODULES: &[StdModule] = &[
 /// `use std.map` still works.
 pub const PRELUDE_STD: &[(&str, &[&str])] = &[("std.map", &["Map", "Entry"])];
 
-/// The `List` methods whose bodies are Oska functions of `std.core` (ADR
-/// 0034). The prelude declares each body-less; a call of one resolves to
-/// the function `list_<name>` of `std.core`, so a program whose text calls
-/// one is joined to the module.
-pub const CORE_METHODS: &[&str] = &[
-    "filter",
-    "fold",
-    "any",
-    "all",
-    "find",
-    "contains",
-    "first",
-    "last",
-    "is_empty",
-    "reverse",
-    "concat",
-    "sorted",
-    "sorted_by",
-    "sort",
+/// The methods whose bodies are Oska functions of `std.core` (ADR 0034),
+/// by type: `List` (functions `list_<name>`), `Option` (`option_<name>`)
+/// and `Result` (`result_<name>`). The prelude declares each body-less; a
+/// call of one resolves to that function of `std.core`, so a program whose
+/// text calls one is joined to the module.
+pub const CORE_METHODS: &[(&str, &[&str])] = &[
+    (
+        "List",
+        &[
+            "filter",
+            "fold",
+            "any",
+            "all",
+            "find",
+            "contains",
+            "first",
+            "last",
+            "is_empty",
+            "reverse",
+            "concat",
+            "sorted",
+            "sorted_by",
+            "sort",
+        ],
+    ),
+    (
+        "Option",
+        &["map", "and_then", "unwrap_or_else", "is_none", "filter"],
+    ),
+    (
+        "Result",
+        &[
+            "map",
+            "map_err",
+            "and_then",
+            "unwrap_or_else",
+            "is_err",
+            "ok",
+            "err",
+        ],
+    ),
 ];
 
 /// The `std.core` function that the prelude method `Type.method` calls,
@@ -240,9 +262,15 @@ pub const CORE_METHODS: &[&str] = &[
 pub fn core_function(type_name: &str, method: &str) -> Option<String> {
     // `sort` changes its receiver: it is `list_sorted`, with the result
     // assigned back (`program/lower.rs`).
-    let function = if method == "sort" { "sorted" } else { method };
-    (type_name == "List" && CORE_METHODS.contains(&method))
-        .then(|| format!("pkg.std.core.list_{function}"))
+    let function = if type_name == "List" && method == "sort" {
+        "sorted"
+    } else {
+        method
+    };
+    CORE_METHODS
+        .iter()
+        .find(|(ty, methods)| *ty == type_name && methods.contains(&method))
+        .map(|_| format!("pkg.std.core.{}_{function}", type_name.to_lowercase()))
 }
 
 /// Whether `source` writes a call of a method named `name`: `.name`, with
@@ -310,7 +338,9 @@ pub fn oska_std_imports(module: &Module, source: &str) -> Vec<&'static StdModule
         }
     }
     if !found.iter().any(|m| m.path == "std.core")
-        && CORE_METHODS.iter().any(|n| calls_method(source, n))
+        && CORE_METHODS
+            .iter()
+            .any(|(_, names)| names.iter().any(|n| calls_method(source, n)))
     {
         if let Some(std) = std_module("std.core") {
             found.push(std);
