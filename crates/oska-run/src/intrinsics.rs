@@ -987,9 +987,10 @@ fn deque_item_limit(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value,
 pub const DEQUE_ITEM_LIMIT_MESSAGE: &str = "the deque holds as many items as its limit allows";
 
 /// The messages of `P0044` and `P0045`, the same in the native backend.
-pub const MAP_ENTRY_LIMIT_MESSAGE: &str = "the map holds as many entries as its limit allows";
+pub const MAP_ENTRY_LIMIT_MESSAGE: &str =
+    "the map or set holds as many entries as its limit allows";
 pub const MAP_PROBE_LIMIT_MESSAGE: &str =
-    "the map's keys collide under every hash it tries: they look chosen to flood it";
+    "the map's keys or the set's items collide under every hash it tries: they look chosen to flood it";
 
 /// `U8.rotl(self, n)`, and `U32`'s and `U64`'s: `P0008` for an amount
 /// out of range (`ops::rotate`).

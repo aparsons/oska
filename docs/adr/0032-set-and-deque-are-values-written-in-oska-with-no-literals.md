@@ -6,7 +6,7 @@ Oska gets two generic collections in the prelude, `Set<T>` and `Deque<T>`. Each 
 
 ### Set
 
-- **Items.** `T` needs `Eq` and `Hash`. The items that qualify are the keys of ADR 0028. `Float` is refused as an item, because NaN and negative zero make equality unstable, and a `Secret` value is refused, because a hash or a probe order leaks timing. Each refusal has a stable `E` code: `E0266` for a type that cannot be an item (the code a `Map` key gets), `E0351` or `E0354` for a `Secret` item. Until `Float` exists (#592), the `Float` refusal has nothing to refuse.
+- **Items.** `T` needs `Eq` and `Hash`. The items that qualify are the keys of ADR 0028. `Float` is refused as an item, because NaN and negative zero make equality unstable, and a `Secret` value is refused, because a hash or a probe order leaks timing. Each refusal has a stable `E` code: `E0266` for a type that cannot be an item (the code a `Map` key gets), `E0351` or `E0354` for a `Secret` item. `Float` is refused today with `E0266`, because it has no `Hash`.
 - **Layout.** A `Set<T>` is a struct over one `Map<T, Bool>`: the item is the key and the value is always `true`. It adds no table code of its own. The table, the fixed hash, the 64-probe limit, the rebuild with the next hash and every constant are those of ADR 0028, so the two types cannot drift apart.
 - **Order.** `to_list()` walks the items in **insertion order**. `add` of an item already present keeps its place. `remove` then `add` of the same item moves it to the end. Two sets are equal when they hold the same items in the same order, as for `Map`. `Set.of(list)` drops repeated items and keeps the first-seen place of each.
 - **Operations.** `new`, `of`, `add`, `remove`, `contains`, `len`, `is_empty`, `to_list`, `union`, `intersection` and `difference`. `add` and `remove` return `Bool` (whether the set changed). `contains` is O(1) on average. `union(a, b)` is the items of `a` in order, then the items of `b` not in `a`. `intersection(a, b)` and `difference(a, b)` keep the order of `a`. A result is a new set; neither operand changes.
@@ -35,11 +35,11 @@ A program that needs a seen-set or a queue otherwise fakes it with a `List` scan
 
 ## Why `Set` wraps `Map` and does not copy its table code
 
-This is a recorded assumption, not a measurement. No benchmark could be run, because `Set` does not exist yet and `Map` stores `Bool` values that a set never reads.
+This is a recorded assumption, not a measurement. No benchmark could be run when this was decided, because `Set` did not exist yet and `Map` stores `Bool` values that a set never reads. A first measurement is below.
 
 - **Assumed cost.** A `Map<T, Bool>` carries one `Bool` per entry in its log. A copy of the table code without values would save that word per item and one field read per lookup. We assume that is under 10% of the time of `add` and `contains`, and not worth a second copy of the probe, rebuild and flood code that ADR 0028 says is "the weakest part of this design".
 - **What a copy would cost.** Two copies of the flood defence must be tested and amended together. A fix to one that misses the other is a security bug.
-- **The check.** The first ticket that builds `Set` (spec #798) writes it over `Map<T, Bool>` and records, in its pull request, the steps and the time of 100,000 `add` and `contains` calls against the same calls on `Map<T, Bool>`. If a copy would be at least 2 times faster in steps, this ADR is amended and the table code is shared as a helper in `std.map`, not copied. A copy of the code is rejected in either case.
+- **The check.** The first ticket that builds `Set` (spec #798) writes it over `Map<T, Bool>` and records the steps and the time of 100,000 `add` and `contains` calls against the same calls on `Map<T, Bool>`. The pull request of that ticket (#879) measured 2,000 `add` and 2,000 `contains` calls: 85,963 steps for `Set` against 67,009 for `Map<Int, Bool>`, about 1.28 times, steps only, which is under the threshold. The 100,000-call measurement with time is still open (follow-up issue #884). If a copy would be at least 2 times faster in steps, this ADR is amended and the table code is shared as a helper in `std.map`, not copied. A copy of the code is rejected in either case.
 
 ## Considered options
 
@@ -48,7 +48,7 @@ This is a recorded assumption, not a measurement. No benchmark could be run, bec
 - **A `Deque` over two lists (a front list reversed, and a back list).** Not chosen. It needs no `set`, but `get(i)` and `pop` after a one-sided run cost O(n) to rebalance, and the amortized bound holds only for a single owner (a copy of the deque that both ends pop from can repeat the rebuild). The ring has the same bound for every copy. It stays the fallback if `List.set` is refused by the ADR 0014 gate.
 - **A `Deque` as a `List` and a head index with no ring.** Not chosen: pops from the front leave dead slots until a rebuild, and a queue that pushes and pops at the same rate grows without bound until the rebuild.
 - **A set or deque literal.** Rejected for now. It is the same open language decision as the `Map` literal, and it needs `oskac fmt` changes (ADR 0028, amendment; ADR 0031).
-- **Allowing a `Float` item.** Rejected until the rules for `Float` say how it hashes (#592); then it is reopened with the same answer as for `Map`.
+- **Allowing a `Float` item.** Rejected: `Float` has no `Hash` today (`E0266`). It is reopened when the rules for `Float` say how it hashes (#592) with the same answer as for `Map`.
 - **A flag for the item limit.** Rejected, as ADR 0028 rejected one for `Map`: `--max-memory` already stops the growth.
 - **Collections as Rust built-ins.** Rejected, for the step-count reason in ADR 0028.
 

@@ -1879,9 +1879,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let message =
             format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
         if let (Some(collection), false) = (map_key, ty.has_param()) {
-            let role = if collection == "Set" { "item" } else { "key" };
+            let (article, role, fields) = if collection == "Set" {
+                ("an", "item", "item types")
+            } else {
+                ("a", "key", "keys")
+            };
+            let article_up = if article == "an" { "An" } else { "A" };
             let message = format!(
-                "`{ty}` cannot be a `{collection}` {role}: it does not implement `{bound}`. A {role} type needs `Eq` and `Hash`: an integer, `Bool`, `String`, `Bytes`, `Path`, an `Option` or `List` of a {role} type, or a struct or enum with `impl Eq` whose fields are all {role}s"
+                "`{ty}` cannot be a `{collection}` {role}: it does not implement `{bound}`. {article_up} {role} type needs `Eq` and `Hash`: an integer, `Bool`, `String`, `Bytes`, `Path`, an `Option` or `List` of {article} {role} type, or a struct or enum with `impl Eq` whose fields are all {fields}"
             );
             self.error(codes::NOT_A_MAP_KEY, message, span);
             return;
