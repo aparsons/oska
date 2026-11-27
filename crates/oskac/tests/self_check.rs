@@ -79,6 +79,11 @@ impl Server {
     /// Serve `connections` connections of `scenario` from the fixture
     /// site `site`, with the certificate chain `chain`.
     fn start(scenario: &str, chain: &str, site: &str, connections: usize) -> Server {
+        // Build `oskac` before the server listens: the first test to need it
+        // waits for a build that can take over a minute on a slow runner,
+        // and a server waiting for its client gives up after the runtime's
+        // 60 seconds of silence on `accept` and closes its port.
+        test_oskac();
         let pki = here("tests/tls/pki");
         let mut child = Command::new(server_exe())
             .arg(pki.join(chain))
