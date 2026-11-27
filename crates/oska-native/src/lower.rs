@@ -178,6 +178,9 @@ mod panics {
     pub const FLOAT_TO_INT: &str = "P0046";
     pub const INT_TO_FLOAT: &str = "P0049";
     pub const FMT_DIGITS: &str = "P0050";
+    pub const DEQUE_ITEM_LIMIT: &str = "P0051";
+    /// The interpreter's message for `P0051`.
+    pub const DEQUE_ITEM_LIMIT_MESSAGE: &str = "the deque holds as many items as its limit allows";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
@@ -2758,6 +2761,9 @@ impl<'l, 'p> Body<'l, 'p> {
                         }
                         "map_probe_limit" => {
                             Some((panics::MAP_PROBE_LIMIT, panics::MAP_PROBE_LIMIT_MESSAGE))
+                        }
+                        "deque_item_limit" => {
+                            Some((panics::DEQUE_ITEM_LIMIT, panics::DEQUE_ITEM_LIMIT_MESSAGE))
                         }
                         _ => None,
                     };

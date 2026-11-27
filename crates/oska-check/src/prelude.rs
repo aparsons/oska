@@ -181,6 +181,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.deque",
+        source: include_str!("std/deque.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.map",
         source: include_str!("std/map.osk"),
         sink_literal: None,
@@ -206,7 +212,8 @@ pub static STD_MODULES: &[StdModule] = &[
 /// is joined to a program only when the program's text writes one of the
 /// names (a program that never says `Map` or `Entry` is unchanged).
 /// `use std.map` still works.
-pub const PRELUDE_STD: &[(&str, &[&str])] = &[("std.map", &["Map", "Entry"])];
+pub const PRELUDE_STD: &[(&str, &[&str])] =
+    &[("std.map", &["Map", "Entry"]), ("std.deque", &["Deque"])];
 
 /// The names of module `path` that the prelude brings into every module.
 pub fn prelude_names(path: &str) -> &'static [&'static str] {
