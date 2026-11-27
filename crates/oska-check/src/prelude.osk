@@ -944,14 +944,14 @@ impl String {
     // rounded: an optional `-`, digits, an optional `.` and digits, and an
     // optional `e` or `E` with an optional sign and digits. `None` for
     // anything else, so `NaN`, `inf`, a leading `+`, spaces, `1.`, `.5`,
-    // a text over 400 characters, and a number whose size is beyond
+    // a text over 400 bytes, and a number whose size is beyond
     // `Float` (`1e999`) are all `None`: no special value comes out of
     // text. A number too small for a subnormal is zero.
     #[follows_trust]
     pub fn parse_float(self) -> Option<Float>
     // `parse_float` with the opt-in: it also takes a leading `+`, the
     // words `nan`, `inf` and `infinity` in any case with an optional sign,
-    // a number beyond `Float` as an infinity, and up to 65536 characters.
+    // a number beyond `Float` as an infinity, and up to 65536 bytes.
     #[follows_trust]
     pub fn parse_float_lenient(self) -> Option<Float>
     // Its UTF-8 encoding.

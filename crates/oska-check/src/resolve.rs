@@ -45,6 +45,12 @@ pub fn untrusted_without_trust_flag(ty: &Type, known: &dyn Fn(&str) -> bool) -> 
     ))
 }
 
+/// The message of `E0357`, wherever a `Secret<Float>` is written or made.
+pub(crate) const SECRET_FLOAT: &str = "`Secret<Float>` is refused: float arithmetic is not \
+     constant-time on common hardware (a subnormal operand is slower), so a secret \
+     must not flow through it; keep the secret as a secret integer or `Secret<Bytes>`, \
+     or read the value with `.expose()` where it may be public";
+
 /// Whether `ty` is written `Secret<Float>`. Float arithmetic is not
 /// constant-time on common hardware, so no secret holds one (`E0357`).
 fn is_secret_float(ty: &Type) -> bool {
@@ -230,7 +236,7 @@ impl Resolver<'_, '_> {
                 if is_secret_float(ty) {
                     self.diagnostics.push(Diagnostic::new(
                         codes::SECRET_FLOAT,
-                        crate::body::SECRET_FLOAT,
+                        SECRET_FLOAT,
                         ty.span,
                     ));
                 }

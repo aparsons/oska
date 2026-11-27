@@ -17,7 +17,8 @@
 //   least 0. `gcd(0, 0)` is 0.
 // - `math.isqrt(n)`: the integer square root of `n`, at least 0: the
 //   largest `r` with `r * r <= n`. It uses the digit-by-digit method, 32
-//   iterations at most, and no `Float`.
+//   loop iterations at most in all (the first loop finds the top bit, the
+//   second takes one bit per step), and no `Float`.
 // - `math.pow(base, exp)`: `base` to the power `exp`, `exp` at least 0,
 //   by repeated squaring. `pow(0, 0)` is 1. A result that does not fit an
 //   `Int` panics (`P0001`); the squarings stop as soon as the answer is

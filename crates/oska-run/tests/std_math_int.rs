@@ -2,7 +2,7 @@
 //! The integer helpers of `std.math` (spec #590, ticket #595): `gcd`,
 //! `isqrt`, `pow`, `floor_div` and `rem_euclid`. Each is checked against
 //! Rust's exact integer arithmetic (`i128` where `i64` could overflow), on
-//! the interpreter and, through the differential helpers, natively. A
+//! the interpreter; the `assert_runs` cases also run natively. A
 //! broken `requires` is `P0006`, an overflow is `P0001`, and a loop counts
 //! steps (ADR 0021), so `--max-steps` stops one with `P0038`.
 

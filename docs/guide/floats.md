@@ -92,7 +92,7 @@ Write `1.5 + 3.0`, or convert with a method that says what it does:
 
 `x.to_string()`, `"{x}"` and `dbg` print the shortest digits that parse back to the same `Float`: `1.5`, `100.0`, `1e16`, `NaN`, `inf`. `x.fmt(digits)` prints 0 to 340 fixed decimals of the exact value, a tie going to the even digit (`P0048` for any other count).
 
-`"1.5e3".parse_float()` is correctly rounded, and gives `None` for `NaN`, `inf`, a leading `+`, a number beyond `Float`, spaces, and text over 400 characters. `parse_float_lenient()` is the opt-in that takes `+`, `nan`, `inf` and up to 65536 characters.
+`"1.5e3".parse_float()` is correctly rounded, and gives `None` for `NaN`, `inf`, a leading `+`, a number beyond `Float`, spaces, and text over 400 bytes. `parse_float_lenient()` is the opt-in that takes `+`, `nan`, `inf` and up to 65536 bytes.
 
 ## Secrets
 

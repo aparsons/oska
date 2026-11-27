@@ -29,6 +29,7 @@ use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use super::{Body, Deferred};
 use crate::codes;
+use crate::resolve::SECRET_FLOAT;
 use crate::ty::{self, Ty};
 
 /// A trait a secret deliberately lacks, and what is reported when one
@@ -42,12 +43,6 @@ struct Refused {
 /// The message of `E0351`, wherever a secret is compared.
 const COMPARED: &str = "a `Secret` is not `Eq`, because comparing one can leak timing \
                         information; use `constant_time_eq`, or `ct_eq` on a secret integer";
-
-/// The message of `E0357`, wherever a `Secret<Float>` is written or made.
-pub(crate) const SECRET_FLOAT: &str = "`Secret<Float>` is refused: float arithmetic is not \
-     constant-time on common hardware (a subnormal operand is slower), so a secret \
-     must not flow through it; keep the secret as a secret integer or `Secret<Bytes>`, \
-     or read the value with `.expose()` where it may be public";
 
 /// The traits a secret deliberately lacks.
 const REFUSED: &[Refused] = &[

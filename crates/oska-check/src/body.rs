@@ -76,7 +76,6 @@ mod purity;
 mod removed;
 mod results;
 mod secrets;
-pub(crate) use secrets::SECRET_FLOAT;
 mod sinks;
 
 use secrets::Operands;
