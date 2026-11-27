@@ -18,7 +18,7 @@
 //! one rename on Unix; on Windows, where a running executable cannot be
 //! overwritten but can be renamed, the running file is renamed aside and the
 //! new one moved in, and the renamed-aside file is deleted as soon as the
-//! system lets it be (the next `oskac self` command at the latest).
+//! system lets it be (the next `oskac self check` or `self update` at the latest).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -73,6 +73,9 @@ fn managed(exe: &Path) -> Result<Receipt, Failed> {
     };
     match identity(&found.json, Some(exe), &version()) {
         Ok(()) => Ok(found),
+        Err(why) if why.starts_with("the receipt records version") => Err(unmanaged(&format!(
+            "{why}, so this binary is not the one the installer recorded: a copy, or one replaced by hand"
+        ))),
         Err(why) => Err(unmanaged(&why)),
     }
 }
@@ -354,18 +357,49 @@ fn replace_aside(staged: &Path, live: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Whether `name` is one `replace_aside` generates: the marker, a process id
+/// and the executable suffix, and nothing else.
+fn is_aside_name(name: &str) -> bool {
+    name.strip_prefix(ASIDE)
+        .and_then(|rest| rest.strip_suffix(std::env::consts::EXE_SUFFIX))
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Delete what an earlier Windows update renamed aside, now that nothing
-/// runs from it. Nothing is kept of a replaced binary.
-fn sweep_aside(exe: &Path) {
+/// runs from it. Nothing is kept of a replaced binary. Only a file with a
+/// name `replace_aside` generates, beside `exe` and not `exe` itself, is
+/// deleted. `self check` and `self update` both do this, so the file is
+/// gone at the next `oskac self` command that starts it.
+pub(crate) fn sweep_aside(exe: &Path) {
     let Some(dir) = exe.parent() else { return };
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(ASIDE) {
+        let name = entry.file_name();
+        if is_aside_name(&name.to_string_lossy()) && entry.path() != exe {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+/// Write `contents` to a new file at `path`, a name this process picked: a
+/// file or link already there (left by a process with the same id) is
+/// removed first and never written through. The file is removed if `oskac`
+/// crashes, until [`crate::crash::untrack`].
+fn write_new(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => std::fs::remove_file(path)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    crate::crash::track(path);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(contents)
 }
 
 /// The receipt, and the version file it records, as they are to be after
@@ -374,6 +408,8 @@ fn sweep_aside(exe: &Path) {
 struct Records {
     receipt: (PathBuf, PathBuf),
     version: Option<(PathBuf, PathBuf)>,
+    /// What the version file held, to put back if the receipt cannot be.
+    old_version: Option<Vec<u8>>,
 }
 
 impl Records {
@@ -440,44 +476,69 @@ impl Records {
         let mut records = Records {
             receipt: (receipt_tmp, old.path.clone()),
             version: None,
+            old_version: None,
         };
-        let cleanup = |records: &Records| records.discard();
-        if let Err(e) = std::fs::write(&records.receipt.0, text) {
-            cleanup(&records);
+        if let Err(e) = write_new(&records.receipt.0, text.as_bytes()) {
+            records.discard();
             return Err(format!("{}: {e}", records.receipt.0.display()));
         }
         if let Some(path) = version_path {
             let tmp = path.with_file_name(format!("version.{id}.tmp"));
-            if let Err(e) = std::fs::write(&tmp, &version_text) {
-                let _ = std::fs::remove_file(&tmp);
-                cleanup(&records);
+            records.old_version = std::fs::read(&path).ok();
+            records.version = Some((tmp.clone(), path));
+            if let Err(e) = write_new(&tmp, version_text.as_bytes()) {
+                records.discard();
                 return Err(format!("{}: {e}", tmp.display()));
             }
-            records.version = Some((tmp, path));
         }
         Ok(records)
     }
 
+    /// Remove the prepared files that were not renamed into place.
     fn discard(&self) {
-        let _ = std::fs::remove_file(&self.receipt.0);
-        if let Some((tmp, _)) = &self.version {
+        let temps = self
+            .version
+            .iter()
+            .map(|(tmp, _)| tmp)
+            .chain([&self.receipt.0]);
+        for tmp in temps {
             let _ = std::fs::remove_file(tmp);
+            crate::crash::untrack(tmp);
         }
     }
 
+    /// Put the version file back as it was, after its rename and before a
+    /// failed receipt rename, so the two never disagree.
+    fn restore_version(&self) {
+        let (Some((_, target)), Some(old)) = (&self.version, &self.old_version) else {
+            return;
+        };
+        let tmp = target.with_file_name(format!("version.{}.old.tmp", std::process::id()));
+        let put_back = write_new(&tmp, old).and_then(|()| std::fs::rename(&tmp, target));
+        if put_back.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        crate::crash::untrack(&tmp);
+    }
+
     /// Rename the prepared files into place: the version file, then the
-    /// receipt, as the installer does.
+    /// receipt, as the installer does. If the receipt cannot be renamed, the
+    /// version file is put back, so a failure never leaves the version file
+    /// new and the receipt old.
     fn commit(self) -> Result<(), String> {
-        let mut failure = None;
-        for (tmp, target) in self.version.iter().chain(Some(&self.receipt)) {
+        if let Some((tmp, target)) = &self.version {
             if let Err(e) = std::fs::rename(tmp, target) {
-                failure.get_or_insert(format!("{}: {e}", target.display()));
+                self.discard();
+                return Err(format!("{}: {e}", target.display()));
             }
         }
-        if failure.is_some() {
+        if let Err(e) = std::fs::rename(&self.receipt.0, &self.receipt.1) {
+            self.restore_version();
             self.discard();
+            return Err(format!("{}: {e}", self.receipt.1.display()));
         }
-        failure.map_or(Ok(()), Err)
+        self.discard();
+        Ok(())
     }
 }
 
@@ -627,14 +688,31 @@ mod tests {
         assert_eq!(fields[1].1, Json::Str("0.7.0".into()));
     }
 
+    /// A scratch directory removed when it is dropped, a panic included.
+    struct Temp(PathBuf);
+
+    impl Temp {
+        fn new(name: &str) -> Temp {
+            let dir = std::env::temp_dir().join(format!("oskac-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("a directory");
+            Temp(dir)
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// The Windows replacement, run here on any platform: the live file
     /// moves aside and the new one takes its name; if the new one cannot be
     /// moved in, the live one is back.
     #[test]
     fn the_aside_replacement_swaps_the_files_and_puts_the_old_one_back_on_failure() {
-        let dir = std::env::temp_dir().join(format!("oskac-aside-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a directory");
+        let temp = Temp::new("aside");
+        let dir = &temp.0;
         let live = dir.join("oskac");
         let staged = dir.join("staged");
         std::fs::write(&live, b"old").expect("live");
@@ -643,7 +721,7 @@ mod tests {
         assert_eq!(std::fs::read(&live).expect("live"), b"new");
         assert!(!staged.exists());
         // The old file is not kept.
-        let left: Vec<_> = std::fs::read_dir(&dir)
+        let left: Vec<_> = std::fs::read_dir(dir)
             .expect("dir")
             .flatten()
             .map(|e| e.file_name())
@@ -652,20 +730,74 @@ mod tests {
         // A staged file that is not there: the live file stays.
         assert!(replace_aside(&dir.join("missing"), &live).is_err());
         assert_eq!(std::fs::read(&live).expect("live"), b"new");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn stale_files_renamed_aside_are_swept() {
-        let dir = std::env::temp_dir().join(format!("oskac-sweep-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a directory");
-        let exe = dir.join("oskac");
-        std::fs::write(&exe, b"live").expect("live");
-        std::fs::write(dir.join(format!("{ASIDE}1")), b"old").expect("aside");
+    fn only_files_renamed_aside_by_an_update_are_swept() {
+        let temp = Temp::new("sweep");
+        let dir = &temp.0;
+        let suffix = std::env::consts::EXE_SUFFIX;
+        let exe = dir.join(format!("oskac{suffix}"));
+        let aside = dir.join(format!("{ASIDE}1234{suffix}"));
+        let others = [
+            dir.join(format!("{ASIDE}x{suffix}")),
+            dir.join(format!("{ASIDE}1234.bak")),
+            dir.join(format!("{ASIDE}{suffix}")),
+            dir.join("notes.txt"),
+        ];
+        for path in others.iter().chain([&exe, &aside]) {
+            std::fs::write(path, b"x").expect("a file");
+        }
         sweep_aside(&exe);
         assert!(exe.exists());
-        assert!(!dir.join(format!("{ASIDE}1")).exists());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!aside.exists());
+        for path in &others {
+            assert!(path.exists(), "{} was deleted", path.display());
+        }
+    }
+
+    /// A receipt that cannot be renamed into place puts the version file
+    /// back: the two never disagree.
+    #[test]
+    fn a_failed_receipt_rename_puts_the_version_file_back() {
+        let temp = Temp::new("records");
+        let dir = &temp.0;
+        let version = dir.join("version");
+        std::fs::write(&version, "0.6.0\n").expect("version");
+        let (receipt_tmp, version_tmp) = (dir.join("r.tmp"), dir.join("v.tmp"));
+        std::fs::write(&receipt_tmp, "new receipt").expect("tmp");
+        std::fs::write(&version_tmp, "0.7.0\n").expect("tmp");
+        // The receipt's place is a directory with something in it, which a
+        // file cannot be renamed over.
+        let receipt = dir.join("receipt.json");
+        std::fs::create_dir(&receipt).expect("a directory");
+        std::fs::write(receipt.join("x"), b"x").expect("a file");
+        let records = Records {
+            receipt: (receipt_tmp.clone(), receipt.clone()),
+            version: Some((version_tmp.clone(), version.clone())),
+            old_version: Some(b"0.6.0\n".to_vec()),
+        };
+        assert!(records.commit().is_err());
+        assert_eq!(std::fs::read(&version).expect("version"), b"0.6.0\n");
+        assert!(!receipt_tmp.exists() && !version_tmp.exists());
+        let names: Vec<_> = std::fs::read_dir(dir).expect("dir").flatten().collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    /// A file or link at the name of a temporary file is replaced, never
+    /// written through.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_a_temporary_name_is_not_written_through() {
+        let temp = Temp::new("link");
+        let dir = &temp.0;
+        let target = dir.join("target");
+        std::fs::write(&target, b"keep").expect("target");
+        let tmp = dir.join("receipt.json.1.tmp");
+        std::os::unix::fs::symlink(&target, &tmp).expect("a link");
+        write_new(&tmp, b"new").expect("written");
+        assert_eq!(std::fs::read(&target).expect("target"), b"keep");
+        assert_eq!(std::fs::read(&tmp).expect("tmp"), b"new");
+        crate::crash::untrack(&tmp);
     }
 }

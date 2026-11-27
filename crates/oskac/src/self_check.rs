@@ -220,6 +220,8 @@ struct Done {
 fn run(identify: bool) -> Result<Done, Failed> {
     let exe =
         running().ok_or_else(|| failed("internal", "this oskac's own path cannot be found"))?;
+    // What an earlier Windows update renamed aside is deleted now.
+    crate::self_update::sweep_aside(&exe);
     let receipt = receipt(&exe);
     let assets = assets();
     let version = version();

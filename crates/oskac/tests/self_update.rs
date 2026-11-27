@@ -504,6 +504,16 @@ fn a_receipt_for_another_version_is_refused() {
         .replace("\"version\": \"0.6.0\"", "\"version\": \"0.5.0\"");
     std::fs::write(scene.receipt_path(), text).expect("the receipt");
     unmanaged(&scene, "another version");
+    let (_, out, _) = scene.oskac(1, &["update", "--format=json"]);
+    let message = error_of(&out).1;
+    assert!(
+        message.contains("receipt records version 0.5.0"),
+        "{message}"
+    );
+    assert!(
+        message.contains("not the one the installer recorded"),
+        "{message}"
+    );
 }
 
 /// A failed update leaves the live binary and the receipt byte for byte as
