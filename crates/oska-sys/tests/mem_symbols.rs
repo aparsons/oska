@@ -57,7 +57,10 @@ fn defined_symbols() -> Vec<String> {
             if shndx == 0 {
                 continue; // undefined
             }
-            let end = exe[name_at..].iter().position(|&b| b == 0).unwrap();
+            let end = exe[name_at..]
+                .iter()
+                .position(|&b| b == 0)
+                .expect("a name ends in NUL");
             names.push(String::from_utf8_lossy(&exe[name_at..name_at + end]).into_owned());
         }
     }
@@ -101,7 +104,7 @@ fn the_c_symbols_copy_and_move() {
         let base = buf.as_mut_ptr();
         // SAFETY: `n + 5` bytes; both ranges of `n` bytes lie inside, and
         // `memmove` accepts overlap.
-        unsafe { memmove(base.add(5), base, n) };
+        unsafe { memmove(base.wrapping_add(5), base, n) };
         assert_eq!(&buf[5..], &src[..]);
     }
 }

@@ -177,8 +177,9 @@ unsafe fn small(d: *mut u8, s: *const u8, n: usize) {
     }
 }
 
-/// Four vectors, loaded before they are stored.
-type Block = [__m128i; 4];
+/// Four vectors, loaded before they are stored. Built from single-vector
+/// loads and stores, so that no 64-byte move can become a call to `memcpy`.
+struct Block(__m128i, __m128i, __m128i, __m128i);
 
 /// Loads 64 bytes.
 ///
@@ -186,8 +187,16 @@ type Block = [__m128i; 4];
 /// 64 bytes from `s + at` must be readable.
 #[inline(always)]
 unsafe fn load_block(s: *const u8, at: usize) -> Block {
-    // SAFETY: the caller promises it. `Block` is four vectors, 64 bytes.
-    unsafe { ld(s, at) }
+    // SAFETY: the caller promises the 64 bytes are readable; each load takes
+    // 16 of them.
+    let a = unsafe { ld(s, at) };
+    // SAFETY: as above.
+    let b = unsafe { ld(s, at + 16) };
+    // SAFETY: as above.
+    let c = unsafe { ld(s, at + 32) };
+    // SAFETY: as above.
+    let d = unsafe { ld(s, at + 48) };
+    Block(a, b, c, d)
 }
 
 /// Stores 64 bytes.
@@ -196,8 +205,15 @@ unsafe fn load_block(s: *const u8, at: usize) -> Block {
 /// 64 bytes from `d + at` must be writable.
 #[inline(always)]
 unsafe fn store_block(d: *mut u8, at: usize, b: Block) {
-    // SAFETY: the caller promises it.
-    unsafe { st(d, at, b) }
+    // SAFETY: the caller promises the 64 bytes are writable; each store
+    // takes 16 of them.
+    unsafe { st(d, at, b.0) };
+    // SAFETY: as above.
+    unsafe { st(d, at + 16, b.1) };
+    // SAFETY: as above.
+    unsafe { st(d, at + 32, b.2) };
+    // SAFETY: as above.
+    unsafe { st(d, at + 48, b.3) };
 }
 
 /// Copies `rep movsb`.
@@ -274,6 +290,15 @@ unsafe fn backward(d: *mut u8, s: *const u8, n: usize) {
     unsafe { store_block(d, 0, head) };
 }
 
+/// Whether a copy of `n` bytes (above 64) takes `rep movsb`.
+fn use_erms(n: usize, path: MemPath) -> bool {
+    match path {
+        MemPath::Detect => n >= ERMS_MIN && has_erms(),
+        MemPath::Erms => true,
+        MemPath::Sse2 => false,
+    }
+}
+
 /// `memcpy`'s body: the ranges do not overlap.
 ///
 /// # Safety
@@ -284,11 +309,7 @@ unsafe fn copy(d: *mut u8, s: *const u8, n: usize, path: MemPath) {
         // SAFETY: `n <= 64`.
         unsafe { small(d, s, n) };
     } else {
-        let erms = match path {
-            MemPath::Detect => n >= ERMS_MIN && has_erms(),
-            MemPath::Erms => true,
-            MemPath::Sse2 => false,
-        };
+        let erms = use_erms(n, path);
         // SAFETY: `n > 64`; no overlap, so ascending is correct.
         unsafe { forward(d, s, n, erms) };
     }
@@ -305,13 +326,9 @@ unsafe fn relocate(d: *mut u8, s: *const u8, n: usize, path: MemPath) {
         unsafe { small(d, s, n) };
     } else if (d as usize).wrapping_sub(s as usize) >= n {
         // The destination is below the source, or the ranges are apart.
-        // (Equal pointers give 0, which is below `n`: the backward branch,
-        // harmless and rare.)
-        let erms = match path {
-            MemPath::Detect => n >= ERMS_MIN && has_erms(),
-            MemPath::Erms => true,
-            MemPath::Sse2 => false,
-        };
+        // (Equal pointers give 0, which is below `n`, so they take the
+        // branch after this one, where `ptr::eq` skips the copy.)
+        let erms = use_erms(n, path);
         // SAFETY: `n > 64`; ascending is correct for this case.
         unsafe { forward(d, s, n, erms) };
     } else if !ptr::eq(d.cast_const(), s) {
@@ -325,7 +342,11 @@ unsafe fn relocate(d: *mut u8, s: *const u8, n: usize, path: MemPath) {
 /// # Safety
 /// As C's: `n` bytes readable from `s`, writable from `d`, not overlapping.
 #[cfg(all(target_os = "linux", target_env = "musl"))]
-#[allow(unknown_lints, suspicious_runtime_symbol_definitions)]
+#[allow(
+    unknown_lints,
+    suspicious_runtime_symbol_definitions,
+    reason = "these are the C symbols, declared with byte pointers as the rest of the crate uses"
+)]
 #[no_mangle]
 pub unsafe extern "C" fn memcpy(d: *mut u8, s: *const u8, n: usize) -> *mut u8 {
     // SAFETY: the caller's promise, which is C's contract for `memcpy`.
@@ -338,7 +359,11 @@ pub unsafe extern "C" fn memcpy(d: *mut u8, s: *const u8, n: usize) -> *mut u8 {
 /// # Safety
 /// As C's: `n` bytes readable from `s` and writable from `d`.
 #[cfg(all(target_os = "linux", target_env = "musl"))]
-#[allow(unknown_lints, suspicious_runtime_symbol_definitions)]
+#[allow(
+    unknown_lints,
+    suspicious_runtime_symbol_definitions,
+    reason = "these are the C symbols, declared with byte pointers as the rest of the crate uses"
+)]
 #[no_mangle]
 pub unsafe extern "C" fn memmove(d: *mut u8, s: *const u8, n: usize) -> *mut u8 {
     // SAFETY: the caller's promise, which is C's contract for `memmove`.
