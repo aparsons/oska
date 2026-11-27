@@ -781,7 +781,7 @@ A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when 
 | `E0225` | Argument label that does not match its parameter or field, or a label on a positional field. | Replace the label with the parameter's name, or remove it. | maybe |
 | `E0226` | Named field constructed without its label. | Insert the field's label. | machine |
 | `E0227` | Unknown field, or a method used without calling it. | Replace the field with the single closest field, when one is close enough. | maybe |
-| `E0228` | Unknown method, variant, or associated function, or an associated function called on a value. A method that only other type arguments have, as `rotl` on a `Secret<Int>`, names the types that have it. | Replace the name with the single closest member, when one is close enough. | maybe |
+| `E0228` | Unknown method, variant, or associated function, or an associated function called on a value. `unwrap` and `expect` on an `Option` or `Result` are refused with a message that lists `?`, `unwrap_or` and `match`. A method that only other type arguments have, as `rotl` on a `Secret<Int>`, names the types that have it. | Replace the name with the single closest member, when one is close enough. | maybe |
 | `E0229` | Assignment to something that is not a `var` binding: a `let` binding, a parameter, or a field of `self` in a method without `var self`. | Change `let` to `var`, or `self` to `var self`. None for parameters. | machine |
 | `E0230` | Mutating method (`var self`) called on something that is not a `var` binding. | Change `let` to `var`, or `self` to `var self`. | machine |
 | `E0231` | Call of a value that is not a function. | None. | — |

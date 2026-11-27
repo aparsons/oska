@@ -585,7 +585,7 @@ fn the_examples_check_cleanly() {
 #[test]
 fn an_unknown_method_does_not_check_its_closure_into_a_second_error() {
     assert_errors(
-        "fn f() {\n    Some(1).map(|x| x + 1)\n}",
-        &[("E0228", "map")],
+        "fn f() {\n    Some(1).flat_map(|x| x + 1)\n}",
+        &[("E0228", "flat_map")],
     );
 }
