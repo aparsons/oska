@@ -120,12 +120,12 @@ pub mod codes {
         oska_check::limits::codes::OUTPUT_LIMIT,
         "P0042",
         "P0043",
-        "P0044",
-        // Defined ahead of the functions that panic with them (ADR 0027).
-        "P0045",
         "P0046",
+        // Defined ahead of the functions that panic with them (ADR 0027).
         "P0047",
         "P0048",
+        "P0049",
+        "P0050",
     ];
 }
 

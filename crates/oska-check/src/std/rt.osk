@@ -9952,7 +9952,7 @@ pub fn float_approx_eq(a: Float, b: Float, relative: Float, absolute: Float) -> 
     gap <= relative * larger || gap <= absolute
 }
 
-// Panic (`P0044`): `to_int()` of a NaN, an infinity or a value out of range.
+// Panic (`P0046`): `to_int()` of a NaN, an infinity or a value out of range.
 pub fn panic_float_to_int(start: String, end: String, x: Float) {
     panic_message(start, end, float_to_int_message("", x))
 }
@@ -9962,7 +9962,7 @@ pub fn float_to_int_message(head: String, x: Float) -> String {
     "{head}`to_int()` of {shown} does not fit `Int`, which ranges from -9223372036854775808 to 9223372036854775807"
 }
 
-// Panic (`P0047`): `to_float()` of a value that would round.
+// Panic (`P0049`): `to_float()` of a value that would round.
 pub fn panic_int_to_float(start: String, end: String, n: Int) {
     panic_message(start, end, int_to_float_message("", n))
 }
@@ -9972,7 +9972,7 @@ pub fn int_to_float_message(head: String, n: Int) -> String {
     "{head}`to_float()` of {shown} would round: it is beyond 2^53 (9007199254740992); `to_float_rounded()` rounds it"
 }
 
-// Panic (`P0048`): `fmt` with a count of digits outside 0 to 340.
+// Panic (`P0050`): `fmt` with a count of digits outside 0 to 340.
 pub fn panic_float_fmt(start: String, end: String, digits: Int) {
     panic_message(start, end, float_fmt_message("", digits))
 }

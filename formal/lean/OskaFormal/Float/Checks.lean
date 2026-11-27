@@ -60,7 +60,7 @@ open OskaFormal.Float
 #guard ofDecimal false 17976931348623159 292 == none
 #guard ofDecimal false 1 999 == none
 
--- `to_int()`: toward zero; none (P0044) for NaN, infinity, out of range.
+-- `to_int()`: toward zero; none (P0046) for NaN, infinity, out of range.
 #guard toInt 0x3feccccccccccccd == some 0
 #guard toInt 0xbfeccccccccccccd == some 0
 #guard toInt 0x3ff8000000000000 == some 1
@@ -76,7 +76,7 @@ open OskaFormal.Float
 #guard toInt 0x7ff0000000000000 == none
 #guard toInt 0xfff0000000000000 == none
 
--- `to_float()`: exact up to 2^53, none (P0047) beyond.
+-- `to_float()`: exact up to 2^53, none (P0049) beyond.
 #guard intToFloat 0 == some 0
 #guard intToFloat (-1) == some 0xbff0000000000000
 #guard intToFloat 9007199254740992 == some 0x4340000000000000

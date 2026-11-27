@@ -74,7 +74,7 @@ impl Body<'_, '_> {
             // A `Float`'s bits are already canonical.
             ("Float.to_bits", &[x]) => self.copy(x),
             ("Float.from_bits", &[x]) => self.float_op(FloatOp::Canonical, x, x),
-            // NaN, an infinity or a value out of range panics (`P0044`).
+            // NaN, an infinity or a value out of range panics (`P0046`).
             ("Float.to_int", &[x]) => {
                 let fits = self.call_runtime("float_fits_int", vec![x], span)?;
                 let label =
@@ -85,7 +85,7 @@ impl Body<'_, '_> {
                 });
                 self.call_runtime("float_to_int", vec![x], span)?
             }
-            // A value that would round panics (`P0047`).
+            // A value that would round panics (`P0049`).
             ("Int.to_float", &[n]) => {
                 let exact = self.call_runtime("int_fits_float", vec![n], span)?;
                 let label =
@@ -96,7 +96,7 @@ impl Body<'_, '_> {
                 });
                 self.call_runtime("int_to_float_rounded", vec![n], span)?
             }
-            // A count of digits outside 0 to 340 panics (`P0048`): above,
+            // A count of digits outside 0 to 340 panics (`P0050`): above,
             // unsigned, is also below 0.
             ("Float.fmt", &[x, digits]) => {
                 let label =

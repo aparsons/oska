@@ -84,13 +84,13 @@ fn main(io: Stdout) -> Result<(), IoError> {
 
 Write `1.5 + 3.0`, or convert with a method that says what it does:
 
-- `n.to_float()` is exact, and panics (`P0047`) for an `Int` beyond 2^53, which it would round.
+- `n.to_float()` is exact, and panics (`P0049`) for an `Int` beyond 2^53, which it would round.
 - `n.to_float_rounded()` rounds to nearest, ties to even. In the example `9007199254740993` becomes `9007199254740992.0`.
-- `x.to_int()` truncates toward zero (`-2.9` gives `-2`), and panics (`P0044`) on NaN, an infinity, or a value that `Int` cannot hold. Check first when a value can be out of range.
+- `x.to_int()` truncates toward zero (`-2.9` gives `-2`), and panics (`P0046`) on NaN, an infinity, or a value that `Int` cannot hold. Check first when a value can be out of range.
 
 ## Text in and out
 
-`x.to_string()`, `"{x}"` and `dbg` print the shortest digits that parse back to the same `Float`: `1.5`, `100.0`, `1e16`, `NaN`, `inf`. `x.fmt(digits)` prints 0 to 340 fixed decimals of the exact value, a tie going to the even digit (`P0048` for any other count).
+`x.to_string()`, `"{x}"` and `dbg` print the shortest digits that parse back to the same `Float`: `1.5`, `100.0`, `1e16`, `NaN`, `inf`. `x.fmt(digits)` prints 0 to 340 fixed decimals of the exact value, a tie going to the even digit (`P0050` for any other count).
 
 `"1.5e3".parse_float()` is correctly rounded, and gives `None` for `NaN`, `inf`, a leading `+`, a number beyond `Float`, spaces, and text over 400 bytes. `parse_float_lenient()` is the opt-in that takes `+`, `nan`, `inf` and up to 65536 bytes.
 

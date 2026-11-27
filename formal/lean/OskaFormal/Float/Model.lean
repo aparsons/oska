@@ -279,14 +279,14 @@ def ofDecimal (neg : Bool) (digits : Nat) (exp10 : Int) : Option Nat :=
 /-- The largest `Int` that `to_float()` takes, `2 ^ 53`. -/
 def exactLimit : Nat := 2 ^ 53
 
-/-- `Int.to_float()`: exact, or `none` (`P0047`) for a number it would round. -/
+/-- `Int.to_float()`: exact, or `none` (`P0049`) for a number it would round. -/
 def intToFloat (n : Int) : Option Nat :=
   if n.natAbs ≤ exactLimit then some (encode (roundDyadic (decide (n < 0)) n.natAbs 0)) else none
 
 /-- `Int.to_float_rounded()`: nearest, ties to even. -/
 def intToFloatRounded (n : Int) : Nat := encode (roundDyadic (decide (n < 0)) n.natAbs 0)
 
-/-- `Float.to_int()`: truncates toward zero, and is `none` (`P0044`) for a
+/-- `Float.to_int()`: truncates toward zero, and is `none` (`P0046`) for a
 NaN, an infinity or a value `Int` (64 bits) cannot hold. -/
 def toInt (x : Nat) : Option Int :=
   match decode x with
