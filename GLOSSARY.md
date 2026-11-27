@@ -149,7 +149,7 @@ _Avoid_: pair, item, member (a `std.json` member is a different type)
 _Avoid_: hash set
 
 **Deque**:
-`Deque<T>`, in the prelude (no `use`): a value that holds items in a line, with amortized O(1) `push_back`, `push_front`, `pop_back` and `pop_front`. A pop on an empty deque gives `None`. It has an item limit (`P0046`). There is no literal: `Deque.of(list)` builds one.
+`Deque<T>`, in the prelude (no `use`): a value that holds items in a line, with amortized O(1) `push_back`, `push_front`, `pop_back` and `pop_front`. A pop on an empty deque gives `None`. It has an item limit (`P0051`). There is no literal: `Deque.of(list)` builds one.
 _Avoid_: queue, stack, ring buffer
 
 **Insertion order**:
