@@ -116,3 +116,57 @@ pub fn list_concat<T>(items: List<T>, more: List<T>) -> List<T> {
     }
     joined
 }
+
+// A new list of the items ordered by `cmp`, a stable merge sort: items
+// that `cmp` calls equal keep their order. It takes O(n log n) steps and
+// one extra list. It reads only positions below the length whatever `cmp`
+// answers, so a `cmp` that is not a total order gives some order of the
+// same items and never reads out of bounds. The receiver is not changed,
+// so a `cmp` that panics leaves it as it was.
+pub fn list_sorted_by<T>(items: List<T>, cmp: fn(T, T) -> Ordering) -> List<T> {
+    let n = items.len()
+    var from = items
+    var width = 1
+    while width < n {
+        var into: List<T> = []
+        var lo = 0
+        while lo < n {
+            let mid = if lo + width < n { lo + width } else { n }
+            let hi = if lo + 2 * width < n { lo + 2 * width } else { n }
+            var left = lo
+            var right = mid
+            while left < mid && right < hi {
+                // The right item goes first only when it is strictly less,
+                // which keeps equal items in their order.
+                let right_first = match cmp(from.at(right), from.at(left)) {
+                    Ordering.Less => true
+                    _ => false
+                }
+                if right_first {
+                    into.push(from.at(right))
+                    right = right + 1
+                } else {
+                    into.push(from.at(left))
+                    left = left + 1
+                }
+            }
+            while left < mid {
+                into.push(from.at(left))
+                left = left + 1
+            }
+            while right < hi {
+                into.push(from.at(right))
+                right = right + 1
+            }
+            lo = lo + 2 * width
+        }
+        from = into
+        width = width * 2
+    }
+    from
+}
+
+// A new list of the items in ascending order, stable.
+pub fn list_sorted<T: Ord>(items: List<T>) -> List<T> {
+    list_sorted_by(items, |a, b| a.cmp(b))
+}
