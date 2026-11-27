@@ -478,3 +478,110 @@ fn the_fixed_instructions() {
     check("ret", Asm::ret, &[0xc3]);
     check("syscall", Asm::syscall, &[0x0f, 0x05]);
 }
+
+// ---- Scalar doubles -----------------------------------------------------------
+
+#[test]
+fn movq_between_a_general_register_and_an_sse_register() {
+    // MOVQ xmm, r/m64: 66 REX.W 0F 6E /r, the xmm register in ModRM.reg.
+    check(
+        "movq xmm0, rax",
+        |a| a.movq_to_xmm(0, RAX),
+        &[0x66, 0x48, 0x0f, 0x6e, 0xc0],
+    );
+    check(
+        "movq xmm1, rcx",
+        |a| a.movq_to_xmm(1, RCX),
+        &[0x66, 0x48, 0x0f, 0x6e, 0xc9],
+    );
+    check(
+        "movq xmm0, r9",
+        |a| a.movq_to_xmm(0, R9),
+        &[0x66, 0x49, 0x0f, 0x6e, 0xc1],
+    );
+    // MOVQ r/m64, xmm: 66 REX.W 0F 7E /r, the xmm register in ModRM.reg.
+    check(
+        "movq rax, xmm0",
+        |a| a.movq_from_xmm(RAX, 0),
+        &[0x66, 0x48, 0x0f, 0x7e, 0xc0],
+    );
+    check(
+        "movq rbx, xmm1",
+        |a| a.movq_from_xmm(RBX, 1),
+        &[0x66, 0x48, 0x0f, 0x7e, 0xcb],
+    );
+    check(
+        "movq r12, xmm0",
+        |a| a.movq_from_xmm(R12, 0),
+        &[0x66, 0x49, 0x0f, 0x7e, 0xc4],
+    );
+}
+
+#[test]
+fn scalar_double_arithmetic_is_f2_0f_op_rr() {
+    // ADDSD F2 0F 58, MULSD F2 0F 59, SUBSD F2 0F 5C, DIVSD F2 0F 5E and
+    // SQRTSD F2 0F 51, each `xmm1, xmm2/m64` with xmm1 in ModRM.reg.
+    check(
+        "addsd xmm0, xmm1",
+        |a| a.sd(0x58, 0, 1),
+        &[0xf2, 0x0f, 0x58, 0xc1],
+    );
+    check(
+        "mulsd xmm0, xmm1",
+        |a| a.sd(0x59, 0, 1),
+        &[0xf2, 0x0f, 0x59, 0xc1],
+    );
+    check(
+        "subsd xmm0, xmm1",
+        |a| a.sd(0x5c, 0, 1),
+        &[0xf2, 0x0f, 0x5c, 0xc1],
+    );
+    check(
+        "divsd xmm0, xmm1",
+        |a| a.sd(0x5e, 0, 1),
+        &[0xf2, 0x0f, 0x5e, 0xc1],
+    );
+    check(
+        "sqrtsd xmm0, xmm0",
+        |a| a.sd(0x51, 0, 0),
+        &[0xf2, 0x0f, 0x51, 0xc0],
+    );
+    check(
+        "divsd xmm1, xmm0",
+        |a| a.sd(0x5e, 1, 0),
+        &[0xf2, 0x0f, 0x5e, 0xc8],
+    );
+}
+
+#[test]
+fn ucomisd_is_66_0f_2e_rr() {
+    // UCOMISD xmm1, xmm2/m64: 66 0F 2E /r.
+    check(
+        "ucomisd xmm0, xmm0",
+        |a| a.ucomisd(0, 0),
+        &[0x66, 0x0f, 0x2e, 0xc0],
+    );
+    check(
+        "ucomisd xmm0, xmm1",
+        |a| a.ucomisd(0, 1),
+        &[0x66, 0x0f, 0x2e, 0xc1],
+    );
+    check(
+        "ucomisd xmm1, xmm0",
+        |a| a.ucomisd(1, 0),
+        &[0x66, 0x0f, 0x2e, 0xc8],
+    );
+}
+
+#[test]
+fn the_parity_conditions_are_a_and_b() {
+    // Table B-10: JP/JPE 1010, JNP/JPO 1011.
+    assert_eq!((P, NP), (0xa, 0xb));
+    check(
+        "jnp rel8",
+        |a| {
+            a.jcc8(NP);
+        },
+        &[0x7b, 0x00],
+    );
+}

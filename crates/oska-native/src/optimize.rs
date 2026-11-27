@@ -580,6 +580,8 @@ fn pure(inst: &Inst) -> bool {
             | Inst::Expose { .. }
             | Inst::Addr { .. }
             | Inst::Binary { .. }
+            | Inst::Float { .. }
+            | Inst::FloatCompare { .. }
             | Inst::BinaryImm { .. }
             | Inst::Compare { .. }
             | Inst::CompareImm { .. }
@@ -603,6 +605,8 @@ fn rename_def(inst: &mut Inst, to: Temp) {
         | Inst::Expose { dst, .. }
         | Inst::Addr { dst, .. }
         | Inst::Binary { dst, .. }
+        | Inst::Float { dst, .. }
+        | Inst::FloatCompare { dst, .. }
         | Inst::BinaryImm { dst, .. }
         | Inst::CompareImm { dst, .. }
         | Inst::ArithImm { dst, .. }
@@ -640,6 +644,8 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
     match inst {
         Inst::Copy { src, .. } | Inst::Secret { src, .. } | Inst::Expose { src, .. } => swap(src),
         Inst::Binary { lhs, rhs, .. }
+        | Inst::Float { lhs, rhs, .. }
+        | Inst::FloatCompare { lhs, rhs, .. }
         | Inst::Compare { lhs, rhs, .. }
         | Inst::Arith { lhs, rhs, .. }
         | Inst::Branch { lhs, rhs, .. } => {

@@ -11,7 +11,7 @@ pub const SOURCE: &str = include_str!("prelude.osk");
 /// Primitive types, which the checker builds in rather than the prelude
 /// declaring them.
 pub const PRIMITIVES: &[&str] = &[
-    "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Bool", "String",
+    "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Float", "Bool", "String",
 ];
 
 /// A `std.*` module, which a module sees only once it imports it with
@@ -183,6 +183,12 @@ pub static STD_MODULES: &[StdModule] = &[
     StdModule {
         path: "std.map",
         source: include_str!("std/map.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
+        path: "std.math",
+        source: include_str!("std/math.osk"),
         sink_literal: None,
         written_in_oska: true,
     },

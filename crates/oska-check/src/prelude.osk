@@ -2,8 +2,8 @@
 // The prelude: what every module sees without `use`. It has the built-in
 // capabilities, `Option`, `Result`, `List` and the methods of `String`,
 // the types tests and structured concurrency use, and the core traits.
-// The primitive types (`Int`, the sized integers `I8` to `U64`, `Bool`,
-// `String`) and `()` are built into the language.
+// The primitive types (`Int`, the sized integers `I8` to `U64`, `Float`,
+// `Bool`, `String`) and `()` are built into the language.
 //
 // A capability is a value that grants authority, such as `Stdout` or
 // `FsRead`. Only `main` receives the built-in ones, as parameters, and no
@@ -940,6 +940,20 @@ impl String {
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>
+    // The `Float` nearest to the number the whole text spells, correctly
+    // rounded: an optional `-`, digits, an optional `.` and digits, and an
+    // optional `e` or `E` with an optional sign and digits. `None` for
+    // anything else, so `NaN`, `inf`, a leading `+`, spaces, `1.`, `.5`,
+    // a text over 400 bytes, and a number whose size is beyond
+    // `Float` (`1e999`) are all `None`: no special value comes out of
+    // text. A number too small for a subnormal is zero.
+    #[follows_trust]
+    pub fn parse_float(self) -> Option<Float>
+    // `parse_float` with the opt-in: it also takes a leading `+`, the
+    // words `nan`, `inf` and `infinity` in any case with an optional sign,
+    // a number beyond `Float` as an infinity, and up to 65536 bytes.
+    #[follows_trust]
+    pub fn parse_float_lenient(self) -> Option<Float>
     // Its UTF-8 encoding.
     #[follows_trust]
     pub fn to_bytes(self) -> Bytes
@@ -986,6 +1000,57 @@ impl Display for IoError {
     fn to_string(self) -> String
 }
 
+// ---- Float ---------------------------------------------------------------
+
+// `Float` is IEEE 754 binary64, and every result of an operation on it is
+// pinned down to the bits (ADR 0027): the same on the interpreter and on
+// every native platform. `+ - * /` and `sqrt` round to nearest, ties to
+// even. The compiler never fuses `a * b + c` into one operation. There is
+// one NaN, the canonical NaN, bits `0x7FF8000000000000`: every operation
+// that makes a NaN makes it. `==`, `!=`, `<`, `<=`, `>` and `>=` follow
+// IEEE 754, so a NaN is equal to nothing, itself included, and `0.0 ==
+// -0.0`. There is no implicit conversion between `Int` and `Float`, and no
+// `%`.
+impl Float {
+    // The square root, correctly rounded. The square root of `-0.0` is
+    // `-0.0`, and of a negative number the canonical NaN.
+    pub fn sqrt(self) -> Float
+    // The 64 bits of the value as a `U64`. A NaN gives the canonical
+    // pattern.
+    pub fn to_bits(self) -> U64
+    // The `Float` with these 64 bits. Any NaN pattern gives the canonical
+    // NaN.
+    pub fn from_bits(bits: U64) -> Float
+    // The value truncated toward zero, as an `Int`. NaN, an infinity, and
+    // a value that does not fit `Int` panic (`P0046`).
+    pub fn to_int(self) -> Int
+    // The text with `digits` digits after the point, from 0 to 340: the
+    // exact value rounded to that many, a tie going to the even digit. It
+    // keeps the sign, so a small negative number is `-0.00`. NaN is `NaN`
+    // and an infinity is `inf` or `-inf`. Any other count panics (`P0050`).
+    pub fn fmt(self, digits: Int) -> String
+    // -1, 0 or 1: where `self` stands in the total order, which is
+    // `-inf`, the negative numbers, `-0.0`, `0.0`, the positive numbers,
+    // `inf`, `NaN`. Unlike `<`, it orders every pair, so it sorts. It is
+    // 0 only for two values with the same bits.
+    pub fn total_cmp(self, other: Float) -> Int
+    // Whether the two differ by at most `relative` times the larger
+    // magnitude, or by at most `absolute`, whichever allows more. Equal
+    // values (`inf` and `inf` too) are close; any other pair with a NaN
+    // or an infinity is not. A tolerance that is NaN allows nothing.
+    pub fn approx_eq(self, other: Float, relative: Float, absolute: Float) -> Bool
+}
+
+// The text of a `Float` (also what `"{x}"` and `dbg` print) is the
+// shortest digits that parse back to the same value, in plain notation
+// when the decimal exponent is from -5 to 15 and with `e` otherwise: `1.5`,
+// `100.0`, `0.00001`, `1e16`, `1.5e-7`, `5e-324`. A whole number in plain
+// notation ends in `.0`. The zeros are `0.0` and `-0.0`, and the rest are
+// `NaN`, `inf` and `-inf`.
+impl Display for Float {
+    fn to_string(self) -> String
+}
+
 // ---- Fixed-width integers -----------------------------------------------
 
 // `U8`, `U32` and `U64` have the bitwise and shift operators
@@ -1011,6 +1076,12 @@ impl Int {
     pub fn to_u32(self) -> U32
     // The same value as a `U64`; it panics (`P0001`) when it does not fit.
     pub fn to_u64(self) -> U64
+    // The same value as a `Float`. It refuses what would round: a value
+    // above 2^53 or below -2^53 panics (`P0049`). Name the rounding with
+    // `to_float_rounded` to convert those.
+    pub fn to_float(self) -> Float
+    // The nearest `Float`, a tie going to the even significand.
+    pub fn to_float_rounded(self) -> Float
 }
 
 impl U8 {
@@ -1156,6 +1227,7 @@ impl Eq for U8 { fn eq(self, other: U8) -> Bool }
 impl Eq for U16 { fn eq(self, other: U16) -> Bool }
 impl Eq for U32 { fn eq(self, other: U32) -> Bool }
 impl Eq for U64 { fn eq(self, other: U64) -> Bool }
+impl Eq for Float { fn eq(self, other: Float) -> Bool }
 impl Eq for Bool { fn eq(self, other: Bool) -> Bool }
 impl Eq for String { fn eq(self, other: String) -> Bool }
 impl Eq for Path { fn eq(self, other: Path) -> Bool }

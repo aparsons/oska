@@ -78,6 +78,19 @@ pub mod codes {
     /// A `std.map` map's probes passed the probe limit under every hash
     /// of its list: the keys flood it.
     pub const MAP_PROBE_LIMIT: &str = "P0045";
+    /// `Float.to_int` of a NaN, an infinity or a value `Int` cannot hold.
+    pub const FLOAT_TO_INT: &str = "P0046";
+    /// A NaN reached a function that needs a number: an operation with no
+    /// answer for NaN (ADR 0027).
+    pub const NAN_OPERAND: &str = "P0047";
+    /// A statistic was asked of an empty list: a mean, a minimum or a
+    /// maximum has no value for no input.
+    pub const EMPTY_INPUT: &str = "P0048";
+    /// `Int.to_float` of a value above 2^53 in magnitude, which it would
+    /// round.
+    pub const INT_TO_FLOAT: &str = "P0049";
+    /// `Float.fmt` with a number of digits outside 0 to 340.
+    pub const FMT_DIGITS: &str = "P0050";
     /// The program would have taken more than `--max-steps` steps
     /// (`oska_check::limits`).
     pub const STEP_LIMIT: &str = oska_check::limits::codes::STEP_LIMIT;
@@ -122,6 +135,11 @@ pub mod codes {
         BYTES_TOO_LONG,
         MAP_ENTRY_LIMIT,
         MAP_PROBE_LIMIT,
+        FLOAT_TO_INT,
+        NAN_OPERAND,
+        EMPTY_INPUT,
+        INT_TO_FLOAT,
+        FMT_DIGITS,
     ];
 }
 

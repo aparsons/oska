@@ -497,6 +497,9 @@ Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench
 | `P0043` | a `Bytes` that would grow past 256 MiB (not yet checked for `String.to_bytes` or a capability's `read_bytes`) |
 | `P0044` | a `std.map` map given a new entry past its entry limit |
 | `P0045` | a `std.map` map whose keys collide under every hash it tries |
+| `P0046` | `Float.to_int()` of a NaN, an infinity or a value `Int` cannot hold |
+| `P0049` | `Int.to_float()` of a value beyond 2^53, which would round |
+| `P0050` | `Float.fmt(digits)` with a count outside 0 to 340 |
 
 - **When `main` returns `Err(e)`,** the runtime prints `e.to_string()` to stderr and exits with code **1**.
 - Exit code 1 means the program failed in a way it expected. Exit code 101 means it has a bug.

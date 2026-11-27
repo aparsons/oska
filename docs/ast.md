@@ -382,6 +382,14 @@ An integer literal.
 | --- | --- | --- |
 | `value` | string | the digits as written, including `_` separators |
 
+#### `FloatExpr`
+
+A float literal.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `value` | string | the text as written: digits with `_` separators, then a fraction (`.5`), an exponent (`e-3`), or both |
+
 #### `StrExpr`
 
 A string literal, split into text and interpolation holes.

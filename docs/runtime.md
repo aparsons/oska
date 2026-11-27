@@ -156,10 +156,15 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0043` | A `Bytes` would grow past 256 MiB: `push`, `append` or an endian push whose result would be longer, or `Bytes.zeroed` with a longer length. The runtime panics instead of running out of memory, and the buffer is not changed. The message names the length it would have had. Spans the call. Not yet checked where a whole buffer is made at once from outside: `String.to_bytes` and the capabilities' `read_bytes` (`DirRead`, `FileRead`) give a buffer of any length without this panic, and a file no memory holds is an `IoError` ("out of memory"). |
 | `P0044` | A `std.map` map was given a new entry past its entry limit: `put` of a key the map does not hold, when it already holds as many entries as the limit allows. The limit is 4,194,304 entries, or the lower number given to `Map.with_max_entries`. An update of a key the map holds is no new entry. The map is not changed. Spans the `put` inside `std.map`. |
 | `P0045` | A `std.map` map's keys collide under every hash it tries. A `put` that cannot place its key within 64 slots of where it hashes rebuilds the table under the next of three fixed hashes (the key's `Hash`, then two mixes of it), and panics when the last fails too. Keys with one 64-bit hash, such as those chosen to flood the map, end here after a bounded number of steps. Spans the `put` inside `std.map`. |
+| `P0046` | `Float.to_int()` of a NaN, an infinity or a value that does not fit `Int` (below -2^63 or at 2^63 or above). The value is truncated toward zero, so `-0.9` is `0`. The message names the value as `to_string` prints it. Spans the call. |
+| `P0047` | A NaN reached a function that has no answer for NaN and so needs a number (ADR 0027), where returning a NaN would hide the bug. The message names the function. Spans the call. No function raises it yet, so it has no example. |
+| `P0048` | A statistic of no input: a mean, a minimum or a maximum of an empty list, which has no value. The message names the function. Spans the call. No function raises it yet, so it has no example. |
+| `P0049` | `Int.to_float()` of a value above 2^53 or below -2^53, which a `Float` could not hold exactly. The runtime refuses instead of rounding; `to_float_rounded()` names the rounding and converts any `Int`. The message names the value. Spans the call. |
+| `P0050` | `Float.fmt(digits)` with `digits` below 0 or above 340. The message names the count. Spans the call. |
 
 ### Panic examples
 
-Each panic has a program that stops with exactly that code and the same program fixed. The `P001x` examples are tests, because only a `test` block can fail an assertion, and run under `oskac test`. `P0005` has no example: the checker (`E0292`) stops a program from keeping a scope handle past its block, so no checked program can reach it.
+Each panic has a program that stops with exactly that code and the same program fixed. The `P001x` examples are tests, because only a `test` block can fail an assertion, and run under `oskac test`. `P0005` has no example: the checker (`E0292`) stops a program from keeping a scope handle past its block, so no checked program can reach it. `P0047` has no example: no function that needs a number is in the language yet. `P0048` has no example: no statistic is in the language yet. ADR 0027 fixes the two codes ahead of those functions.
 
 #### `P0001`
 
@@ -635,6 +640,54 @@ fn main() {
         m.put(i, i)
         i = i + 1
     }
+}
+```
+
+#### `P0046`
+
+```oska error=P0046
+fn main() {
+    let ratio = 0.0 / 0.0
+    let count = ratio.to_int()
+}
+```
+
+```oska fixed=P0046
+fn main() {
+    let ratio = 7.5 / 2.0
+    let count = ratio.to_int()
+}
+```
+
+#### `P0049`
+
+```oska error=P0049
+fn main() {
+    let id = 9007199254740993
+    let x = id.to_float()
+}
+```
+
+```oska fixed=P0049
+fn main() {
+    let id = 9007199254740993
+    let x = id.to_float_rounded()
+}
+```
+
+#### `P0050`
+
+```oska error=P0050
+fn main() {
+    let price = 2.5
+    let text = price.fmt(400)
+}
+```
+
+```oska fixed=P0050
+fn main() {
+    let price = 2.5
+    let text = price.fmt(2)
 }
 ```
 

@@ -394,6 +394,7 @@ impl Uses<'_, '_> {
     fn expr(&mut self, expr: &Expr, out: &mut Vec<(String, Reach)>) {
         match &expr.kind {
             ExprKind::Int(_)
+            | ExprKind::Float(_)
             | ExprKind::SinkStr { .. }
             | ExprKind::Bool(_)
             | ExprKind::Unit

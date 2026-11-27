@@ -49,12 +49,14 @@ use fence::{FenceLine, Fences};
 /// which a documentation example cannot write, `E0391` is an output
 /// path, `E0393` and `E0394` a `--target`, and `E0395`, `E0396` and
 /// `E0397` `oskac release`'s version, key and name, which are no part of
-/// a program, and
+/// a program, `P0047` and `P0048` are
+/// defined ahead of the first function that panics with them (ADR 0027: a
+/// function that needs a number, a statistic), and
 /// `E0392` a fault in the native backend and `E0398` a bug in it, which no
 /// program is meant to reach.
-const UNREACHABLE: [&str; 11] = [
+const UNREACHABLE: [&str; 13] = [
     "E0170", "E0391", "E0392", "E0393", "E0394", "E0395", "E0396", "E0397", "E0398", "E0411",
-    "P0005",
+    "P0005", "P0047", "P0048",
 ];
 
 /// How the meaning of a code with no example ends, after the reason why.

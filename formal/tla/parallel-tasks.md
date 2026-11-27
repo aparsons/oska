@@ -135,6 +135,10 @@ These follow Rust's `Arc`, which uses the same scheme. They come from the C++/Ru
 - `ScopedTasks` and `SharedCounts` are separate to keep TLC fast. `SharedCounts` lets any task share with any other at any time, which covers every way `ScopedTasks` passes values between tasks.
 - The models do not check memory orderings, or programs beyond the bound.
 
+## Floats share no state between tasks (ADR 0027)
+
+`Float` adds no model. A `Float` is 64 bits held in a value slot, with no heap cell, no reference count and no interior mutability (ADR 0001, ADR 0027). A float operation reads its operands and returns a new value: there is no rounding-mode state, no sticky flag and no fast-math switch, so two tasks cannot see each other through the floating-point unit. A `Float` that crosses a task (a spawn argument, a result or a channel message) is copied like an `Int`, and a `List<Float>` is a list like any other, so its count is the one `SharedCounts` already models. `Secret<Float>` does not exist (`E0357`), so no float is held under a constant-time promise. The Lean model of `Float` (`formal/lean/OskaFormal/Float/`) is a function from bits to bits for that reason. A future `Float` feature that adds shared state, such as a per-task rounding mode, needs a model here first (ADR 0019).
+
 ## Channels and select
 
 `Sched` channels and `select` let tasks pass messages, and they are nondeterministic, so they need `Sched` (`docs/design.md`, Concurrency). `Channels` checks the semantics below. The surface syntax is not settled; `tx.send(v)`, `rx.recv()`, `tx.close()` and `select` here name operations, not final spellings.

@@ -254,7 +254,7 @@ fn describe(kind: Option<&TokenKind>) -> String {
         None => "end of input".into(),
         Some(TokenKind::Ident(name)) => format!("`{name}`"),
         Some(TokenKind::Keyword(kw)) => format!("`{}`", kw.text()),
-        Some(TokenKind::Int(digits)) => format!("`{digits}`"),
+        Some(TokenKind::Int(digits) | TokenKind::Float(digits)) => format!("`{digits}`"),
         Some(TokenKind::Str(_)) => "a string".into(),
         Some(TokenKind::SinkStr { tag, .. }) => format!("a `{tag}` sink literal"),
         Some(TokenKind::Punct(p)) => format!("`{}`", p.text()),
@@ -1647,14 +1647,18 @@ impl<'a> Parser<'a> {
         // A token whose kind holds text is moved out ([`Parser::bump_kind`]),
         // so matching on it copies no text (#572).
         let kind = match self.peek() {
-            Some(TokenKind::Int(_) | TokenKind::SinkStr { .. } | TokenKind::Ident(_)) => {
-                match self.bump_kind() {
-                    Some(TokenKind::Int(digits)) => ExprKind::Int(digits),
-                    Some(TokenKind::SinkStr { tag, value }) => ExprKind::SinkStr { tag, value },
-                    Some(TokenKind::Ident(name)) => ExprKind::Name(Ident { name, span: start }),
-                    _ => unreachable!("the token peeked at"),
-                }
-            }
+            Some(
+                TokenKind::Int(_)
+                | TokenKind::Float(_)
+                | TokenKind::SinkStr { .. }
+                | TokenKind::Ident(_),
+            ) => match self.bump_kind() {
+                Some(TokenKind::Int(digits)) => ExprKind::Int(digits),
+                Some(TokenKind::Float(text)) => ExprKind::Float(text),
+                Some(TokenKind::SinkStr { tag, value }) => ExprKind::SinkStr { tag, value },
+                Some(TokenKind::Ident(name)) => ExprKind::Name(Ident { name, span: start }),
+                _ => unreachable!("the token peeked at"),
+            },
             Some(TokenKind::Str(_)) => {
                 self.bump();
                 ExprKind::Str(self.str_parts(start)?)
@@ -2177,7 +2181,7 @@ mod tests {
     /// Render an expression as a compact S-expression.
     fn sexp(e: &Expr) -> String {
         match &e.kind {
-            ExprKind::Int(d) => d.clone(),
+            ExprKind::Int(d) | ExprKind::Float(d) => d.clone(),
             ExprKind::Str(parts) => {
                 let inner: Vec<String> = parts
                     .iter()

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# cos(x): inputs whose result is within 2^-18 ulp of a tie
+# columns: inputs, reference hi, reference lo, kind (u), pinned (-: none)
+41352e9585c72139 3fee82522bb27bd3 3c8fffffd6575cd0 u -
+c12617f346682965 3fecac481c7e01fc bc8fffffd27ca3de u -
+4134441834772a5e 3fefeaf9ddaf6202 3c8ffffd36d31e71 u -
+411863b58769c792 3fe9b9c5fca5e359 bc8ffffd132a5cb0 u -
+4138d0fd943684a3 3fe72a7c26ad0e50 bc8ffffcd9f902a2 u -
+c0fd9605e0aa2af7 3feae68871b2d321 bc8ffff8b254dca8 u -
+c1026574ae8521c1 3feda66aca945992 bc8ffff6f4c97eee u -
+4121d9e40b001d76 3fee62db4d04731c 3c8ffff666fff31a u -
+c136fb371359f95b bf725e034423746f bc1ffff63b2afce1 u -
+40fb12fdce01c876 bfe6aa5b62e5b9f6 3c8ffff565b18c68 u -
+c125ec0e034d630f 3fe1330afd53084a bc8ffff2c625403b u -
+c13168ebcaf525c9 bfd4109abef1fee0 3c7ffff0a54c8eb3 u -
+be69ec47455855cc 3feffffffffffff6 bc8fffff06f329ac u -
+c00768b4a7d3693b bfef4292e7d6612a 3c8ffffd018058fd u -
+3ff06d5d8b945cf7 3fe0908b897c91fb 3c8ffffb5ad494e4 u -
+bf47c8ea505214c1 3fefffff72920e10 bc8ffff37eed957d u -
+bf0d11b165668cd7 3fefffffff2cbf26 bc8ffff278ac2940 u -
+3f243d339b7a9840 3feffffff9998539 bc8ffff0057f380f u -

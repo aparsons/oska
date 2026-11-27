@@ -58,6 +58,9 @@ pub enum TokenKind {
     Keyword(Keyword),
     /// Integer literal, kept as written (digits and `_` separators).
     Int(String),
+    /// Float literal, kept as written: digits and `_` separators, then a
+    /// fraction (`.5`), an exponent (`e-3`), or both.
+    Float(String),
     /// String literal with escapes resolved. `{name}` interpolation is
     /// preserved verbatim for the parser to handle.
     Str(String),
@@ -960,6 +963,7 @@ fn is_terminator(prev: Option<&Token>, next: &Token, innermost: Option<&Punct>) 
         prev.kind,
         TokenKind::Ident(_)
             | TokenKind::Int(_)
+            | TokenKind::Float(_)
             | TokenKind::Str(_)
             | TokenKind::SinkStr { .. }
             | TokenKind::Keyword(
@@ -1124,11 +1128,47 @@ impl Lexer<'_> {
         Ok(TokenKind::Ident(word.to_string()))
     }
 
+    /// An integer literal, or a float literal when a fraction (`.` and a
+    /// digit) or an exponent (`e`, an optional sign and a digit) follows
+    /// the digits. `1.max(2)` and `0..3` stay integers: a `.` needs a
+    /// digit after it.
     fn int(&mut self, start: usize) -> TokenKind {
+        self.digits();
+        let mut float = false;
+        if self.peek() == Some('.') && matches!(self.peek_second(), Some(c) if c.is_ascii_digit()) {
+            float = true;
+            self.bump();
+            self.digits();
+        }
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let rest = &self.src[self.pos + 1..];
+            let mut chars = rest.chars();
+            let first = chars.next();
+            let digit = match first {
+                Some('+' | '-') => chars.next(),
+                other => other,
+            };
+            if matches!(digit, Some(c) if c.is_ascii_digit()) {
+                float = true;
+                self.bump();
+                if matches!(self.peek(), Some('+' | '-')) {
+                    self.bump();
+                }
+                self.digits();
+            }
+        }
+        let text = self.src[start..self.pos].to_string();
+        if float {
+            TokenKind::Float(text)
+        } else {
+            TokenKind::Int(text)
+        }
+    }
+
+    fn digits(&mut self) {
         while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '_') {
             self.bump();
         }
-        TokenKind::Int(self.src[start..self.pos].to_string())
     }
 
     fn string(&mut self, start: usize) -> Result<TokenKind, LexError> {
@@ -1282,6 +1322,39 @@ mod tests {
             vec![
                 TokenKind::Str("a\n{x}".into()),
                 TokenKind::Int("1_000".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_float_literals() {
+        assert_eq!(
+            kinds("1.5 2e-3 1_0.2_5E+4 7e2"),
+            vec![
+                TokenKind::Float("1.5".into()),
+                TokenKind::Float("2e-3".into()),
+                TokenKind::Float("1_0.2_5E+4".into()),
+                TokenKind::Float("7e2".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dot_or_an_e_without_digits_leaves_an_integer() {
+        assert_eq!(
+            kinds("1.max 0..3 5e 2e+"),
+            vec![
+                TokenKind::Int("1".into()),
+                TokenKind::Punct(Punct::Dot),
+                TokenKind::Ident("max".into()),
+                TokenKind::Int("0".into()),
+                TokenKind::Punct(Punct::DotDot),
+                TokenKind::Int("3".into()),
+                TokenKind::Int("5".into()),
+                TokenKind::Ident("e".into()),
+                TokenKind::Int("2".into()),
+                TokenKind::Ident("e".into()),
+                TokenKind::Punct(Punct::Plus),
             ]
         );
     }
@@ -1482,7 +1555,7 @@ mod tests {
         kinds(src)
             .into_iter()
             .map(|k| match k {
-                TokenKind::Ident(name) | TokenKind::Int(name) => name,
+                TokenKind::Ident(name) | TokenKind::Int(name) | TokenKind::Float(name) => name,
                 TokenKind::Str(value) => format!("{value:?}"),
                 TokenKind::SinkStr { tag, value } => format!("{tag}{value:?}"),
                 TokenKind::Keyword(kw) => format!("{kw:?}").to_lowercase(),

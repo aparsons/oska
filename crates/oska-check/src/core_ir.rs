@@ -785,9 +785,12 @@ impl Core<'_> {
                 }
                 return Ok(node("Result", vec![("ok", ok), ("err", err)]));
             }
-            Type::Int(_) | Type::Named { .. } | Type::Fn { .. } | Type::Param(_) | Type::Never => {
-                return refuse(format!("the type `{ty}`"), span)
-            }
+            Type::Int(_)
+            | Type::Float
+            | Type::Named { .. }
+            | Type::Fn { .. }
+            | Type::Param(_)
+            | Type::Never => return refuse(format!("the type `{ty}`"), span),
         };
         Ok(Json::Str(name.to_string()))
     }
@@ -844,6 +847,9 @@ impl Core<'_> {
             ExprKind::Int(value, IntType::Int) => node("Int", vec![("value", Json::Int(*value))]),
             ExprKind::Int(_, int) => {
                 return refuse(format!("the integer type `{}`", int.name()), span)
+            }
+            ExprKind::Float(_) | ExprKind::FloatBinary { .. } | ExprKind::FloatNeg(_) => {
+                return refuse("a `Float` (core IR has no Float yet; the Lean model of Float is checked on its own)", span)
             }
             ExprKind::Bool(value) => node("Bool", vec![("value", Json::Bool(*value))]),
             ExprKind::Local(slot) => {
