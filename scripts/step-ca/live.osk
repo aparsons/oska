@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: Apache-2.0
+// The live ACME test (spec #824, #839): issue a certificate from a Smallstep
+// CA on loopback by HTTP-01, then renew it (a second order on the same
+// account), with `std.acme` over `std.tls`. It is run by
+// scripts/step-ca/run.sh, from the work directory that script prepares:
+//
+//     root.crt    the CA's root, which the TLS connection is checked against
+//     www/        the web root an HTTP server on port 80 serves; the proof
+//                 goes in www/.well-known/acme-challenge/
+//     out/        where the issued chains are written, for openssl to check
+//
+// It prints `issued 1` and `renewed 2` on success and exits 1 otherwise.
+// This program is a test of the client, not a shipped API.
+
+use std.acme
+use std.tls
+use std.x509
+
+const CA_HOST: String = "localhost"
+const CA_PORT: Int = 9000
+const DIRECTORY: String = "https://localhost:9000/acme/acme-ci/directory"
+const NAME: String = "acme-ci.test"
+
+// Publishes a proof as a file under the web root.
+cap struct Webroot { dir: DirWrite }
+
+impl acme.Responder for Webroot {
+    fn present(self, proof: acme.Proof) -> Result<(), String> {
+        match self.dir.write(Path.new("www/.well-known/acme-challenge/{proof.token}"), proof.key_authorization) {
+            Ok(_) => Ok(())
+            Err(_) => Err("cannot write the proof")
+        }
+    }
+
+    fn cleanup(self, proof: acme.Proof) -> () {}
+}
+
+// Waits by reading the clock: the library has none to sleep on.
+cap struct Spin { clock: Clock }
+
+impl acme.Waiter for Spin {
+    fn wait(self, seconds: Int) -> () {
+        let end = self.clock.now_millis() + seconds * 1000
+        while self.clock.now_millis() < end {}
+    }
+}
+
+// A failure, said by stage, in fixed text.
+fn why(stage: String, e: acme.AcmeError) -> String {
+    let text = e.to_string()
+    "{stage}: {text}"
+}
+
+fn run(io: Stdout, read: DirRead, dir: DirWrite, net: Net, random: Random, clock: Clock) -> Result<(), String> {
+    let pem = match read.read_to_string(Path.new("root.crt")) {
+        Ok(text) => text
+        Err(_) => { return Err("cannot read root.crt") }
+    }
+    // The root is the CA this run just made, written by run.sh: trusting it
+    // is the point of the test.
+    let trust = match x509.TrustConfig.only_roots([]).with_root_pem(pem.assume_trusted()) {
+        Ok(t) => t
+        Err(_) => { return Err("root.crt is not a certificate") }
+    }
+    let host = net.restrict_to(CA_HOST, CA_PORT)
+    let transport = acme.HttpsTransport.new(host, tls.TlsConfig.default().with_trust(trust), random, clock)
+    let directory = match acme.fetch_directory(transport, DIRECTORY, true) {
+        Ok(d) => d
+        Err(e) => { return Err(why("directory", e)) }
+    }
+    var client = match acme.Client.new(directory, random.secure_bytes(32), true) {
+        Ok(c) => c
+        Err(e) => { return Err(why("client", e)) }
+    }
+    match client.new_account(transport, [], true, false) {
+        Ok(_) => {}
+        Err(e) => { return Err(why("account", e)) }
+    }
+    var first = ""
+    var round = 1
+    while round <= 2 {
+        let issued = match client.issue(transport, Webroot(dir: dir), Spin(clock: clock), random, [NAME], acme.ChallengeKind.Http01, 60) {
+            Ok(i) => i
+            Err(e) => { return Err(why("order", e)) }
+        }
+        let text = issued.chain.pem
+        match dir.write(Path.new("out/cert{round}.pem"), text) {
+            Ok(_) => {}
+            Err(_) => { return Err("cannot write the chain") }
+        }
+        if round == 1 {
+            first = text
+            let _ = io.println("issued 1")
+        } else {
+            if text == first {
+                return Err("the renewal returned the same certificate")
+            }
+            let _ = io.println("renewed 2")
+        }
+        round = round + 1
+    }
+    Ok(())
+}
+
+fn main(io: Stdout, fs: Fs, net: Net, random: Random, clock: Clock) -> Result<(), String> {
+    let root = fs.restrict_to(".")
+    run(io, root.read_only(), root.write_only(), net, random, clock)
+}
