@@ -38,6 +38,12 @@ const NATIVE_NET_ATTEMPTS: &str =
     "a native plain test refuses `t.net` as the interpreter does, but \
 does not record where it was asked to go: `t.net_attempts` is a later ticket of spec #228";
 
+/// The `List` methods whose bodies are Oska in `std.core` (ADR 0034): the
+/// checker resolves a call to a function of the program, so there is no
+/// intrinsic to implement. `oska-run`'s `list_methods` test runs each on
+/// both backends.
+const CORE_LIST: &str = "written in Oska in std.core, not an intrinsic";
+
 /// The types, or `Type.method` names, that no backend implements, with
 /// why. A program given a type that has no runtime is refused before it
 /// runs, by the interpreter (`E0370`) and the native backend alike.
@@ -49,6 +55,17 @@ const EXEMPT: &[(&str, &str)] = &[
     ("TestContext.net_attempts", NATIVE_NET_ATTEMPTS),
     ("Spawn", "process spawning has no runtime yet"),
     ("Sched", "scheduling has no runtime yet"),
+    ("List.filter", CORE_LIST),
+    ("List.fold", CORE_LIST),
+    ("List.any", CORE_LIST),
+    ("List.all", CORE_LIST),
+    ("List.find", CORE_LIST),
+    ("List.contains", CORE_LIST),
+    ("List.first", CORE_LIST),
+    ("List.last", CORE_LIST),
+    ("List.is_empty", CORE_LIST),
+    ("List.reverse", CORE_LIST),
+    ("List.concat", CORE_LIST),
 ];
 
 /// How a [`CALLS`] program is run.

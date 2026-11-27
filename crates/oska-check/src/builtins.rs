@@ -149,6 +149,13 @@ pub fn test_context_fields() -> &'static [&'static str] {
     })
 }
 
+/// Whether the prelude method `type_name.method` is written in Oska in
+/// `std.core` (ADR 0034): a call of it is a call of a function of the
+/// program, so no backend has an intrinsic for it.
+pub fn is_core_method(type_name: &str, method: &str) -> bool {
+    crate::prelude::core_function(type_name, method).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
