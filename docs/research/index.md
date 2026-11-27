@@ -12,6 +12,7 @@ Each note answers one question, with its sources and the date it was written. A 
 - [Math and data science for Oska](2026-11-math-and-data-science.md) (2026-11-22): what the main math and data libraries of ten languages provide, and what belongs in `std`. Build a `Float` with pinned IEEE 754 results first, then a deterministic map, `std.math`, `std.stats`, a seeded `Rng` and `std.csv`. Not Parquet, BLAS, tensors or plotting yet.
 - [Data classification for Oska](2026-11-data-classification.md) (2026-11-26): yes. A classification flag on text and bytes like the trust flag, a ceiling label on log, network and `std.llm` sinks, and a `Declassify` capability. Open: implicit flows and declassification policy.
 - [Knowledge graphs and ontologies in Oska](2026-11-knowledge-graphs-and-ontology.md) (2026-11-27): which W3C and ISO standards own the facts, and how capabilities, untrusted text and `std.llm` fit building, running and maintaining a graph. Build a strict RDF codec, diff, SHACL-core and canonical hashing first. Not an OWL reasoner or a SPARQL engine. Open: GQL and SPARQL Update were not read.
+- [What should be in the Oska prelude](2026-11-prelude-contents.md) (2026-11-27): keep `Map`, rename or free `Entry` before 1.0, move the authority helper types (`Budget`, `Spawn`, approvals) out, and ship `Ord` and the `Option` and `List` methods. Prelude types hold no ambient authority; the cost is names.
 
 ## Agents and code mode
 
