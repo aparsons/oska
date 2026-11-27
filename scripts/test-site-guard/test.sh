@@ -112,5 +112,25 @@ mkdir -p "$dir/crates/oskac/ci"
 printf 'cargo build --release --all-features\n' >"$dir/crates/oskac/ci/build.sh"
 expect_refused "a build under crates" "$dir" "all features"
 
+# A build command continued over several lines is one command.
+dir=$(tree)
+printf 'jobs:\n  a:\n    steps:\n      - run: |\n          cargo build --release \\\n            -p oskac \\\n            --features test-site\n' >"$dir/.github/workflows/release.yml"
+expect_refused "a continued build with the feature" "$dir" "release.yml"
+
+dir=$(tree)
+printf 'cargo build --release \\\n  --target x86_64-unknown-linux-musl \\\n  --all-features\n' >"$dir/build.sh"
+expect_refused "a continued build with all features" "$dir" "build.sh"
+
+dir=$(tree)
+printf 'cargo check \\\n  --all-features\n' >"$dir/lint.sh"
+expect_pass "a continued check with all features" "$dir"
+
+# A binary built with --target sits in target/<triple>/...; check.sh passes
+# those to the guard, which inspects every BINARY it is given.
+dir=$(tree)
+mkdir -p "$work/target/x86_64-unknown-linux-musl/dist"
+printf 'x OSKAC_TEST_SITE_PORT x' >"$work/target/x86_64-unknown-linux-musl/dist/oskac"
+expect_refused "a cross-target binary with the marker" "$dir" "test-site" "$work"/target/*/dist/oskac
+
 printf 'test-site-guard tests: %s passed, %s failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]

@@ -270,7 +270,7 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --check --json
 
 ### Check with `oskac self check`
 
-`oskac self check` answers "is there a newer Oska, and is this binary a genuine one?" with no curl, no `ssh-keygen` and no system TLS library: `oskac` runs its built-in update checker, a program written in Oska, which uses Oska's own TLS client, SHA-256 and SSH signature verification. It is read-only, and it uses the network only when you run it.
+`oskac self check` answers "is there a newer Oska, and is this binary a genuine one?" with no curl, no `ssh-keygen` and no system TLS library: `oskac` runs its built-in update checker, a program written in Oska, which uses Oska's own TLS client, SHA-256 and SSH signature verification. It installs, replaces and deletes nothing: the only thing it writes is the receipt's `index_serial`, raised after a verified check (never lowered). It does that for any receipt in the Oska home (`~/.oska`, or `OSKA_HOME`), even when the running `oskac` is not the managed binary, because the serial memory is shared. It uses the network only when you run it.
 
 ```sh
 oskac self check --format=json

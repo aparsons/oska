@@ -8,9 +8,13 @@
 //! install receipt remembers; it does no cryptography and no TLS.
 //!
 //! It exits 0 whether or not an update exists, and 1 when it could not
-//! verify an answer (a refusal never looks like "no update"). Its only
+//! verify an answer (a refusal never looks like "no update"). It never
+//! installs, replaces or deletes anything (it does not even sweep a file an
+//! earlier Windows update renamed aside; `self update` does). Its only
 //! write is the receipt's `index_serial`, raised after a verified check,
-//! atomically, and never lowered.
+//! atomically, and never lowered. A receipt found in the Oska home is
+//! raised even when this binary is not the managed one: the serial memory
+//! is shared by every install that reads that home.
 
 use crate::json::{quote, quote_option, Json};
 use crate::self_cmd::{executable, identity, linux_build, oska_home, platform, read_receipt};
@@ -220,8 +224,6 @@ struct Done {
 fn run(identify: bool) -> Result<Done, Failed> {
     let exe =
         running().ok_or_else(|| failed("internal", "this oskac's own path cannot be found"))?;
-    // What an earlier Windows update renamed aside is deleted now.
-    crate::self_update::sweep_aside(&exe);
     let receipt = receipt(&exe);
     let assets = assets();
     let version = version();

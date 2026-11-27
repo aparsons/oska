@@ -490,3 +490,62 @@ fn an_unknown_flag_is_a_usage_error_in_json_and_the_flag_belongs_to_self_check_a
     assert_eq!(code, 2, "{out}");
     assert_eq!(str_of(&json(&out), "error"), "usage");
 }
+
+/// The runtime half of the no-network guard: `self info`, `check`, `run` and
+/// `build` never connect, even in a build that knows where a release site
+/// is. A listener stands in for the loopback test server, the commands run
+/// with the test-site environment pointing at it, and it must see no
+/// connection. (A connection to a listening socket waits in its backlog, so
+/// accepting afterwards finds it.)
+#[test]
+fn info_check_run_and_build_make_no_connection() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+    listener.set_nonblocking(true).expect("non-blocking");
+    let port = listener.local_addr().expect("an address").port();
+    let run = Run::new("no-network", port, "genuine");
+    run.receipt(1);
+    let program = run.home.path().join("hello.osk");
+    std::fs::write(
+        &program,
+        "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hello\")\n}\n",
+    )
+    .expect("the program");
+    let key =
+        std::fs::read_to_string(here("tests/fixtures/update/test_key.pub")).expect("the test key");
+    let program = program.to_str().expect("text").to_string();
+    let out = run.home.path().join("hello-out");
+    let out = out.to_str().expect("text").to_string();
+    let commands: [(&str, Vec<&str>); 4] = [
+        ("self info", vec!["self", "info", "--format=json"]),
+        ("check", vec!["check", &program]),
+        ("run", vec!["run", &program]),
+        ("build", vec!["build", &program, "-o", &out]),
+    ];
+    for (name, args) in commands {
+        let mut command = Command::new(test_oskac());
+        set_home(&mut command, run.home.path())
+            .env("OSKA_HOME", run.home.path().join(".oska"))
+            .env("OSKAC_TEST_SITE_PORT", port.to_string())
+            .env("OSKAC_TEST_SITE_ROOT", &run.chain_root)
+            .env("OSKAC_TEST_SITE_KEY", key.trim())
+            .env("OSKAC_TEST_NOW", NOW)
+            .env("OSKAC_TEST_VERSION", run.version)
+            .env("OSKAC_TEST_EXE", &run.exe)
+            .env("OSKAC_TEST_ASSETS", "oskac-fixture")
+            .current_dir(run.home.path())
+            .args(&args);
+        let output = output_of(&mut command);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{name}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "{name} connected to the release site"
+        );
+    }
+}
