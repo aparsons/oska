@@ -27,7 +27,8 @@
 //   not 0. `Int` `/` rounds toward zero.
 // - `math.rem_euclid(a, b)`: the remainder of `a` by `b`, never negative:
 //   `a - b * q` for the `q` that puts it between 0 and `abs(b) - 1`. `b`
-//   not 0. `Int` `%` takes the sign of `a`.
+//   not 0. `Int` `%` takes the sign of `a`. `rem_euclid(Int.MIN, -1)` is 0,
+//   unlike `floor_div(Int.MIN, -1)`, whose quotient does not fit (`P0001`).
 //
 // Each loop counts steps (ADR 0021), as every loop in Oska does.
 //
