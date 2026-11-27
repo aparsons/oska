@@ -778,6 +778,34 @@ impl<T> List<T> {
     pub fn at(self, index: Int) -> T
     // A new list of `f` applied to each item, in order.
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
+    // A new list of the items for which `keep` is true, in order.
+    pub fn filter(self, keep: fn(T) -> Bool) -> List<T>
+    // `f` applied to `init` and the first item, then to that result and
+    // the next item, and so on: `init` for an empty list.
+    pub fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A
+    // Whether `check` is true for some item. It stops at the first item
+    // that passes, so it is false for an empty list.
+    pub fn any(self, check: fn(T) -> Bool) -> Bool
+    // Whether `check` is true for every item. It stops at the first item
+    // that fails, so it is true for an empty list.
+    pub fn all(self, check: fn(T) -> Bool) -> Bool
+    // The first item for which `check` is true, or `None`.
+    pub fn find(self, check: fn(T) -> Bool) -> Option<T>
+    // The first item, or `None` for an empty list.
+    pub fn first(self) -> Option<T>
+    // The last item, or `None` for an empty list.
+    pub fn last(self) -> Option<T>
+    // Whether the list has no item.
+    pub fn is_empty(self) -> Bool
+    // A new list of the items in the opposite order.
+    pub fn reverse(self) -> List<T>
+    // A new list of the items of this list, then those of `other`.
+    pub fn concat(self, other: List<T>) -> List<T>
+}
+
+impl<T: Eq> List<T> {
+    // Whether some item equals `item`.
+    pub fn contains(self, item: T) -> Bool
 }
 
 // A packed buffer of bytes: a value, like `List`, copied on write. A

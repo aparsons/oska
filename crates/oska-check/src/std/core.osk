@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: Apache-2.0
+// The bodies of the core library's methods on `List` (spec #660, ADR
+// 0034). A method such as `filter` is declared body-less on `List` in the
+// prelude, so the checker and the API reference list it as a method of
+// `List`. A call of it resolves to the function here whose name starts
+// with `list_`, which takes the receiver as its first argument. This file
+// is the module `std.core`: both backends run it as Oska, so there is one
+// implementation, and every loop back-edge and closure call in it is a
+// step (ADR 0021). A program is joined to it only when its text calls one
+// of these methods.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code. The type parameters of each function are, in order, those of
+// the prelude's `impl` and then those of the method, so a call's type
+// arguments line up. Write only what a method needs: a new method is a
+// body-less declaration in `prelude.osk`, a function here, and its name in
+// `CORE_METHODS` (`prelude.rs`).
+
+// A new list of the items for which `keep` is true, in order.
+pub fn list_filter<T>(items: List<T>, keep: fn(T) -> Bool) -> List<T> {
+    var found: List<T> = []
+    for item in items {
+        if keep(item) {
+            found.push(item)
+        }
+    }
+    found
+}
+
+// `f` applied to `init` and the first item, then to that result and the
+// next item, and so on: `init` for an empty list.
+pub fn list_fold<T, A>(items: List<T>, init: A, f: fn(A, T) -> A) -> A {
+    var total = init
+    for item in items {
+        total = f(total, item)
+    }
+    total
+}
+
+// Whether `check` is true for some item. It stops at the first item that
+// passes.
+pub fn list_any<T>(items: List<T>, check: fn(T) -> Bool) -> Bool {
+    for item in items {
+        if check(item) {
+            return true
+        }
+    }
+    false
+}
+
+// Whether `check` is true for every item. It stops at the first item that
+// fails.
+pub fn list_all<T>(items: List<T>, check: fn(T) -> Bool) -> Bool {
+    for item in items {
+        if !check(item) {
+            return false
+        }
+    }
+    true
+}
+
+// The first item for which `check` is true, or `None`.
+pub fn list_find<T>(items: List<T>, check: fn(T) -> Bool) -> Option<T> {
+    for item in items {
+        if check(item) {
+            return Some(item)
+        }
+    }
+    None
+}
+
+// Whether some item equals `wanted`.
+pub fn list_contains<T: Eq>(items: List<T>, wanted: T) -> Bool {
+    for item in items {
+        if item == wanted {
+            return true
+        }
+    }
+    false
+}
+
+// The first item, or `None` for an empty list.
+pub fn list_first<T>(items: List<T>) -> Option<T> {
+    items.get(0)
+}
+
+// The last item, or `None` for an empty list.
+pub fn list_last<T>(items: List<T>) -> Option<T> {
+    items.get(items.len() - 1)
+}
+
+// Whether the list has no item.
+pub fn list_is_empty<T>(items: List<T>) -> Bool {
+    items.len() == 0
+}
+
+// A new list of the items in the opposite order.
+pub fn list_reverse<T>(items: List<T>) -> List<T> {
+    var flipped: List<T> = []
+    var at = items.len() - 1
+    while at >= 0 {
+        flipped.push(items.at(at))
+        at = at - 1
+    }
+    flipped
+}
+
+// A new list of the items of `items`, then those of `more`.
+pub fn list_concat<T>(items: List<T>, more: List<T>) -> List<T> {
+    var joined: List<T> = []
+    for item in items {
+        joined.push(item)
+    }
+    for item in more {
+        joined.push(item)
+    }
+    joined
+}
