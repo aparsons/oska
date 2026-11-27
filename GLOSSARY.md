@@ -184,6 +184,18 @@ _Avoid_: clearance, limit
 Lowering a classification on purpose. Only code that holds a `Declassify` capability can do it, and every use is an audit site. Decided in ADR 0029 and not built yet.
 _Avoid_: downgrade, unclassify, redact
 
+**Store**:
+A typed, embedded record database that one program opens through a directory capability and a store key. It keeps a hash-chained append-only log and a snapshot, holds one writer at a time, and is queried with typed values, never with query text. Decided in ADR 0040 and not built yet; it is separate from `std.sql`, which talks to an external database.
+_Avoid_: database engine, DB, datastore
+
+**Store key**:
+The secret value that seals the records of one store at rest. Holding the directory capability without the store key gives no access to the contents, and a subkey can cover one table or one classification.
+_Avoid_: password, master key
+
+**Record label**:
+The classification and trust that a store writes with each record and restores on read. A read gives the higher of the record label and the classification of the capability that opened the store; only `Declassify` lowers it. Decided in ADR 0040 and not built yet.
+_Avoid_: row security, policy, tag
+
 **Approval**:
 A person's yes to one consequential action, such as a tool deleting a file, recorded with the action's summary and details. Only an approver makes one, and it is single use: the tool it is given to consumes it, and the runtime refuses a second use. It is not the approval of a widening, which is a change to an authority baseline that a reviewer makes before a build.
 _Avoid_: consent, confirmation token

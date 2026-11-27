@@ -49,6 +49,9 @@
 #               the shell pattern PATTERN (repeatable): a script suite's own
 #               directory
 #   --no-slot   the step is cheap and runs without a build slot
+#   --concurrent  with --group scripts: the step may run beside other
+#               suites (the audit in docs/agents/check-concurrency.md says
+#               which); OSKA_CHECK_JOBS=1 runs one at a time
 #   --cargo     a cargo step: skipped when cargo_plan says so (below)
 #   --docs-tests  with --cargo: when only docs/ changed, the step still runs,
 #               and its block runs just the tests that read docs/
@@ -93,12 +96,19 @@ mode=run  # run, or list: print the step names and run nothing
 only_group= # set by --group: run only the steps of that group
 tier=full # full, or fast: only steps tagged --fast or --fast-when
 fast_run= # set by --fast; stays set if the run falls back to every step
+internal_step= # set by --internal-step: this process runs only that step
 while [ $# -gt 0 ]; do
   case $1 in
     --list) mode=list ;;
     --group)
       only_group=${2:-}
       case $only_group in tests | formal | lint | scripts | checks) ;; *) usage ;; esac
+      shift
+      ;;
+    --internal-step)
+      # Used by a concurrent --group run: run just this step, in a child.
+      internal_step=${2:-}
+      [ -n "$internal_step" ] || usage
       shift
       ;;
     --fast)
@@ -109,6 +119,26 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# OSKA_CHECK_JOBS=N: how many suites a `--group scripts` run may run at once
+# (default: the number of cores); 1 runs them one at a time, as before.
+jobs=${OSKA_CHECK_JOBS:-}
+if [ -z "$jobs" ]; then
+  jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+fi
+case $jobs in
+  '' | 0* | *[!0-9]*)
+    echo "check.sh: OSKA_CHECK_JOBS must be a positive integer, got '$jobs'" >&2
+    exit 2
+    ;;
+esac
+concurrent_mode= # set when this run queues its --concurrent steps
+if [ "$only_group" = scripts ] && [ "$mode" = run ] && [ -z "$internal_step" ] && [ "$jobs" -gt 1 ]; then
+  concurrent_mode=1
+fi
+queue_names=() # concurrent mode: every step of the group, in order
+queue_conc=()  # 1 for a --concurrent step, else empty (it runs alone)
+queue_slot=    # set when a queued step wants a build slot
 
 # A git hook (such as .githooks/pre-push) exports GIT_DIR and related
 # variables. Scripts that run git on their own scratch repositories must not
@@ -138,6 +168,31 @@ deleted=      # once known: the paths among them that were deleted
 diff_base=    # once known: the merge-base with origin/main
 ran_any=      # set once a step's block runs
 fast_decided= # set once a --fast run has decided whether it can be fast
+timed_step=   # the step whose header printed and whose time is running
+timed_from=0  # SECONDS when that step's header printed
+step_times=   # "SECONDS NAME" per finished step, for the slowest-steps summary
+
+# begin_timing NAME / end_timing: time a step from its header to the next
+# step's start (or `finish`), with the shell's SECONDS and no external tool.
+# end_timing prints the step's elapsed seconds and records it.
+begin_timing() {
+  timed_step=$1
+  timed_from=$SECONDS
+}
+end_timing() {
+  [ -n "$timed_step" ] || return 0
+  local took=$((SECONDS - timed_from))
+  printf '(%ss)\n' "$took"
+  step_times="$step_times$took $timed_step"$'\n'
+  timed_step=
+}
+# slowest_steps: the five slowest steps of the run, longest first.
+slowest_steps() {
+  [ -n "$step_times" ] || return 0
+  printf '\nSlowest steps:\n'
+  printf '%s' "$step_times" | sort -rn -k1,1 -s | head -n 5 |
+    while read -r took name; do printf '  %5ss  %s\n' "$took" "$name"; done
+}
 
 # step NAME [--fast] [--fast-when PATTERN]... [--no-slot] [--cargo]
 # [--docs-tests] [--group G]: opens a step's block,
@@ -148,7 +203,8 @@ fast_decided= # set once a --fast run has decided whether it can be fast
 # skipped waits for a build slot. In the fast tier a step runs only when its
 # tags say so (see the top of this file).
 step() {
-  local name=$1 fast='' slot=1 cargo='' docs='' when=() group=lint
+  local name=$1 fast='' slot=1 cargo='' docs='' when=() group=lint conc=''
+  end_timing
   shift
   while [ $# -gt 0 ]; do
     case $1 in
@@ -158,6 +214,7 @@ step() {
         shift
         ;;
       --no-slot) slot= ;;
+      --concurrent) conc=1 ;;
       --cargo) cargo=1 ;;
       --docs-tests) docs=1 ;;
       --group)
@@ -187,14 +244,17 @@ step() {
       return 1
     fi
   fi
-  if [ -n "$fast_run" ] && [ -z "$fast_decided" ]; then
+  if [ -n "$internal_step" ]; then
+    # The parent run decided this step runs; any other step is not ours.
+    [ "$name" = "$internal_step" ] || return 1
+  elif [ -n "$fast_run" ] && [ -z "$fast_decided" ]; then
     fast_decided=1
     if ! changes; then
       tier=full
       printf 'check.sh --fast: cannot tell what changed (%s); running every step\n' "$changes_why" >&2
     fi
   fi
-  if [ "$tier" = fast ]; then
+  if [ "$tier" = fast ] && [ -z "$internal_step" ]; then
     [ -n "$fast" ] || [ ${#when[@]} -gt 0 ] || return 1
     if [ ${#when[@]} -gt 0 ]; then changed_match "${when[@]}" || return 1; fi
     if [ -n "$cargo" ]; then
@@ -214,6 +274,13 @@ step() {
   fi
   ran_any=1
   current_step=$name
+  if [ -n "$concurrent_mode" ]; then
+    # run_queue runs it, in a child, when the last step has been seen.
+    queue_names+=("$name")
+    queue_conc+=("$conc")
+    [ -z "$slot" ] || queue_slot=1
+    return 1
+  fi
   if [ -z "$started" ] && [ -z "$fast_run" ]; then
     started=1
     checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
@@ -223,11 +290,13 @@ step() {
     # No cargo input changed: the stamp's tree vouches for the skip.
     if [ "$cargo_mode" = skip ]; then
       printf '\n== %s\n' "$name"
+      begin_timing "$name"
       skip_step "skipped: $cargo_why; CI runs it"
       return 1
     fi
     if [ "$cargo_mode" = docs ] && [ -z "$docs" ]; then
       printf '\n== %s\n' "$name"
+      begin_timing "$name"
       skip_step --no-stamp "skipped: $cargo_why; CI runs it"
       return 1
     fi
@@ -236,11 +305,12 @@ step() {
       unstamped="$unstamped$name: narrowed to the tests that read docs/"$'\n'
     fi
   fi
-  if [ -n "$slot" ] && [ -z "$have_slot" ]; then
+  if [ -n "$slot" ] && [ -z "$have_slot" ] && [ -z "$internal_step" ]; then
     have_slot=1
     . scripts/build-slots/acquire.sh
   fi
   printf '\n== %s\n' "$name"
+  begin_timing "$name"
 }
 
 # skip_step [--no-stamp] REASON: inside a step's block, says why the step did
@@ -461,9 +531,153 @@ run_docs_tests() {
   done
 }
 
-fail() {
-  printf 'check.sh: %s\n' "$1" >&2
-  exit 1
+# fail MESSAGE / fail_rc CODE MESSAGE: end the run. The failing step's seconds
+# and the slowest steps print first, so a failure is timed like a pass.
+fail() { fail_rc 1 "$1"; }
+fail_rc() {
+  end_timing
+  [ -n "$internal_step" ] || slowest_steps
+  step_times=
+  printf 'check.sh: %s\n' "$2" >&2
+  exit "$1"
+}
+
+# descendants PID: every process below PID, deepest first (ps works on Linux
+# and macOS alike).
+descendants() {
+  local c
+  for c in $(ps -A -o pid= -o ppid= | awk -v p="$1" '$2 == p { print $1 }'); do
+    descendants "$c"
+    printf '%s\n' "$c"
+  done
+}
+
+# The concurrent run's state, global so the EXIT trap can clean up.
+q_tmp=      # the private buffer directory
+q_pids=()   # the launch_step subshell of each queued step, by place
+# queue_cleanup: stops every process the queued steps started (their runners
+# and everything below), waits for them, then removes the buffer directory, so
+# nothing outlives the run or writes into a deleted directory.
+queue_cleanup() {
+  local p all='' left
+  for p in ${q_pids[@]+"${q_pids[@]}"}; do
+    all="$all $(descendants "$p" | tr '\n' ' ') $p"
+  done
+  # shellcheck disable=SC2086 # a list of pids
+  [ -z "${all// /}" ] || kill $all 2>/dev/null || true
+  for p in ${q_pids[@]+"${q_pids[@]}"}; do wait "$p" 2>/dev/null || true; done
+  for p in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    left=
+    for pid in $all; do kill -0 "$pid" 2>/dev/null && left=1; done
+    [ -n "$left" ] || break
+    sleep 0.1
+  done
+  # shellcheck disable=SC2086
+  [ -z "$left" ] || kill -9 $all 2>/dev/null || true
+  q_pids=()
+  [ -z "$q_tmp" ] || rm -rf "$q_tmp"
+  q_tmp=
+}
+
+# on_exit: the EXIT trap. A run that ends non-zero without `fail` (a step's
+# command failed under set -e) still prints the step's seconds and the slowest
+# steps; an interrupt (130, 143) prints neither.
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  queue_cleanup
+  case $rc in 0 | 130 | 143) ;; *)
+    end_timing
+    [ -n "$internal_step" ] || slowest_steps
+    ;;
+  esac
+  exit "$rc"
+}
+trap on_exit EXIT
+
+# run_queue: concurrent mode. Runs the queued steps, each in a child
+# `check.sh --group scripts --internal-step NAME` with its output in a private
+# (0700) directory, up to $jobs at a time. A step without --concurrent runs
+# alone among the serial steps (never beside another one, though beside
+# concurrent ones). Output prints as one block per step, in step order, as
+# soon as every step before it has finished. The first failing step (in order)
+# prints whole and fails the run, after the children still running finish.
+run_queue() {
+  local n=${#queue_names[@]} i rc took
+  [ "$n" -gt 0 ] || return 0
+  if [ -n "$queue_slot" ] && [ -z "$have_slot" ]; then
+    have_slot=1
+    . scripts/build-slots/acquire.sh
+  fi
+  q_tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-check.XXXXXX") || fail "cannot make a temporary directory"
+  chmod 700 "$q_tmp"
+  # states are indexed by the step's place in the queue.
+  local state=() running=0 serial_running='' next=0 failed='' failed_rc=1 moved
+  for ((i = 0; i < n; i++)); do state[i]=pending; done
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  while [ "$next" -lt "$n" ]; do
+    moved=
+    for ((i = 0; i < n; i++)); do
+      [ "${state[i]}" = running ] || continue
+      if [ ! -f "$q_tmp/$i.rc" ]; then
+        # No result and no runner left (killed, out of memory): a failure,
+        # not something to wait for. The result is checked again in case the
+        # runner wrote it just before it ended.
+        kill -0 "${q_pids[i]}" 2>/dev/null && continue
+        if [ ! -f "$q_tmp/$i.rc" ]; then
+          printf 'check.sh: the runner of step "%s" ended without a result\n' "${queue_names[i]}" >>"$q_tmp/$i.out"
+          echo "1 0" >"$q_tmp/$i.rc"
+        fi
+      fi
+      state[i]="done"
+      running=$((running - 1))
+      [ -z "${queue_conc[i]}" ] && serial_running=
+      moved=1
+    done
+    while [ "$next" -lt "$n" ] && [ "${state[next]}" = "done" ]; do
+      read -r rc took <"$q_tmp/$next.rc"
+      cat "$q_tmp/$next.out"
+      step_times="$step_times$took ${queue_names[next]}"$'\n'
+      if [ "$rc" -ne 0 ] && [ -z "$failed" ]; then
+        failed=${queue_names[next]}
+        failed_rc=$rc
+      fi
+      [ -z "$failed" ] || break
+      next=$((next + 1))
+      moved=1
+    done
+    if [ -n "$failed" ]; then
+      # Let the running children end, so none outlives the run.
+      for ((i = 0; i < n; i++)); do
+        [ "${state[i]}" = running ] && wait "${q_pids[i]}" 2>/dev/null || true
+      done
+      fail_rc "$failed_rc" "step \"$failed\" failed (its output is above)"
+    fi
+    for ((i = 0; i < n && running < jobs; i++)); do
+      [ "${state[i]}" = pending ] || continue
+      if [ -z "${queue_conc[i]}" ] && [ -n "$serial_running" ]; then continue; fi
+      state[i]=running
+      running=$((running + 1))
+      [ -n "${queue_conc[i]}" ] || serial_running=1
+      launch_step "$q_tmp" "$i" "${queue_names[i]}" &
+      q_pids[i]=$!
+      moved=1
+    done
+    [ -n "$moved" ] || sleep 0.2
+  done
+  trap - INT TERM
+  queue_cleanup
+}
+
+# launch_step DIR I NAME: run in the background by run_queue. Writes DIR/I.out
+# and, last, DIR/I.rc: "EXIT-CODE SECONDS".
+launch_step() {
+  local dir=$1 i=$2 name=$3 start=$SECONDS rc=0
+  # run_queue's cleanup stops this subshell and everything below it.
+  bash scripts/check.sh --group scripts --internal-step "$name" >"$dir/$i.out" 2>&1 || rc=$?
+  echo "$rc $((SECONDS - start))" >"$dir/$i.rc.tmp"
+  mv "$dir/$i.rc.tmp" "$dir/$i.rc"
 }
 
 # finish: after the last block. In a run, every step passed: stamp the tier
@@ -475,6 +689,12 @@ finish() {
   if [ "$mode" = list ]; then
     exit 0
   fi
+  run_queue
+  end_timing
+  if [ -n "$internal_step" ]; then
+    exit 0
+  fi
+  slowest_steps
   if [ -n "$fast_run" ] && [ -z "$ran_any" ]; then
     printf '\n--fast: no steps ran; nothing they check changed. This was NOT the full check: no pass stamp written; scripts/check.sh (and CI) runs every step.\n'
     exit 0
@@ -542,6 +762,56 @@ if step "every workflow job has a timeout" --no-slot; then
   # GitHub lets a job run 360 minutes unless it says otherwise. The guard fails
   # a job with no `timeout-minutes`, a non-literal value, or one above 60.
   scripts/workflow-guard/guard.sh
+fi
+
+if step "shellcheck" --no-slot --fast-when '*.sh' --fast-when .githooks/pre-push --fast-when 'scripts/shellcheck/*'; then
+  if command -v shellcheck >/dev/null 2>&1; then
+    # Same files and severity as the installers workflow.
+    scripts/shellcheck/run.sh
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: shellcheck is not installed, and CI must run it" >&2
+      exit 1
+    fi
+    skip_step "shellcheck not installed; skipped (CI runs it)"
+  fi
+fi
+
+if step "workflow validation" --no-slot --fast-when '.github/workflows/*' --fast-when 'scripts/actionlint/*'; then
+  # GitHub makes no jobs and no checks for a workflow it cannot parse, so a
+  # broken file looks like a green PR (#329). CI must never skip this.
+  rc=0
+  bash scripts/actionlint/run.sh || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "actionlint is required in CI" >&2
+      exit 1
+    fi
+    skip_step "actionlint unavailable; skipped (CI runs it)"
+  elif [ "$rc" -ne 0 ]; then
+    exit "$rc"
+  fi
+fi
+
+if step "powershell parse" --no-slot --fast-when '*.ps1'; then
+  # Syntax-only parse of the installer scripts; only Windows CI runs them.
+  if command -v pwsh >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # PowerShell variables, not shell ones
+    pwsh -NoProfile -NonInteractive -Command '
+      $bad = 0
+      foreach ($f in "scripts/install/install.ps1", "scripts/install/test.ps1") {
+        $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+        foreach ($e in $errors) { "${f}:$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+      }
+      if ($bad -gt 0) { exit 1 }'
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: pwsh is not installed, and CI must run it" >&2
+      exit 1
+    fi
+    skip_step "pwsh not installed; skipped (CI runs it)"
+  fi
 fi
 
 if step "cargo fmt" --fast --cargo; then
@@ -636,7 +906,7 @@ if step "eval batch driver tests" --fast-when 'scripts/eval-batch/*' --fast-when
   fi
 fi
 
-if step "installer tests" --fast-when 'scripts/install/*' --group scripts; then
+if step "installer tests" --fast-when 'scripts/install/*' --concurrent --group scripts; then
   bash scripts/install/test.sh
 fi
 
@@ -644,13 +914,13 @@ if step "release script tests" --fast-when 'scripts/release/*' --group scripts; 
   bash scripts/release/test.sh
 fi
 
-if step "release notes tests" --fast-when 'scripts/release/*' --group scripts; then
+if step "release notes tests" --fast-when 'scripts/release/*' --concurrent --group scripts; then
   # scripts/release/notes.sh, the GitHub release body: the version's
   # CHANGELOG.md section and a footer; it fails closed.
   bash scripts/release/notes-test.sh
 fi
 
-if step "release image tests" --fast-when 'scripts/release/*' --group scripts; then
+if step "release image tests" --fast-when 'scripts/release/*' --concurrent --group scripts; then
   # The oskac container image builder (scripts/release/image.sh): the same
   # fake binaries give the same OCI bytes, and the layout holds only /oskac
   # and /tmp, run as user 65532. They read GNU tar's listing, and jq, as
@@ -666,14 +936,14 @@ if step "release image tests" --fast-when 'scripts/release/*' --group scripts; t
   fi
 fi
 
-if step "release image push tests" --fast-when 'scripts/release/*' --group scripts; then
+if step "release image push tests" --fast-when 'scripts/release/*' --concurrent --group scripts; then
   # scripts/release/push-image.sh, with a fake skopeo: it pushes only the
   # image the signed release rebuilds to, and fails when the registry
   # serves another digest than the signed one.
   bash scripts/release/push-image-test.sh
 fi
 
-if step "Linux build check tests" --fast-when 'scripts/release/*' --group scripts; then
+if step "Linux build check tests" --fast-when 'scripts/release/*' --concurrent --group scripts; then
   # They run GNU readelf, as the release runners have it.
   if grep -q 'GNU readelf' <<<"$(readelf --version 2>/dev/null || true)"; then
     bash scripts/release/check-linux-build-test.sh
@@ -686,15 +956,15 @@ if step "Linux build check tests" --fast-when 'scripts/release/*' --group script
   fi
 fi
 
-if step "unsafe guard tests" --fast-when 'scripts/unsafe-guard/*' --group scripts; then
+if step "unsafe guard tests" --fast-when 'scripts/unsafe-guard/*' --concurrent --group scripts; then
   bash scripts/unsafe-guard/test.sh
 fi
 
-if step "intrinsic guard tests" --fast-when 'scripts/intrinsic-guard/*' --group scripts; then
+if step "intrinsic guard tests" --fast-when 'scripts/intrinsic-guard/*' --concurrent --group scripts; then
   bash scripts/intrinsic-guard/test.sh
 fi
 
-if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*' --group scripts; then
+if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*' --concurrent --group scripts; then
   bash scripts/spdx-guard/test.sh
 fi
 
@@ -702,7 +972,7 @@ if step "test-site guard tests" --fast-when 'scripts/test-site-guard/*' --group 
   bash scripts/test-site-guard/test.sh
 fi
 
-if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json --group scripts; then
+if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json --concurrent --group scripts; then
   # The Claude Code hook (.claude/settings.json) that refuses pkill -f, killall
   # and other kills by pattern, name or session.
   bash scripts/kill-guard/test.sh
@@ -732,50 +1002,50 @@ if step "claude plugin validate" --no-slot --fast-when '.claude-plugin/*' --fast
   fi
 fi
 
-if step "workflow guard tests" --fast-when 'scripts/workflow-guard/*' --group scripts; then
+if step "workflow guard tests" --fast-when 'scripts/workflow-guard/*' --concurrent --group scripts; then
   bash scripts/workflow-guard/test.sh
 fi
 
-if step "temp-leak wrapper tests" --fast-when 'scripts/temp-leak/*' --group scripts; then
+if step "temp-leak wrapper tests" --fast-when 'scripts/temp-leak/*' --concurrent --group scripts; then
   bash scripts/temp-leak/test.sh
 fi
 
-if step "rust-stable tests" --fast-when 'scripts/rust-stable/*' --group scripts; then
+if step "rust-stable tests" --fast-when 'scripts/rust-stable/*' --concurrent --group scripts; then
   bash scripts/rust-stable/test.sh
 fi
 
-if step "cross-build manifest tests" --fast-when 'scripts/cross-build/*' --group scripts; then
+if step "cross-build manifest tests" --fast-when 'scripts/cross-build/*' --concurrent --group scripts; then
   bash scripts/cross-build/test.sh
 fi
 
-if step "cargo cache tests" --fast-when 'scripts/cargo-cache/*' --group scripts; then
+if step "cargo cache tests" --fast-when 'scripts/cargo-cache/*' --concurrent --group scripts; then
   bash scripts/cargo-cache/test.sh
 fi
 
-if step "build slot tests" --fast-when 'scripts/build-slots/*' --group scripts; then
+if step "build slot tests" --fast-when 'scripts/build-slots/*' --concurrent --group scripts; then
   bash scripts/build-slots/test.sh
 fi
 
-if step "pass stamp tests" --fast-when 'scripts/pass-stamp/*' --fast-when '.githooks/*' --group scripts; then
+if step "pass stamp tests" --fast-when 'scripts/pass-stamp/*' --fast-when '.githooks/*' --concurrent --group scripts; then
   bash scripts/pass-stamp/test.sh
 fi
 
-if step "docs-test list tests" --fast-when 'scripts/docs-tests/*' --group scripts; then
+if step "docs-test list tests" --fast-when 'scripts/docs-tests/*' --concurrent --group scripts; then
   # The Rust tests that read docs/, which a docs-only change runs.
   bash scripts/docs-tests/test.sh
 fi
 
-if step "test shard tests" --fast-when 'scripts/test-shard*' --fast-when '.github/workflows/ci.yml' --fast-when 'crates/*/tests/*' --group scripts; then
+if step "test shard tests" --fast-when 'scripts/test-shard*' --fast-when '.github/workflows/ci.yml' --fast-when 'crates/*/tests/*' --concurrent --group scripts; then
   # Each test of a CI job's set runs in exactly one shard (scripts/test-shard.sh).
   bash scripts/test-shard/test.sh
 fi
 
-if step "ci changes tests" --no-slot --fast-when 'scripts/ci-changes/*' --group scripts; then
+if step "ci changes tests" --no-slot --fast-when 'scripts/ci-changes/*' --concurrent --group scripts; then
   # Which pull requests skip the slow test jobs (scripts/ci-changes/docs-only.sh).
   bash scripts/ci-changes/test.sh
 fi
 
-if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh --group scripts; then
+if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh --concurrent --group scripts; then
   # --list prints exactly the steps a run runs, in order (this file's blocks).
   bash scripts/check-steps/test.sh
 fi
@@ -803,66 +1073,16 @@ if step "formal step tests" --no-slot --fast-when 'formal/*' --fast-when 'script
   bash scripts/formal/test.sh
 fi
 
-if step "workflow validation" --no-slot --fast-when '.github/workflows/*' --fast-when 'scripts/actionlint/*'; then
-  # GitHub makes no jobs and no checks for a workflow it cannot parse, so a
-  # broken file looks like a green PR (#329). CI must never skip this.
-  rc=0
-  bash scripts/actionlint/run.sh || rc=$?
-  if [ "$rc" -eq 3 ]; then
-    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
-      echo "actionlint is required in CI" >&2
-      exit 1
-    fi
-    skip_step "actionlint unavailable; skipped (CI runs it)"
-  elif [ "$rc" -ne 0 ]; then
-    exit "$rc"
-  fi
-fi
-
-if step "workflow validation tests" --no-slot --fast-when 'scripts/actionlint/*' --group scripts; then
+if step "workflow validation tests" --no-slot --fast-when 'scripts/actionlint/*' --concurrent --group scripts; then
   bash scripts/actionlint/test.sh
 fi
 
-if step "x509 roots generator tests" --no-slot --fast-when 'scripts/x509-roots/*' --fast-when 'crates/oska-check/src/std/x509_roots.osk' --group scripts; then
+if step "x509 roots generator tests" --no-slot --fast-when 'scripts/x509-roots/*' --fast-when 'crates/oska-check/src/std/x509_roots.osk' --concurrent --group scripts; then
   bash scripts/x509-roots/test.sh
 fi
 
-if step "expected workflows tests" --no-slot --fast-when 'scripts/expected-workflows/*' --group scripts; then
+if step "expected workflows tests" --no-slot --fast-when 'scripts/expected-workflows/*' --concurrent --group scripts; then
   bash scripts/expected-workflows/test.sh
-fi
-
-if step "shellcheck" --fast-when '*.sh' --fast-when .githooks/pre-push --fast-when 'scripts/shellcheck/*'; then
-  if command -v shellcheck >/dev/null 2>&1; then
-    # Same files and severity as the installers workflow.
-    scripts/shellcheck/run.sh
-  else
-    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
-      echo "check.sh: shellcheck is not installed, and CI must run it" >&2
-      exit 1
-    fi
-    skip_step "shellcheck not installed; skipped (CI runs it)"
-  fi
-fi
-
-if step "powershell parse" --fast-when '*.ps1'; then
-  # Syntax-only parse of the installer scripts; only Windows CI runs them.
-  if command -v pwsh >/dev/null 2>&1; then
-    # shellcheck disable=SC2016 # PowerShell variables, not shell ones
-    pwsh -NoProfile -NonInteractive -Command '
-      $bad = 0
-      foreach ($f in "scripts/install/install.ps1", "scripts/install/test.ps1") {
-        $errors = $null
-        [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
-        foreach ($e in $errors) { "${f}:$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
-      }
-      if ($bad -gt 0) { exit 1 }'
-  else
-    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
-      echo "check.sh: pwsh is not installed, and CI must run it" >&2
-      exit 1
-    fi
-    skip_step "pwsh not installed; skipped (CI runs it)"
-  fi
 fi
 
 finish
