@@ -180,6 +180,49 @@ fn uninstall_removes_what_the_receipt_lists_and_nothing_else() {
     assert!(!home.exists(), "the empty Oska home should be removed");
 }
 
+/// The SHA-256 of the three bytes `abc`.
+const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+/// The copy `oskac self update --keep-previous` leaves (#260): a `binary`
+/// entry with the SHA-256 recorded from the signed `SHA256SUMS`, which
+/// `kept_previous` names too. Uninstall removes it while it still has that
+/// SHA-256, and keeps, and says so, a copy that changed.
+#[test]
+fn uninstall_removes_a_kept_copy_and_keeps_a_changed_one() {
+    for (name, content, removed) in [("kept", "abc", true), ("kept-changed", "abd", false)] {
+        let scratch = new_scratch(name);
+        let home = scratch.path().join(".oska");
+        let kept = home.join("bin").join("oskac-0.0.1");
+        let extra = format!(
+            ",\"previous_version\":\"0.0.1\",\"kept_previous\":{{\"version\":\"0.0.1\",\"path\":{},\"sha256\":\"{ABC}\"}}",
+            json_path(&kept)
+        );
+        let exe = install(&home, VERSION, &extra);
+        std::fs::write(&kept, content).expect("the kept copy");
+        add_entry(
+            &home,
+            &format!(
+                "{{\"path\":{},\"kind\":\"binary\",\"sha256\":\"{ABC}\"}}",
+                json_path(&kept)
+            ),
+        );
+        let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
+        assert_eq!(text(&output.stderr), "");
+        assert_eq!(output.status.code(), Some(0));
+        let done = json_of(&output);
+        let listed = |key: &str| format!("{:?}", done.get(key));
+        let shown_kept = shown(&kept);
+        let in_removed = listed("removed").contains("oskac-0.0.1");
+        let in_kept = listed("kept").contains("oskac-0.0.1");
+        assert_eq!(
+            (in_removed, in_kept),
+            (removed, !removed),
+            "{done:?} {shown_kept}"
+        );
+        assert_eq!(kept.exists(), !removed);
+    }
+}
+
 #[test]
 fn uninstall_keeps_a_directory_with_something_else_in_it() {
     let scratch = new_scratch("uninstall-keep");

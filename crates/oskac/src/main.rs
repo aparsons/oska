@@ -151,11 +151,15 @@ USAGE:
                                            pinned release key, and whether this
                                            binary is the published one; the
                                            only command that uses the network
-    oskac self update [--version X [--allow-downgrade]] [--format=json]
+    oskac self update [--version X [--allow-downgrade] | --rollback]
+                      [--keep-previous] [--format=json]
                                            Replace this managed install with
                                            the latest verified release, or
                                            with release X; an older release
-                                           needs --allow-downgrade
+                                           needs --allow-downgrade. --rollback
+                                           goes back one version.
+                                           --keep-previous keeps the replaced
+                                           binary for this update only
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -193,6 +197,10 @@ struct Flags {
     /// `--allow-downgrade`: `oskac self update --version X` may install an
     /// older release.
     allow_downgrade: bool,
+    /// `--rollback`: `oskac self update` goes back to the previous version.
+    rollback: bool,
+    /// `--keep-previous`: `oskac self update` keeps the binary it replaces.
+    keep_previous: bool,
     /// `--update`: `oskac test` writes new and changed snapshots
     /// (`oska_run::snapshots`) instead of failing on them.
     update: bool,
@@ -311,6 +319,8 @@ impl CommandLine {
                 "--update" => line.flags.update = true,
                 "--no-identify" => line.flags.no_identify = true,
                 "--allow-downgrade" => line.flags.allow_downgrade = true,
+                "--rollback" => line.flags.rollback = true,
+                "--keep-previous" => line.flags.keep_previous = true,
                 event if event.starts_with("--event=") => {
                     line.event = Some(event["--event=".len()..].to_string());
                 }
@@ -470,6 +480,20 @@ fn main() -> ExitCode {
         }
         return ExitCode::from(2);
     }
+    // Only `self update` rolls back or keeps the binary it replaces, and a
+    // rollback names its release itself.
+    if (flags.rollback || flags.keep_previous)
+        && (!updating || (flags.rollback && (line.version.is_some() || flags.allow_downgrade)))
+    {
+        if flags.json {
+            outln!(
+                "{{\"ok\":false,\"error\":\"usage\",\"message\":\"--rollback and --keep-previous belong to `oskac self update` alone, and --rollback takes no --version or --allow-downgrade\"}}"
+            );
+        } else {
+            eprint!("{USAGE}");
+        }
+        return ExitCode::from(2);
+    }
     // Only `test` takes a filter or writes snapshots.
     if (line.filter.is_some() || flags.update) && positional.first() != Some(&"test") {
         eprint!("{USAGE}");
@@ -500,9 +524,15 @@ fn main() -> ExitCode {
                 ["info"] if bare => self_cmd::info(flags.json),
                 ["uninstall"] if bare => self_cmd::uninstall(flags.json),
                 ["check"] if bare => self_check::check(flags.json, !flags.no_identify),
-                ["update"] if bare && !flags.no_identify => {
-                    self_update::update(flags.json, line.version.clone(), flags.allow_downgrade)
-                }
+                ["update"] if bare && !flags.no_identify => self_update::update(
+                    flags.json,
+                    &self_update::Request {
+                        version: line.version.clone(),
+                        allow_downgrade: flags.allow_downgrade,
+                        rollback: flags.rollback,
+                        keep_previous: flags.keep_previous,
+                    },
+                ),
                 _ => self_cmd::usage(flags.json),
             }
         }
@@ -1585,6 +1615,8 @@ mod tests {
                 update: false,
                 no_identify: false,
                 allow_downgrade: false,
+                rollback: false,
+                keep_previous: false,
             }
         );
         assert!(line.program_args.is_empty());
