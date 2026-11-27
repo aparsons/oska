@@ -17,6 +17,7 @@ ok() { printf 'ok   %s\n' "$1"; passed=$((passed + 1)); }
 bad() { printf 'FAIL %s: %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
 split=$(grep '^SITE_SPLIT=' scripts/test-shard.sh | cut -d= -f2)
+corpus=$(grep '^CORPUS_SPLIT=' scripts/test-shard.sh | cut -d= -f2)
 
 for set in musl linux macos windows; do
   # Each shard but `all`, one "PACKAGE KIND NAME" line a target; a site slice
@@ -27,10 +28,10 @@ for set in musl linux macos windows; do
   # `all` is the whole set: what every shard must add up to. Its site.rs is
   # one target, so the slices are folded back into it.
   want=$(scripts/test-shard.sh "$set" all --plan | sort)
-  folded=$(printf '%s\n' "$got" | sed 's|^\(oska-run test site\)/[0-9]*$|\1|' | sort | uniq -c | awk '{c=$1; $1=""; sub(/^ /,""); print c "\t" $0}')
+  folded=$(printf '%s\n' "$got" | sed -e 's|^\(oska-run test site\)/[0-9]*$|\1|' -e 's|^\(oskac test native_tests\)/[0-9]*$|\1|' | sort | uniq -c | awk '{c=$1; $1=""; sub(/^ /,""); print c "\t" $0}')
   slices=$(printf '%s\n' "$got" | grep -c '^oska-run test site/' || true)
-  extra=$(printf '%s\n' "$folded" | awk -F'\t' -v n="$split" -v set="$set" '
-    { want = ($2 == "oska-run test site" && set == "musl") ? n : 1; if ($1 != want) print $0 }')
+  extra=$(printf '%s\n' "$folded" | awk -F'\t' -v n="$split" -v c="$corpus" -v set="$set" '
+    { want = ($2 == "oska-run test site" && set == "musl") ? n : (($2 == "oskac test native_tests" && (set == "macos" || set == "linux")) ? c : 1); if ($1 != want) print $0 }')
   if [ -n "$extra" ]; then
     bad "$set: each target runs once" "run more or fewer times than once: $extra"
   else
@@ -76,6 +77,22 @@ if scripts/test-shard.sh bogus rest --plan 2>/dev/null; then
   bad "a bad set fails" "it ran"
 else
   ok "a bad set fails"
+fi
+
+# scripts/coverage-plan.py cuts the linux set finer for the Coverage workflow:
+# its jobs together must run every target of the set once (native_tests in
+# its three slices, as one target).
+want=$(scripts/test-shard.sh linux all --plan | sort)
+got=$(python3 -I scripts/coverage-plan.py | python3 -I -c 'import json, sys
+for job in json.load(sys.stdin):
+    print(job["lines"])' | grep -v '^$' | sed 's|^\(oskac test native_tests\)/[0-9]*$|\1|' | sort | uniq)
+count=$(python3 -I scripts/coverage-plan.py | python3 -I -c 'import json, sys
+print(sum(len(j["lines"].splitlines()) for j in json.load(sys.stdin)))')
+all=$(scripts/test-shard.sh linux all --plan | wc -l)
+if [ "$want" = "$got" ] && [ "$count" -eq $((all + 2)) ]; then
+  ok "coverage plan: each linux target runs exactly once"
+else
+  bad "coverage plan: each linux target runs exactly once" "targets differ, or run more than once ($count lines, $all targets)"
 fi
 
 printf '\n%s passed, %s failed\n' "$passed" "$failures"

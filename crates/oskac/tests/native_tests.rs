@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use differential::in_parallel;
+use differential::{in_parallel, is_coverage_profile};
 
 /// What one `oskac test` run showed.
 #[derive(Debug, PartialEq, Eq)]
@@ -129,6 +129,8 @@ fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, String>) {
         if path.is_dir() {
             tree.insert(format!("{name}/"), String::new());
             read_tree(&path, &format!("{name}/"), tree);
+        } else if is_coverage_profile(&path) {
+            // The instrumented build's, not the program's output.
         } else {
             let text = std::fs::read(&path).expect("should read the file");
             tree.insert(name, String::from_utf8_lossy(&text).into_owned());
@@ -623,6 +625,28 @@ fn has_tests(text: &str) -> bool {
     text.contains("test \"")
 }
 
+/// The cases of this run's slice of the corpus. CI splits the corpus tests
+/// of the macOS Intel job over shards (`scripts/test-shard.sh`): with
+/// `OSKA_CORPUS_PART=K/N` a corpus test keeps the K-th of every N cases, by
+/// position, and the N slices together are all of them. Unset, every case.
+fn corpus_slice<T>(cases: Vec<T>) -> Vec<T> {
+    let Ok(part) = std::env::var("OSKA_CORPUS_PART") else {
+        return cases;
+    };
+    let (k, n) = part.split_once('/').expect("OSKA_CORPUS_PART is K/N");
+    let (k, n): (usize, usize) = (
+        k.parse().expect("K is a number"),
+        n.parse().expect("N is a number"),
+    );
+    assert!(n > 0 && k < n, "OSKA_CORPUS_PART {part}");
+    cases
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % n == k)
+        .map(|(_, case)| case)
+        .collect()
+}
+
 /// Run a corpus program on both backends.
 fn assert_same_corpus(name: &str, files: &[(String, String)], target: &str) {
     let files: Vec<(&str, &str)> = files
@@ -692,7 +716,7 @@ fn test_packages() -> Vec<PathBuf> {
 fn every_test_bearing_package_in_the_corpus_reports_the_same() {
     let packages = test_packages();
     assert!(packages.len() >= 7, "{packages:?}");
-    in_parallel(&packages, |dir| {
+    in_parallel(&corpus_slice(packages), |dir| {
         let name = dir
             .file_name()
             .expect("a name")
@@ -729,7 +753,7 @@ fn every_test_bearing_single_file_in_the_corpus_reports_the_same() {
         }
     }
     assert!(!cases.is_empty());
-    in_parallel(&cases, |(name, src)| {
+    in_parallel(&corpus_slice(cases), |(name, src)| {
         assert_same_corpus(
             &format!("file-{name}"),
             &[(name.clone(), src.clone())],
@@ -797,7 +821,7 @@ fn doc_programs() -> Vec<(String, String)> {
 fn every_test_bearing_program_in_the_guides_reports_the_same() {
     let programs = doc_programs();
     assert!(programs.len() >= 5, "{}", programs.len());
-    in_parallel(&programs, |(name, src)| {
+    in_parallel(&corpus_slice(programs), |(name, src)| {
         assert_same_corpus(
             &format!("doc-{name}"),
             &[("main.osk".to_string(), src.clone())],

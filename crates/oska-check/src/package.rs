@@ -321,7 +321,7 @@ fn std_sources(modules: &[&ModuleSource], toolchain: bool) -> Vec<&'static Modul
         let Ok(ast) = parsed else {
             continue;
         };
-        for std in crate::prelude::oska_std_imports(&ast) {
+        for std in crate::prelude::oska_std_imports(&ast, source) {
             let present = modules.iter().any(|m| m.module == std.path)
                 || found.iter().any(|m| m.module == std.path);
             if !present {

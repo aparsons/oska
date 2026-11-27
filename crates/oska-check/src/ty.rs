@@ -422,6 +422,16 @@ impl Ty {
         }
     }
 
+    /// Contains a generic parameter of the enclosing declaration.
+    pub fn has_param(&self) -> bool {
+        match self {
+            Ty::Param(_) => true,
+            Ty::Named(_, args, _) => args.iter().any(Ty::has_param),
+            Ty::Fn { params, ret, .. } => params.iter().any(Ty::has_param) || ret.has_param(),
+            Ty::Unit | Ty::Var(_) | Ty::Never | Ty::Error => false,
+        }
+    }
+
     /// Replace each generic parameter named in `subst` with its type.
     pub fn substitute(&self, subst: &[(String, Ty)]) -> Ty {
         match self {

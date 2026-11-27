@@ -555,6 +555,14 @@ fn spawn(command: Command, stdin: &str) -> (String, String, Option<i32>) {
     }
 }
 
+/// A native program built by an instrumented compiler writes its coverage
+/// counters to `default_*.profraw` in its working directory when it exits.
+fn is_coverage_profile(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("default_") && name.ends_with(".profraw"))
+}
+
 /// Every entry under `dir`, by path relative to the root, never following
 /// a symlink.
 fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Entry>) {
@@ -570,6 +578,9 @@ fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Entry>) {
         } else if kind.is_dir() {
             tree.insert(name.clone(), Entry::Dir);
             read_tree(&path, &format!("{name}/"), tree);
+        } else if is_coverage_profile(&path) {
+            // The instrumented build's counters (scripts/coverage.sh), not
+            // the program's output.
         } else {
             let bytes = kind.is_file().then(|| std::fs::read(&path).ok()).flatten();
             tree.insert(name, bytes.map_or(Entry::Other, Entry::File));

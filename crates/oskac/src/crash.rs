@@ -75,6 +75,12 @@ fn message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// Whether the caller asked for a backtrace: `RUST_BACKTRACE` is set to
+/// anything but `0`. The default report stays one line.
+fn wants_backtrace() -> bool {
+    std::env::var_os("RUST_BACKTRACE").is_some_and(|value| value != "0")
+}
+
 /// Report a crash in one line and a request, remove the temporary files,
 /// and end the process with 101. Call it first in `main`.
 pub fn install() {
@@ -87,6 +93,13 @@ pub fn install() {
             "oskac: internal error: {}{place}\nThis is a bug in oskac, not in your program. Please report it: {REPORT}",
             message(info.payload())
         );
+        if wants_backtrace() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "stack backtrace:\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         clean_up();
         std::process::exit(EXIT_CODE);
     }));

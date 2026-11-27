@@ -70,6 +70,7 @@ use crate::{Attenuation, AuditSite, FnOrTest, TestName};
 pub(crate) mod attenuation;
 mod audit;
 mod calls;
+mod derived;
 mod patterns;
 mod privacy;
 mod purity;
@@ -336,6 +337,9 @@ struct Callable {
     /// qualified call of a method with one `impl` per type argument, as
     /// `Secret.rotl(k, 3)`, checks its receiver to choose the `impl`.
     checked_first: Option<Ty>,
+    /// A method of the prelude's `Map`: its `Eq` and `Hash` bounds on the key
+    /// type are `E0266`.
+    map_key: bool,
 }
 
 /// What `base.name` names when `base` is not a value.
@@ -398,6 +402,9 @@ pub struct Body<'c, 'd, 'a> {
     /// instantiates others, and what its contracts reach, settled once its
     /// types are solved (`body/purity.rs`).
     uses: purity::Uses,
+    /// The types whose derived `Hash` is being decided, so that a recursive
+    /// type does not decide itself forever.
+    deriving: std::cell::RefCell<Vec<Ty>>,
 }
 
 /// A closure whose capability flag waits for its captures' types.
@@ -478,6 +485,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             typed_args: Vec::new(),
             open_closures: Vec::new(),
             uses: purity::Uses::default(),
+            deriving: std::cell::RefCell::default(),
         }
     }
 
@@ -616,6 +624,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }),
             Ty::Named(head, _, _) if in_prelude(head) && in_prelude(trait_name) => {
                 Some(Callee::intrinsic(format!("{head}.{method}")))
+            }
+            // A derived `Hash` has no impl to call: it is reached by the type's
+            // runtime tag, as a generic parameter's is.
+            Ty::Named(_, _, _) if trait_name == ty::HASH && self.hash_is_derived(ty) => {
+                Some(Callee::Trait {
+                    trait_name: trait_name.to_string(),
+                    method: method.to_string(),
+                })
             }
             Ty::Named(head, _, _) => Some(Callee::Function(program::trait_method(
                 head, trait_name, method,
@@ -1536,7 +1552,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             BinaryOp::And | BinaryOp::Or | BinaryOp::Implies => self.logical(expr, op, lhs, rhs),
             BinaryOp::Eq | BinaryOp::Ne => {
                 if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
-                    self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                    self.require_trait(
+                        &ty,
+                        ty::EQ,
+                        &[],
+                        expr.span,
+                        &format!("`{}`", op.text()),
+                        false,
+                    );
                     self.defer(expr.span, &ty, Deferred::Equality);
                     let what = if op == BinaryOp::Eq { "`==`" } else { "`!=`" };
                     let eq = purity::Reaches::Dispatch {
@@ -1737,7 +1760,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     && b.args.len() == args.len()
                     && b.args.iter().zip(args).all(|(x, y)| infer.unify(x, y))
             }),
-            ty @ Ty::Named(..) => self.impl_in(infer, &ty, trait_name, args, depth).is_some(),
+            ty @ Ty::Named(..) => {
+                self.impl_in(infer, &ty, trait_name, args, depth).is_some()
+                    || (trait_name == ty::HASH && self.derives_hash(infer, &ty, depth))
+            }
         }
     }
 
@@ -1801,7 +1827,17 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let mut trial = self.infer.clone();
         let ty = trial.resolve(ty);
         let (imp, instance) = self.impl_in(&mut trial, &ty, trait_name, args, 0)?;
-        let instance: Vec<Ty> = instance.iter().map(|t| trial.resolve(t)).collect();
+        // A trust flag the trial made is nothing the body knows: settled
+        // trusted, as an unreached flag reads.
+        let instance: Vec<Ty> = instance
+            .iter()
+            .map(|t| {
+                trial.resolve(t).map_trust(&mut |trust| match trust {
+                    Trust::Var(v) if !self.infer.knows_trust(v) => Trust::Trusted,
+                    other => other,
+                })
+            })
+            .collect();
         let known = instance.iter().all(|t| self.infer.knows(t));
         Some((imp, known.then_some(instance)))
     }
@@ -1809,7 +1845,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Report `E0265` at `span` when `ty` does not implement
     /// `trait_name<args>`, which `what` needs. On a generic parameter of
     /// this function, the fix adds the bound.
-    fn require_trait(&mut self, ty: &Ty, trait_name: &str, args: &[Ty], span: Span, what: &str) {
+    ///
+    /// `map_key` marks the key type of a `Map` method: a concrete type that
+    /// fails there is `E0266`, which says what a key needs.
+    fn require_trait(
+        &mut self,
+        ty: &Ty,
+        trait_name: &str,
+        args: &[Ty],
+        span: Span,
+        what: &str,
+        map_key: bool,
+    ) {
         let bound = Bound {
             param: String::new(),
             trait_name: trait_name.to_string(),
@@ -1823,6 +1870,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let bound = Ty::generic(trait_name, args.to_vec()).to_string();
         let message =
             format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
+        if map_key && !ty.has_param() {
+            let message = format!(
+                "`{ty}` cannot be a `Map` key: it does not implement `{bound}`. A key type needs `Eq` and `Hash`: an integer, `Bool`, `String`, `Bytes`, `Path`, an `Option` or `List` of a key type, or a struct or enum with `impl Eq` whose fields are all keys"
+            );
+            self.error(codes::NOT_A_MAP_KEY, message, span);
+            return;
+        }
         let mut diagnostic = Diagnostic::new(codes::NOT_IMPLEMENTED, message, span);
         if let Ty::Param(p) = &ty {
             if let Some(site) = self.lower.sites.iter().rev().find(|s| &s.name == p) {

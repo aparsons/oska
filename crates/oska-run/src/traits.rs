@@ -10,6 +10,7 @@
 use std::rc::Rc;
 
 use oska_check::builtins;
+use oska_check::hashing;
 use oska_syntax::Span;
 
 use crate::host::Host;
@@ -37,10 +38,90 @@ pub const INTRINSICS: Table = &[
     ("U32.eq", Plain(same)),
     ("U64.eq", Plain(same)),
     ("U8.eq", Plain(same)),
+    ("Bool.hash", Plain(word_hash)),
+    ("I16.hash", Plain(word_hash)),
+    ("I32.hash", Plain(word_hash)),
+    ("I64.hash", Plain(word_hash)),
+    ("I8.hash", Plain(word_hash)),
+    ("Int.hash", Plain(word_hash)),
+    ("U16.hash", Plain(word_hash)),
+    ("U32.hash", Plain(word_hash)),
+    ("U64.hash", Plain(word_hash)),
+    ("U8.hash", Plain(word_hash)),
+    ("String.hash", Plain(text_hash)),
+    ("Path.hash", Plain(path_hash)),
+    // A struct or enum without an `impl Hash` derives it.
+    (DERIVED_HASH, HigherOrder(items_hash)),
+    ("List.hash", HigherOrder(items_hash)),
+    ("Option.hash", HigherOrder(items_hash)),
     ("List.eq", HigherOrder(items_eq)),
     ("Option.eq", HigherOrder(items_eq)),
     ("Result.eq", HigherOrder(items_eq)),
 ];
+
+/// The intrinsic a struct or enum that derives `Hash` is hashed by
+/// (`Interpreter::dispatch` finds it when the type has no impl).
+pub const DERIVED_HASH: &str = "(derived).hash";
+
+/// `hash(self)` for an integer or `Bool`: the hash of its 64-bit value
+/// (`oska_check::hashing`).
+fn word_hash(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(hashed(hashing::word(word_of(&args[0]))))
+}
+
+/// `String.hash(self)`: the FNV-1a hash of its UTF-8 bytes.
+fn text_hash(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(hashed(hashing::bytes(args[0].as_str().as_bytes())))
+}
+
+/// `Path.hash(self)`: the hash of its text.
+fn path_hash(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(hashed(hashing::bytes(args[0].field(0).as_str().as_bytes())))
+}
+
+/// `hash(self)` for a `List`, an `Option`, and a struct or enum that
+/// derives `Hash`: the state of the variant's index (a list's length),
+/// then each field's or item's hash through `Hash` for its own type, which
+/// may be the program's impl.
+fn items_hash(
+    interp: &mut Interpreter<'_, '_>,
+    args: &mut Args,
+    span: Span,
+) -> Result<Value, Panic> {
+    let (mut state, items): (u64, Rc<Vec<Value>>) = match &args[0] {
+        Value::List(items) => (hashing::word(items.len() as u64), Rc::clone(items)),
+        Value::Struct { fields, .. } => (hashing::word(0), Rc::clone(fields)),
+        Value::Variant {
+            ty,
+            variant,
+            fields,
+        } => (
+            hashing::word(interp.variant_index(ty, variant) as u64),
+            Rc::clone(fields),
+        ),
+        other => unreachable!("the checker guarantees a list, struct or enum, found {other:?}"),
+    };
+    for item in items.iter() {
+        let hash = interp
+            .call_trait(builtins::HASH_HASH, item.clone(), Vec::new(), span)?
+            .as_int();
+        state = hashing::mix(state, hash as u64);
+    }
+    Ok(hashed(state))
+}
+
+/// The 64-bit value of an integer or `Bool`.
+fn word_of(value: &Value) -> u64 {
+    match value {
+        Value::Bool(b) => u64::from(*b),
+        other => other.as_int() as u64,
+    }
+}
+
+/// A hash, as the `Int` it is.
+fn hashed(hash: u64) -> Value {
+    Value::int(i128::from(hash as i64))
+}
 
 /// `eq(self, other)` for a type whose values are equal exactly when
 /// they hold the same data: integers, `Bool`, text, `Path`, `IoError`.

@@ -6,7 +6,7 @@ The fast inner loop for an agent implementing a ticket. The machine is shared an
 
 1. `cargo fmt` first.
 2. While iterating, run only the changed crate's tests: `cargo test -p <crate>`, or one `--test <name>`. Do not run the full `scripts/check.sh` per edit.
-3. Push early: as soon as the ticket's tests exist, commit and push the ticket branch (`ticket/<number>-<slug>`), so CI (Windows and macOS included) runs alongside your local work. Push again as you go. Never `--no-verify`.
+3. Push early: as soon as the ticket's tests exist, commit and push the ticket branch (`ticket/<number>-<slug>`), so CI (Linux) runs alongside your local work. Push again as you go. Never `--no-verify`.
 4. Run the full `scripts/check.sh` once, right before the final commit, then push.
 
 ## Release notes
@@ -91,7 +91,7 @@ Any test that builds paths, puts a path in JSON, or sets a home uses `crates/osk
 
 ## CI on ticket branches
 
-A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `confinement.yml`, so every platform verifies a ticket before the spec's pull request. Name ticket branches `ticket/<number>-<slug>`.
+A push to `ticket/**` or `review-fixes-*` runs the Linux jobs of `ci.yml` and `confinement.yml` (spec #711); its pull request is skipped, because the push run of the same commit is its check. macOS and Windows run on a push to `main` or `spec/**` and on dispatch (`gh workflow run ci.yml --ref <branch>`, `windows.yml` likewise), so a ticket's platform-specific code is verified when it merges into the spec branch, before the spec's pull request. Name ticket branches `ticket/<number>-<slug>`.
 
 ## Review findings
 

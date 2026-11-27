@@ -95,7 +95,7 @@ pub mod codes {
     /// `P0039` is never the program's own: `oskac` stops a native program
     /// at its `--timeout` and reports it, and `P0014` is the test
     /// runner's, after a test has run (`oska_run::snapshots`).
-    pub const PANICS: [&str; 29] = [
+    pub const PANICS: [&str; 31] = [
         "P0001",
         "P0002",
         "P0003",
@@ -120,6 +120,8 @@ pub mod codes {
         oska_check::limits::codes::OUTPUT_LIMIT,
         "P0042",
         "P0043",
+        "P0044",
+        "P0045",
         "P0046",
         // Defined ahead of the functions that panic with them (ADR 0027).
         "P0047",
@@ -204,7 +206,30 @@ pub fn build_limited(
     locate: &dyn Locate,
     limits: Limits,
 ) -> Result<Vec<u8>, Diagnostic> {
-    compile(program, target, locate, lower::Entry::Main, limits)
+    build_hooked(program, target, locate, limits, false)
+}
+
+/// [`build_limited`], and `dns_test_hooks` says whether the executable's
+/// name resolution honors the environment variables `OSKA_DNS_HOSTS`,
+/// `OSKA_DNS_RESOLV_CONF` and `OSKA_DNS_PORT` (ADR 0026). It is a constant
+/// written into the executable: only the compiler's caller sets it, and
+/// `connect`'s flag never comes from a program or its environment. [`build`] and [`build_limited`]
+/// leave the hooks off; `oskac` turns them on in debug builds alone.
+pub fn build_hooked(
+    program: &Program,
+    target: Target,
+    locate: &dyn Locate,
+    limits: Limits,
+    dns_test_hooks: bool,
+) -> Result<Vec<u8>, Diagnostic> {
+    compile(
+        program,
+        target,
+        locate,
+        lower::Entry::Main,
+        limits,
+        dns_test_hooks,
+    )
 }
 
 /// Compile the `test` blocks of `program`, which checked with no
@@ -231,12 +256,23 @@ pub fn build_limited(
 /// [`test_failure`] reads back. The caller places it in the source, as it
 /// places the interpreter's.
 pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnostic> {
+    build_tests_hooked(program, target, false)
+}
+
+/// [`build_tests`], with the DNS test hooks on or off as for
+/// [`build_hooked`].
+pub fn build_tests_hooked(
+    program: &Program,
+    target: Target,
+    dns_test_hooks: bool,
+) -> Result<Vec<u8>, Diagnostic> {
     compile(
         program,
         target,
         &Unplaced,
         lower::Entry::Tests,
         Limits::NONE,
+        dns_test_hooks,
     )
 }
 
@@ -408,6 +444,7 @@ fn compile(
     locate: &dyn Locate,
     entry: lower::Entry,
     limits: Limits,
+    dns_test_hooks: bool,
 ) -> Result<Vec<u8>, Diagnostic> {
     if let Some(refusal) = unimplemented_module(program) {
         return Err(refusal);
@@ -420,7 +457,7 @@ fn compile(
             NOWHERE,
         ));
     };
-    let module = lower::program(program, &rt, locate, entry, target, limits)?;
+    let module = lower::program(program, &rt, locate, entry, target, limits, dns_test_hooks)?;
     let text = target.emit(&module).map_err(|why| {
         Diagnostic::new(
             codes::UNSUPPORTED,

@@ -168,6 +168,13 @@ mod panics {
     pub const TEXT_TOO_LONG: &str = "P0037";
     pub const BYTES_OUT_OF_RANGE: &str = "P0042";
     pub const BYTES_TOO_LONG: &str = "P0043";
+    pub const MAP_ENTRY_LIMIT: &str = "P0044";
+    /// The interpreter's message for `P0044`.
+    pub const MAP_ENTRY_LIMIT_MESSAGE: &str = "the map holds as many entries as its limit allows";
+    pub const MAP_PROBE_LIMIT: &str = "P0045";
+    /// The interpreter's message for `P0045`.
+    pub const MAP_PROBE_LIMIT_MESSAGE: &str =
+        "the map's keys collide under every hash it tries: they look chosen to flood it";
     pub const FLOAT_TO_INT: &str = "P0046";
     pub const INT_TO_FLOAT: &str = "P0049";
     pub const FMT_DIGITS: &str = "P0050";
@@ -228,6 +235,10 @@ enum Instance {
     /// through `Eq` for each field's type (`traits.rs`). Under
     /// `--max-steps`, one for each `==`, as [`Instance::ListEq`].
     Equal(Source, Type, Option<Span>),
+    /// The hash of a value of this `List`, `Option`, or struct or enum
+    /// type, which derives `Hash` or has the prelude's (`traits.rs`). Under
+    /// `--max-steps`, as [`Instance::Equal`].
+    Hash(Source, Type, Option<Span>),
     /// The check of a function's `requires` clauses, a function of the
     /// same parameters as it: gives 0 when they all hold, else the number
     /// (from 1) of the first that is false. The caller panics with it,
@@ -278,6 +289,7 @@ pub fn program(
     kind: Entry,
     target: Target,
     limits: Limits,
+    dns_test_hooks: bool,
 ) -> Result<ir::Module, Diagnostic> {
     let mut lowering = Lowering {
         user,
@@ -286,6 +298,7 @@ pub fn program(
         kind,
         target,
         limits,
+        dns_test_hooks,
         uncounted: false,
         human: locate.places(),
         frame: "main".to_string(),
@@ -325,6 +338,7 @@ pub fn program(
                 | Instance::RunTasks
                 | Instance::Thunk { .. }
                 | Instance::Equal(..)
+                | Instance::Hash(..)
                 | Instance::ListEq(..)
         ) {
             lowering.between_functions.push(id);
@@ -384,6 +398,9 @@ struct Lowering<'p> {
     /// The run limits the program is built under (`oskac run`): none for
     /// `oskac build` and test executables.
     limits: Limits,
+    /// Whether `std.dns` in the executable honors the `OSKA_DNS_*` test
+    /// variables (`rt_mem_dns_test_hooks`).
+    dns_test_hooks: bool,
     /// Whether the function being lowered is one of `std.rt`'s counting
     /// allocator functions ([`COUNTED_MEMORY`]), whose own calls of the
     /// allocator are not redirected.
@@ -707,6 +724,12 @@ impl<'p> Lowering<'p> {
                 body.equal_function(ty, at.unwrap_or(origin))?;
                 return body.finish(&qualified(instance), 2, NOWHERE);
             }
+            Instance::Hash(source, ty, at) => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                body.hash_function(ty, at.unwrap_or(origin))?;
+                return body.finish(&qualified(instance), 1, NOWHERE);
+            }
             Instance::Closure(index) => {
                 let source = self.closures[*index].source;
                 let runtime_origin = (source == Source::Runtime).then_some(origin);
@@ -854,6 +877,7 @@ fn qualified(instance: &Instance) -> String {
         Instance::ListEq(_, ty, _) => format!("list_eq<{ty}>"),
         Instance::Debug(_, ty) => format!("debug<{ty}>"),
         Instance::Equal(_, ty, _) => format!("eq<{ty}>"),
+        Instance::Hash(_, ty, _) => format!("hash<{ty}>"),
         Instance::Requires {
             source,
             name,
@@ -2468,6 +2492,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 dst
             }
             Runtime::TestHost => self.test_host(),
+            Runtime::DnsTestHooks => self.constant(i64::from(self.lowering.dns_test_hooks)),
             // A call of the target platform's table, a static object.
             Runtime::PlatformTable => {
                 let table = self.lowering.target.platform().table;
@@ -2697,6 +2722,9 @@ impl<'l, 'p> Body<'l, 'p> {
                     if let Some(value) = self.eq_intrinsic(name, args, &values, span)? {
                         return Ok(value);
                     }
+                    if let Some(value) = self.hash_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
                     if let Some(value) = self.rotation_intrinsic(name, args, &values, span)? {
                         return Ok(value);
                     }
@@ -2722,6 +2750,20 @@ impl<'l, 'p> Body<'l, 'p> {
                         let todo = self.panic_static(panics::TODO, panics::NOT_WRITTEN, span)?;
                         self.push(Inst::Jump(todo));
                         // Never reached: a value of no type, holding nothing.
+                        return Ok(self.constant(0));
+                    }
+                    let map_panic = match name.as_str() {
+                        "map_entry_limit" => {
+                            Some((panics::MAP_ENTRY_LIMIT, panics::MAP_ENTRY_LIMIT_MESSAGE))
+                        }
+                        "map_probe_limit" => {
+                            Some((panics::MAP_PROBE_LIMIT, panics::MAP_PROBE_LIMIT_MESSAGE))
+                        }
+                        _ => None,
+                    };
+                    if let Some((code, message)) = map_panic {
+                        let label = self.panic_static(code, message, span)?;
+                        self.push(Inst::Jump(label));
                         return Ok(self.constant(0));
                     }
                 }
@@ -3593,6 +3635,7 @@ fn main(io: Stdout) {
             super::Entry::Main,
             target,
             limits,
+            false,
         )
         .expect("the program should lower")
     }

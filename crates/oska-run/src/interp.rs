@@ -43,6 +43,7 @@ use crate::memory;
 use crate::ops;
 use crate::panics::{codes, Panic};
 use crate::tasks::Tasks;
+use crate::traits;
 use crate::value::{ClosureValue, Value};
 
 /// Why evaluation stopped before producing a value.
@@ -1448,7 +1449,10 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             let (function, room) = self.function(&name);
             Target::Function(function, room)
         } else {
+            // A struct or enum without an `impl Hash` derives it.
+            let derived = (trait_name == builtins::HASH).then_some(traits::DERIVED_HASH);
             let intrinsic = intrinsics::lookup(&format!("{tag}.{method}"))
+                .or_else(|| derived.and_then(intrinsics::lookup))
                 .expect("`crate::run` refuses a call to a missing intrinsic");
             Target::Intrinsic(intrinsic)
         };
@@ -1460,6 +1464,18 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             .or_default()
             .insert(tag.to_string(), target);
         target
+    }
+
+    /// The index of the variant named `variant` among the declared variants
+    /// of the enum `ty`, which a derived `Hash` hashes.
+    pub(crate) fn variant_index(&self, ty: &str, variant: &str) -> usize {
+        match self.program.types.get(ty).map(|decl| &decl.kind) {
+            Some(program::TypeDeclKind::Enum(variants)) => variants
+                .iter()
+                .position(|v| v.name == variant)
+                .unwrap_or_else(|| unreachable!("the enum `{ty}` has no variant `{variant}`")),
+            other => unreachable!("the checker guarantees an enum for `{ty}`, found {other:?}"),
+        }
     }
 
     /// Call the trait method `method` on `receiver`, through the

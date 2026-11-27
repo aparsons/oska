@@ -17,11 +17,13 @@
 #   windows  every test of oska-run and oskac (the Windows job)
 #
 # A plan is one line a target: "PACKAGE lib", "PACKAGE bins", "PACKAGE doc",
-# "PACKAGE test NAME" or "PACKAGE test site/K" (K of the SITE_SPLIT slices of
+# "PACKAGE test NAME", "PACKAGE test site/K" or "oskac test native_tests/K" (K of the SITE_SPLIT slices of
 # oska-run's tests/site.rs, the slowest test binary, by position in its sorted
 # test list). The shard `rest` of a set holds, by exclusion, every target that
 # no other shard names, so a new test file lands in `rest` with no change
-# here. A set may name `rest-1`, `rest-2` instead (REST_SPLIT of them, Windows):
+# here. native_tests/K is slice K of the CORPUS_SPLIT slices of the corpus
+# cases of oskac's native_tests (OSKA_CORPUS_PART in the test); slice 0 also
+# runs the file's other tests. A set may name `rest-1`, `rest-2` instead (REST_SPLIT of them, Windows):
 # each takes every REST_SPLIT-th of those leftover targets, by position. `all` runs the whole set in one shard (the macOS arm64 job).
 # ci.yml's matrices name the same shards as `--sets`;
 # scripts/test-shard/test.sh checks that every target runs exactly once.
@@ -33,12 +35,14 @@ cd "$(dirname "$0")/.."
 SITE_SPLIT=3
 # Windows: the leftover targets are split into this many `rest-K` shards.
 REST_SPLIT=2
+# macOS and Linux: the corpus cases of native_tests run in this many slices.
+CORPUS_SPLIT=3
 
 # The shards of each set, then each shard's heavy targets, "PACKAGE:NAME".
 shards_of() {
   case $1 in
     musl) echo "site-0 site-1 site-2 sites-1 sites-2 rest all" ;;
-    linux) echo "site native rest all" ;;
+    linux) echo "site native-1 native-2 rest-1 rest-2 all" ;;
     macos) echo "native-1 native-2 rest all" ;;
     windows) echo "native heavy rest-1 rest-2 all" ;;
     *) return 1 ;;
@@ -49,11 +53,21 @@ heavy_of() { # SET SHARD
     "musl sites-1") echo "oska-run:site_api oska-run:site_home oska-run:site_meta" ;;
     "musl sites-2") echo "oska-run:site_links oska-run:site_corpus oska-run:site_compliance" ;;
     "linux site") echo "oska-run:site oska-run:site_api oska-run:site_links oska-run:site_corpus oska-run:site_compliance oska-run:site_home oska-run:site_meta" ;;
-    "linux native") echo "oskac:native_tests oskac:native_prelude oskac:build_cache oskac:run_limits oskac:native_corpus oskac:run_limits_steps_native oskac:native_sshsig" ;;
+    # Linux `rest` is some 14 minutes of test binaries, one after another, so
+    # it runs as two shards. The binaries that take 14 s or more are pinned
+    # (their times from CI run 45754852640: 220 s and 233 s); the other
+    # targets alternate by position, as on Windows.
+    "linux rest-1") echo "oskac:native_sockets oska-run:text_toolkit oskac:native_x509 oskac:native_http oska-run:postconditions" ;;
+    "linux rest-2") echo "oskac:native_tls oska-run:lean_reference oska-run:scopes oskac:native_p256 oskac:native_ecdsa oska-run:oska_core oska-run:core oskac:native_kex_primitives" ;;
+    # Linux `native`: some 490 s of tests in 7 binaries (CI run 45908735193),
+    # in two shards of about 250 s each; the native_tests corpus cases run in
+    # the same CORPUS_SPLIT slices as on macOS.
+    "linux native-1") echo "oskac:native_tests/0 oskac:native_prelude" ;;
+    "linux native-2") echo "oskac:native_tests/1 oskac:native_tests/2 oskac:native_corpus oskac:run_limits oskac:run_limits_steps_native oskac:build_cache oskac:native_sshsig" ;;
     "windows native") echo "oskac:native_tests" ;;
     "windows heavy") echo "oskac:native_prelude oskac:native_corpus oskac:native_tls oskac:native_ints" ;;
-    "macos native-1") echo "oskac:native_prelude oskac:native_data oskac:native_system_calls" ;;
-    "macos native-2") echo "oskac:native_tests oskac:run_limits oskac:run_limits_steps_native" ;;
+    "macos native-1") echo "oskac:native_prelude oskac:native_data oskac:native_system_calls oskac:native_tests/0" ;;
+    "macos native-2") echo "oskac:native_tests/1 oskac:native_tests/2 oskac:run_limits oskac:run_limits_steps_native" ;;
   esac
 }
 # Targets that a shard of a set splits by position: "PACKAGE:NAME".
@@ -91,8 +105,8 @@ plan() { # SET SHARD
   if [ -n "$is_rest" ]; then
     local all s heavy=" " n=0
     for s in $(shards_of "$set"); do
-      case $s in all | rest | rest-[0-9]*) continue ;; esac
-      for h in $(heavy_of "$set" "$s"); do heavy="$heavy$h "; done
+      case $s in all | rest) continue ;; esac
+      for h in $(heavy_of "$set" "$s"); do heavy="$heavy${h%%/*} "; done
     done
     for h in $(split_of "$set"); do heavy="$heavy$h "; done
     all=$(universe "$set")
@@ -100,6 +114,11 @@ plan() { # SET SHARD
       # oskac: only the differential suite and its own unit tests run on musl.
       all="$all"$'\n'"oskac test native_files"$'\n'"oskac test native_parity"$'\n'"oskac test native_default"$'\n'"oskac bins"
     fi
+    # A rest-K shard first runs the targets pinned to it.
+    case $shard in rest-[0-9]*)
+      for h in $(heavy_of "$set" "$shard"); do echo "${h%%:*} test ${h#*:}"; done
+      ;;
+    esac
     while read -r pkg kind name; do
       [ -n "$pkg" ] || continue
       if [ "$kind" = test ] && [ "$shard" != all ]; then
@@ -132,7 +151,15 @@ set=$1 shard=$2 mode=${3:-run}
 [ "$mode" = run ] || [ "$mode" = --plan ] || usage
 case " $(shards_of "$set" 2>/dev/null || true) " in *" $shard "*) ;; *) echo "unknown set or shard: $set $shard" >&2; exit 2 ;; esac
 
-lines=$(plan "$set" "$shard")
+# OSKA_SHARD_LINES: a plan of the same lines, in place of the shard's own.
+# scripts/coverage-plan.py cuts the linux set into finer pieces than CI's
+# shards, which the instrumented coverage run needs (spec "Add coverage
+# reports to merges"). Not for CI's own shards.
+if [ -n "${OSKA_SHARD_LINES:-}" ]; then
+  lines=$OSKA_SHARD_LINES
+else
+  lines=$(plan "$set" "$shard")
+fi
 if [ "$mode" = --plan ]; then
   printf '%s\n' "$lines"
   exit 0
@@ -159,6 +186,7 @@ run_package() { # PACKAGE LINES
       test)
         case $name in
           site/*) run_site "${name#site/}" ;;
+          native_tests/*) run_corpus "${name#native_tests/}" ;;
           *) flags+=(--test "$name") ;;
         esac
         ;;
@@ -166,6 +194,19 @@ run_package() { # PACKAGE LINES
     esac
   done <<<"$lines"
   [ ${#flags[@]} -eq 0 ] || cargo_test -p "$pkg" "${flags[@]}"
+}
+
+# Slice K of the corpus cases (see CORPUS_SPLIT). Slice 0 runs the whole file,
+# its other tests too; the others only the three corpus tests.
+run_corpus() { # K
+  local k=$1
+  export OSKA_CORPUS_PART="$k/$CORPUS_SPLIT"
+  if [ "$k" -eq 0 ]; then
+    cargo_test -p oskac --test native_tests
+  else
+    cargo_test -p oskac --test native_tests -- every_test_bearing_
+  fi
+  unset OSKA_CORPUS_PART
 }
 
 run_site() { # K

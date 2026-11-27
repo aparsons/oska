@@ -546,6 +546,16 @@ fn contents(bytes: Vec<u8>) -> String {
     })
 }
 
+/// A native program built by an instrumented `oskac` (`scripts/coverage.sh`)
+/// writes its coverage counters to `default_*.profraw` in its working
+/// directory when it exits, which the interpreter does not. That file is the
+/// build's, not the program's output, so the tree leaves it out.
+pub fn is_coverage_profile(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("default_") && name.ends_with(".profraw"))
+}
+
 fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Option<String>>) {
     let entries = std::fs::read_dir(dir).expect("should list the directory");
     for entry in entries {
@@ -563,6 +573,8 @@ fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Option<String
         } else if path.is_dir() {
             tree.insert(format!("{name}/"), None);
             read_tree(&path, &format!("{name}/"), tree);
+        } else if is_coverage_profile(&path) {
+            // Not the program's output: see `is_coverage_profile`.
         } else {
             let bytes = std::fs::read(&path).expect("should read the file");
             tree.insert(name, Some(contents(bytes)));

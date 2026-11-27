@@ -73,6 +73,11 @@ pub mod codes {
     pub const BYTES_OUT_OF_RANGE: &str = "P0042";
     /// A `Bytes` would grow longer than the runtime allows (256 MiB).
     pub const BYTES_TOO_LONG: &str = "P0043";
+    /// A `std.map` map was given an entry past its entry limit.
+    pub const MAP_ENTRY_LIMIT: &str = "P0044";
+    /// A `std.map` map's probes passed the probe limit under every hash
+    /// of its list: the keys flood it.
+    pub const MAP_PROBE_LIMIT: &str = "P0045";
     /// `Float.to_int` of a NaN, an infinity or a value `Int` cannot hold.
     pub const FLOAT_TO_INT: &str = "P0046";
     /// A NaN reached a function that needs a number: an operation with no
@@ -128,6 +133,8 @@ pub mod codes {
         OUTPUT_LIMIT,
         BYTES_OUT_OF_RANGE,
         BYTES_TOO_LONG,
+        MAP_ENTRY_LIMIT,
+        MAP_PROBE_LIMIT,
         FLOAT_TO_INT,
         NAN_OPERAND,
         EMPTY_INPUT,

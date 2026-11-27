@@ -1201,6 +1201,14 @@ pub fn dbg<T>(value: T) -> T
 // of each arm it adds.
 pub fn todo<T>() -> T
 
+// For `std.map` only (ADR 0028): a map that would pass its entry limit
+// panics with `P0044`. It has a prelude name because a panic with a code
+// of its own is a built-in.
+pub fn map_entry_limit()
+// For `std.map` only (ADR 0028): a map whose probes pass the limit under
+// every hash of its list panics with `P0045`.
+pub fn map_probe_limit()
+
 // ---- Core traits -------------------------------------------------------
 
 // Equality: `==` and `!=` need `Eq`. `()` is `Eq` without an impl.
@@ -1236,7 +1244,28 @@ pub trait Hash {
     fn hash(self) -> Int
 }
 
-// The 64-bit FNV-1a hash of the bytes, the same on every platform.
+// The hash is a fixed 64-bit function, the same on every platform and both
+// backends, with no seed (ADR 0028). Text and `Bytes` hash as the 64-bit
+// FNV-1a of their bytes. An integer or `Bool` hashes as the FNV-1a of the
+// 8 little-endian bytes of its 64-bit value (`Bool`: 0 or 1). Anything
+// else hashes as the same function over a variant index and then the hash
+// of each field: an `Option`, a `List` (its length first), and a struct or
+// enum whose fields are all `Hash` has `Hash` without an `impl`.
+// A `Secret`, or a type that holds one, is not `Hash`.
+impl Hash for Int { fn hash(self) -> Int }
+impl Hash for I8 { fn hash(self) -> Int }
+impl Hash for I16 { fn hash(self) -> Int }
+impl Hash for I32 { fn hash(self) -> Int }
+impl Hash for I64 { fn hash(self) -> Int }
+impl Hash for U8 { fn hash(self) -> Int }
+impl Hash for U16 { fn hash(self) -> Int }
+impl Hash for U32 { fn hash(self) -> Int }
+impl Hash for U64 { fn hash(self) -> Int }
+impl Hash for Bool { fn hash(self) -> Int }
+impl Hash for String { fn hash(self) -> Int }
+impl Hash for Path { fn hash(self) -> Int }
+impl<T: Hash> Hash for Option<T> { fn hash(self) -> Int }
+impl<T: Hash> Hash for List<T> { fn hash(self) -> Int }
 impl Hash for Bytes { fn hash(self) -> Int }
 
 // A value with a text form, which `"{value}"` interpolation uses.

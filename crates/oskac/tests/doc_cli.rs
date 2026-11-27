@@ -237,6 +237,7 @@ fn every_public_item_of_the_prelude_and_std_is_listed() {
         ("std.mcp", "crates/oska-check/src/std/mcp.osk"),
         ("std.sql", "crates/oska-check/src/std/sql.osk"),
         ("std.proc", "crates/oska-check/src/std/proc.osk"),
+        ("std.map", "crates/oska-check/src/std/map.osk"),
     ];
     for (module, path) in sources {
         let src = std::fs::read_to_string(repo_root().join(path)).expect("the source should read");
@@ -281,7 +282,8 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
             "std.chacha20poly1305",
             "std.aes128gcm",
             "std.tls",
-            "std.http"
+            "std.http",
+            "std.map"
         ]
     );
     assert!(items.iter().all(|i| !field(i, "name").starts_with("rt_")));

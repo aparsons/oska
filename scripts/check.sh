@@ -574,14 +574,14 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests -
     run_docs_tests
   elif [ "$tier" = fast ]; then
     # shellcheck disable=SC2046 # one word per package argument
-    scripts/temp-leak/run.sh cargo test $(fast_crates)
+    scripts/temp-leak/run.sh cargo test --no-fail-fast $(fast_crates)
   elif [ -n "${OSKA_TEST_SHARD:-}" ]; then
     # CI's parallel shards of this step (scripts/test-shard.sh): the set is
     # the host's, "linux" or "macos". Every shard of a set together is the
     # whole `cargo test --all`.
     scripts/temp-leak/run.sh scripts/test-shard.sh "${OSKA_TEST_SET:?OSKA_TEST_SHARD needs OSKA_TEST_SET}" "$OSKA_TEST_SHARD"
   else
-    scripts/temp-leak/run.sh cargo test --all
+    scripts/temp-leak/run.sh cargo test --all --no-fail-fast
   fi
 fi
 
@@ -736,6 +736,11 @@ fi
 if step "test shard tests" --fast-when 'scripts/test-shard*' --fast-when '.github/workflows/ci.yml' --fast-when 'crates/*/tests/*' --group scripts; then
   # Each test of a CI job's set runs in exactly one shard (scripts/test-shard.sh).
   bash scripts/test-shard/test.sh
+fi
+
+if step "ci changes tests" --no-slot --fast-when 'scripts/ci-changes/*' --group scripts; then
+  # Which pull requests skip the slow test jobs (scripts/ci-changes/docs-only.sh).
+  bash scripts/ci-changes/test.sh
 fi
 
 if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh --group scripts; then

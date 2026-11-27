@@ -137,7 +137,7 @@ The prelude's buffer of raw bytes, for binary data that is not text. It is a val
 _Avoid_: byte array, blob, binary string
 
 **Map**:
-The prelude's `Map<K, V>`: a value that holds entries and finds one by its key. Keys need `Eq` and `Hash`; `Float` and secret values are refused as keys (ADR 0028). Like a list, it is copied on write.
+`Map<K, V>`, in the prelude (no `use`): a value that holds entries and finds one by its key. Keys need `Eq` and `Hash`; ADR 0028 refuses `Float` and secret values as keys: a secret key is refused now (`E0351`, `E0354`), a `Float` key once `Float` exists. Like a list, it is copied on write. It has an entry limit (`P0044`), and keys that collide under every hash it tries panic with `P0045`.
 _Avoid_: dictionary, hash table, hash map
 
 **Entry**:
@@ -171,6 +171,18 @@ _Avoid_: constant-time int, CtU32
 **Constant time**:
 The property of code that no conditional branch or memory address depends on a secret value, and no secret is a divisor or a shift amount, so the path the code takes and the memory it touches do not reveal the secret. It holds for native code, not for the interpreter, and not for what the hardware does with the instructions.
 _Avoid_: timing-safe, side-channel free
+
+**Classification**:
+A flag on text and bytes that says how far the data may travel: `Public`, `Internal`, `Confidential` or `Restricted`, in that order. Decided in ADR 0029 and not built yet; it is separate from an untrusted value and from a secret value, and a value can have any combination.
+_Avoid_: sensitivity level, label, tainted, sensitive
+
+**Ceiling**:
+The highest classification that a sink capability accepts, `Public` by default. Attenuation can only lower it, and raising it above the baseline is a widening. Decided in ADR 0029 and not built yet.
+_Avoid_: clearance, limit
+
+**Declassification**:
+Lowering a classification on purpose. Only code that holds a `Declassify` capability can do it, and every use is an audit site. Decided in ADR 0029 and not built yet.
+_Avoid_: downgrade, unclassify, redact
 
 **Approval**:
 A person's yes to one consequential action, such as a tool deleting a file, recorded with the action's summary and details. Only an approver makes one, and it is single use: the tool it is given to consumes it, and the runtime refuses a second use. It is not the approval of a widening, which is a change to an authority baseline that a reviewer makes before a build.
@@ -319,6 +331,10 @@ _Avoid_: golden file, fixture (for this concept)
 **Snapshot update**:
 `oskac test --update`: writing each snapshot that is missing or differs from its value instead of failing the test, and listing what was written. It never deletes a snapshot, and its result is reviewed as a diff like any other change.
 _Avoid_: accepting, blessing
+
+**Coverage**:
+The share of a program's lines that a test run executed, counted per function, with the lines that never ran listed. It is line coverage only: whether each side of a branch ran is a different measure and has no term yet. It describes one run, not how good the tests are.
+_Avoid_: test coverage, code coverage (they suggest it grades the tests)
 
 ## Compliance
 

@@ -1,12 +1,19 @@
 name: CI
 
-# A push runs on main and on the ticket and review-fix branches, which are
-# merged into an integration branch before any pull request, so a pull
-# request's head is not tested twice (as windows.yml and confinement.yml).
+# Where it runs (spec #711): the Linux jobs (test, musl) run on every push to
+# main, spec/**, ticket/** and review-fixes-* and on every pull request. The
+# macOS and cross-build jobs, which wait longest for a runner, run only on
+# main, on spec/** (the branch of a spec's pull request) and on dispatch, so
+# a ticket push or a small pull request uses no Mac. A pull request whose head
+# is a pushed branch (ticket/**, review-fixes-*, spec/**) is skipped: the push
+# run of the same commit is its check, so the matrix runs once, not twice (as
+# windows.yml and confinement.yml). To run the full matrix on any branch:
+#   gh workflow run ci.yml --ref <branch>
 on:
   push:
-    branches: [main, "ticket/**", "review-fixes-*"]
+    branches: [main, "spec/**", "ticket/**", "review-fixes-*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,6 +31,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether a pull request changes only files no test reads (#718), so the
+  # macOS, musl and cross-build jobs, the slowest, can skip. A push (main,
+  # ticket branches) always runs everything. A skipped job reports as
+  # skipped, which docs/agents/merge-policy.md counts as passed for these
+  # jobs. The `test` job always runs: its formal, lint and scripts parts
+  # check docs/agents too, and its cargo shards are cheap beside macOS.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+    steps:
+      # The merge commit of a pull request: its first parent is the base.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD | scripts/ci-changes/docs-only.sh >> "$GITHUB_OUTPUT"
+          else
+            echo docs_only=false >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     # On arm64 and x86_64 the tests are also differential (spec #125,
     # #153): every runtime test, example, guide program, CLI fixture and
@@ -37,7 +70,7 @@ jobs:
     # script suites), and three shards of the cargo tests (`--group tests`)
     # run on each processor. scripts/test-shard.sh names the shards, and its test
     # checks that every test runs in exactly one.
-    # shards linux: site native rest
+    # shards linux: site native-1 native-2 rest-1 rest-2
     strategy:
       fail-fast: false
       matrix:
@@ -46,12 +79,17 @@ jobs:
           - {os: ubuntu-latest, group: lint, shard: ""}
           - {os: ubuntu-latest, group: scripts, shard: ""}
           - {os: ubuntu-latest, group: tests, shard: site}
-          - {os: ubuntu-latest, group: tests, shard: native}
-          - {os: ubuntu-latest, group: tests, shard: rest}
+          - {os: ubuntu-latest, group: tests, shard: native-1}
+          - {os: ubuntu-latest, group: tests, shard: native-2}
+          - {os: ubuntu-latest, group: tests, shard: rest-1}
+          - {os: ubuntu-latest, group: tests, shard: rest-2}
           - {os: ubuntu-24.04-arm, group: tests, shard: site}
-          - {os: ubuntu-24.04-arm, group: tests, shard: native}
-          - {os: ubuntu-24.04-arm, group: tests, shard: rest}
+          - {os: ubuntu-24.04-arm, group: tests, shard: native-1}
+          - {os: ubuntu-24.04-arm, group: tests, shard: native-2}
+          - {os: ubuntu-24.04-arm, group: tests, shard: rest-1}
+          - {os: ubuntu-24.04-arm, group: tests, shard: rest-2}
     name: test (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.shard && format(', {0}', matrix.shard) || '' }})
+    if: github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'ticket/') || startsWith(github.head_ref, 'review-fixes-') || startsWith(github.head_ref, 'spec/'))
     runs-on: ${{ matrix.os }}
     # Incremental data about doubles the size of `target`, which is cached
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
@@ -120,7 +158,7 @@ jobs:
       # TLC. Without them the step fails here, never skips. The formal part
       # runs the formal step; the shard that holds oska-run's lean_reference
       # test needs Lean (check.sh makes that test fail without it, ADR 0018).
-      - if: matrix.group == 'formal' || matrix.shard == 'rest'
+      - if: matrix.group == 'formal' || startsWith(matrix.shard, 'rest')
         run: |
           scripts/formal/install.sh "$HOME/.local/formal"
           echo "$HOME/.local/formal/lean/bin" >> "$GITHUB_PATH"
@@ -135,14 +173,14 @@ jobs:
       # meanwhile and every cargo step ran on the tree as checked out (CI
       # always runs them all). target/tmp holds the tests' scratch files,
       # sparse files of terabytes among them: tar would read them in full.
-      # Only each processor's `rest` shard saves, under the key every part
+      # Only each processor's `rest-1` shard saves, under the key every part
       # of the processor restores from, so the cache stays one entry per
       # processor and under GitHub's limit.
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest-1'
         run: |
           scripts/cargo-cache/mtimes.sh verify
           rm -rf target/tmp
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 'rest-1'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
@@ -163,6 +201,8 @@ jobs:
     # runner minutes for wall time. A new shard must be added to this matrix
     # and to the script (`scripts/test-shard.sh --sets` names them).
     # shards musl: site-0 site-1 site-2 sites-1 sites-2 rest
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'ticket/') || startsWith(github.head_ref, 'review-fixes-') || startsWith(github.head_ref, 'spec/')))
     strategy:
       fail-fast: false
       matrix:
@@ -223,6 +263,8 @@ jobs:
     # Intel is the slow one, so its tests run as three parallel shards
     # (scripts/test-shard.sh, spec #631); Apple silicon runs them whole.
     # shards macos: native-1 native-2 rest
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/'))))
     strategy:
       fail-fast: false
       matrix:
@@ -285,6 +327,8 @@ jobs:
     # host. A refusal that
     # scripts/cross-build/refused.txt does not expect fails here, with
     # oskac's error, so two hosts cannot agree by refusing.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/spec/'))))
     strategy:
       fail-fast: false
       matrix:

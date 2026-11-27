@@ -14,7 +14,7 @@ Adam set this policy on 2026-11-18: agents merge code when it is complete and te
 
 1. The pull request is not a draft, and it has no merge conflict.
 2. `scripts/expected-workflows/check.sh <pr>` passes. Every workflow that must report did report.
-3. Every check on the head commit passed. A pending, failed, cancelled, or missing check stops the merge.
+3. Every check on the head commit passed. A pending, failed, cancelled, or missing check stops the merge. A skipped check counts as passed only for a job that `ci.yml` gates on the `changes` job (macOS, musl, cross-build) when that job reports `docs_only` true; any other skipped check stops the merge.
 4. The full `scripts/check.sh` passed on the head commit, on CI or locally with a pass stamp.
 5. `diff-review` ran on the final diff. Each finding is fixed, or deferred to a filed issue that links the pull request ("Follow-ups from the PR #<pr> review (#<spec>)").
 6. The acceptance criteria of every linked ticket are met. The Spec axis of `diff-review` reports nothing missing.
