@@ -66,6 +66,9 @@ const EXEMPT: &[(&str, &str)] = &[
     ("List.is_empty", CORE_LIST),
     ("List.reverse", CORE_LIST),
     ("List.concat", CORE_LIST),
+    ("List.sorted", CORE_LIST),
+    ("List.sorted_by", CORE_LIST),
+    ("List.sort", CORE_LIST),
 ];
 
 /// How a [`CALLS`] program is run.

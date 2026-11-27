@@ -219,15 +219,30 @@ pub const PRELUDE_STD: &[(&str, &[&str])] = &[("std.map", &["Map", "Entry"])];
 /// the function `list_<name>` of `std.core`, so a program whose text calls
 /// one is joined to the module.
 pub const CORE_METHODS: &[&str] = &[
-    "filter", "fold", "any", "all", "find", "contains", "first", "last", "is_empty", "reverse",
+    "filter",
+    "fold",
+    "any",
+    "all",
+    "find",
+    "contains",
+    "first",
+    "last",
+    "is_empty",
+    "reverse",
     "concat",
+    "sorted",
+    "sorted_by",
+    "sort",
 ];
 
 /// The `std.core` function that the prelude method `Type.method` calls,
 /// by its key in a program, if its body is in `std.core`.
 pub fn core_function(type_name: &str, method: &str) -> Option<String> {
+    // `sort` changes its receiver: it is `list_sorted`, with the result
+    // assigned back (`program/lower.rs`).
+    let function = if method == "sort" { "sorted" } else { method };
     (type_name == "List" && CORE_METHODS.contains(&method))
-        .then(|| format!("pkg.std.core.list_{method}"))
+        .then(|| format!("pkg.std.core.list_{function}"))
 }
 
 /// Whether `source` writes a call of a method named `name`: `.name`, with
