@@ -184,6 +184,216 @@ impl Body<'_, '_> {
         Ok(result)
     }
 
+    /// Where the list at `receiver` is held: its temporary, its type, and
+    /// the struct object and offset that hold it when it is a field,
+    /// which is made unshared. `what` names the change for a refusal.
+    fn list_place(
+        &mut self,
+        receiver: &Place,
+        span: Span,
+        what: &str,
+    ) -> Result<(Temp, Type, Option<(Temp, u32)>), Diagnostic> {
+        Ok(match receiver {
+            Place::Local(_) | Place::SelfValue => match self.holder(receiver) {
+                Some((temp, ty, _)) => (temp, ty, None),
+                None => return Err(self.refuse(span, what)),
+            },
+            Place::Field { base, index } => {
+                let (parent, parent_ty) = self.unique_place(base, span)?;
+                let ty = self.struct_field_type(&parent_ty, *index);
+                let offset = layout::struct_field(*index);
+                (self.load(parent, offset), ty, Some((parent, offset)))
+            }
+        })
+    }
+
+    /// Make the list object in `list` unshared before an item of it
+    /// changes, without room for more: a copy of exactly its items when it
+    /// is shared (`std.rt`'s `list_unshare`), which goes back to where the
+    /// list is held.
+    fn list_unshare(
+        &mut self,
+        list: Temp,
+        item_ty: &Type,
+        held_at: Option<(Temp, u32)>,
+    ) -> Result<(), Diagnostic> {
+        let ready = self.label();
+        let count = self.load(list, 0);
+        self.push(Inst::BranchImm {
+            cond: Cond::Eq,
+            lhs: count,
+            imm: 1,
+            target: ready,
+        });
+        let counted = self.constant(i64::from(self.counted(item_ty)));
+        let own = self.call_runtime("list_unshare", vec![list, counted], NOWHERE)?;
+        self.push(Inst::Copy {
+            dst: list,
+            src: own,
+        });
+        if let Some((parent, offset)) = held_at {
+            self.store(parent, offset, list);
+        }
+        self.push(Inst::Label(ready));
+        Ok(())
+    }
+
+    /// `receiver.set(index, item)`, `args` holding both: `P0002` when the
+    /// index is out of bounds, else the item replaces the one there in an
+    /// unshared list, which releases the old one.
+    pub(super) fn list_set(
+        &mut self,
+        receiver: &Place,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let [index_expr, item_expr] = args else {
+            return Err(self.refuse(span, "`List.set` without an index and an item"));
+        };
+        let index = self.expr(index_expr)?;
+        let item = self.expr(item_expr)?;
+        let (list, list_ty, held_at) =
+            self.list_place(receiver, span, "changing an item of this list")?;
+        let item_ty = layout::list_item(&list_ty).cloned().unwrap_or(Type::Unit);
+        let length = self.load(list, layout::LIST_LEN);
+        let out_of_bounds = self.panic_binary(
+            panics::INDEX_OUT_OF_BOUNDS,
+            (
+                "index ",
+                index,
+                " is out of bounds for a list of length ",
+                length,
+                "",
+            ),
+            false,
+            span,
+        )?;
+        // Unsigned, so a negative index is out of bounds too.
+        self.push(Inst::Branch {
+            cond: Cond::AboveEq,
+            lhs: index,
+            rhs: length,
+            target: out_of_bounds,
+        });
+        self.list_unshare(list, &item_ty, held_at)?;
+        let base = self.item_base(list, index);
+        if self.counted(&item_ty) {
+            let old = self.load(base, layout::LIST_ITEMS);
+            self.store(base, layout::LIST_ITEMS, item);
+            self.release(old, &item_ty)?;
+        } else {
+            self.store(base, layout::LIST_ITEMS, item);
+        }
+        // The list takes over the item's reference.
+        self.owned.remove(&item);
+        Ok(self.constant(0))
+    }
+
+    /// `receiver.pop()`: `None` for an empty list, else `Some` of the last
+    /// item, which the list gives up, in an unshared list.
+    pub(super) fn list_pop(&mut self, receiver: &Place, span: Span) -> Result<Temp, Diagnostic> {
+        let (list, list_ty, held_at) =
+            self.list_place(receiver, span, "removing an item of this list")?;
+        let item_ty = layout::list_item(&list_ty).cloned().unwrap_or(Type::Unit);
+        let some = self.variant(builtins::OPTION, builtins::SOME, span)? as i64;
+        let none = self.variant(builtins::OPTION, builtins::NONE, span)? as i64;
+        let result = self.temp();
+        let (missing, end) = (self.label(), self.label());
+        let length = self.load(list, layout::LIST_LEN);
+        self.push(Inst::JumpIfZero {
+            cond: length,
+            target: missing,
+        });
+        self.list_unshare(list, &item_ty, held_at)?;
+        let one = self.constant(1);
+        let shorter = self.binary_op(BinOp::Sub, length, one);
+        self.store(list, layout::LIST_LEN, shorter);
+        let item = self.item(list, shorter);
+        let object = self.alloc(layout::variant_size(1))?;
+        let tag = self.constant(some);
+        self.store(object, layout::ENUM_TAG, tag);
+        self.store(object, layout::enum_field(0), item);
+        self.push(Inst::Copy {
+            dst: result,
+            src: object,
+        });
+        self.push(Inst::Jump(end));
+        self.push(Inst::Label(missing));
+        let at = self.lowering.rodata.object(&[none]);
+        let nothing = self.rodata(at);
+        self.push(Inst::Copy {
+            dst: result,
+            src: nothing,
+        });
+        self.push(Inst::Label(end));
+        Ok(result)
+    }
+
+    /// `receiver.truncate(n)`: the items from `n` on released and dropped
+    /// from an unshared list, when `n` is below the length; a negative `n`
+    /// is 0.
+    pub(super) fn list_truncate(
+        &mut self,
+        receiver: &Place,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let [n_expr] = args else {
+            return Err(self.refuse(span, "`List.truncate` without a length"));
+        };
+        let n = self.expr(n_expr)?;
+        let (list, list_ty, held_at) =
+            self.list_place(receiver, span, "removing items of this list")?;
+        let item_ty = layout::list_item(&list_ty).cloned().unwrap_or(Type::Unit);
+        let keep = self.copy(n);
+        let (positive, done) = (self.label(), self.label());
+        self.push(Inst::BranchImm {
+            cond: Cond::Ge,
+            lhs: keep,
+            imm: 0,
+            target: positive,
+        });
+        let zero = self.constant(0);
+        self.push(Inst::Copy {
+            dst: keep,
+            src: zero,
+        });
+        self.push(Inst::Label(positive));
+        let length = self.load(list, layout::LIST_LEN);
+        self.push(Inst::Branch {
+            cond: Cond::Ge,
+            lhs: keep,
+            rhs: length,
+            target: done,
+        });
+        self.list_unshare(list, &item_ty, held_at)?;
+        self.store(list, layout::LIST_LEN, keep);
+        if self.counted(&item_ty) {
+            let at = self.copy(keep);
+            let (head, exit) = (self.label(), self.label());
+            self.push(Inst::Label(head));
+            self.push(Inst::Branch {
+                cond: Cond::Ge,
+                lhs: at,
+                rhs: length,
+                target: exit,
+            });
+            let item = self.item(list, at);
+            self.release(item, &item_ty)?;
+            let one = self.constant(1);
+            self.push(Inst::Binary {
+                op: BinOp::Add,
+                dst: at,
+                lhs: at,
+                rhs: one,
+            });
+            self.push(Inst::Jump(head));
+            self.push(Inst::Label(exit));
+        }
+        self.push(Inst::Label(done));
+        Ok(self.constant(0))
+    }
+
     /// `receiver.push(item)`, `args` holding the item, on a list held at a
     /// place: the item is added in place when the list object is unshared
     /// and has room; otherwise `std.rt`'s `list_reserve` gives one that
@@ -198,19 +408,7 @@ impl Body<'_, '_> {
             return Err(self.refuse(span, "`List.push` without an item"));
         };
         let item = self.expr(item_expr)?;
-        // Where the list is: a local, or a field of a struct made unshared.
-        let (list, list_ty, held_at) = match receiver {
-            Place::Local(_) | Place::SelfValue => match self.holder(receiver) {
-                Some((temp, ty, _)) => (temp, ty, None),
-                None => return Err(self.refuse(span, "adding to this list")),
-            },
-            Place::Field { base, index } => {
-                let (parent, parent_ty) = self.unique_place(base, span)?;
-                let ty = self.struct_field_type(&parent_ty, *index);
-                let offset = layout::struct_field(*index);
-                (self.load(parent, offset), ty, Some((parent, offset)))
-            }
-        };
+        let (list, list_ty, held_at) = self.list_place(receiver, span, "adding to this list")?;
         let item_ty = layout::list_item(&list_ty).cloned().unwrap_or(Type::Unit);
         let (reserve, ready) = (self.label(), self.label());
         let count = self.load(list, 0);

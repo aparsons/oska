@@ -690,6 +690,49 @@ pub(crate) fn push(items: &mut Rc<Vec<Value>>, item: Value, span: Span) -> Resul
     Ok(())
 }
 
+/// `change` applied to `items` held by this value alone, as `List.set`,
+/// `pop` and `truncate` need: copied first when shared. Under the limit a
+/// copy is charged for its length, as `push` charges one, and a list that
+/// only this value holds charges nothing more.
+#[inline]
+pub(crate) fn unshared<R>(
+    items: &mut Rc<Vec<Value>>,
+    span: Span,
+    change: impl FnOnce(&mut Vec<Value>) -> R,
+) -> Result<R, Panic> {
+    if metered() {
+        return unshared_metered(items, span, change);
+    }
+    Ok(change(Rc::make_mut(items)))
+}
+
+#[cold]
+#[inline(never)]
+fn unshared_metered<R>(
+    items: &mut Rc<Vec<Value>>,
+    span: Span,
+    change: impl FnOnce(&mut Vec<Value>) -> R,
+) -> Result<R, Panic> {
+    if Rc::strong_count(items) > 1 {
+        let bytes = items_bytes(items.len());
+        charge(bytes, span)?;
+        let mut copy = Vec::with_capacity(items.len());
+        copy.extend(items.iter().cloned());
+        // Changed before the meter holds it weakly: `Rc::get_mut` refuses
+        // a value that is held weakly.
+        let mut own = Rc::new(copy);
+        let result = change(Rc::get_mut(&mut own).expect("a new list is held once"));
+        *items = own;
+        record(Held::Items(Rc::downgrade(items)), bytes);
+        return Ok(result);
+    }
+    // Held by the meter weakly: `make_mut` may move it to a new address.
+    let before = Rc::as_ptr(items) as usize;
+    let result = change(Rc::make_mut(items));
+    moved(before, items, 0, 0);
+    Ok(result)
+}
+
 #[cold]
 #[inline(never)]
 fn push_metered(items: &mut Rc<Vec<Value>>, item: Value, span: Span) -> Result<(), Panic> {
