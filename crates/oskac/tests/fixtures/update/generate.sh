@@ -13,6 +13,11 @@
 #                           in the namespace oska-index, and
 #                           releases/v<X.Y.Z>/SHA256SUMS(.sig) in
 #                           oska-release, one directory per case
+#   site/update*/           the same, for `oskac self update` (#259), with
+#                           the binary the release lists, `oskac-fixture`,
+#                           a script that prints `oskac X.Y.Z`: update is the
+#                           good site (releases 0.5.0, 0.6.0 and 0.7.0, the
+#                           latest), the others differ in one way each
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -54,5 +59,35 @@ done
 # signing.
 sed -i 's/"serial": 5/"serial": 6/' site/tampered_index/release-index.json
 sed -i "s/$sum/$(printf '%064d' 0)/" site/bad_checksums/releases/v0.6.0/SHA256SUMS
+
+# ---- oskac self update (#259) -------------------------------------------
+# binary <dir> <version> <reported>: releases/v<version>/oskac-fixture, a
+# script that prints `oskac <reported>`, and a signed SHA256SUMS listing it.
+binary() {
+  mkdir -p "$1/releases/v$2"
+  printf '#!/bin/sh\necho "oskac %s"\n' "$3" > "$1/releases/v$2/oskac-fixture"
+  chmod 755 "$1/releases/v$2/oskac-fixture"
+  bsum=$(sha256sum "$1/releases/v$2/oskac-fixture" | cut -d' ' -f1)
+  printf '# oska-release v%s\n%s  oskac-fixture\n' "$2" "$bsum" > "$1/releases/v$2/SHA256SUMS"
+  rm -f "$1/releases/v$2/SHA256SUMS.sig"
+  ssh-keygen -Y sign -q -f test_key -n oska-release "$1/releases/v$2/SHA256SUMS"
+}
+
+update_site() {
+  index "site/$1" 5 2019-12-01T00:00:00Z 2099-01-01T00:00:00Z 0.7.0 oska-index
+  binary "site/$1" 0.5.0 0.5.0
+  binary "site/$1" 0.6.0 0.6.0
+  binary "site/$1" 0.7.0 0.7.0
+}
+update_site update
+# A release whose binary was changed after SHA256SUMS was signed.
+update_site update_bad_digest
+printf '#!/bin/sh\necho "oskac 0.7.0"\n# tampered\n' > site/update_bad_digest/releases/v0.7.0/oskac-fixture
+# A properly signed and hashed binary that reports another version.
+update_site update_wrong_version
+binary site/update_wrong_version 0.7.0 0.9.9
+# A SHA256SUMS changed after it was signed.
+update_site update_bad_sums
+sed -i "s/$(sha256sum site/update_bad_sums/releases/v0.7.0/oskac-fixture | cut -d' ' -f1)/$(printf '%064d' 0)/" site/update_bad_sums/releases/v0.7.0/SHA256SUMS
 
 rm test_key # the private half is never committed

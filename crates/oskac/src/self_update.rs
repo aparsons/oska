@@ -1,0 +1,671 @@
+// SPDX-License-Identifier: Apache-2.0
+//! `oskac self update [--version X [--allow-downgrade]] [--format=json]`
+//! (spec #230): replace this `oskac` with a verified release, as the
+//! installer does, and only on a managed install.
+//!
+//! The update checker (an Oska program, `update_checker.rs`) does everything
+//! that needs trust and the network: it verifies the signed index, chooses
+//! the release, applies the downgrade rule, verifies the signed `SHA256SUMS`
+//! and the downloaded binary's digest, and only then writes the binary to a
+//! staging file, the one path its grant lets it write. It never writes the
+//! live binary. This side plans the work and does the plumbing: the
+//! managed-install rule (before any network), running the staged binary to
+//! read its version, replacing the live binary and updating the receipt. It
+//! does no cryptography and no TLS.
+//!
+//! Any failure before the replacement leaves the live binary and the
+//! receipt as they were and removes the staging file. The replacement is
+//! one rename on Unix; on Windows, where a running executable cannot be
+//! overwritten but can be renamed, the running file is renamed aside and the
+//! new one moved in, and the renamed-aside file is deleted as soon as the
+//! system lets it be (the next `oskac self` command at the latest).
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
+
+use crate::json::{quote, Json};
+use crate::self_check::{
+    assets, failed, next_step, receipt, remembered, report_failure, running, version, Failed,
+    Receipt, SITE,
+};
+use crate::self_cmd::identity;
+use crate::update_checker::{self, Ask, UpdateAsk, UpdateVerdict, Updated};
+
+/// How long the staged binary may take to say its version.
+const VERSION_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The marker in the name of a file renamed aside on Windows.
+const ASIDE: &str = ".oskac-old-";
+
+/// `oskac self update`.
+pub(crate) fn update(json: bool, requested: Option<String>, allow_downgrade: bool) -> ExitCode {
+    match run(requested.as_deref(), allow_downgrade) {
+        Ok(done) => {
+            done.print(json);
+            ExitCode::SUCCESS
+        }
+        Err(failure) => report_failure("update", json, &failure),
+    }
+}
+
+struct Done {
+    updated: Box<Updated>,
+    notes: Vec<String>,
+}
+
+/// Why this install is not managed, and what to do about it.
+fn unmanaged(why: &str) -> Failed {
+    failed(
+        "unmanaged_install",
+        format!(
+            "this oskac is not a managed install ({why}), so it will not replace itself; nothing was changed. `oskac self update` replaces only a binary the installer put in place and recorded. Re-run the installer ({}), or rebuild from source",
+            next_step(false)
+        ),
+    )
+}
+
+/// The receipt of a managed install, or the refusal.
+fn managed(exe: &Path) -> Result<Receipt, Failed> {
+    let Some(found) = receipt(exe) else {
+        return Err(unmanaged("there is no readable install receipt"));
+    };
+    match identity(&found.json, Some(exe), &version()) {
+        Ok(()) => Ok(found),
+        Err(why) => Err(unmanaged(&why)),
+    }
+}
+
+/// The staging file: a name of its own beside the live binary, so that the
+/// final step is a rename on one volume. It is removed unless it was moved
+/// into place, and on a crash of `oskac`.
+struct Staging {
+    path: PathBuf,
+}
+
+impl Staging {
+    fn new(exe: &Path) -> Result<Staging, Failed> {
+        let name = format!(
+            ".oskac-update-{}{}",
+            std::process::id(),
+            std::env::consts::EXE_SUFFIX
+        );
+        let path = exe.with_file_name(name);
+        // A file left by an earlier run with this process id is not ours to
+        // write through.
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => std::fs::remove_file(&path).map_err(|e| {
+                failed(
+                    "internal",
+                    format!("cannot clear the staging file {}: {e}", path.display()),
+                )
+            })?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(failed(
+                    "internal",
+                    format!("cannot look at the staging file {}: {e}", path.display()),
+                ))
+            }
+        }
+        crate::crash::track(&path);
+        Ok(Staging { path })
+    }
+
+    fn name(&self) -> &str {
+        self.path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        crate::crash::untrack(&self.path);
+    }
+}
+
+fn run(requested: Option<&str>, allow_downgrade: bool) -> Result<Done, Failed> {
+    let exe =
+        running().ok_or_else(|| failed("internal", "this oskac's own path cannot be found"))?;
+    // Before any network use.
+    let receipt = managed(&exe)?;
+    sweep_aside(&exe);
+    let version = version();
+    let assets = assets();
+    let staging = Staging::new(&exe)?;
+    let ask = UpdateAsk {
+        ask: Ask {
+            version: &version,
+            now: update_checker::now(),
+            remembered: remembered(&receipt),
+            identify: false,
+            exe: &exe,
+            assets: &assets,
+        },
+        requested,
+        allow_downgrade,
+        staging: staging.name(),
+    };
+    let updated = match update_checker::update(&ask) {
+        Ok(UpdateVerdict::Done(updated)) => updated,
+        Ok(UpdateVerdict::Refused { code, message }) => return Err(Failed { code, message }),
+        Err(why) => return Err(failed("internal", why.0)),
+    };
+    agrees(&updated, &version, requested, allow_downgrade)?;
+    let mut notes = Vec::new();
+    if updated.action == "current" {
+        if let Err(why) = crate::self_check::raise_serial(&receipt, updated.serial) {
+            notes.push(format!("the receipt's index serial was not raised: {why}"));
+        }
+        return Ok(Done { updated, notes });
+    }
+    let staged = &staging.path;
+    ready(staged, &exe)?;
+    let reported = reported_version(staged)?;
+    if reported != format!("oskac {}", updated.to) {
+        return Err(failed(
+            "version_mismatch",
+            format!(
+                "the {} binary reports '{reported}', not 'oskac {}'; nothing was changed",
+                updated.tag, updated.to
+            ),
+        ));
+    }
+    let record = Records::prepare(&receipt, &updated, &exe).map_err(|why| {
+        failed(
+            "replace_failed",
+            format!("cannot prepare the receipt: {why}; the installed oskac is as it was"),
+        )
+    })?;
+    replace(staged, &exe).map_err(|e| {
+        record.discard();
+        failed(
+            "replace_failed",
+            format!(
+                "cannot replace {}: {e}; the installed oskac is as it was",
+                crate::self_cmd::display(&exe)
+            ),
+        )
+    })?;
+    // The new binary is in place: it is what is installed, whatever happens
+    // to the records.
+    if let Err(why) = record.commit() {
+        notes.push(format!(
+            "oskac was replaced, but the install receipt was not updated ({why}); re-run the installer to repair it"
+        ));
+    }
+    Ok(Done { updated, notes })
+}
+
+/// The program's answer must be the one that was asked for, whatever it
+/// printed: the version it started from, the release named, and an action
+/// that is what the two versions and the flags make it.
+fn agrees(
+    updated: &Updated,
+    version: &str,
+    requested: Option<&str>,
+    allow_downgrade: bool,
+) -> Result<(), Failed> {
+    let from = crate::semver::parse(&updated.from);
+    let to = crate::semver::parse(&updated.to);
+    let order = from
+        .as_ref()
+        .zip(to.as_ref())
+        .map(|(from, to)| to.cmp(from));
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let ok = updated.from == version
+        && requested.map_or(true, |r| r == updated.to)
+        && match (updated.action.as_str(), order) {
+            ("updated", Some(Greater)) | ("current", Some(Equal)) => true,
+            ("downgraded", Some(Less)) => allow_downgrade && requested.is_some(),
+            _ => false,
+        };
+    if ok {
+        Ok(())
+    } else {
+        Err(failed(
+            "internal",
+            "the update checker's answer is not the one asked for",
+        ))
+    }
+}
+
+/// The staged file must be the file the program wrote: a regular file, not
+/// a link. It gets the mode of an installed binary.
+fn ready(staged: &Path, live: &Path) -> Result<(), Failed> {
+    let meta = std::fs::symlink_metadata(staged).map_err(|e| {
+        failed(
+            "internal",
+            format!("the update checker staged no binary: {e}"),
+        )
+    })?;
+    if !meta.is_file() || meta.len() == 0 {
+        return Err(failed(
+            "internal",
+            "the update checker's staging file is not a binary",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = live;
+        std::fs::set_permissions(staged, std::fs::Permissions::from_mode(0o755)).map_err(|e| {
+            failed(
+                "internal",
+                format!("cannot make the staged binary executable: {e}"),
+            )
+        })?;
+    }
+    #[cfg(not(unix))]
+    let _ = live;
+    Ok(())
+}
+
+/// What the staged binary says `--version` is: its first line. It runs only
+/// after the update checker has verified its signature chain and checksum.
+fn reported_version(staged: &Path) -> Result<String, Failed> {
+    let mut child = Command::new(staged)
+        .arg("--version")
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            failed(
+                "version_mismatch",
+                format!(
+                    "the new binary cannot be run to read its version: {e}; nothing was changed"
+                ),
+            )
+        })?;
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        if let Some(stdout) = stdout {
+            let _ = stdout.take(4096).read_to_end(&mut out);
+        }
+        out
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() > VERSION_DEADLINE => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => break None,
+        }
+    };
+    let out = reader.join().unwrap_or_default();
+    let text = String::from_utf8_lossy(&out);
+    let first = text.lines().next().unwrap_or("").trim_end_matches('\r');
+    if status.is_some_and(|s| s.success()) {
+        Ok(first.to_string())
+    } else {
+        Err(failed(
+            "version_mismatch",
+            format!(
+                "the new binary did not report its version (it said '{first}'); nothing was changed"
+            ),
+        ))
+    }
+}
+
+/// Put `staged` where `live` is. The staged file is beside the live one,
+/// so this is one rename.
+fn replace(staged: &Path, live: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        replace_aside(staged, live)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(staged, live)
+    }
+}
+
+/// The Windows way: a running executable cannot be overwritten or deleted,
+/// but it can be renamed. The live file is renamed aside, the new file is
+/// moved to its name, and the old one is deleted when the system allows,
+/// which is not while it runs; [`sweep_aside`] deletes it later. If the new
+/// file cannot be moved in, the old one is put back.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn replace_aside(staged: &Path, live: &Path) -> std::io::Result<()> {
+    let aside = live.with_file_name(format!(
+        "{ASIDE}{}{}",
+        std::process::id(),
+        std::env::consts::EXE_SUFFIX
+    ));
+    let _ = std::fs::remove_file(&aside);
+    std::fs::rename(live, &aside)?;
+    if let Err(e) = std::fs::rename(staged, live) {
+        let _ = std::fs::rename(&aside, live);
+        return Err(e);
+    }
+    let _ = std::fs::remove_file(&aside);
+    Ok(())
+}
+
+/// Delete what an earlier Windows update renamed aside, now that nothing
+/// runs from it. Nothing is kept of a replaced binary.
+fn sweep_aside(exe: &Path) {
+    let Some(dir) = exe.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(ASIDE) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The receipt, and the version file it records, as they are to be after
+/// the update: written to files beside the old ones first, so that nothing
+/// can fail between the replacement and the final renames but a rename.
+struct Records {
+    receipt: (PathBuf, PathBuf),
+    version: Option<(PathBuf, PathBuf)>,
+}
+
+impl Records {
+    fn prepare(old: &Receipt, updated: &Updated, exe: &Path) -> Result<Records, String> {
+        let digest = updated.sha256.as_deref().ok_or("no digest")?;
+        let home = old.path.parent().ok_or("the receipt has no directory")?;
+        let mut json = old.json.clone();
+        let version_text = format!("{}\n", updated.to);
+        let mut version_path = None;
+        let Json::Obj(fields) = &mut json else {
+            return Err("the receipt is not an object".to_string());
+        };
+        let old_serial = remembered(old);
+        set(fields, "version", Json::Str(updated.to.clone()), None);
+        set(
+            fields,
+            "previous_version",
+            Json::Str(updated.from.clone()),
+            Some("version"),
+        );
+        if fields.iter().any(|(k, _)| k == "tag") {
+            set(fields, "tag", Json::Str(updated.tag.clone()), None);
+        }
+        set(fields, "sha256", Json::Str(digest.to_string()), None);
+        set(
+            fields,
+            "index_serial",
+            Json::Num(old_serial.max(updated.serial).to_string()),
+            None,
+        );
+        if let Some((_, Json::Arr(files))) = fields.iter_mut().find(|(k, _)| k == "files") {
+            for file in files {
+                let Json::Obj(entry) = file else { continue };
+                let text = |key: &str| {
+                    entry
+                        .iter()
+                        .find(|(k, _)| k == key)
+                        .and_then(|(_, v)| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let (kind, path) = (text("kind"), PathBuf::from(text("path")));
+                if kind == "binary" && (path == exe || path.canonicalize().is_ok_and(|p| p == exe))
+                {
+                    set(entry, "sha256", Json::Str(digest.to_string()), None);
+                } else if kind == "record"
+                    && path.parent() == Some(home)
+                    && path.file_name().is_some_and(|n| n == "version")
+                    && entry.iter().any(|(k, _)| k == "sha256")
+                {
+                    let sum = crate::sha256::hex(&crate::sha256::digest(version_text.as_bytes()));
+                    set(entry, "sha256", Json::Str(sum), None);
+                    version_path = Some(path);
+                }
+            }
+        }
+        let text = pretty(&json);
+        let parsed = Json::parse(&text)?;
+        if parsed != json {
+            return Err("the new receipt does not read back as written".to_string());
+        }
+        let id = std::process::id();
+        let receipt_tmp = old.path.with_file_name(format!("receipt.json.{id}.tmp"));
+        let mut records = Records {
+            receipt: (receipt_tmp, old.path.clone()),
+            version: None,
+        };
+        let cleanup = |records: &Records| records.discard();
+        if let Err(e) = std::fs::write(&records.receipt.0, text) {
+            cleanup(&records);
+            return Err(format!("{}: {e}", records.receipt.0.display()));
+        }
+        if let Some(path) = version_path {
+            let tmp = path.with_file_name(format!("version.{id}.tmp"));
+            if let Err(e) = std::fs::write(&tmp, &version_text) {
+                let _ = std::fs::remove_file(&tmp);
+                cleanup(&records);
+                return Err(format!("{}: {e}", tmp.display()));
+            }
+            records.version = Some((tmp, path));
+        }
+        Ok(records)
+    }
+
+    fn discard(&self) {
+        let _ = std::fs::remove_file(&self.receipt.0);
+        if let Some((tmp, _)) = &self.version {
+            let _ = std::fs::remove_file(tmp);
+        }
+    }
+
+    /// Rename the prepared files into place: the version file, then the
+    /// receipt, as the installer does.
+    fn commit(self) -> Result<(), String> {
+        let mut failure = None;
+        for (tmp, target) in self.version.iter().chain(Some(&self.receipt)) {
+            if let Err(e) = std::fs::rename(tmp, target) {
+                failure.get_or_insert(format!("{}: {e}", target.display()));
+            }
+        }
+        if failure.is_some() {
+            self.discard();
+        }
+        failure.map_or(Ok(()), Err)
+    }
+}
+
+/// Set `key` to `value`: in place when the object has it, else as the field
+/// after `after` (or last).
+fn set(fields: &mut Vec<(String, Json)>, key: &str, value: Json, after: Option<&str>) {
+    if let Some((_, slot)) = fields.iter_mut().find(|(k, _)| k == key) {
+        *slot = value;
+        return;
+    }
+    let at = after
+        .and_then(|a| fields.iter().position(|(k, _)| k == a))
+        .map_or(fields.len(), |i| i + 1);
+    fields.insert(at, (key.to_string(), value));
+}
+
+/// An object as the installer writes one inside the receipt: `{"a": 1, "b":
+/// "x"}`.
+fn spaced(fields: &[(String, Json)]) -> String {
+    let parts: Vec<String> = fields
+        .iter()
+        .map(|(k, v)| {
+            let mut text = String::new();
+            v.write(&mut text);
+            format!("{}: {text}", quote(k))
+        })
+        .collect();
+    format!("{{{}}}", parts.join(", "))
+}
+
+/// The receipt as the installers lay it out: one field to a line, the
+/// `files` entries one to a line.
+fn pretty(json: &Json) -> String {
+    let Json::Obj(fields) = json else {
+        let mut out = String::new();
+        json.write(&mut out);
+        return out;
+    };
+    let mut lines = Vec::new();
+    for (key, value) in fields {
+        let body = match value {
+            Json::Arr(items)
+                if key == "files" && items.iter().all(|i| matches!(i, Json::Obj(_))) =>
+            {
+                let entries: Vec<String> = items
+                    .iter()
+                    .map(|i| match i {
+                        Json::Obj(entry) => format!("    {}", spaced(entry)),
+                        _ => String::new(),
+                    })
+                    .collect();
+                if entries.is_empty() {
+                    "[]".to_string()
+                } else {
+                    format!("[\n{}\n  ]", entries.join(",\n"))
+                }
+            }
+            other => {
+                let mut text = String::new();
+                other.write(&mut text);
+                text
+            }
+        };
+        lines.push(format!("  {}: {body}", quote(key)));
+    }
+    format!("{{\n{}\n}}\n", lines.join(",\n"))
+}
+
+impl Done {
+    fn print(&self, json: bool) {
+        let updated = &self.updated;
+        if json {
+            let list: Vec<String> = updated
+                .warnings
+                .iter()
+                .chain(&self.notes)
+                .map(|w| quote(w))
+                .collect();
+            outln!(
+                "{{\"ok\":true,\"action\":{},\"from\":{},\"to\":{},\"index_serial\":{},\"site\":{},\"warnings\":[{}]}}",
+                quote(&updated.action),
+                quote(&updated.from),
+                quote(&updated.to),
+                updated.serial,
+                quote(SITE),
+                list.join(",")
+            );
+            return;
+        }
+        match updated.action.as_str() {
+            "updated" => outln!("updated oskac from {} to {}", updated.from, updated.to),
+            "downgraded" => outln!(
+                "downgraded oskac from {} to {} (you asked for an older release)",
+                updated.from,
+                updated.to
+            ),
+            _ => outln!(
+                "oskac {} is the latest release; nothing was changed",
+                updated.to
+            ),
+        }
+        outln!(
+            "release index: serial {}, expires {}, signature verified",
+            updated.serial,
+            updated.expires
+        );
+        if updated.action != "current" {
+            outln!(
+                "verified: the release's SHA256SUMS signature, the binary's SHA-256 and the version it reports"
+            );
+        }
+        for warning in updated.warnings.iter().chain(&self.notes) {
+            outln!("warning: {warning}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn receipt_text() -> String {
+        "{\n  \"schema\": 1,\n  \"version\": \"0.6.0\",\n  \"tag\": \"v0.6.0\",\n  \"sha256\": \"aa\",\n  \"index_serial\": 3,\n  \"files\": [\n    {\"path\": \"/h/bin/oskac\", \"kind\": \"binary\", \"sha256\": \"aa\"},\n    {\"path\": \"/h/receipt.json\", \"kind\": \"record\"}\n  ]\n}\n".to_string()
+    }
+
+    #[test]
+    fn the_receipt_is_laid_out_as_the_installers_write_it() {
+        let text = receipt_text();
+        let json = Json::parse(&text).expect("a receipt");
+        assert_eq!(pretty(&json), text);
+    }
+
+    #[test]
+    fn a_field_is_set_in_place_or_after_another() {
+        let Json::Obj(mut fields) = Json::parse(&receipt_text()).expect("a receipt") else {
+            panic!("an object");
+        };
+        set(&mut fields, "version", Json::Str("0.7.0".into()), None);
+        set(
+            &mut fields,
+            "previous_version",
+            Json::Str("0.6.0".into()),
+            Some("version"),
+        );
+        let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(&keys[..3], ["schema", "version", "previous_version"]);
+        assert_eq!(fields[1].1, Json::Str("0.7.0".into()));
+    }
+
+    /// The Windows replacement, run here on any platform: the live file
+    /// moves aside and the new one takes its name; if the new one cannot be
+    /// moved in, the live one is back.
+    #[test]
+    fn the_aside_replacement_swaps_the_files_and_puts_the_old_one_back_on_failure() {
+        let dir = std::env::temp_dir().join(format!("oskac-aside-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let live = dir.join("oskac");
+        let staged = dir.join("staged");
+        std::fs::write(&live, b"old").expect("live");
+        std::fs::write(&staged, b"new").expect("staged");
+        replace_aside(&staged, &live).expect("replaced");
+        assert_eq!(std::fs::read(&live).expect("live"), b"new");
+        assert!(!staged.exists());
+        // The old file is not kept.
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .expect("dir")
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(left.len(), 1, "{left:?}");
+        // A staged file that is not there: the live file stays.
+        assert!(replace_aside(&dir.join("missing"), &live).is_err());
+        assert_eq!(std::fs::read(&live).expect("live"), b"new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_files_renamed_aside_are_swept() {
+        let dir = std::env::temp_dir().join(format!("oskac-sweep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let exe = dir.join("oskac");
+        std::fs::write(&exe, b"live").expect("live");
+        std::fs::write(dir.join(format!("{ASIDE}1")), b"old").expect("aside");
+        sweep_aside(&exe);
+        assert!(exe.exists());
+        assert!(!dir.join(format!("{ASIDE}1")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

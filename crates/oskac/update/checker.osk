@@ -14,8 +14,9 @@
 // digest. `oskac` supplies inputs and prints the verdict.
 //
 //   checker <command> <version> <now> <serial> <identify> <file> <assets>
+//           <target> <downgrade> <staging>
 //
-//   command   `check`
+//   command   `check` or `update`
 //   version   the running `oskac`'s version, `X.Y.Z` or with a pre-release
 //   now       the host clock, in seconds since 1970 (expiry is judged by it)
 //   serial    the highest index serial remembered, 0 for none
@@ -23,12 +24,21 @@
 //   file      the name of the running executable, in the working directory
 //   assets    the release file names this build may be, best first, split
 //             by commas
+//   target    `update` only: the release to install (`X.Y.Z`), or `-` for the
+//             latest; `check` passes `-`
+//   downgrade `update` only: `1` when `--allow-downgrade` was given (it needs
+//             a target), else `0`
+//   staging   `update` only: the name, in the working directory, of the one
+//             file the program may write; `check` passes `-`
 //
 // Its authority is visible in its signature: a network connection that it
 // narrows to one host and port, the read of one file (the running
-// executable, named relative to the working directory), the clock and
-// secure randomness for TLS, and standard output. It imports no system-call layer, has no
-// environment, no directory listing, no write and no spawn.
+// executable, named relative to the working directory), the write of one
+// file (the staging file, named the same way, and only for `update`), the
+// clock and secure randomness for TLS, and standard output. It imports no
+// system-call layer, has no environment, no directory listing and no spawn,
+// and never writes the live binary: `oskac` verifies the staged file and
+// replaces itself.
 //
 // It prints exactly one line, a JSON object, on success or on refusal:
 //
@@ -38,6 +48,16 @@
 //                "sha256":"..."|null,"expected_sha256":"..."|null,
 //                "source":"..."|null}}
 //   {"ok":false,"code":"bad_index","message":"..."}
+//
+// `update` prints, on success,
+//
+//   {"ok":true,"action":"updated"|"downgraded"|"current","from":"X.Y.Z",
+//    "to":"X.Y.Z","tag":"vX.Y.Z","index_serial":N,"index_expires":"...",
+//    "warnings":["..."],"sha256":"..."|null,"asset":"..."|null}
+//
+// where a verified binary (checked against the signed SHA256SUMS, in
+// memory, before a byte is written) is in the staging file unless the
+// action is `current`.
 //
 // Text that came from the network is printed with every byte outside
 // printable ASCII replaced by `?`. It exits with 0 for either line, and
@@ -54,6 +74,9 @@ use std.sshsig
 const MAX_INDEX: Int = 16384
 const MAX_SIGNATURE: Int = 8192
 const MAX_SUMS: Int = 65536
+
+// The most a release binary may be, in bytes: the most `std.http` reads.
+const MAX_BINARY: Int = 16777216
 
 // The index's warning when this little of it is left: 30 days.
 const WARN_SECONDS: Int = 2592000
@@ -440,7 +463,7 @@ fn parse_index(bytes: Untrusted<Bytes>) -> Option<Index> {
 // this client does not accept, is the network's (`network_error`); a
 // failure of the handshake, the certificate or the protocol is TLS's
 // (`tls_error`), and is never reported as "no update".
-fn failed(what: String, error: http.HttpError) -> Refusal {
+fn failed(what: Untrusted<String>, error: http.HttpError) -> Refusal {
     let why = error.to_string()
     match error {
         http.HttpError.Tls(inner) => match inner {
@@ -458,7 +481,7 @@ fn failed(what: String, error: http.HttpError) -> Refusal {
 // What the program needs to reach the site: its capabilities and the user
 // agent. A capability is not a field of a plain struct, so the program
 // passes them as parameters.
-fn get(net: NetConnect, args: Args, random: Random, clock: Clock, agent: Untrusted<String>, path: Untrusted<String>, max: Int, what: String) -> Result<http.Response, Refusal> {
+fn get(net: NetConnect, args: Args, random: Random, clock: Clock, agent: Untrusted<String>, path: Untrusted<String>, max: Int, what: Untrusted<String>) -> Result<http.Response, Refusal> {
     let trust = match trust_config(args) {
         Ok(trust) => trust
         Err(why) => { return Err(refuse("internal", why)) }
@@ -473,7 +496,7 @@ fn get(net: NetConnect, args: Args, random: Random, clock: Clock, agent: Untrust
 
 // The status must be 200: a redirect is refused and never followed, so the
 // program never talks to a host it holds no capability for.
-fn body_of(response: http.Response, what: String) -> Result<Untrusted<Bytes>, Refusal> {
+fn body_of(response: http.Response, what: Untrusted<String>) -> Result<Untrusted<Bytes>, Refusal> {
     if response.status == 200 {
         return Ok(response.body)
     }
@@ -560,15 +583,16 @@ fn verified_index(net: NetConnect, args: Args, random: Random, clock: Clock, age
     }
 }
 
-// The identity of the running binary, from the signed SHA256SUMS of the
-// release it says it is. No published release by that version is
-// `unknown_release`, which is no error.
-fn identify(net: NetConnect, args: Args, random: Random, clock: Clock, read: FsRead, agent: Untrusted<String>, version: Untrusted<String>, file: Untrusted<String>, assets: Untrusted<String>) -> Result<Identity, Refusal> {
-    let tag = "v{version}"
+// The signed SHA256SUMS of the release `tag`: fetched, its signature verified
+// in the namespace `oska-release` before any line is read, and its lines
+// parsed. `None` when the site has no such release (its SHA256SUMS is a 404).
+// The signed first line must name `tag`, so a genuine older release served
+// under a newer tag is refused.
+fn signed_sums(net: NetConnect, args: Args, random: Random, clock: Clock, agent: Untrusted<String>, tag: Untrusted<String>) -> Result<Option<List<SumLine>>, Refusal> {
     let base = "/releases/{tag}"
     let sums_response = get(net, args, random, clock, agent, "{base}/SHA256SUMS", MAX_SUMS, "SHA256SUMS")?
     if sums_response.status == 404 {
-        return Ok(Identity(state: "unknown_release", sha256: None, expected: None, source: None))
+        return Ok(None)
     }
     let sums = body_of(sums_response, "SHA256SUMS")?
     let sig_response = get(net, args, random, clock, agent, "{base}/SHA256SUMS.sig", MAX_SIGNATURE, "the SHA256SUMS signature")?
@@ -591,31 +615,50 @@ fn identify(net: NetConnect, args: Args, random: Random, clock: Clock, read: FsR
             None => { return Err(refuse("bad_checksums", "SHA256SUMS has a line that is not a SHA-256 digest and a file name")) }
         }
     }
-    // The first of this build's names that the release lists, exactly once.
-    var expected: Option<Untrusted<String>> = None
-    var chosen = ""
+    Ok(Some(entries))
+}
+
+// The file this build downloads and its signed digest.
+struct Chosen { name: Untrusted<String>, digest: Untrusted<String> }
+
+// The first of this build's names (`assets`, split by commas) that the
+// release lists, exactly once; `None` when it lists none.
+fn choose_asset(entries: List<SumLine>, assets: Untrusted<String>) -> Result<Option<Chosen>, Refusal> {
+    var found: Option<Chosen> = None
     for candidate in assets.split(",") {
-        if !expected.is_some() {
+        if !found.is_some() {
             var count = 0
-            var digest: Option<Untrusted<String>> = None
+            var digest = ""
             for entry in entries {
                 if entry.name == candidate {
                     count = count + 1
-                    digest = Some(entry.digest)
+                    digest = entry.digest
                 }
             }
             if count > 1 {
-                return Err(refuse("bad_checksums", "SHA256SUMS lists {candidate} more than once"))
+                let shown = safe(candidate)
+                return Err(refuse("bad_checksums", "SHA256SUMS lists {shown} more than once"))
             }
             if count == 1 {
-                expected = digest
-                chosen = candidate
+                found = Some(Chosen(name: candidate, digest: digest))
             }
         }
     }
+    Ok(found)
+}
+
+// The identity of the running binary, from the signed SHA256SUMS of the
+// release it says it is. No published release by that version is
+// `unknown_release`, which is no error.
+fn identify(net: NetConnect, args: Args, random: Random, clock: Clock, read: FsRead, agent: Untrusted<String>, version: Untrusted<String>, file: Untrusted<String>, assets: Untrusted<String>) -> Result<Identity, Refusal> {
+    let tag = "v{version}"
+    let entries = match signed_sums(net, args, random, clock, agent, tag)? {
+        Some(entries) => entries
+        None => { return Ok(Identity(state: "unknown_release", sha256: None, expected: None, source: None)) }
+    }
     let source = "the signed SHA256SUMS of {tag}"
-    let want = match expected {
-        Some(digest) => digest
+    let want = match choose_asset(entries, assets)? {
+        Some(chosen) => chosen.digest
         None => { return Ok(Identity(state: "unknown_release", sha256: None, expected: None, source: Some(source))) }
     }
     let bytes = match read.restrict_to(".").restrict_to_file(Path.from(file)).read_bytes() {
@@ -674,10 +717,153 @@ fn check(net: NetConnect, args: Args, random: Random, clock: Clock, read: FsRead
     Ok("\{\"ok\":true,\"latest\":{latest},\"tag\":{tag},\"index_serial\":{serial},\"index_issued\":{issued},\"index_expires\":{expires},\"warnings\":{notes},\"identity\":{who}\}")
 }
 
-fn main(args: Args, out: Stdout, net: NetConnect, read: FsRead, random: Random, clock: Clock) -> Result<(), IoError> {
+// ---- The update -----------------------------------------------------------------------
+
+// The text before the first `mark`, or all of it.
+fn before(text: Untrusted<String>, mark: String) -> Untrusted<String> {
+    var out = text
+    var taken = false
+    for piece in text.split(mark) {
+        if !taken {
+            out = piece
+            taken = true
+        }
+    }
+    out
+}
+
+// The three numbers of a version, and whether it has a pre-release part. A
+// build part (`+...`) does not count.
+struct Core { numbers: List<Int>, pre: Bool }
+
+fn core_of(version: Untrusted<String>) -> Core {
+    let no_build = before(version, "+")
+    let core = before(no_build, "-")
+    var numbers: List<Int> = List.new()
+    for part in core.split(".") {
+        numbers.push(part.parse_int().unwrap_or(0))
+    }
+    Core(numbers: numbers, pre: core.len() < no_build.len())
+}
+
+// How `target` (a release, `X.Y.Z`) stands to `installed`, by semantic
+// versioning precedence: 1 when it is newer, 0 when the same, -1 when
+// older. A pre-release is below its release, so a release candidate is
+// updated to the release it leads to.
+fn newer(installed: Untrusted<String>, target: Untrusted<String>) -> Int {
+    let have = core_of(installed)
+    let want = core_of(target)
+    for i in 0..3 {
+        let a = have.numbers.get(i).unwrap_or(0)
+        let b = want.numbers.get(i).unwrap_or(0)
+        if b > a { return 1 }
+        if b < a { return -1 }
+    }
+    if have.pre { 1 } else { 0 }
+}
+
+// Whether `name` is a plain file name for the staging file: the name
+// characters SHA256SUMS allows, not starting with a dot-dot.
+fn is_staging_name(name: Untrusted<String>) -> Bool {
+    let bytes = name.to_bytes()
+    if bytes.len() == 0 || bytes.len() > 128 {
+        return false
+    }
+    for i in 0..bytes.len() {
+        if !is_name_byte(bytes.at(i)) {
+            return false
+        }
+    }
+    !name.contains("..")
+}
+
+fn update_json(action: String, from: Untrusted<String>, to: Untrusted<String>, index: Index, warnings: List<String>, digest: Option<Untrusted<String>>, asset: Option<Untrusted<String>>) -> Untrusted<String> {
+    let from_text = quoted(from)
+    let to_text = quoted(to)
+    let tag = quoted("v{to}")
+    let serial = index.serial
+    let expires = quoted(index.expires)
+    let notes = warnings_json(warnings)
+    let sha = quoted_or_null(digest)
+    let name = quoted_or_null(asset)
+    "\{\"ok\":true,\"action\":\"{action}\",\"from\":{from_text},\"to\":{to_text},\"tag\":{tag},\"index_serial\":{serial},\"index_expires\":{expires},\"warnings\":{notes},\"sha256\":{sha},\"asset\":{name}\}"
+}
+
+// `update`: the verified index, the target release (the latest, or the one
+// asked for), the downgrade rule, the release's signed SHA256SUMS, and the
+// binary: downloaded, hashed and compared with its signed digest, in memory,
+// and only then written to the staging file, the one path this program may
+// write. `oskac` runs the staged binary for its version and replaces itself.
+fn update(net: NetConnect, args: Args, random: Random, clock: Clock, write: FsWrite) -> Result<Untrusted<String>, Refusal> {
+    let version = args.get(2).unwrap_or("")
+    let now = args.get(3).unwrap_or("").parse_int().unwrap_or(-1)
+    let remembered = args.get(4).unwrap_or("").parse_int().unwrap_or(-1)
+    let assets = args.get(7).unwrap_or("")
+    let requested = args.get(8).unwrap_or("")
+    let allow = args.get(9).unwrap_or("")
+    let staging = args.get(10).unwrap_or("")
+    let named = requested != "-"
+    if !is_version(version) || now < 0 || remembered < 0 || (allow != "0" && allow != "1") || !is_staging_name(staging) {
+        return Err(refuse("internal", "the update checker was started with arguments it does not accept"))
+    }
+    if named && !is_tag_and_version("v{requested}", requested) {
+        return Err(refuse("internal", "the update checker was started with a release that is not X.Y.Z"))
+    }
+    if allow == "1" && !named {
+        return Err(refuse("internal", "the update checker was started with a downgrade permission and no release"))
+    }
+    let agent = "oskac {version}"
+    var warnings: List<String> = List.new()
+    let index = verified_index(net, args, random, clock, agent, now, remembered, warnings)?
+    let left = epoch_of(index.expires) - now
+    if left < WARN_SECONDS {
+        let days = left / 86400
+        warnings.push("the release index expires in {days} days; the monthly re-signing may be failing")
+    }
+    let target = if named { requested } else { index.version }
+    let tag = "v{target}"
+    let order = newer(version, target)
+    if order == 0 {
+        return Ok(update_json("current", version, target, index, warnings, None, None))
+    }
+    if order < 0 && !(named && allow == "1") {
+        if named {
+            return Err(refuse("downgrade_refused", "oskac {version} is installed, which is newer than {target}; nothing was changed (to downgrade, add --allow-downgrade)"))
+        }
+        return Err(refuse("downgrade_refused", "oskac {version} is installed, which is newer than the latest release, {target}; nothing was changed (to go back, pass --version {target} --allow-downgrade)"))
+    }
+    let entries = match signed_sums(net, args, random, clock, agent, tag)? {
+        Some(entries) => entries
+        None => { return Err(refuse("network_error", "no release {target} is published: the site has no SHA256SUMS for {tag}")) }
+    }
+    let chosen = match choose_asset(entries, assets)? {
+        Some(chosen) => chosen
+        None => { return Err(refuse("bad_checksums", "SHA256SUMS for {tag} lists no file for this platform; nothing was changed")) }
+    }
+    let name = chosen.name
+    let download = get(net, args, random, clock, agent, "/releases/{tag}/{name}", MAX_BINARY, "the {tag} binary")?
+    let binary = body_of(download, "the {tag} binary")?
+    let actual = sha2.sha256(binary).to_hex()
+    if actual != chosen.digest {
+        return Err(refuse("checksum_mismatch", "the downloaded {name} does not match its SHA-256 in the signed SHA256SUMS of {tag}; nothing was changed"))
+    }
+    match write.restrict_to(".").restrict_to_file(Path.from(staging)).write_bytes(binary) {
+        Ok(_) => {}
+        Err(error) => {
+            let why = error.message
+            return Err(refuse("internal", "cannot write the staging file: {why}"))
+        }
+    }
+    let action = if order < 0 { "downgraded" } else { "updated" }
+    Ok(update_json(action, version, target, index, warnings, Some(actual), Some(name)))
+}
+
+fn main(args: Args, out: Stdout, net: NetConnect, read: FsRead, write: FsWrite, random: Random, clock: Clock) -> Result<(), IoError> {
     let command = args.get(1).unwrap_or("")
     let result = if command == "check" {
         check(net, args, random, clock, read)
+    } else if command == "update" {
+        update(net, args, random, clock, write)
     } else {
         Err(refuse("internal", "the update checker was started with a command it does not know"))
     }

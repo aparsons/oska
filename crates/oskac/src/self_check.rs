@@ -24,7 +24,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// This `oskac`'s version, and in a test build (`test-site`) the one
 /// `OSKAC_TEST_VERSION` names, so that the fixtures do not move with every
 /// release.
-fn version() -> String {
+pub(crate) fn version() -> String {
     #[cfg(feature = "test-site")]
     if let Ok(fixed) = std::env::var("OSKAC_TEST_VERSION") {
         return fixed;
@@ -34,7 +34,7 @@ fn version() -> String {
 
 /// The running executable; in a test build `OSKAC_TEST_EXE` stands in for
 /// it, a fixture file whose digest the fixture `SHA256SUMS` lists.
-fn running() -> Option<PathBuf> {
+pub(crate) fn running() -> Option<PathBuf> {
     #[cfg(feature = "test-site")]
     if let Some(fixed) = std::env::var_os("OSKAC_TEST_EXE") {
         return Some(PathBuf::from(fixed));
@@ -43,15 +43,15 @@ fn running() -> Option<PathBuf> {
 }
 
 /// The site every update command uses. No flag or variable changes it.
-const SITE: &str = "https://oskalang.dev";
+pub(crate) const SITE: &str = "https://oskalang.dev";
 
 /// A failed check: the stable code and what to do about it.
-struct Failed {
-    code: String,
-    message: String,
+pub(crate) struct Failed {
+    pub(crate) code: String,
+    pub(crate) message: String,
 }
 
-fn failed(code: &str, message: impl Into<String>) -> Failed {
+pub(crate) fn failed(code: &str, message: impl Into<String>) -> Failed {
     Failed {
         code: code.to_string(),
         message: message.into(),
@@ -61,7 +61,7 @@ fn failed(code: &str, message: impl Into<String>) -> Failed {
 /// The release files this `oskac` may be, best first: what the installer
 /// downloads for this platform (the glibc build also under the name
 /// releases before the musl build used).
-fn assets() -> Vec<String> {
+pub(crate) fn assets() -> Vec<String> {
     #[cfg(feature = "test-site")]
     if let Ok(names) = std::env::var("OSKAC_TEST_ASSETS") {
         return names.split(',').map(str::to_string).collect();
@@ -80,21 +80,21 @@ fn assets() -> Vec<String> {
 
 /// The install receipt, if there is a readable one: where, what it says,
 /// and whether it records this executable.
-struct Receipt {
-    path: PathBuf,
-    text: String,
-    json: Json,
-    managed: bool,
+pub(crate) struct Receipt {
+    pub(crate) path: PathBuf,
+    pub(crate) text: String,
+    pub(crate) json: Json,
+    pub(crate) managed: bool,
 }
 
-fn receipt(exe: &Path) -> Option<Receipt> {
+pub(crate) fn receipt(exe: &Path) -> Option<Receipt> {
     let path = oska_home()?.join("receipt.json");
     let text = std::fs::read_to_string(&path).ok()?;
     let json = read_receipt(&path).ok()?;
     if !matches!(json, Json::Obj(_)) {
         return None;
     }
-    let managed = identity(&json, Some(exe)).is_ok();
+    let managed = identity(&json, Some(exe), &version()).is_ok();
     Some(Receipt {
         path,
         text,
@@ -104,7 +104,7 @@ fn receipt(exe: &Path) -> Option<Receipt> {
 }
 
 /// The serial the receipt remembers: 0 when it holds none.
-fn remembered(receipt: &Receipt) -> u64 {
+pub(crate) fn remembered(receipt: &Receipt) -> u64 {
     match receipt.json.get("index_serial") {
         Some(Json::Num(n)) => n.parse().unwrap_or(0),
         _ => 0,
@@ -143,7 +143,7 @@ fn with_serial(text: &str, serial: u64) -> Option<String> {
 /// Raise the receipt's serial to `serial` if that is higher: a temporary
 /// file in the same directory, then a rename. The new text must read as
 /// the old receipt with that one number changed, or nothing is written.
-fn raise_serial(receipt: &Receipt, serial: u64) -> Result<(), String> {
+pub(crate) fn raise_serial(receipt: &Receipt, serial: u64) -> Result<(), String> {
     if serial <= remembered(receipt) {
         return Ok(());
     }
@@ -170,7 +170,9 @@ fn raise_serial(receipt: &Receipt, serial: u64) -> Result<(), String> {
     })
 }
 
-fn report_failure(json: bool, failure: &Failed) -> ExitCode {
+/// A failure of `command` (`check` or `update`), as the stable JSON error or
+/// text on standard error, with exit code 1.
+pub(crate) fn report_failure(command: &str, json: bool, failure: &Failed) -> ExitCode {
     if json {
         outln!(
             "{{\"ok\":false,\"error\":{},\"message\":{}}}",
@@ -178,13 +180,13 @@ fn report_failure(json: bool, failure: &Failed) -> ExitCode {
             quote(&failure.message)
         );
     } else {
-        eprintln!("oskac self check: {}", failure.message);
+        eprintln!("oskac self {command}: {}", failure.message);
     }
     ExitCode::from(1)
 }
 
 /// What to run next when an update exists.
-fn next_step(managed: bool) -> &'static str {
+pub(crate) fn next_step(managed: bool) -> &'static str {
     if managed {
         "oskac self update"
     } else if cfg!(windows) {
@@ -201,7 +203,7 @@ pub(crate) fn check(json: bool, identify: bool) -> ExitCode {
             done.print(json);
             ExitCode::SUCCESS
         }
-        Err(failure) => report_failure(json, &failure),
+        Err(failure) => report_failure("check", json, &failure),
     }
 }
 
@@ -390,9 +392,10 @@ mod tests {
 
     /// "The network is used only when the user asks" is enforced, not just
     /// promised (spec #230): the update checker is started from `self
-    /// check` alone, and nothing else in `oskac` opens a socket.
+    /// check` and `self update` alone, and nothing else in `oskac` opens a
+    /// socket.
     #[test]
-    fn only_self_check_starts_the_update_checker_and_no_code_opens_a_socket() {
+    fn only_self_check_and_self_update_start_the_update_checker_and_no_code_opens_a_socket() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut seen = Vec::new();
         let mut stack = vec![src.clone()];
@@ -417,10 +420,11 @@ mod tests {
             // This file's own test text names what it looks for.
             let text = text.split("#[cfg(test)]").next().unwrap_or_default();
             let starts = text.contains("update_checker::");
-            let allowed = name == "self_check.rs" || name == "update_checker.rs";
+            let allowed =
+                ["self_check.rs", "self_update.rs", "update_checker.rs"].contains(&name.as_str());
             assert!(
                 !starts || allowed,
-                "{name} reaches the update checker: only `oskac self check` may start it"
+                "{name} reaches the update checker: only `oskac self check` and `self update` may start it"
             );
             let sockets = text.contains("std::net") || text.contains("TcpStream");
             assert!(
