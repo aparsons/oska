@@ -63,7 +63,7 @@ expect_refused "another feature enabling it" "$dir" "enables"
 
 dir=$(tree)
 printf '[package]\nname = "oskac"\n' >"$dir/crates/oskac/Cargo.toml"
-expect_refused "the feature missing" "$dir" "no \`test-site = []\`"
+expect_refused "the feature missing" "$dir" "no test-site = [] feature"
 
 dir=$(tree)
 printf '      - run: cargo build --release --all-features -p oskac\n' >>"$dir/.github/workflows/ci.yml"

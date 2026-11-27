@@ -36,16 +36,16 @@ cargo_toml=$root/crates/oskac/Cargo.toml
 # The features table of oskac, without comments.
 features=$(awk '/^\[features\]/ {on = 1; next} /^\[/ {on = 0} on' "$cargo_toml" | sed 's/#.*//')
 if ! grep -q '^test-site *= *\[\]' <<<"$features"; then
-  printf 'test-site-guard: %s has no `test-site = []` feature, or it enables another\n' "$cargo_toml" >&2
+  printf 'test-site-guard: %s has no test-site = [] feature, or it enables another\n' "$cargo_toml" >&2
   bad=1
 fi
 # `default` must not name it, and no other feature may enable it.
 if grep -E '^default *=' <<<"$features" | grep -q 'test-site'; then
-  printf 'test-site-guard: `test-site` is a default feature of oskac\n' >&2
+  printf 'test-site-guard: test-site is a default feature of oskac\n' >&2
   bad=1
 fi
 if grep -v '^test-site' <<<"$features" | grep -q 'test-site'; then
-  printf 'test-site-guard: a feature of oskac enables `test-site`\n' >&2
+  printf 'test-site-guard: a feature of oskac enables test-site\n' >&2
   bad=1
 fi
 
@@ -59,7 +59,7 @@ while IFS= read -r line; do
   text=${text#*:}
   if grep -Eq 'cargo( +\+[^ ]+)? +(build|install|publish|package|rustc|run)( |$)' <<<"$text" &&
     grep -Eq -- '--all-features|test-site|oskac/test' <<<"$text"; then
-    printf 'test-site-guard: %s builds with all features or `test-site`: %s\n' "$file" "$text" >&2
+    printf 'test-site-guard: %s builds with all features or test-site: %s\n' "$file" "$text" >&2
     bad=1
   fi
 done < <(git -C "$root" grep -n -I -E -- '--all-features|test-site|oskac/test' -- . || true)
@@ -74,7 +74,7 @@ if [ $# -eq 0 ]; then
 fi
 for binary in "$@"; do
   if grep -aq 'OSKAC_TEST_SITE_' "$binary"; then
-    printf 'test-site-guard: %s was built with the `test-site` feature\n' "$binary" >&2
+    printf 'test-site-guard: %s was built with the test-site feature\n' "$binary" >&2
     bad=1
   fi
 done
