@@ -32,6 +32,10 @@ use crate::ir::{BinOp, Cond, Inst, Label, Temp};
 use crate::layout;
 use crate::NOWHERE;
 
+/// Where a list is held: its temporary, its type, and the struct object
+/// and offset that hold it when it is a field.
+type ListPlace = (Temp, Type, Option<(Temp, u32)>);
+
 impl Body<'_, '_> {
     /// The address of item `index` of the list object `list`, less
     /// [`layout::LIST_ITEMS`].
@@ -192,7 +196,7 @@ impl Body<'_, '_> {
         receiver: &Place,
         span: Span,
         what: &str,
-    ) -> Result<(Temp, Type, Option<(Temp, u32)>), Diagnostic> {
+    ) -> Result<ListPlace, Diagnostic> {
         Ok(match receiver {
             Place::Local(_) | Place::SelfValue => match self.holder(receiver) {
                 Some((temp, ty, _)) => (temp, ty, None),
