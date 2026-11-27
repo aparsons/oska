@@ -100,8 +100,7 @@ USAGE:
                                            release exists, verified against the
                                            pinned release key, and whether this
                                            binary is the published one; the
-                                           only commands that use the network
-                                           are this and self update
+                                           only command that uses the network
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
@@ -128,6 +127,7 @@ USAGE:
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
 | `--filter=<substring>` | `test` | Run only the tests whose names contain `<substring>`, case-sensitive. Also written `--filter <substring>`, unless the substring starts with `--`. The others are neither run nor reported as tests, and the report says how many were filtered out. A filter that matches no test is an error (exit code 1). A missing or empty substring or a repeated flag is a usage error that says which, `error: --filter ...` on standard error (with `--format=json`, `{"ok":false,"error":"usage","message":"--filter ..."}` on standard output); the flag on any other command prints the usage text. Either exits with 2. |
 | `--update` | `test` | Write each snapshot that `t.assert_snapshot` finds missing or different, instead of failing the test, and list what was written. It never deletes a snapshot. Any other command given it is a usage error (exit code 2). See [snapshots](testing.md#snapshots). |
+| `--no-identify` | `self check` | Skip the comparison of the running `oskac`'s SHA-256 with the release's signed `SHA256SUMS`, and the two extra downloads it needs; `identity.state` is `skipped`. Any other command given it is a usage error (exit code 2). See [`oskac self`](#oskac-self). |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |

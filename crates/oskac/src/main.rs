@@ -149,8 +149,7 @@ USAGE:
                                            release exists, verified against the
                                            pinned release key, and whether this
                                            binary is the published one; the
-                                           only commands that use the network
-                                           are this and self update
+                                           only command that uses the network
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";

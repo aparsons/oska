@@ -27,7 +27,7 @@
 // Its authority is visible in its signature: a network connection that it
 // narrows to one host and port, the read of one file (the running
 // executable, named relative to the working directory), the clock and
-// secure randomness for TLS, and standard output. It has no `std.rt`, no
+// secure randomness for TLS, and standard output. It imports no system-call layer, has no
 // environment, no directory listing, no write and no spawn.
 //
 // It prints exactly one line, a JSON object, on success or on refusal:
