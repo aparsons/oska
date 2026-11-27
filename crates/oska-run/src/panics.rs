@@ -91,6 +91,8 @@ pub mod codes {
     pub const INT_TO_FLOAT: &str = "P0049";
     /// `Float.fmt` with a number of digits outside 0 to 340.
     pub const FMT_DIGITS: &str = "P0050";
+    /// A `std.deque` deque was given an item past its item limit.
+    pub const DEQUE_ITEM_LIMIT: &str = "P0051";
     /// The program would have taken more than `--max-steps` steps
     /// (`oska_check::limits`).
     pub const STEP_LIMIT: &str = oska_check::limits::codes::STEP_LIMIT;
@@ -140,6 +142,7 @@ pub mod codes {
         EMPTY_INPUT,
         INT_TO_FLOAT,
         FMT_DIGITS,
+        DEQUE_ITEM_LIMIT,
     ];
 }
 

@@ -1220,6 +1220,9 @@ pub fn map_entry_limit()
 // For `std.map` only (ADR 0028): a map whose probes pass the limit under
 // every hash of its list panics with `P0045`.
 pub fn map_probe_limit()
+// For `std.deque` only (ADR 0032): a deque that would pass its item
+// limit panics with `P0051`.
+pub fn deque_item_limit()
 
 // ---- Core traits -------------------------------------------------------
 
