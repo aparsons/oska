@@ -145,6 +145,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.x509_csr",
+        source: include_str!("std/x509_csr.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.x509_roots",
         source: include_str!("std/x509_roots.osk"),
         sink_literal: None,

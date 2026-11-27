@@ -1,0 +1,694 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.x509_csr`: writing and reading a PKCS#10 certificate signing request
+// (RFC 2986, RFC 5280 section 4.1.2.4 and 4.2.1.6), the message an ACME
+// client sends to finalize an order (RFC 8555 section 7.4). A module sees
+// it only after `use std.x509_csr`.
+//
+// `create` builds a request for a list of names, signed by an ECDSA P-256
+// private key with SHA-256 (`ecdsa-with-SHA256`), and returns its DER
+// encoding, which ACME sends as base64url (`std.base64url.encode`). The
+// subject is empty unless `create_with_common_name` gives one, and the
+// names are the request's `subjectAltName` extension, asked for in the
+// `extensionRequest` attribute: each is a DNS name or an IP address. A DNS
+// name is ASCII letters, digits and hyphens in labels of 1 to 63 characters
+// that neither begin nor end with a hyphen, at most 253 characters in all,
+// with no trailing dot, and a last label that is not all digits; its first
+// label may be `*` for a wildcard. A name is written in lower case. An IPv4
+// address is four decimal numbers without leading zeros; an IPv6 address is
+// in its colon-separated form (with at most one `::`, and no embedded IPv4
+// part). A name that is neither, an empty list of names or more than 100
+// names is refused with a `CsrError`, and nothing is signed.
+//
+// The private key is a `Secret<Bytes>`, the 32 bytes of the scalar. The
+// signature is ECDSA with the deterministic nonce of `std.ecdsa.sign`, so
+// the same key and names give the same request on every backend. The module
+// has two audit sites, both in `create_with_common_name` and both of public
+// values: the public point of the key and the signature are each declassified
+// to be written into the request, which sends them in the clear. The key
+// itself is never exposed.
+//
+// `parse` reads a request from untrusted bytes with a strict DER parser (as
+// `std.x509` reads a certificate) and checks its signature against the key
+// it carries, so a request that parses is one its sender holds the key of.
+// It reads the request this module writes and the ones OpenSSL and
+// `cryptography` write for a P-256 key. A request for another key type or
+// signature algorithm is `UnsupportedAlgorithm`.
+//
+// This code is hand-written and has not been audited (ADR 0012).
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+
+use std.sha2
+use std.ecdsa
+use std.p256
+use std.base64url
+
+// Why a request was not written or not read. The kinds are stable: a
+// program may match on them.
+pub enum CsrError {
+    // There is no name to ask for.
+    NoNames,
+    // More than 100 names, which no certificate authority issues.
+    TooManyNames,
+    // A name is neither a valid DNS name nor an IP address.
+    InvalidName,
+    // The common name is not a valid DNS name of at most 64 characters.
+    InvalidCommonName,
+    // The private key is not 32 bytes in the range 1 to n - 1, or the
+    // request carries a public key that is not a point on P-256.
+    InvalidKey,
+    // Not a strictly DER-encoded request of the shape RFC 2986 gives.
+    Malformed,
+    // A key type or signature algorithm other than ECDSA on P-256 with
+    // SHA-256.
+    UnsupportedAlgorithm,
+    // The signature does not verify under the key in the request.
+    BadSignature,
+}
+
+impl Display for CsrError {
+    fn to_string(self) -> String {
+        match self {
+            CsrError.NoNames => "the request has no names"
+            CsrError.TooManyNames => "the request has more than 100 names"
+            CsrError.InvalidName => "a name is not a valid DNS name or IP address"
+            CsrError.InvalidCommonName => "the common name is not a valid DNS name"
+            CsrError.InvalidKey => "the key is not a valid P-256 key"
+            CsrError.Malformed => "the request is malformed"
+            CsrError.UnsupportedAlgorithm => "the request uses a key or signature algorithm that is not supported"
+            CsrError.BadSignature => "the request's signature does not verify"
+        }
+    }
+}
+
+// A parsed and verified certificate signing request. Its fields are
+// private: it comes only from `parse`.
+pub struct Csr {
+    der: Bytes,
+    common_name: String,
+    dns: List<String>,
+    ips: List<Bytes>,
+    key: ecdsa.PublicKey,
+}
+
+impl Csr {
+    // The request's DER encoding, the bytes `parse` accepted.
+    pub fn to_der(self) -> Bytes {
+        self.der
+    }
+
+    // The common name of the subject, or the empty text if it has none.
+    pub fn common_name(self) -> String {
+        self.common_name
+    }
+
+    // The `dNSName` entries of the requested subject alternative names, in
+    // order, as written (a wildcard keeps its `*`).
+    pub fn dns_names(self) -> List<String> {
+        self.dns
+    }
+
+    // The `iPAddress` entries, in order, each 4 bytes (IPv4) or 16 (IPv6).
+    pub fn ip_addresses(self) -> List<Bytes> {
+        self.ips
+    }
+
+    // The key the request is for, which signed it.
+    pub fn public_key(self) -> ecdsa.PublicKey {
+        self.key
+    }
+}
+
+// ---- Writing --------------------------------------------------------------------------
+
+// The DER request for `names`, with an empty subject, signed by `key`.
+// See `create_with_common_name`.
+pub fn create(key: Secret<Bytes>, names: List<String>) -> Result<Bytes, CsrError> {
+    create_with_common_name(key, "", names)
+}
+
+// The DER request for `names` (see the module description for what a name
+// is), signed by the P-256 private key `key`, with `common_name` as the
+// subject's common name (the empty text for an empty subject, whose
+// `subjectAltName` is then marked critical, as RFC 5280 requires). The
+// common name must be a valid DNS name of at most 64 characters, and is
+// written in lower case; it need not be one of `names`. The result is the
+// same for the same key, common name and names. It is an error, and nothing
+// is signed, if a name is refused or `key` is not a private key.
+pub fn create_with_common_name(key: Secret<Bytes>, common_name: String, names: List<String>) -> Result<Bytes, CsrError> {
+    if names.len() == 0 {
+        return Err(CsrError.NoNames)
+    }
+    if names.len() > 100 {
+        return Err(CsrError.TooManyNames)
+    }
+    var subject = Bytes.new()
+    if common_name != "" {
+        let cn = match dns_name(common_name) {
+            Some(text) => text
+            None => {
+                return Err(CsrError.InvalidCommonName)
+            }
+        }
+        if cn.len() > 64 {
+            return Err(CsrError.InvalidCommonName)
+        }
+        let attribute = tlv(48, cat([oid_common_name(), tlv(12, cn.to_bytes())]))
+        subject = tlv(48, tlv(49, attribute))
+    } else {
+        subject = tlv(48, Bytes.new())
+    }
+    var general_names = Bytes.new()
+    for name in names {
+        match general_name(name) {
+            Some(encoded) => {
+                general_names.append(encoded)
+            }
+            None => {
+                return Err(CsrError.InvalidName)
+            }
+        }
+    }
+    let point = match p256.public_key(key) {
+        Some(secret_point) => secret_point.expose()
+        None => {
+            return Err(CsrError.InvalidKey)
+        }
+    }
+    let san_value = tlv(4, tlv(48, general_names))
+    var san = Bytes.new()
+    san.append(oid_subject_alt_name())
+    if common_name == "" {
+        san.append(tlv(1, filled(1, 255)))
+    }
+    san.append(san_value)
+    let extensions = tlv(48, tlv(48, san))
+    let attribute = tlv(48, cat([oid_extension_request(), tlv(49, extensions)]))
+    let spki = tlv(48, cat([spki_algorithm(), tlv(3, cat([filled(1, 0), point]))]))
+    let info = tlv(48, cat([tlv(2, filled(1, 0)), subject, spki, tlv(160, attribute)]))
+    let signature = match ecdsa.sign(key, sha2.sha256(info)) {
+        Some(secret_signature) => secret_signature.expose()
+        None => {
+            return Err(CsrError.InvalidKey)
+        }
+    }
+    let der_signature = tlv(48, cat([der_integer(signature.slice(0, 32)), der_integer(signature.slice(32, 64))]))
+    Ok(tlv(48, cat([info, signature_algorithm(), tlv(3, cat([filled(1, 0), der_signature]))])))
+}
+
+// `n` bytes, each `value`.
+fn filled(n: Int, value: U8) -> Bytes {
+    var out = Bytes.new()
+    for _ in 0..n {
+        out.push(value)
+    }
+    out
+}
+
+// The parts, one after the other.
+fn cat(parts: List<Bytes>) -> Bytes {
+    var out = Bytes.new()
+    for part in parts {
+        out.append(part)
+    }
+    out
+}
+
+// The DER TLV with `tag` and `content`: a header with the shortest length.
+fn tlv(tag: Int, content: Bytes) -> Bytes {
+    var out = Bytes.new()
+    out.push(tag.to_u8())
+    let n = content.len()
+    if n < 128 {
+        out.push(n.to_u8())
+    } else if n < 256 {
+        out.push(129)
+        out.push(n.to_u8())
+    } else {
+        out.push(130)
+        out.push((n / 256).to_u8())
+        out.push((n % 256).to_u8())
+    }
+    out.append(content)
+    out
+}
+
+// A DER INTEGER holding the non-negative big-endian number `value`: no
+// leading zero byte, except the one that keeps the sign bit clear.
+fn der_integer(value: Bytes) -> Bytes {
+    var start = 0
+    while start < value.len() - 1 && value.at(start) == 0 {
+        start = start + 1
+    }
+    var content = Bytes.new()
+    if value.at(start).to_int() >= 128 {
+        content.push(0)
+    }
+    content.append(value.slice(start, value.len()))
+    tlv(2, content)
+}
+
+fn from_hex(text: String) -> Bytes {
+    Bytes.from_hex(text).unwrap_or(Bytes.new())
+}
+
+// 2.5.4.3, commonName.
+fn oid_common_name() -> Bytes {
+    from_hex("0603550403")
+}
+
+// 2.5.29.17, subjectAltName.
+fn oid_subject_alt_name() -> Bytes {
+    from_hex("0603551d11")
+}
+
+// 1.2.840.113549.1.9.14, extensionRequest.
+fn oid_extension_request() -> Bytes {
+    from_hex("06092a864886f70d01090e")
+}
+
+// The AlgorithmIdentifier of an EC public key on prime256v1.
+fn spki_algorithm() -> Bytes {
+    from_hex("301306072a8648ce3d020106082a8648ce3d030107")
+}
+
+// The AlgorithmIdentifier ecdsa-with-SHA256, with no parameters.
+fn signature_algorithm() -> Bytes {
+    from_hex("300a06082a8648ce3d040302")
+}
+
+// ---- Names ----------------------------------------------------------------------------
+
+// The encoded `GeneralName` of `name`: an `iPAddress` for an IP literal,
+// else a `dNSName`; `None` when it is neither.
+fn general_name(name: String) -> Option<Bytes> {
+    match parse_ipv4(name) {
+        Some(address) => {
+            return Some(tlv(135, address))
+        }
+        None => {}
+    }
+    if name.contains(":") {
+        match parse_ipv6(name) {
+            Some(address) => {
+                return Some(tlv(135, address))
+            }
+            None => {
+                return None
+            }
+        }
+    }
+    match dns_name(name) {
+        Some(text) => Some(tlv(130, text.to_bytes()))
+        None => None
+    }
+}
+
+// Whether `c` is an ASCII letter, digit or hyphen.
+fn is_label_char(c: String) -> Bool {
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-".contains(c)
+}
+
+fn is_digit(c: String) -> Bool {
+    "0123456789".contains(c)
+}
+
+// `name` in lower case if it is a valid DNS name as the module description
+// says, else `None`.
+fn dns_name(name: String) -> Option<String> {
+    var rest = name
+    if rest.starts_with("*.") {
+        rest = rest.slice(2, rest.len())
+    }
+    if rest.len() < 1 || rest.len() > 253 {
+        return None
+    }
+    let labels = rest.split(".")
+    for label in labels {
+        if label.len() < 1 || label.len() > 63 || label.starts_with("-") || label.ends_with("-") {
+            return None
+        }
+        for c in label.chars() {
+            if !is_label_char(c) {
+                return None
+            }
+        }
+    }
+    var all_digits = true
+    for c in labels.at(labels.len() - 1).chars() {
+        if !is_digit(c) {
+            all_digits = false
+        }
+    }
+    if all_digits {
+        return None
+    }
+    Some(name.to_lowercase())
+}
+
+// The value of a hexadecimal digit, or -1.
+fn hex_value(c: String) -> Int {
+    let all = "0123456789abcdef".chars()
+    for i in 0..all.len() {
+        if all.at(i) == c {
+            return i
+        }
+    }
+    -1
+}
+
+// The four bytes of an IPv4 literal such as `192.0.2.1`, or `None`.
+fn parse_ipv4(text: String) -> Option<Bytes> {
+    let parts = text.split(".")
+    if parts.len() != 4 {
+        return None
+    }
+    var out = Bytes.new()
+    for part in parts {
+        let n = part.len()
+        if n < 1 || n > 3 || (n > 1 && part.starts_with("0")) {
+            return None
+        }
+        var value = 0
+        for c in part.chars() {
+            let digit = hex_value(c)
+            if digit < 0 || digit > 9 {
+                return None
+            }
+            value = value * 10 + digit
+        }
+        if value > 255 {
+            return None
+        }
+        out.push(value.to_u8())
+    }
+    Some(out)
+}
+
+// The groups of one side of an IPv6 literal, or `None`.
+fn ipv6_groups(text: String) -> Option<List<Int>> {
+    var out: List<Int> = []
+    if text == "" {
+        return Some(out)
+    }
+    for group in text.split(":") {
+        let n = group.len()
+        if n < 1 || n > 4 {
+            return None
+        }
+        var value = 0
+        for c in group.chars() {
+            let digit = hex_value(c)
+            if digit < 0 {
+                return None
+            }
+            value = value * 16 + digit
+        }
+        out.push(value)
+    }
+    Some(out)
+}
+
+// The 16 bytes of an IPv6 literal in colon-separated form, with at most one
+// `::`, in either case, or `None`.
+fn parse_ipv6(literal: String) -> Option<Bytes> {
+    let text = literal.to_lowercase()
+    var groups: List<Int> = []
+    let halves = text.split("::")
+    if halves.len() == 1 {
+        match ipv6_groups(text) {
+            Some(g) => {
+                groups = g
+            }
+            None => {
+                return None
+            }
+        }
+        if groups.len() != 8 {
+            return None
+        }
+    } else if halves.len() == 2 {
+        let left = match ipv6_groups(halves.at(0)) {
+            Some(g) => g
+            None => {
+                return None
+            }
+        }
+        let right = match ipv6_groups(halves.at(1)) {
+            Some(g) => g
+            None => {
+                return None
+            }
+        }
+        if left.len() + right.len() > 7 {
+            return None
+        }
+        for g in left {
+            groups.push(g)
+        }
+        for _ in 0..(8 - left.len() - right.len()) {
+            groups.push(0)
+        }
+        for g in right {
+            groups.push(g)
+        }
+    } else {
+        return None
+    }
+    var out = Bytes.new()
+    for g in groups {
+        out.push((g / 256).to_u8())
+        out.push((g % 256).to_u8())
+    }
+    Some(out)
+}
+
+// ---- Reading --------------------------------------------------------------------------
+
+// A tag-length-value in a buffer: the tag byte, where the header starts,
+// and where the content starts and ends.
+struct Tlv { tag: Int, head: Int, start: Int, end: Int }
+
+// The TLV at `pos`, which must end by `limit`. The length must be minimal
+// and definite, and the tag a single byte.
+fn read_tlv(d: Bytes, pos: Int, limit: Int) -> Result<Tlv, CsrError> {
+    if pos < 0 || limit - pos < 2 {
+        return Err(CsrError.Malformed)
+    }
+    let tag = d.at(pos).to_int()
+    if tag % 32 == 31 {
+        return Err(CsrError.Malformed)
+    }
+    let first = d.at(pos + 1).to_int()
+    var length = first
+    var start = pos + 2
+    if first >= 128 {
+        let count = first - 128
+        if count == 0 || count > 3 || limit - start < count || d.at(start) == 0 {
+            return Err(CsrError.Malformed)
+        }
+        length = 0
+        for i in 0..count {
+            length = length * 256 + d.at(start + i).to_int()
+        }
+        if length < 128 {
+            return Err(CsrError.Malformed)
+        }
+        start = start + count
+    }
+    if length > limit - start {
+        return Err(CsrError.Malformed)
+    }
+    Ok(Tlv(tag: tag, head: pos, start: start, end: start + length))
+}
+
+// The TLVs that fill `t`'s content exactly.
+fn children(d: Bytes, t: Tlv) -> Result<List<Tlv>, CsrError> {
+    var out: List<Tlv> = []
+    var pos = t.start
+    while pos < t.end {
+        let child = read_tlv(d, pos, t.end)?
+        out.push(child)
+        pos = child.end
+    }
+    Ok(out)
+}
+
+// The one TLV that fills `t`'s content exactly.
+fn only_child(d: Bytes, t: Tlv) -> Result<Tlv, CsrError> {
+    let kids = children(d, t)?
+    if kids.len() != 1 {
+        return Err(CsrError.Malformed)
+    }
+    Ok(kids.at(0))
+}
+
+// The whole TLV, header included.
+fn whole(d: Bytes, t: Tlv) -> Bytes {
+    d.slice(t.head, t.end)
+}
+
+// The TLV's content.
+fn content(d: Bytes, t: Tlv) -> Bytes {
+    d.slice(t.start, t.end)
+}
+
+// What a request says, before its signature is checked.
+struct Found { common_name: String, dns: List<String>, ips: List<Bytes> }
+
+// The common name in the subject `Name` `t`, or the empty text.
+fn read_common_name(d: Bytes, t: Tlv) -> Result<String, CsrError> {
+    var out = ""
+    for rdn in children(d, t)? {
+        if rdn.tag != 49 {
+            return Err(CsrError.Malformed)
+        }
+        for attribute in children(d, rdn)? {
+            if attribute.tag != 48 {
+                return Err(CsrError.Malformed)
+            }
+            let parts = children(d, attribute)?
+            if parts.len() != 2 || parts.at(0).tag != 6 {
+                return Err(CsrError.Malformed)
+            }
+            if whole(d, parts.at(0)) == oid_common_name() && out == "" {
+                let value = parts.at(1)
+                if value.tag != 12 && value.tag != 19 {
+                    return Err(CsrError.Malformed)
+                }
+                out = content(d, value).to_text().unwrap_or("")
+            }
+        }
+    }
+    Ok(out)
+}
+
+// The names in the `GeneralNames` `t`.
+fn read_general_names(d: Bytes, t: Tlv, found: Found) -> Result<Found, CsrError> {
+    var out = found
+    for name in children(d, t)? {
+        if name.tag == 130 {
+            out.dns.push(content(d, name).to_text().unwrap_or(""))
+        } else if name.tag == 135 {
+            let n = name.end - name.start
+            if n != 4 && n != 16 {
+                return Err(CsrError.Malformed)
+            }
+            out.ips.push(content(d, name))
+        }
+    }
+    Ok(out)
+}
+
+// The names in the `extensionRequest` attribute's `Extensions` `t`.
+fn read_extensions(d: Bytes, t: Tlv, found: Found) -> Result<Found, CsrError> {
+    var out = found
+    for extension in children(d, t)? {
+        if extension.tag != 48 {
+            return Err(CsrError.Malformed)
+        }
+        let parts = children(d, extension)?
+        if parts.len() < 2 || parts.len() > 3 || parts.at(0).tag != 6 {
+            return Err(CsrError.Malformed)
+        }
+        let value = parts.at(parts.len() - 1)
+        if parts.len() == 3 && parts.at(1).tag != 1 {
+            return Err(CsrError.Malformed)
+        }
+        if value.tag != 4 {
+            return Err(CsrError.Malformed)
+        }
+        if whole(d, parts.at(0)) == oid_subject_alt_name() {
+            let names = only_child(d, Tlv(tag: 4, head: value.head, start: value.start, end: value.end))?
+            if names.tag != 48 {
+                return Err(CsrError.Malformed)
+            }
+            out = read_general_names(d, names, out)?
+        }
+    }
+    Ok(out)
+}
+
+// The names the attributes `t` (the `[0]` of the request's info) ask for.
+fn read_attributes(d: Bytes, t: Tlv, found: Found) -> Result<Found, CsrError> {
+    var out = found
+    for attribute in children(d, t)? {
+        if attribute.tag != 48 {
+            return Err(CsrError.Malformed)
+        }
+        let parts = children(d, attribute)?
+        if parts.len() != 2 || parts.at(0).tag != 6 || parts.at(1).tag != 49 {
+            return Err(CsrError.Malformed)
+        }
+        if whole(d, parts.at(0)) == oid_extension_request() {
+            let extensions = only_child(d, parts.at(1))?
+            if extensions.tag != 48 {
+                return Err(CsrError.Malformed)
+            }
+            out = read_extensions(d, extensions, out)?
+        }
+    }
+    Ok(out)
+}
+
+// Reads the request `d` and checks its signature.
+fn read_request(d: Bytes) -> Result<Csr, CsrError> {
+    let top = read_tlv(d, 0, d.len())?
+    if top.tag != 48 || top.end != d.len() {
+        return Err(CsrError.Malformed)
+    }
+    let parts = children(d, top)?
+    if parts.len() != 3 || parts.at(0).tag != 48 || parts.at(1).tag != 48 || parts.at(2).tag != 3 {
+        return Err(CsrError.Malformed)
+    }
+    let info = parts.at(0)
+    let fields = children(d, info)?
+    if fields.len() != 4 || fields.at(0).tag != 2 || fields.at(1).tag != 48 || fields.at(2).tag != 48 || fields.at(3).tag != 160 {
+        return Err(CsrError.Malformed)
+    }
+    if whole(d, fields.at(0)) != from_hex("020100") {
+        return Err(CsrError.Malformed)
+    }
+    let spki = whole(d, fields.at(2))
+    if spki.len() != 91 || spki.slice(0, 26) != from_hex("3059301306072a8648ce3d020106082a8648ce3d030107034200") {
+        return Err(CsrError.UnsupportedAlgorithm)
+    }
+    if whole(d, parts.at(1)) != signature_algorithm() {
+        return Err(CsrError.UnsupportedAlgorithm)
+    }
+    let key = match ecdsa.PublicKey.from_bytes(ecdsa.Curve.P256, spki.slice(26, 91)) {
+        Some(k) => k
+        None => {
+            return Err(CsrError.InvalidKey)
+        }
+    }
+    let common_name = read_common_name(d, fields.at(1))?
+    let found = read_attributes(d, fields.at(3), Found(common_name: common_name, dns: [], ips: []))?
+    let bits = content(d, parts.at(2))
+    if bits.len() < 1 || bits.at(0) != 0 {
+        return Err(CsrError.Malformed)
+    }
+    let raw = match base64url.es256_raw_from_der(bits.slice(1, bits.len())) {
+        Ok(r) => r
+        Err(_) => {
+            return Err(CsrError.Malformed)
+        }
+    }
+    if !ecdsa.verify(key, sha2.sha256(whole(d, info)), raw) {
+        return Err(CsrError.BadSignature)
+    }
+    Ok(Csr(der: d, common_name: found.common_name, dns: found.dns, ips: found.ips, key: key))
+}
+
+// The request `der` encodes, with its signature checked: a strict DER
+// parse, so two parsers cannot read one request two ways. A request from
+// outside the program needs no trust assertion.
+pub fn parse(der: Untrusted<Bytes>) -> Result<Csr, CsrError> {
+    var copy = Bytes.new()
+    for i in 0..der.len() {
+        copy.push(der.at(i))
+    }
+    read_request(copy)
+}

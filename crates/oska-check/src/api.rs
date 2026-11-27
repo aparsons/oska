@@ -45,6 +45,7 @@ pub const MODULES: &[&str] = &[
     "std.rsa",
     "std.p256",
     "std.x509",
+    "std.x509_csr",
     "std.hkdf",
     "std.x25519",
     "std.chacha20poly1305",
