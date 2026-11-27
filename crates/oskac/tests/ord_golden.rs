@@ -61,3 +61,14 @@ fn float_and_secret_are_refused_with_the_reason() {
     assert!(stdout.contains("constant_time_eq"), "{stdout}");
     assert_golden(&stdout, "refused.json");
 }
+
+#[test]
+fn unwrap_and_expect_are_refused_with_the_alternatives() {
+    let (stdout, ok) = check("unwrap.osk");
+    assert!(!ok, "the fixture should fail to check: {stdout}");
+    assert_eq!(stdout.matches("\"code\":\"E0228\"").count(), 2, "{stdout}");
+    for alternative in ["`?`", "`unwrap_or`", "`match`"] {
+        assert!(stdout.contains(alternative), "{alternative}: {stdout}");
+    }
+    assert_golden(&stdout, "unwrap.json");
+}

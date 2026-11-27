@@ -116,3 +116,105 @@ pub fn list_concat<T>(items: List<T>, more: List<T>) -> List<T> {
     }
     joined
 }
+
+// ---- Option ------------------------------------------------------------
+// The functions of `Option`'s methods are named `option_<method>`.
+
+// Whether there is no value.
+pub fn option_is_none<T>(o: Option<T>) -> Bool {
+    match o {
+        Some(_) => false
+        None => true
+    }
+}
+
+// `Some(f(value))`, or `None`.
+pub fn option_map<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U> {
+    match o {
+        Some(v) => Some(f(v))
+        None => None
+    }
+}
+
+// `f(value)`, or `None`.
+pub fn option_and_then<T, U>(o: Option<T>, f: fn(T) -> Option<U>) -> Option<U> {
+    match o {
+        Some(v) => f(v)
+        None => None
+    }
+}
+
+// The value, or what `f()` gives.
+pub fn option_unwrap_or_else<T>(o: Option<T>, f: fn() -> T) -> T {
+    match o {
+        Some(v) => v
+        None => f()
+    }
+}
+
+// The value if `keep` is true for it, otherwise `None`.
+pub fn option_filter<T>(o: Option<T>, keep: fn(T) -> Bool) -> Option<T> {
+    match o {
+        Some(v) => if keep(v) { Some(v) } else { None }
+        None => None
+    }
+}
+
+// ---- Result ------------------------------------------------------------
+// The functions of `Result`'s methods are named `result_<method>`.
+
+// Whether it is `Err`.
+pub fn result_is_err<T, E>(r: Result<T, E>) -> Bool {
+    match r {
+        Ok(_) => false
+        Err(_) => true
+    }
+}
+
+// `Ok(f(value))`, or the `Err`.
+pub fn result_map<T, E, U>(r: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+    match r {
+        Ok(v) => Ok(f(v))
+        Err(e) => Err(e)
+    }
+}
+
+// `Err(f(error))`, or the `Ok`.
+pub fn result_map_err<T, E, F>(r: Result<T, E>, f: fn(E) -> F) -> Result<T, F> {
+    match r {
+        Ok(v) => Ok(v)
+        Err(e) => Err(f(e))
+    }
+}
+
+// `f(value)`, or the `Err`.
+pub fn result_and_then<T, E, U>(r: Result<T, E>, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+    match r {
+        Ok(v) => f(v)
+        Err(e) => Err(e)
+    }
+}
+
+// The `Ok` value, or what `f(error)` gives.
+pub fn result_unwrap_or_else<T, E>(r: Result<T, E>, f: fn(E) -> T) -> T {
+    match r {
+        Ok(v) => v
+        Err(e) => f(e)
+    }
+}
+
+// `Some(value)` for an `Ok`, `None` for an `Err`.
+pub fn result_ok<T, E>(r: Result<T, E>) -> Option<T> {
+    match r {
+        Ok(v) => Some(v)
+        Err(_) => None
+    }
+}
+
+// `Some(error)` for an `Err`, `None` for an `Ok`.
+pub fn result_err<T, E>(r: Result<T, E>) -> Option<E> {
+    match r {
+        Ok(_) => None
+        Err(e) => Some(e)
+    }
+}
