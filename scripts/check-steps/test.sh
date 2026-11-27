@@ -98,6 +98,17 @@ if [ "$first" = "no external crates" ]; then
 else
   bad "--list starts with the first step" "first line: $first"
 fi
+# The cheap static steps run before the cargo test step, so their mistakes
+# fail in seconds and not after the whole test run.
+test_line=$(printf '%s\n' "$list" | grep -nxF "cargo test (private temporary directory)" | cut -d: -f1)
+for cheap in "SPDX headers and NOTICE" "shellcheck" "workflow validation" "powershell parse" "cargo fmt"; do
+  cheap_line=$(printf '%s\n' "$list" | grep -nxF "$cheap" | cut -d: -f1)
+  if [ -n "$cheap_line" ] && [ -n "$test_line" ] && [ "$cheap_line" -lt "$test_line" ]; then
+    ok "--list puts \"$cheap\" before the cargo test step"
+  else
+    bad "--list puts \"$cheap\" before the cargo test step" "at $cheap_line, cargo test at $test_line"
+  fi
+done
 order=$(printf '%s\n' "$list" | grep -xF -e "cargo fmt" -e "cargo clippy" -e "pass stamp tests" | tr '\n' ,)
 if [ "$order" = "cargo fmt,cargo clippy,pass stamp tests," ]; then
   ok "--list prints the steps in order"
@@ -144,7 +155,7 @@ else
   bad "a full run stamps the full tier and the tree it checked" "out: $out"
 fi
 slot_and_neighbours=$(printf '%s\n' "$log" | grep -x -B1 -A1 build-slots/acquire.sh | tr '\n' ,)
-if [ "$slot_and_neighbours" = "workflow-guard/guard.sh,build-slots/acquire.sh,cargo fmt," ]; then
+if [ "$slot_and_neighbours" = "bin/pwsh,build-slots/acquire.sh,cargo fmt," ]; then
   ok "a run takes the build slot once, after the cheap guards and before cargo fmt"
 else
   bad "a run takes the build slot once, after the cheap guards and before cargo fmt" "log: $log"
@@ -566,7 +577,7 @@ else
 fi
 
 fast_case "a script change" 'echo "# two" >>scripts/kill-guard/test.sh'
-if [ "$status" -eq 0 ] && [ "$headers" = "kill guard tests,shellcheck," ] &&
+if [ "$status" -eq 0 ] && [ "$headers" = "shellcheck,kill guard tests," ] &&
   ! ran_cargo; then
   ok "--fast on a script change runs that script's tests and shellcheck only"
 else
@@ -582,7 +593,7 @@ else
 fi
 
 fast_case "a hook change" 'mkdir -p .githooks && echo "# two" >.githooks/pre-push'
-if [ "$headers" = "pass stamp tests,shellcheck," ]; then
+if [ "$headers" = "shellcheck,pass stamp tests," ]; then
   ok "--fast on a pre-push hook change runs the pass stamp tests and shellcheck"
 else
   bad "--fast on a pre-push hook change runs the pass stamp tests and shellcheck" "headers: $headers"
