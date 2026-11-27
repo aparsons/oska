@@ -14,5 +14,10 @@ oska-run = { path = "../oska-run" }
 oska-syntax = { path = "../oska-syntax" }
 oska-sys = { path = "../oska-sys" }
 
+[build-dependencies]
+oska-check = { path = "../oska-check" }
+oska-native = { path = "../oska-native" }
+oska-syntax = { path = "../oska-syntax" }
+
 [lints]
 workspace = true
