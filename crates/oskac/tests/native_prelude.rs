@@ -279,6 +279,13 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "FileWrite.write_private_bytes",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to_file("key.bin").write_private_bytes(Bytes.from_hex("80ff").unwrap_or(Bytes.new()))
+}"#,
+    ),
+    (
         "Env.get",
         Run::WithInput(""),
         r#"fn main(io: Stdout, env: Env) -> Result<(), IoError> {

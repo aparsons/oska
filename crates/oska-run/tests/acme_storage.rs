@@ -621,7 +621,12 @@ impl Drop for Scratch {
 /// What `body` kept in `result.txt` of a second scratch directory, on a
 /// real disk, with `@DIR@` the scratch directory the store is in.
 fn printed_real(dir: &std::path::Path, body: &str) -> String {
-    let results = Scratch::new("results");
+    let results = Scratch::new(&format!(
+        "results-{}",
+        dir.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ));
     let body = body
         .replace("@DIR@", &common::literal(dir))
         .replace("@OUT@", &common::literal(results.path()));
