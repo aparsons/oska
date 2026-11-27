@@ -126,6 +126,14 @@ _Avoid_: IR, compiled program
 A runtime failure that stops the current task and cannot be caught, such as integer overflow or an out-of-bounds index. A panic means the program has a bug; an `Err` returned from `main` does not.
 _Avoid_: exception, crash
 
+**Ord**:
+The prelude trait of a type whose values have one total order, through `cmp(self, other) -> Ordering`. `<`, `<=`, `>` and `>=` work on every `Ord` type. The integer types, `Bool`, `String` (by Unicode code point), `Option<T>` and `List<T>` are `Ord` (the last two when `T` is). `Float` and `Secret<T>` are not.
+_Avoid_: Comparable, PartialOrd
+
+**Ordering**:
+The enum `Less`, `Equal`, `Greater`, which `cmp` returns and a custom sort key gives to `sorted_by`.
+_Avoid_: Comparison, sign
+
 ## Untrusted data
 
 **Untrusted value**:
