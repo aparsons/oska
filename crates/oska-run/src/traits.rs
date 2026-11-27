@@ -38,6 +38,17 @@ pub const INTRINSICS: Table = &[
     ("U32.eq", Plain(same)),
     ("U64.eq", Plain(same)),
     ("U8.eq", Plain(same)),
+    ("Bool.cmp", Plain(cmp)),
+    ("I16.cmp", Plain(cmp)),
+    ("I32.cmp", Plain(cmp)),
+    ("I64.cmp", Plain(cmp)),
+    ("I8.cmp", Plain(cmp)),
+    ("Int.cmp", Plain(cmp)),
+    ("String.cmp", Plain(cmp)),
+    ("U16.cmp", Plain(cmp)),
+    ("U32.cmp", Plain(cmp)),
+    ("U64.cmp", Plain(cmp)),
+    ("U8.cmp", Plain(cmp)),
     ("Bool.hash", Plain(word_hash)),
     ("I16.hash", Plain(word_hash)),
     ("I32.hash", Plain(word_hash)),
@@ -127,6 +138,17 @@ fn hashed(hash: u64) -> Value {
 /// they hold the same data: integers, `Bool`, text, `Path`, `IoError`.
 fn same(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
     Ok(Value::Bool(args[0] == args[1]))
+}
+
+/// `cmp(self, other)` for the integers, `Bool` and `String` (ADR 0031): an
+/// `Ordering`.
+fn cmp(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    let variant = match crate::ops::order(&args[0], &args[1]) {
+        std::cmp::Ordering::Less => "Less",
+        std::cmp::Ordering::Equal => "Equal",
+        std::cmp::Ordering::Greater => "Greater",
+    };
+    Ok(Value::variant(builtins::ORDERING, variant, Vec::new()))
 }
 
 /// `IoError.to_string(self)`: its message.

@@ -178,6 +178,8 @@ pub const SCOPE: &str = "Scope";
 pub const TEST_CONTEXT: &str = "TestContext";
 /// `==` and `!=` need it.
 pub const EQ: &str = "Eq";
+/// `<`, `<=`, `>` and `>=` need it, or an integer or `Float` operand.
+pub const ORD: &str = "Ord";
 /// `?` converts errors with it.
 pub const FROM: &str = "From";
 /// `main`'s error type needs it.

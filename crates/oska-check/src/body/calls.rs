@@ -666,6 +666,15 @@ impl Body<'_, '_, '_> {
             );
             return None;
         }
+        if name.name == "cmp" && self.infer.resolve(receiver).is_float() {
+            self.error(
+                codes::NO_MEMBER,
+                "`Float` has no `cmp`: it is not `Ord`, because `NaN` is unordered; \
+                 `total_cmp` gives a total order of floats",
+                name.span,
+            );
+            return None;
+        }
         let candidates = self.items.method_names(type_name);
         let message = format!("`{receiver}` has no method `{}`", name.name);
         self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
