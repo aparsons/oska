@@ -588,11 +588,11 @@ unfinished_steps() {
 # it was read is not in the first list, and a runner whose launch subshell is
 # gone has been adopted by init: its pid file still names it.
 queue_cleanup() {
-  local p pid round seen='' now left
+  local p pid seen='' now left
   if [ -n "$(unfinished_steps)" ] && ! ps -A -o pid= -o ppid= >/dev/null 2>&1; then
     printf 'check.sh: cannot list processes (ps -A -o pid= -o ppid= failed); suites started by this run may keep running\n' >&2
   fi
-  for round in 1 2 3; do
+  for _ in 1 2 3; do
     now=$(queued_pids | tr '\n' ' ')
     [ -n "${now// /}" ] || break
     seen="$seen $now"
