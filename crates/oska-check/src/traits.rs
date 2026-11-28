@@ -4,12 +4,12 @@
 //! trait's arguments replaced (`E0262`), and no method is one the trait
 //! does not declare (`E0263`).
 
-use oska_syntax::ast::{ItemKind, Module, TraitDecl};
+use oska_syntax::ast::{ImplDecl, Item, ItemKind, Module, TraitDecl, Type};
 use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::collect::Decls;
-use crate::items::{FnSig, Items, Lower, Receiver};
+use crate::items::{FnSig, Items, Lower, Receiver, TraitInfo};
 use crate::ty::{Trust, Ty};
 
 pub fn module(
@@ -38,14 +38,46 @@ pub fn module(
         if target.is_error() {
             continue;
         }
-        let declaration = declared_trait(module, &trait_name);
+        let check = ImplCheck {
+            trait_name: &trait_name,
+            info,
+            args: &args,
+            target: &target,
+            declaration: declared_trait(module, &trait_name),
+            lower: &lower,
+        };
+        let provided = check.methods(imp, diagnostics);
+        check.missing(src, item, imp, trait_ref, &provided, diagnostics);
+    }
+}
+
+/// What `impl Trait for Type` is checked against: the trait as the module
+/// declares it, and the impl's target and the trait's arguments.
+struct ImplCheck<'a> {
+    trait_name: &'a str,
+    info: &'a TraitInfo,
+    args: &'a [Ty],
+    target: &'a Ty,
+    declaration: Option<&'a TraitDecl>,
+    lower: &'a Lower<'a, 'a>,
+}
+
+impl ImplCheck<'_> {
+    /// Check each method of the impl against the trait's declaration
+    /// (`E0263`, `E0262`). Returns the names of the methods it provides.
+    fn methods<'i>(&self, imp: &'i ImplDecl, diagnostics: &mut Vec<Diagnostic>) -> Vec<&'i str> {
+        let trait_name = self.trait_name;
         let mut provided = Vec::new();
         for method in &imp.methods {
             let ItemKind::Fn(f) = &method.kind else {
                 continue;
             };
             provided.push(f.name.name.as_str());
-            let Some((declared, _)) = info.methods.iter().find(|(s, _)| s.name == f.name.name)
+            let Some((declared, _)) = self
+                .info
+                .methods
+                .iter()
+                .find(|(s, _)| s.name == f.name.name)
             else {
                 let mut diagnostic = Diagnostic::new(
                     codes::NOT_IN_TRAIT,
@@ -55,7 +87,7 @@ pub fn module(
                     ),
                     f.name.span,
                 );
-                if let Some(trait_decl) = declaration {
+                if let Some(trait_decl) = self.declaration {
                     diagnostic = diagnostic.with_related(
                         format!("the trait `{trait_name}` is declared here"),
                         trait_decl.name.span,
@@ -64,8 +96,8 @@ pub fn module(
                 diagnostics.push(diagnostic);
                 continue;
             };
-            let actual = lower.signature(f, &[], Some(target.clone()));
-            let expected = info.method_for(declared, &target, &args, None);
+            let actual = self.lower.signature(f, &[], Some(self.target.clone()));
+            let expected = self.info.method_for(declared, self.target, self.args, None);
             if !same_signature(&actual, &expected) {
                 let mut diagnostic = Diagnostic::new(
                     codes::IMPL_SIGNATURE,
@@ -76,13 +108,32 @@ pub fn module(
                     ),
                     f.name.span,
                 );
-                if let Some(at) = declaration.and_then(|t| declared_method(t, &f.name.name)) {
+                if let Some(at) = self
+                    .declaration
+                    .and_then(|t| declared_method(t, &f.name.name))
+                {
                     diagnostic = diagnostic.with_related("declared here", at);
                 }
                 diagnostics.push(diagnostic);
             }
         }
-        let missing: Vec<&FnSig> = info
+        provided
+    }
+
+    /// Report the required methods the impl does not provide (`E0261`), with
+    /// a fix that adds a stub of each.
+    fn missing(
+        &self,
+        src: &str,
+        item: &Item,
+        imp: &ImplDecl,
+        trait_ref: &Type,
+        provided: &[&str],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let trait_name = self.trait_name;
+        let missing: Vec<&FnSig> = self
+            .info
             .methods
             .iter()
             .filter(|(sig, has_default)| !has_default && !provided.contains(&sig.name.as_str()))
@@ -106,7 +157,8 @@ pub fn module(
             let stubs: Vec<FnSig> = missing
                 .iter()
                 .map(|sig| {
-                    info.method_for(sig, &target, &args, None)
+                    self.info
+                        .method_for(sig, self.target, self.args, None)
                         .in_impl_with(&impl_generics)
                 })
                 .collect();

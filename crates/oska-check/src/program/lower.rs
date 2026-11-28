@@ -285,87 +285,8 @@ pub fn module(
                     program.imports.push((path.join("."), span));
                 }
             }
-            ItemKind::Impl(imp) => {
-                let Some(type_name) = path_name(&imp.target) else {
-                    continue;
-                };
-                let trait_impl = match &imp.trait_ref {
-                    Some(_) => match items.impls.iter().find(|i| i.span == Some(item.span)) {
-                        Some(info) => Some(info),
-                        None => continue,
-                    },
-                    None => None,
-                };
-                let own: Vec<&FnDecl> = fn_decls(&imp.methods).collect();
-                let declaring = trait_impl.and_then(|i| traits.get(i.trait_name.as_str()));
-                // A default method the impl does not override is the
-                // impl's too: its body sees `self` as the impl's type.
-                let defaults: Vec<&FnDecl> = declaring
-                    .map(|(_, methods)| {
-                        fn_decls(methods)
-                            .filter(|d| !own.iter().any(|m| m.name.name == d.name.name))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let impl_generics = names(&imp.generics);
-                for (f, default) in own
-                    .iter()
-                    .map(|f| (*f, false))
-                    .chain(defaults.iter().map(|f| (*f, true)))
-                {
-                    let method = &f.name.name;
-                    let name = match trait_impl {
-                        Some(info) => match info.method_name(method) {
-                            Some(name) => name,
-                            None => continue,
-                        },
-                        None => format!("{type_name}.{method}"),
-                    };
-                    // The trait's declaration of the method holds its
-                    // contract, whichever impl runs.
-                    let declared = declaring
-                        .and_then(|(_, methods)| fn_decls(methods).find(|d| d.name.name == *method))
-                        .unwrap_or(f);
-                    // What the trait declared is checked with `Self` and
-                    // the trait's generics, and its method's own, as
-                    // parameters: here they are the impl's.
-                    let from_trait = match (trait_impl, declaring) {
-                        (Some(info), Some((trait_generics, _))) => {
-                            trait_subst(info, trait_generics, declared, f)
-                        }
-                        _ => Vec::new(),
-                    };
-                    let contracts =
-                        lowering.with_subst(from_trait.clone(), || lowering.contracts(declared));
-                    let subst = if default { from_trait } else { Vec::new() };
-                    lowering.with_subst(subst, || {
-                        lowering.function(&mut program, name, f, &impl_generics, contracts)
-                    });
-                }
-            }
-            ItemKind::Const(c) => {
-                // A constant is a function of no parameters that its
-                // uses call (#83): the same value on every call, since
-                // its initializer is pure.
-                let name = c.name.name.clone();
-                let function = Function {
-                    name: name.clone(),
-                    span: c.name.span,
-                    generics: Vec::new(),
-                    self_ty: None,
-                    receiver: false,
-                    mutating: false,
-                    params: Vec::new(),
-                    ret: lowering.convert(items.const_types.get(&name), c.name.span),
-                    ret_annotation: Some(c.ty.span),
-                    contracts: Contracts::default(),
-                    body: lowering.expr(&c.value),
-                };
-                // `E0202` refuses a second declaration of the name, and no
-                // program is lowered with an error, so this is the first.
-                let earlier = program.functions.insert(name, function);
-                debug_assert!(earlier.is_none(), "a constant's name is declared once");
-            }
+            ItemKind::Impl(imp) => impl_methods(&lowering, &mut program, items, item, imp, &traits),
+            ItemKind::Const(c) => const_function(&lowering, &mut program, items, c),
             ItemKind::Test(test) => program.tests.push(super::Test {
                 name: test_name(&test.name),
                 integration: item.attributes.iter().any(|a| a.name.name == "integration"),
@@ -377,6 +298,96 @@ pub fn module(
     }
     program.unsolved = lowering.unsolved.take();
     program
+}
+
+/// Lower the methods of one impl: its own, and the trait's default methods
+/// it does not override.
+fn impl_methods(
+    lowering: &Lowering,
+    program: &mut Program,
+    items: &Items,
+    item: &Item,
+    imp: &ast::ImplDecl,
+    traits: &HashMap<&str, (&[ast::GenericParam], &[Item])>,
+) {
+    let Some(type_name) = path_name(&imp.target) else {
+        return;
+    };
+    let trait_impl = match &imp.trait_ref {
+        Some(_) => match items.impls.iter().find(|i| i.span == Some(item.span)) {
+            Some(info) => Some(info),
+            None => return,
+        },
+        None => None,
+    };
+    let own: Vec<&FnDecl> = fn_decls(&imp.methods).collect();
+    let declaring = trait_impl.and_then(|i| traits.get(i.trait_name.as_str()));
+    // A default method the impl does not override is the
+    // impl's too: its body sees `self` as the impl's type.
+    let defaults: Vec<&FnDecl> = declaring
+        .map(|(_, methods)| {
+            fn_decls(methods)
+                .filter(|d| !own.iter().any(|m| m.name.name == d.name.name))
+                .collect()
+        })
+        .unwrap_or_default();
+    let impl_generics = names(&imp.generics);
+    for (f, default) in own
+        .iter()
+        .map(|f| (*f, false))
+        .chain(defaults.iter().map(|f| (*f, true)))
+    {
+        let method = &f.name.name;
+        let name = match trait_impl {
+            Some(info) => match info.method_name(method) {
+                Some(name) => name,
+                None => continue,
+            },
+            None => format!("{type_name}.{method}"),
+        };
+        // The trait's declaration of the method holds its
+        // contract, whichever impl runs.
+        let declared = declaring
+            .and_then(|(_, methods)| fn_decls(methods).find(|d| d.name.name == *method))
+            .unwrap_or(f);
+        // What the trait declared is checked with `Self` and
+        // the trait's generics, and its method's own, as
+        // parameters: here they are the impl's.
+        let from_trait = match (trait_impl, declaring) {
+            (Some(info), Some((trait_generics, _))) => {
+                trait_subst(info, trait_generics, declared, f)
+            }
+            _ => Vec::new(),
+        };
+        let contracts = lowering.with_subst(from_trait.clone(), || lowering.contracts(declared));
+        let subst = if default { from_trait } else { Vec::new() };
+        lowering.with_subst(subst, || {
+            lowering.function(program, name, f, &impl_generics, contracts)
+        });
+    }
+}
+
+/// A constant is a function of no parameters that its uses call (#83): the
+/// same value on every call, since its initializer is pure.
+fn const_function(lowering: &Lowering, program: &mut Program, items: &Items, c: &ast::ConstDecl) {
+    let name = c.name.name.clone();
+    let function = Function {
+        name: name.clone(),
+        span: c.name.span,
+        generics: Vec::new(),
+        self_ty: None,
+        receiver: false,
+        mutating: false,
+        params: Vec::new(),
+        ret: lowering.convert(items.const_types.get(&name), c.name.span),
+        ret_annotation: Some(c.ty.span),
+        contracts: Contracts::default(),
+        body: lowering.expr(&c.value),
+    };
+    // `E0202` refuses a second declaration of the name, and no
+    // program is lowered with an error, so this is the first.
+    let earlier = program.functions.insert(name, function);
+    debug_assert!(earlier.is_none(), "a constant's name is declared once");
 }
 
 /// What a trait's declaration of a method names as parameters, and the
@@ -665,60 +676,9 @@ impl Lowering<'_> {
             ast::ExprKind::Field { base, name } => self.field(expr.span, base, name),
             ast::ExprKind::SelfValue => ExprKind::SelfValue,
             ast::ExprKind::Block(block) => return self.block(block),
-            ast::ExprKind::Unary { op, operand } => match (op, &operand.kind) {
-                (UnaryOp::Not, _) => ExprKind::Not(self.boxed(operand)),
-                // A negative literal is one value, so `-128` fits `I8`.
-                (UnaryOp::Neg, ast::ExprKind::Int(text)) => self.int_literal(text, true, expr.span),
-                (UnaryOp::Neg, ast::ExprKind::Float(text)) => {
-                    self.float_literal(text, true, expr.span)
-                }
-                (UnaryOp::Neg, _) if self.type_at(operand.span) == Type::Float => {
-                    ExprKind::FloatNeg(self.boxed(operand))
-                }
-                (UnaryOp::Neg, _) => match self.resolutions.get(&expr.span) {
-                    Some(Resolution::Int(int)) => ExprKind::Neg {
-                        operand: self.boxed(operand),
-                        int: *int,
-                    },
-                    _ => self.unsupported(expr.span, "`-` on this type"),
-                },
-                (UnaryOp::BitNot, _) => match self.resolutions.get(&expr.span) {
-                    Some(Resolution::Int(int)) => ExprKind::BitNot {
-                        operand: self.boxed(operand),
-                        int: *int,
-                    },
-                    _ => self.unsupported(expr.span, "`~` on this type"),
-                },
-            },
+            ast::ExprKind::Unary { op, operand } => self.unary(expr.span, *op, operand),
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
-            ast::ExprKind::Closure { params, body } => match self.resolutions.get(&expr.span) {
-                Some(Resolution::Closure {
-                    captures,
-                    captures_self,
-                    height,
-                }) => {
-                    // A closure's `return` and `?` leave the closure.
-                    let outer = self.in_contract.replace(false);
-                    let body = self.expr(body);
-                    self.in_contract.set(outer);
-                    ExprKind::Closure(Arc::new(Closure {
-                        params: params
-                            .iter()
-                            .map(|p| Param {
-                                name: p.name.name.clone(),
-                                ty: self.type_at(p.name.span),
-                                binds: p.name.name != "_",
-                                annotation: p.ty.as_ref().map(|ty| ty.span),
-                            })
-                            .collect(),
-                        captures: captures.clone(),
-                        captures_self: *captures_self,
-                        height: *height,
-                        body,
-                    }))
-                }
-                _ => self.unsupported(expr.span, "this closure"),
-            },
+            ast::ExprKind::Closure { params, body } => self.closure(expr.span, params, body),
             ast::ExprKind::List(items) => {
                 ExprKind::List(items.iter().map(|item| self.expr(item)).collect())
             }
@@ -735,78 +695,7 @@ impl Lowering<'_> {
                 then_branch: Box::new(self.block(then_block)),
                 else_branch: else_branch.as_ref().map(|e| self.boxed(e)),
             },
-            ast::ExprKind::Call { callee, args } => {
-                let args = args.iter().map(|a| self.expr(&a.value));
-                match (&callee.kind, self.resolutions.get(&expr.span)) {
-                    (ast::ExprKind::Field { base, .. }, Some(Resolution::Method(callee))) => {
-                        ExprKind::Call {
-                            callee: callee.clone(),
-                            type_args: self.type_args_at(expr.span),
-                            args: std::iter::once(self.expr(base)).chain(args).collect(),
-                        }
-                    }
-                    (
-                        ast::ExprKind::Field { base, .. },
-                        Some(Resolution::MutatingMethod(callee)),
-                    ) => match self.place(base) {
-                        // `List.sort` is `list_sorted` of the receiver,
-                        // assigned back when it has returned, so a panic
-                        // in the sort leaves the list as it was.
-                        Some(receiver) if matches!(callee, Callee::Function(f) if f == "pkg.std.core.list_sorted") =>
-                        {
-                            let ty = self.type_at(base.span);
-                            let read = Expr {
-                                kind: self.expr(base).kind,
-                                ty,
-                                span: base.span,
-                            };
-                            ExprKind::Block {
-                                stmts: vec![Stmt::Assign {
-                                    place: receiver,
-                                    value: Expr {
-                                        kind: ExprKind::Call {
-                                            callee: callee.clone(),
-                                            type_args: self.type_args_at(expr.span),
-                                            args: vec![read.clone()],
-                                        },
-                                        ty: read.ty.clone(),
-                                        span: expr.span,
-                                    },
-                                    span: expr.span,
-                                }],
-                                value: None,
-                            }
-                        }
-                        Some(receiver) => ExprKind::MutatingCall {
-                            callee: callee.clone(),
-                            type_args: self.type_args_at(expr.span),
-                            receiver,
-                            args: args.collect(),
-                        },
-                        // A temporary, such as a call's result: the
-                        // change is not kept.
-                        None => ExprKind::Call {
-                            callee: callee.clone(),
-                            type_args: self.type_args_at(expr.span),
-                            args: std::iter::once(self.expr(base)).chain(args).collect(),
-                        },
-                    },
-                    (_, Some(Resolution::Call(callee))) => ExprKind::Call {
-                        callee: callee.clone(),
-                        type_args: self.type_args_at(expr.span),
-                        args: args.collect(),
-                    },
-                    (_, Some(Resolution::CallValue)) => ExprKind::CallValue {
-                        callee: self.boxed(callee),
-                        args: args.collect(),
-                    },
-                    (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
-                        ctor: ctor.clone(),
-                        fields: args.collect(),
-                    },
-                    _ => self.unsupported(expr.span, "this call"),
-                }
-            }
+            ast::ExprKind::Call { callee, args } => self.call(expr.span, callee, args),
             ast::ExprKind::Try(_) if self.in_contract.get() => {
                 ExprKind::Unsupported("a `?` in a contract".to_string())
             }
@@ -838,6 +727,139 @@ impl Lowering<'_> {
             kind: self.secret(kind, &ty, expr.span),
             ty,
             span: expr.span,
+        }
+    }
+
+    /// A unary operator: `!`, `-` (a negative literal is one value) or `~`.
+    fn unary(&self, span: Span, op: UnaryOp, operand: &ast::Expr) -> ExprKind {
+        match (op, &operand.kind) {
+            (UnaryOp::Not, _) => ExprKind::Not(self.boxed(operand)),
+            // A negative literal is one value, so `-128` fits `I8`.
+            (UnaryOp::Neg, ast::ExprKind::Int(text)) => self.int_literal(text, true, span),
+            (UnaryOp::Neg, ast::ExprKind::Float(text)) => self.float_literal(text, true, span),
+            (UnaryOp::Neg, _) if self.type_at(operand.span) == Type::Float => {
+                ExprKind::FloatNeg(self.boxed(operand))
+            }
+            (UnaryOp::Neg, _) => match self.resolutions.get(&span) {
+                Some(Resolution::Int(int)) => ExprKind::Neg {
+                    operand: self.boxed(operand),
+                    int: *int,
+                },
+                _ => self.unsupported(span, "`-` on this type"),
+            },
+            (UnaryOp::BitNot, _) => match self.resolutions.get(&span) {
+                Some(Resolution::Int(int)) => ExprKind::BitNot {
+                    operand: self.boxed(operand),
+                    int: *int,
+                },
+                _ => self.unsupported(span, "`~` on this type"),
+            },
+        }
+    }
+
+    /// A closure, with the slots it captures that the checker found.
+    fn closure(&self, span: Span, params: &[ast::ClosureParam], body: &ast::Expr) -> ExprKind {
+        match self.resolutions.get(&span) {
+            Some(Resolution::Closure {
+                captures,
+                captures_self,
+                height,
+            }) => {
+                // A closure's `return` and `?` leave the closure.
+                let outer = self.in_contract.replace(false);
+                let body = self.expr(body);
+                self.in_contract.set(outer);
+                ExprKind::Closure(Arc::new(Closure {
+                    params: params
+                        .iter()
+                        .map(|p| Param {
+                            name: p.name.name.clone(),
+                            ty: self.type_at(p.name.span),
+                            binds: p.name.name != "_",
+                            annotation: p.ty.as_ref().map(|ty| ty.span),
+                        })
+                        .collect(),
+                    captures: captures.clone(),
+                    captures_self: *captures_self,
+                    height: *height,
+                    body,
+                }))
+            }
+            _ => self.unsupported(span, "this closure"),
+        }
+    }
+
+    /// A call, as the checker resolved it: a function, a method (a mutating
+    /// one writes its receiver back), a closure value, or a constructor.
+    fn call(&self, span: Span, callee: &ast::Expr, args: &[ast::Arg]) -> ExprKind {
+        let args = args.iter().map(|a| self.expr(&a.value));
+        match (&callee.kind, self.resolutions.get(&span)) {
+            (ast::ExprKind::Field { base, .. }, Some(Resolution::Method(callee))) => {
+                ExprKind::Call {
+                    callee: callee.clone(),
+                    type_args: self.type_args_at(span),
+                    args: std::iter::once(self.expr(base)).chain(args).collect(),
+                }
+            }
+            (ast::ExprKind::Field { base, .. }, Some(Resolution::MutatingMethod(callee))) => {
+                match self.place(base) {
+                    // `List.sort` is `list_sorted` of the receiver,
+                    // assigned back when it has returned, so a panic
+                    // in the sort leaves the list as it was.
+                    Some(receiver) if matches!(callee, Callee::Function(f) if f == "pkg.std.core.list_sorted") =>
+                    {
+                        let ty = self.type_at(base.span);
+                        let read = Expr {
+                            kind: self.expr(base).kind,
+                            ty,
+                            span: base.span,
+                        };
+                        ExprKind::Block {
+                            stmts: vec![Stmt::Assign {
+                                place: receiver,
+                                value: Expr {
+                                    kind: ExprKind::Call {
+                                        callee: callee.clone(),
+                                        type_args: self.type_args_at(span),
+                                        args: vec![read.clone()],
+                                    },
+                                    ty: read.ty.clone(),
+                                    span,
+                                },
+                                span,
+                            }],
+                            value: None,
+                        }
+                    }
+                    Some(receiver) => ExprKind::MutatingCall {
+                        callee: callee.clone(),
+                        type_args: self.type_args_at(span),
+                        receiver,
+                        args: args.collect(),
+                    },
+                    // A temporary, such as a call's result: the
+                    // change is not kept.
+                    None => ExprKind::Call {
+                        callee: callee.clone(),
+                        type_args: self.type_args_at(span),
+                        args: std::iter::once(self.expr(base)).chain(args).collect(),
+                    },
+                }
+            }
+            (_, Some(Resolution::Call(callee))) => ExprKind::Call {
+                callee: callee.clone(),
+                type_args: self.type_args_at(span),
+                args: args.collect(),
+            },
+            (_, Some(Resolution::CallValue)) => ExprKind::CallValue {
+                callee: self.boxed(callee),
+                args: args.collect(),
+            },
+            (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
+                ctor: ctor.clone(),
+                fields: args.collect(),
+            },
+            _ => self.unsupported(span, "this call"),
         }
     }
 
