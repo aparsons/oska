@@ -457,7 +457,7 @@ fn sorted_names(entries: Vec<std::ffi::OsString>, path: &Path) -> io::Result<Vec
 }
 
 /// `root`'s path joined with `names`.
-fn joined(root: &RootHandle, names: &[String]) -> PathBuf {
+pub(crate) fn joined(root: &RootHandle, names: &[String]) -> PathBuf {
     names
         .iter()
         .fold(root.path.to_path_buf(), |path, name| path.join(name))
@@ -1046,6 +1046,18 @@ impl Default for FakeHost {
 impl FakeHost {
     pub fn new() -> Self {
         FakeHost::default()
+    }
+
+    /// A host holding `world`: its stdin, environment and filesystem.
+    pub fn from_world(world: FakeWorld) -> Self {
+        FakeHost {
+            stdin: world.stdin.into_iter().collect(),
+            env: world.env,
+            files: world.files,
+            dirs: world.dirs,
+            links: world.links,
+            ..FakeHost::default()
+        }
     }
 
     /// The host with environment variable `name` set to `value`.

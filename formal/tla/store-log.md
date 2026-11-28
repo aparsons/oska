@@ -63,3 +63,26 @@ So the primitives are: `append`, file `sync`, `rename` inside one capability, di
 `FileWrite.sync` on macOS is `F_FULLFSYNC`, so `Ok` means the drive's cache is empty too; the model's "durable" is that. On Windows a directory flush is not documented to make a rename durable (`docs/runtime.md`), so step 3.4 there rests on what NTFS's journal gives.
 
 The model has one writer. The lock capability is what makes that true, and a second writer is out of scope for the first version.
+
+## The crash filesystem (`oska_run::CrashHost`, #847)
+
+`crates/oska-run/src/crash_fs.rs` runs a program on an in-memory filesystem, records each step, and replays the record into every crash the rules below allow. `crates/oska-run/tests/crash_fs.rs` proves it against the models: a write acknowledged after its sync survives every crash; one acknowledged before it (`StoreLogAckEarly`) is lost at some crash; a rename before the directory sync can revert; a rename before the data sync (`StoreLogRenameFirst`) can leave a torn snapshot; a torn last append leaves a prefix.
+
+How it mirrors the model:
+
+- Data: `write` and `append` are cached; a file `sync` makes that file's data durable. A crash keeps any first few unsynced writes and may tear the next one to a prefix (`Tears`: none, half, or every prefix). This is "any first few of the unsynced ones, the last possibly torn".
+- Names: a `rename`, `remove_file` or `remove_dir` is visible at once and durable after the sync of each directory it changes. A crash keeps any first few unsynced changes: an unsynced rename may or may not have happened.
+- Data and names are chosen independently, so a rename can survive with the file's data not: the torn snapshot of `StoreLogRenameFirst`.
+- Acknowledged: stdout is the acknowledgement, and each print is a crash point.
+
+Stricter than the model: a crash is a point between two steps, never inside one `append` (a torn write is the tear choice).
+
+Looser than the model, and than a real disk:
+
+- Unsynced writes reach the disk in program order across all files; a real file system may keep a later write and lose an earlier one. The chain check makes that harmless in the model, and this filesystem does not try it.
+- A new file's name and `create_dir` are durable at once (the model has no creation to lose); only its data is not. A creation after an unsynced change of the same name waits for the directory sync.
+- Unsynced name changes are kept as a prefix in order, not as any subset. A change across two directories needs both syncs, and blocks later changes until then.
+- A torn `write` over an existing file is a prefix of the new bytes; it is never emptied or mixed with the old ones.
+- No bit rot or edited file: that is the attack tests' job.
+
+An Oska test program under `oskac test` cannot use it yet: `t.fs` is a `FakeHost` inside `TestHost`, and a crash needs a new prelude seam (a capability to crash and reopen) in the checker, the interpreter and every native backend. It is left to a later ticket.
