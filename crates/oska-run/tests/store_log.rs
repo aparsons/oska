@@ -47,6 +47,7 @@ fn show(io: Stdout, rd: store.Reader<Item>, key: String) -> Result<(), IoError> 
 fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {{
     let read = fs.read_only().restrict_to("/data")
     let dir = fs.write_only().restrict_to("/data")
+    let key = Secret.new("store key".to_bytes())
     let codec = store.Codec.new(to_value, from_value)
 {body}
     Ok(())
@@ -56,7 +57,7 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {{
 }
 
 /// Print every key `k1` to `k4`, or the error.
-const SHOW_ALL: &str = r#"    match store.read(read, codec) {
+const SHOW_ALL: &str = r#"    match store.read(read, key, codec) {
         Ok(rd) => {
             show(io, rd, "k1")?
             show(io, rd, "k2")?
@@ -69,7 +70,7 @@ const SHOW_ALL: &str = r#"    match store.read(read, codec) {
 /// Open for writing and run `ops`, then print "done" or the error.
 fn writing(ops: &str) -> String {
     format!(
-        r#"    let r = store.open(read, dir, codec, |s: store.Store<Item>| {{
+        r#"    let r = store.open(read, dir, key, codec, |s: store.Store<Item>| {{
         var st = s
 {ops}
         "done"
@@ -155,7 +156,7 @@ fn the_log_is_a_chain_of_hashed_records() {
 #[test]
 fn a_second_writer_is_refused_while_the_first_holds_the_store() {
     let mut host = world();
-    let ops = "        let again = store.open(read, dir, codec, |t: store.Store<Item>| 1)\n\
+    let ops = "        let again = store.open(read, dir, key, codec, |t: store.Store<Item>| 1)\n\
          match again {\n\
          \x20   Ok(_) => { let _ = io.println(\"second writer\") }\n\
          \x20   Err(e) => { let _ = io.println(e.message()) }\n\
@@ -163,7 +164,7 @@ fn a_second_writer_is_refused_while_the_first_holds_the_store() {
     // The inner open runs inside the outer one's closure, which holds the
     // lock. `io` is captured, so the closure is a `cap fn`.
     let body = format!(
-        r#"    let r = store.open(read, dir, codec, |s: store.Store<Item>| {{
+        r#"    let r = store.open(read, dir, key, codec, |s: store.Store<Item>| {{
 {ops}        0
     }})
     match r {{
@@ -196,6 +197,12 @@ fn opening_for_writing_cuts_a_torn_last_line_off_and_goes_on() {
     assert_eq!(lines(&host).len(), 3);
 }
 
+/// The line with its last character changed: a changed byte of the seal.
+fn flip(line: &str) -> String {
+    let (head, last) = line.split_at(line.len() - 1);
+    format!("{head}{}", if last == "0" { "1" } else { "0" })
+}
+
 // ---- tamper ----------------------------------------------------------------------------
 
 fn opens_with(log: &str) -> String {
@@ -209,20 +216,20 @@ fn a_changed_record_is_an_error_on_open() {
     let log = lines(&host);
     // The value of the middle record is changed, its hash left alone.
     let mut changed = log.clone();
-    changed[1] = changed[1].replace("\"qty\":2", "\"qty\":99");
+    changed[1] = flip(&changed[1]);
     let out = opens_with(&format!("{}\n", changed.join("\n")));
     assert!(out.starts_with("store: corrupt log: line 2:"), "{out}");
     assert!(out.contains("hash does not match"), "{out}");
     assert!(!out.contains("k1="), "no partial data: {out}");
-    // Changed and re-hashed: the next record no longer links to it.
+    // Changed and re-hashed: the seal no longer opens.
     let (_, body) = log[1].split_once(' ').expect("record");
-    let body = body.replace("\"qty\":2", "\"qty\":99");
+    let body = flip(body);
     let rehashed = format!("{} {body}", sha256_hex(&body));
     let mut forged = log.clone();
     forged[1] = rehashed;
     let out = opens_with(&format!("{}\n", forged.join("\n")));
-    assert!(out.starts_with("store: corrupt log: line 3:"), "{out}");
-    assert!(out.contains("does not follow"), "{out}");
+    assert!(out.starts_with("store: corrupt log: line 2:"), "{out}");
+    assert!(out.contains("does not open"), "{out}");
 }
 
 #[test]
@@ -245,7 +252,7 @@ fn a_damaged_complete_last_record_is_an_error_not_a_torn_write() {
     let host = world_with_log(2);
     let log = lines(&host);
     let mut changed = log.clone();
-    changed[1] = changed[1].replace("\"qty\":2", "\"qty\":3");
+    changed[1] = flip(&changed[1]);
     let out = opens_with(&format!("{}\n", changed.join("\n")));
     assert!(out.starts_with("store: corrupt log: line 2:"), "{out}");
 }
@@ -303,7 +310,7 @@ fn crash_program() -> String {
         let _ = st.put("k3", Item(name: "c", qty: 3))
         let _ = io.println("ack 4")"#;
     program(&format!(
-        r#"    let r = store.open(read, dir, codec, |s: store.Store<Item>| {{
+        r#"    let r = store.open(read, dir, key, codec, |s: store.Store<Item>| {{
         var st = s
 {ops}
         "done"
