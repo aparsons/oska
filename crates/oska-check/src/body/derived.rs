@@ -26,7 +26,7 @@ impl Body<'_, '_, '_> {
         let Ty::Named(name, args, _) = ty else {
             return false;
         };
-        if self.decls().get(name).map_or(true, |d| d.in_prelude) {
+        if self.decls().get(name).is_none_or(|d| d.in_prelude) {
             return false;
         }
         let (generics, shapes) = match (

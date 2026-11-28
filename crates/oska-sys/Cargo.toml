@@ -11,11 +11,12 @@ rust-version.workspace = true
 
 # The one crate that does not take the workspace's lints, because it may
 # use `unsafe` (ADR 0009). scripts/check.sh refuses any other crate that
-# opts out. The workspace's other lints are repeated here.
+# opts out. Cargo does not let `[lints] workspace = true` add keys, so the
+# workspace's other lints are repeated here, and must match them.
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
-unwrap_used = "warn"
+unwrap_used = "deny"
 undocumented_unsafe_blocks = "deny"
 multiple_unsafe_ops_per_block = "deny"

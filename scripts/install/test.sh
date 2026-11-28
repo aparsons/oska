@@ -1009,6 +1009,36 @@ test_uninstall_keeps_a_changed_file() {
     fail "left $(find "$oska")"
 }
 
+# The copy `oskac self update --keep-previous` leaves beside the binary is
+# a `binary` entry of the receipt, with `kept_previous` naming it: uninstall
+# removes it, with no change to the installer, and keeps one that changed.
+# (A receipt with a nested `kept_previous` object is read like any other.)
+test_uninstall_removes_the_copy_self_update_kept() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local oska="$PWD/home/.oska" copy sum
+  copy="$oska/bin/oskac-1.2.2"
+  printf '#!/bin/sh\necho kept\n' >"$copy"
+  sum=$(sha256 "$copy")
+  jq --arg p "$copy" --arg s "$sum" \
+    '.previous_version = "1.2.2" | .kept_previous = {version: "1.2.2", path: $p, sha256: $s}
+     | .files = (.files[0:-1] + [{path: $p, kind: "binary", sha256: $s}] + .files[-1:])' \
+    "$oska/receipt.json" >receipt.new
+  cp receipt.new "$oska/receipt.json"
+  cp -R home home.kept
+  install --json --uninstall >out.json
+  [ "$(jq -c '.removed | index("'"$copy"'") != null' out.json)" = true ] || fail "removed $(jq -c .removed out.json)"
+  [ ! -e "$oska" ] || fail "left $(find "$oska")"
+  # Changed since it was kept: left in place, and said so.
+  rm -rf home
+  mv home.kept home
+  printf 'changed\n' >"$copy"
+  install --json --uninstall >out.json
+  [ "$(jq -c '.kept | index("'"$copy"'") != null' out.json)" = true ] || fail "kept $(jq -c .kept out.json)"
+  [ -f "$copy" ] || fail "the changed copy was removed"
+}
+
 # Anything else in the Oska home is not the installer's: it stays, and so
 # does the home.
 test_uninstall_keeps_a_home_with_other_files_in_it() {

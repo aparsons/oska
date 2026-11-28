@@ -1,6 +1,6 @@
 # Concurrency audit of the `scripts` group
 
-Spec #810, tickets #812 and #813. For each step of `scripts/check.sh --group scripts`, the state it shares with the other steps and a verdict: `safe` to run beside another suite, or `serial`. `scripts/check.sh --group scripts` runs the `safe` steps concurrently, up to the number of cores (`OSKA_CHECK_JOBS=N` sets the number; `1` runs one at a time). A `safe` step carries the `--concurrent` tag in `scripts/check.sh`; a `serial` step has none, runs in the group's one serial lane (never beside another serial step), and may run beside safe ones. Each suite's output is buffered in a private temp dir and prints as one block, in step order.
+Spec #810, tickets #812 and #813. For each step of `scripts/check.sh --group scripts`, the state it shares with the other steps and a verdict: `safe` to run beside another suite, or `serial`. `scripts/check.sh --group scripts` runs the `safe` steps concurrently, up to the number of cores (`OSKA_CHECK_JOBS=N` sets the number; `1` runs one at a time). A `safe` step carries the `--concurrent` tag in `scripts/check.sh`; a `serial` step has none, runs in the group's one serial lane (never beside another serial step), and may run beside safe ones. Each suite's output is buffered in a private temp dir and prints as one block, in step order. On INT or TERM the run stops every process the suites started, found with `ps -A -o pid= -o ppid=` (read again after each kill), and each runner's pid is also written to a file in the buffer directory so a runner whose launch subshell is gone is still found. Where `ps` cannot list processes (git-bash on Windows may not), the run says so on stderr and cannot stop the suites.
 
 `scripts/check-steps/test.sh` fails when the `--concurrent` tags and the `safe` rows differ, when a step of the group has no row here, when a row names no step of the group, or when a verdict is not `safe` or `serial` with a reason. A new suite adds its row.
 
@@ -37,6 +37,7 @@ Each `safe` verdict was checked by running the suites side by side on a 4-core m
 | `unsafe guard tests` | cargo package cache, briefly | safe | Builds throwaway workspaces in its own scratch dir (own `target`); the package cache lock is shared and brief, and nothing is downloaded. |
 | `intrinsic guard tests` | none | safe | Own scratch trees; the file under `target/` is in its scratch tree. |
 | `SPDX guard tests` | none | safe | Own scratch trees and own `git` repositories. |
+| `test-site guard tests` | none | safe | Own scratch trees and own `git` repositories. |
 | `kill guard tests` | none | safe | Feeds command text to the guard; kills nothing and starts no process. |
 | `workflow guard tests` | none | safe | Own scratch trees. |
 | `temp-leak wrapper tests` | none | safe | Sets `TMPDIR` to its own scratch dir; the wrapper's private dir is made under that, not under the shared `/tmp`. |

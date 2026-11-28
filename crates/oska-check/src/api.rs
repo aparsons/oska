@@ -11,7 +11,9 @@
 //! above it, with no blank line between. That is a reading convention, not
 //! syntax: Oska has no doc comments (ADR 0014 freezes new syntax).
 
-use oska_syntax::ast::{Fields, FnDecl, GenericParam, Item, ItemKind, Module};
+use oska_syntax::ast::{
+    EnumDecl, Fields, FnDecl, GenericParam, Item, ItemKind, Module, StructDecl,
+};
 use oska_syntax::Diagnostic;
 
 use crate::authority;
@@ -239,52 +241,14 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
                 out.push(item(name, Kind::Fn, fn_signature(src, it, f), it, reach));
             }
             ItemKind::Struct(s) if it.is_public() => {
-                let capability = it.attributes.iter().any(|a| a.name.name == "capability");
-                let kind = if capability {
-                    Kind::Capability
-                } else {
-                    Kind::Struct
-                };
-                let mut sig = format!(
-                    "pub {}struct {}{}",
-                    if s.cap { "cap " } else { "" },
-                    s.name.name,
-                    generics(src, &s.generics)
-                );
-                if let Fields::Named(fields) = &s.fields {
-                    let public: Vec<&str> = fields
-                        .iter()
-                        .filter(|f| f.public)
-                        .map(|f| text(src, f.span.start, f.span.end))
-                        .collect();
-                    if !public.is_empty() {
-                        sig.push_str(&format!(" {{ {} }}", public.join(", ")));
-                    }
-                }
+                let (kind, sig) = struct_signature(src, it, s);
                 let reach = type_reach(decls, &s.name.name, &s.generics);
-                out.push(item(s.name.name.clone(), kind, one_line(&sig), it, reach));
+                out.push(item(s.name.name.clone(), kind, sig, it, reach));
             }
             ItemKind::Enum(e) if it.is_public() => {
-                let variants: Vec<&str> = e
-                    .variants
-                    .iter()
-                    .map(|v| text(src, v.span.start, v.span.end))
-                    .collect();
-                let sig = format!(
-                    "pub {}enum {}{} {{ {} }}",
-                    if e.cap { "cap " } else { "" },
-                    e.name.name,
-                    generics(src, &e.generics),
-                    variants.join(", ")
-                );
+                let sig = enum_signature(src, e);
                 let reach = type_reach(decls, &e.name.name, &e.generics);
-                out.push(item(
-                    e.name.name.clone(),
-                    Kind::Enum,
-                    one_line(&sig),
-                    it,
-                    reach,
-                ));
+                out.push(item(e.name.name.clone(), Kind::Enum, sig, it, reach));
             }
             ItemKind::Trait(t) if it.is_public() => {
                 let sig = format!("pub trait {}{}", t.name.name, generics(src, &t.generics));
@@ -329,6 +293,51 @@ fn items_of(path: &str, src: &str, module: &Module, decls: &Decls, items: &Items
     qualify_shared_methods(&mut out, &methods);
     qualify_clashing_functions(path, &mut out);
     out
+}
+
+/// The kind and the one-line signature of a public `struct`: its public
+/// fields are listed when they are named.
+fn struct_signature(src: &str, it: &Item, s: &StructDecl) -> (Kind, String) {
+    let capability = it.attributes.iter().any(|a| a.name.name == "capability");
+    let kind = if capability {
+        Kind::Capability
+    } else {
+        Kind::Struct
+    };
+    let mut sig = format!(
+        "pub {}struct {}{}",
+        if s.cap { "cap " } else { "" },
+        s.name.name,
+        generics(src, &s.generics)
+    );
+    if let Fields::Named(fields) = &s.fields {
+        let public: Vec<&str> = fields
+            .iter()
+            .filter(|f| f.public)
+            .map(|f| text(src, f.span.start, f.span.end))
+            .collect();
+        if !public.is_empty() {
+            sig.push_str(&format!(" {{ {} }}", public.join(", ")));
+        }
+    }
+    (kind, one_line(&sig))
+}
+
+/// The signature of a public `enum`, with its variants as written.
+fn enum_signature(src: &str, e: &EnumDecl) -> String {
+    let variants: Vec<&str> = e
+        .variants
+        .iter()
+        .map(|v| text(src, v.span.start, v.span.end))
+        .collect();
+    let sig = format!(
+        "pub {}enum {}{} {{ {} }}",
+        if e.cap { "cap " } else { "" },
+        e.name.name,
+        generics(src, &e.generics),
+        variants.join(", ")
+    );
+    one_line(&sig)
 }
 
 /// Names a function whose anchor a type of the same module has too, as

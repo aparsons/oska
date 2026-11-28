@@ -55,40 +55,48 @@ pub struct Decls<'a> {
     renamed: HashMap<&'static str, String>,
 }
 
+/// The `std.*` modules `module` imports, the ones it binds by name, and the
+/// names it imports unqualified.
+#[allow(clippy::type_complexity)]
+fn imports(module: &Module) -> (Vec<&'static StdModule>, Vec<&'static StdModule>, Vec<&str>) {
+    let mut imported: Vec<&'static StdModule> = Vec::new();
+    let mut bound: Vec<&'static StdModule> = Vec::new();
+    let mut unqualified: Vec<&str> = Vec::new();
+    for item in &module.items {
+        if let ItemKind::Use(u) = &item.kind {
+            let path: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
+            // An unknown module is reported by name resolution.
+            let Some(std) = prelude::std_module(&path.join(".")) else {
+                continue;
+            };
+            if !imported.iter().any(|m| m.path == std.path) {
+                imported.push(std);
+            }
+            match &u.names {
+                // Only exports can be imported; others stay hidden.
+                Some(names) => unqualified.extend(
+                    names
+                        .iter()
+                        .map(|n| n.name.as_str())
+                        .filter(|n| std.exports_name(n)),
+                ),
+                None => {
+                    if !bound.iter().any(|m| m.path == std.path) {
+                        bound.push(std);
+                    }
+                }
+            }
+        }
+    }
+    (imported, bound, unqualified)
+}
+
 impl<'a> Decls<'a> {
     /// Collect the prelude's declarations, then those of every `std.*`
     /// module `module` imports, then `module`'s, reporting any name
     /// declared twice.
     pub fn collect(module: &'a Module, diagnostics: &mut Vec<Diagnostic>) -> Self {
-        let mut imported: Vec<&'static StdModule> = Vec::new();
-        let mut bound: Vec<&'static StdModule> = Vec::new();
-        let mut unqualified: Vec<&str> = Vec::new();
-        for item in &module.items {
-            if let ItemKind::Use(u) = &item.kind {
-                let path: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
-                // An unknown module is reported by name resolution.
-                let Some(std) = prelude::std_module(&path.join(".")) else {
-                    continue;
-                };
-                if !imported.iter().any(|m| m.path == std.path) {
-                    imported.push(std);
-                }
-                match &u.names {
-                    // Only exports can be imported; others stay hidden.
-                    Some(names) => unqualified.extend(
-                        names
-                            .iter()
-                            .map(|n| n.name.as_str())
-                            .filter(|n| std.exports_name(n)),
-                    ),
-                    None => {
-                        if !bound.iter().any(|m| m.path == std.path) {
-                            bound.push(std);
-                        }
-                    }
-                }
-            }
-        }
+        let (imported, bound, unqualified) = imports(module);
         let own: Vec<&str> = module.items.iter().filter_map(prelude::item_name).collect();
         let mut qualified_only = HashMap::new();
         let mut renamed = HashMap::new();
@@ -140,13 +148,19 @@ impl<'a> Decls<'a> {
                 decls.names.insert(key, decl);
             }
         }
+        decls.declare_own(module, diagnostics);
+        decls
+    }
+
+    /// Declare the module's own names, reporting any declared twice.
+    fn declare_own(&mut self, module: &'a Module, diagnostics: &mut Vec<Diagnostic>) {
         // Where the module declares each name first.
         let mut first: HashMap<&str, Span> = HashMap::new();
         for item in &module.items {
             let Some((name, span, decl)) = declaration(item, false) else {
                 continue;
             };
-            match decls.names.get(name) {
+            match self.names.get(name) {
                 Some(previous) => {
                     let place = if previous.in_prelude {
                         "in the prelude"
@@ -164,12 +178,11 @@ impl<'a> Decls<'a> {
                     diagnostics.push(diagnostic);
                 }
                 None => {
-                    decls.names.insert(name.to_string(), decl);
+                    self.names.insert(name.to_string(), decl);
                     first.insert(name, span);
                 }
             }
         }
-        decls
     }
 
     /// The prelude's items followed by those of every imported `std.*`

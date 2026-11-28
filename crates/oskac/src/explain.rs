@@ -10,6 +10,7 @@
 //! tests in `tests/catalog.rs` keep them in step with the codes the
 //! source defines.
 
+use crate::cli::Flags;
 use crate::fence::{FenceLine, Fences};
 use crate::json::{quote, quote_option};
 use std::fmt::Write;
@@ -301,6 +302,28 @@ pub fn unknown_to_human(code: &str, suggestion: Option<&Entry>) -> String {
             format!("error: unknown diagnostic code `{code}`; a code looks like E0300 or P0004")
         }
     }
+}
+
+/// `oskac explain`: print the catalog entry of a diagnostic code, as JSON
+/// with `--format=json`. An unknown code is an error (exit code 2) that
+/// suggests the closest code, as text on stderr or as JSON on stdout.
+pub(crate) fn command(code: &str, Flags { json, .. }: Flags) -> std::process::ExitCode {
+    let entries = catalog();
+    if let Some(entry) = find(&entries, code) {
+        if json {
+            outln!("{}", to_json(entry));
+        } else {
+            out!("{}", to_human(entry));
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
+    let suggestion = closest(&entries, code);
+    if json {
+        outln!("{}", unknown_to_json(code, suggestion));
+    } else {
+        eprintln!("{}", unknown_to_human(code, suggestion));
+    }
+    std::process::ExitCode::from(2)
 }
 
 #[cfg(test)]

@@ -179,11 +179,11 @@ fn is_semver(version: &str) -> bool {
         let parts: Vec<&str> = core.split('.').collect();
         parts.len() == 3 && parts.iter().all(|p| numeric(p))
     };
-    let pre_ok = pre.map_or(true, |p| {
+    let pre_ok = pre.is_none_or(|p| {
         p.split('.')
             .all(|id| identifier(id) && (!id.chars().all(|c| c.is_ascii_digit()) || numeric(id)))
     });
-    let build_ok = build.map_or(true, |b| b.split('.').all(identifier));
+    let build_ok = build.is_none_or(|b| b.split('.').all(identifier));
     core_ok && pre_ok && build_ok
 }
 

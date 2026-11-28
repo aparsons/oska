@@ -546,7 +546,7 @@ fail_rc() {
 # and macOS alike).
 descendants() {
   local c
-  for c in $(ps -A -o pid= -o ppid= | awk -v p="$1" '$2 == p { print $1 }'); do
+  for c in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'); do
     descendants "$c"
     printf '%s\n' "$c"
   done
@@ -555,25 +555,60 @@ descendants() {
 # The concurrent run's state, global so the EXIT trap can clean up.
 q_tmp=      # the private buffer directory
 q_pids=()   # the launch_step subshell of each queued step, by place
+# queued_pids: the launch_step subshell of each unfinished queued step and the
+# runner it started (its pid file), then everything below them, deepest first.
+# A step with a result file has ended, and its pid may belong to another
+# process by now, so it is left alone.
+queued_pids() {
+  local i p
+  [ -n "$q_tmp" ] && [ "${#q_pids[@]}" -gt 0 ] || return 0
+  for i in "${!q_pids[@]}"; do
+    [ ! -f "$q_tmp/$i.rc" ] || continue
+    p=${q_pids[i]}
+    descendants "$p"
+    printf '%s\n' "$p"
+    p=$(cat "$q_tmp/$i.pid" 2>/dev/null) || continue
+    [ -n "$p" ] || continue
+    descendants "$p"
+    printf '%s\n' "$p"
+  done
+}
+# unfinished_steps: the places of the queued steps that have no result yet.
+unfinished_steps() {
+  local i
+  [ -n "$q_tmp" ] && [ "${#q_pids[@]}" -gt 0 ] || return 0
+  for i in "${!q_pids[@]}"; do
+    [ -f "$q_tmp/$i.rc" ] || printf '%s ' "$i"
+  done
+}
 # queue_cleanup: stops every process the queued steps started (their runners
 # and everything below), waits for them, then removes the buffer directory, so
-# nothing outlives the run or writes into a deleted directory.
+# nothing outlives the run or writes into a deleted directory. The process
+# tree is read again after each kill, because a process that was starting when
+# it was read is not in the first list, and a runner whose launch subshell is
+# gone has been adopted by init: its pid file still names it.
 queue_cleanup() {
-  local p all='' left
-  for p in ${q_pids[@]+"${q_pids[@]}"}; do
-    all="$all $(descendants "$p" | tr '\n' ' ') $p"
+  local p pid seen='' now left
+  if [ -n "$(unfinished_steps)" ] && ! ps -A -o pid= -o ppid= >/dev/null 2>&1; then
+    printf 'check.sh: cannot list processes (ps -A -o pid= -o ppid= failed); suites started by this run may keep running\n' >&2
+  fi
+  for _ in 1 2 3; do
+    now=$(queued_pids | tr '\n' ' ')
+    [ -n "${now// /}" ] || break
+    seen="$seen $now"
+    # shellcheck disable=SC2086 # a list of pids
+    kill $now 2>/dev/null || true
+    sleep 0.1
   done
-  # shellcheck disable=SC2086 # a list of pids
-  [ -z "${all// /}" ] || kill $all 2>/dev/null || true
   for p in ${q_pids[@]+"${q_pids[@]}"}; do wait "$p" 2>/dev/null || true; done
   for p in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     left=
-    for pid in $all; do kill -0 "$pid" 2>/dev/null && left=1; done
+    for pid in $seen; do kill -0 "$pid" 2>/dev/null && left=1; done
     [ -n "$left" ] || break
     sleep 0.1
   done
   # shellcheck disable=SC2086
-  [ -z "$left" ] || kill -9 $all 2>/dev/null || true
+  [ -z "$left" ] || kill -9 $seen 2>/dev/null || true
   q_pids=()
   [ -z "$q_tmp" ] || rm -rf "$q_tmp"
   q_tmp=
@@ -674,8 +709,12 @@ run_queue() {
 # and, last, DIR/I.rc: "EXIT-CODE SECONDS".
 launch_step() {
   local dir=$1 i=$2 name=$3 start=$SECONDS rc=0
-  # run_queue's cleanup stops this subshell and everything below it.
-  bash scripts/check.sh --group scripts --internal-step "$name" >"$dir/$i.out" 2>&1 || rc=$?
+  # run_queue's cleanup stops this subshell and everything below it; the
+  # runner's pid is written down so it is found even if this subshell is gone.
+  bash scripts/check.sh --group scripts --internal-step "$name" >"$dir/$i.out" 2>&1 &
+  local runner=$!
+  echo "$runner" >"$dir/$i.pid"
+  wait "$runner" || rc=$?
   echo "$rc $((SECONDS - start))" >"$dir/$i.rc.tmp"
   mv "$dir/$i.rc.tmp" "$dir/$i.rc"
 }
@@ -748,6 +787,14 @@ if step "SPDX headers and NOTICE" --no-slot --fast-when 'scripts/spdx-guard/*'; 
   # Every tracked .rs, .osk and .sh file starts with an SPDX-License-Identifier
   # header, and the tree has a NOTICE file (Apache 2.0 section 4).
   scripts/spdx-guard/guard.sh
+fi
+
+if step "test-site feature kept out of releases" --no-slot --fast-when 'crates/oskac/Cargo.toml' --fast-when 'scripts/test-site-guard/*' --fast-when '.github/*'; then
+  # `oskac`'s test-only `test-site` feature (spec #230) points the update
+  # checker at a loopback server and a test key. It must never be a default
+  # feature, be turned on by another, or reach a build that ships. The
+  # binaries are inspected after the build, by the step below.
+  scripts/test-site-guard/guard.sh
 fi
 
 if step "every workflow job has a timeout" --no-slot; then
@@ -853,6 +900,26 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests -
   else
     scripts/temp-leak/run.sh cargo test --all --no-fail-fast
   fi
+  if [ "$cargo_mode" != docs ] && [ "$tier" != fast ]; then
+    # The `oskac` built with default features (what a plain build ships) must
+    # not hold the `test-site` feature's marker, nor a release or dist one
+    # already built. Built here if this job has not, so every job that runs
+    # this step has a binary to inspect (the self_check tests build their
+    # test-site `oskac` into a directory of their own, not this one). A CI
+    # run with no binary fails, so the check cannot pass by looking at
+    # nothing.
+    cargo build --quiet -p oskac
+    binaries=(target/debug/oskac)
+    # Shipped binaries are built with --target, so those count too.
+    for built in target/dist/oskac target/release/oskac target/*/dist/oskac target/*/release/oskac; do
+      [ -f "$built" ] && binaries+=("$built")
+    done
+    if [ -n "${CI:-}" ]; then
+      scripts/test-site-guard/guard.sh --require-binary . "${binaries[@]}"
+    else
+      scripts/test-site-guard/guard.sh . "${binaries[@]}"
+    fi
+  fi
 fi
 
 if step "eval task set" --cargo --fast-when 'eval/*' --fast-when 'crates/oska-eval/*' --fast-when 'scripts/eval-tasks/*' --group scripts; then
@@ -938,6 +1005,10 @@ fi
 
 if step "SPDX guard tests" --fast-when 'scripts/spdx-guard/*' --concurrent --group scripts; then
   bash scripts/spdx-guard/test.sh
+fi
+
+if step "test-site guard tests" --fast-when 'scripts/test-site-guard/*' --concurrent --group scripts; then
+  bash scripts/test-site-guard/test.sh
 fi
 
 if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json --concurrent --group scripts; then

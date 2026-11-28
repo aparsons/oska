@@ -125,7 +125,7 @@ fn hex_value(digit: u8) -> Option<u8> {
 /// or `None` for an odd number of digits or anything that is not one.
 fn bytes_from_hex(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let text = args[0].as_str().as_bytes();
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Ok(Value::none());
     }
     let decoded: Option<Vec<u8>> = text

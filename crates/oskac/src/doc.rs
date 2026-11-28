@@ -7,6 +7,7 @@
 //! `E0370` or `E0371`. The command reads only the toolchain's embedded
 //! sources and writes only to standard output.
 
+use crate::cli::Flags;
 use oska_check::api::{self, ApiItem, Kind, PRELUDE};
 use oska_syntax::json_escape;
 
@@ -106,7 +107,7 @@ pub fn select(entries: Vec<Entry>, filter: &str) -> Option<Vec<Entry>> {
     };
     let selected: Vec<Entry> = entries
         .into_iter()
-        .filter(|e| module.map_or(true, |m| e.item.module == m))
+        .filter(|e| module.is_none_or(|m| e.item.module == m))
         .filter(|e| e.item.kind != Kind::Module)
         .filter(|e| {
             [e.item.name.clone(), e.item.unqualified_name()]
@@ -172,7 +173,7 @@ fn modules_run(entries: &[Entry], module: &str) -> bool {
     entries
         .iter()
         .find(|e| e.item.module == module)
-        .map_or(true, |e| e.refused != Some(Refusal::Module))
+        .is_none_or(|e| e.refused != Some(Refusal::Module))
 }
 
 /// The JSON form: `{"items": [...]}`, one object per item and per line,
@@ -201,4 +202,37 @@ pub fn to_json(entries: &[Entry]) -> String {
         return "{\"items\": []}\n".to_string();
     }
     format!("{{\"items\": [\n  {}\n]}}\n", items.join(",\n  "))
+}
+
+/// `oskac doc [filter]`: the API reference, or the part `filter` selects.
+/// An unknown module or item is a usage error (exit code 2).
+pub(crate) fn command(filter: Option<&str>, Flags { json, .. }: Flags) -> std::process::ExitCode {
+    let entries = entries();
+    let entries = match filter {
+        None => entries,
+        Some(filter) => match select(entries, filter) {
+            Some(selected) => selected,
+            None => {
+                let message = format!(
+                    "the reference has no module or item named `{filter}`; \
+                     run `oskac doc` for the whole list"
+                );
+                if json {
+                    outln!(
+                        "{{\"error\":\"unknown item\",\"item\":\"{}\"}}",
+                        oska_syntax::json_escape(filter)
+                    );
+                } else {
+                    eprintln!("error: {message}");
+                }
+                return std::process::ExitCode::from(2);
+            }
+        },
+    };
+    if json {
+        out!("{}", to_json(&entries));
+    } else {
+        out!("{}", to_human(&entries));
+    }
+    std::process::ExitCode::SUCCESS
 }
