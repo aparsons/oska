@@ -45,7 +45,7 @@ pub(crate) enum Gate<'a> {
 /// report.
 pub(crate) fn check(report: &CheckReport, json: bool, path: &str, gate: Gate) -> ExitCode {
     if !report.diagnostics.is_empty() {
-        let code = crate::print_report(report, json, path);
+        let code = crate::check::print_report(report, json, path);
         if let Gate::UpdateBaseline(file) = gate {
             eprintln!("error: the baseline {file} was not written: the program has diagnostics");
         }
@@ -53,13 +53,13 @@ pub(crate) fn check(report: &CheckReport, json: bool, path: &str, gate: Gate) ->
     }
     match gate {
         Gate::UpdateBaseline(file) => match write(report, file) {
-            Ok(()) => crate::print_report(report, json, path),
+            Ok(()) => crate::check::print_report(report, json, path),
             Err(message) => {
                 // As for a baseline that cannot be read: the error
                 // decides, so `--format=json` prints no check object,
                 // whose verdict would be `ok`.
                 if !json {
-                    let _ = crate::print_report(report, json, path);
+                    let _ = crate::check::print_report(report, json, path);
                 }
                 eprintln!("error: cannot write the baseline {file}: {message}");
                 ExitCode::FAILURE
@@ -176,7 +176,7 @@ fn compare(report: &CheckReport, json: bool, path: &str, kind: Against, file: &s
             // `--format=json` no check object: the error decides. The
             // human report still lists the program's authority.
             if !json {
-                let _ = crate::print_report(report, json, path);
+                let _ = crate::check::print_report(report, json, path);
             }
             eprintln!("error: {message}");
             return ExitCode::FAILURE;
@@ -187,7 +187,7 @@ fn compare(report: &CheckReport, json: bool, path: &str, kind: Against, file: &s
     if json {
         out!("{}", check_json(report, Some(&shown), verdict));
     } else {
-        let _ = crate::print_report(report, json, path);
+        let _ = crate::check::print_report(report, json, path);
         out!("{shown}");
     }
     if verdict == Verdict::Widened {

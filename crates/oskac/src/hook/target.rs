@@ -94,14 +94,14 @@ pub fn check(shown: &Shown, options: CheckOptions) -> Result<Checked, String> {
                 report.diagnostics = report
                     .diagnostics
                     .into_iter()
-                    .map(|d| crate::from_here(&shown.name, d))
+                    .map(|d| crate::places::from_here(&shown.name, d))
                     .collect();
                 Ok(Checked::Package { package, report })
             }
             Loaded::Refused(diagnostics) => Ok(Checked::Refused(
                 diagnostics
                     .into_iter()
-                    .map(|d| crate::from_here(&shown.name, d))
+                    .map(|d| crate::places::from_here(&shown.name, d))
                     .collect(),
             )),
             Loaded::Unreadable(message) => Err(message),

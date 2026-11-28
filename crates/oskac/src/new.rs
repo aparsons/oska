@@ -263,7 +263,7 @@ pub fn usage(json: bool) -> ExitCode {
             quote("give one package name: `oskac new <name> [--lib] [--no-agent-files] [--format=json]`")
         );
     } else {
-        eprint!("{}", crate::USAGE);
+        eprint!("{}", crate::cli::USAGE);
     }
     ExitCode::from(2)
 }

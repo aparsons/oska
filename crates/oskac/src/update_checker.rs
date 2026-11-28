@@ -606,7 +606,7 @@ fn source() -> String {
 #[cfg(test)]
 mod tests {
     use super::EXECUTABLE;
-    use crate::Places;
+    use crate::places::Places;
 
     /// [`EXECUTABLE`] is what `oskac`'s own pipeline (`oskac build`'s
     /// check and native build, with its places and debug hooks) makes of

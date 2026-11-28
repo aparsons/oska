@@ -32,7 +32,8 @@ use oska_native::Target;
 use oska_syntax::{Diagnostic, Span};
 
 use crate::cache::Cached;
-use crate::{Flags, Places};
+use crate::cli::Flags;
+use crate::places::Places;
 
 /// The target `oskac run` and `oskac test` compile for with `flags`:
 /// the host's, when it has a backend and `--interpret` is not given.
