@@ -1111,8 +1111,7 @@ reset_stub "$kill_stub"
 # itself a concurrent child) has SIGINT ignored, and a script cannot trap a
 # signal that was ignored on entry. Reset it to the default before the exec.
 reset_int=(env)
-# shellcheck disable=SC2016 # Perl's $SIG, not a shell variable
-command -v perl >/dev/null 2>&1 && reset_int=(perl -e '$SIG{INT}="DEFAULT";exec(@ARGV)' --)
+command -v python3 >/dev/null 2>&1 && reset_int=(python3 -I -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])')
 for sig in INT TERM; do
   rm -f "$work"/log.*
   rm -rf "$work/sig-tmp"
@@ -1159,7 +1158,7 @@ wait'
     ok "$sig stops every suite process and removes the buffer directory"
   else
     hint=
-    [ "${#reset_int[@]}" -gt 1 ] || hint=" (an ignored SIGINT can only be reset with perl, which is not installed)"
+    [ "${#reset_int[@]}" -gt 1 ] || hint=" (an ignored SIGINT can only be reset with python3, which is not installed)"
     bad "$sig stops every suite process and removes the buffer directory" "exit $sig_status (want $want)$hint, alive:$alive, left: $(ls -A "$work/sig-tmp"), gc: $gc1 $gc2"
   fi
 done
