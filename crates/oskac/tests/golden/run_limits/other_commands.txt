@@ -93,6 +93,22 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
+    oskac self update [--version X [--allow-downgrade] | --rollback]
+                      [--keep-previous] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade. --rollback
+                                           goes back one version.
+                                           --keep-previous keeps the replaced
+                                           binary for this update only
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -192,6 +208,22 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
+    oskac self update [--version X [--allow-downgrade] | --rollback]
+                      [--keep-previous] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade. --rollback
+                                           goes back one version.
+                                           --keep-previous keeps the replaced
+                                           binary for this update only
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -291,6 +323,22 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
+    oskac self update [--version X [--allow-downgrade] | --rollback]
+                      [--keep-previous] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade. --rollback
+                                           goes back one version.
+                                           --keep-previous keeps the replaced
+                                           binary for this update only
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)
@@ -390,6 +438,22 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
+    oskac self update [--version X [--allow-downgrade] | --rollback]
+                      [--keep-previous] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade. --rollback
+                                           goes back one version.
+                                           --keep-previous keeps the replaced
+                                           binary for this update only
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 --- exit Some(2)

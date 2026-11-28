@@ -40,7 +40,7 @@ const PROFILE_MARK: &str = "# added by the Oska installer";
 const PROFILES: [&str; 4] = [".zshrc", ".bashrc", ".bash_profile", ".profile"];
 
 /// The platform name release assets use, as the installers record it.
-fn platform() -> String {
+pub(crate) fn platform() -> String {
     let os = if cfg!(target_os = "linux") {
         "linux"
     } else if cfg!(target_os = "macos") {
@@ -57,7 +57,7 @@ fn platform() -> String {
 /// Which Linux build this `oskac` is, from the target it was compiled for:
 /// the glibc build (`gnu`) or the musl build (`musl`), the suffix of its
 /// release asset (ADR 0022). `None` off Linux, where there is one build.
-fn linux_build() -> Option<&'static str> {
+pub(crate) fn linux_build() -> Option<&'static str> {
     if cfg!(all(target_os = "linux", target_env = "musl")) {
         Some("musl")
     } else if cfg!(all(target_os = "linux", target_env = "gnu")) {
@@ -91,20 +91,20 @@ pub(crate) fn clean(path: PathBuf) -> PathBuf {
 }
 
 /// The Oska home: `OSKA_HOME`, else `.oska` in the user's home directory.
-fn oska_home() -> Option<PathBuf> {
+pub(crate) fn oska_home() -> Option<PathBuf> {
     env_path("OSKA_HOME")
         .or_else(|| user_home().map(|h| h.join(".oska")))
         .map(clean)
 }
 
 /// This executable's canonical path.
-fn executable() -> Option<PathBuf> {
+pub(crate) fn executable() -> Option<PathBuf> {
     std::env::current_exe().and_then(|p| p.canonicalize()).ok()
 }
 
 /// A path for output. Windows canonical paths carry a `\\?\` prefix; it is
 /// dropped when a drive letter follows, as the path means the same without.
-fn display(path: &Path) -> String {
+pub(crate) fn display(path: &Path) -> String {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
@@ -145,7 +145,7 @@ pub(crate) fn usage(json: bool) -> ExitCode {
     if json {
         outln!(
             "{{\"ok\":false,\"error\":\"usage\",\"message\":{}}}",
-            quote("the self commands are `oskac self info [--format=json]` and `oskac self uninstall [--format=json]`")
+            quote("the self commands are `oskac self info [--format=json]`, `oskac self check [--format=json] [--no-identify]`, `oskac self update [--version X [--allow-downgrade] | --rollback] [--keep-previous] [--format=json]` and `oskac self uninstall [--format=json]`")
         );
     } else {
         eprint!("{}", crate::USAGE);
@@ -254,7 +254,7 @@ fn entries(receipt: &Json) -> Result<Vec<Entry>, String> {
         .collect())
 }
 
-fn read_receipt(path: &Path) -> Result<Json, String> {
+pub(crate) fn read_receipt(path: &Path) -> Result<Json, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     Json::parse(&text)
 }
@@ -262,11 +262,11 @@ fn read_receipt(path: &Path) -> Result<Json, String> {
 /// Whether this `oskac` is the install the receipt records: the receipt's
 /// version is this version, and one of its binary entries is this
 /// executable, by path.
-fn identity(receipt: &Json, exe: Option<&Path>) -> Result<(), String> {
+pub(crate) fn identity(receipt: &Json, exe: Option<&Path>, running: &str) -> Result<(), String> {
     let version = receipt.get("version").and_then(Json::as_str);
-    if version != Some(VERSION) {
+    if version != Some(running) {
         return Err(format!(
-            "the receipt records version {}, and this oskac is {VERSION}",
+            "the receipt records version {}, and this oskac is {running}",
             version.unwrap_or("none")
         ));
     }
@@ -305,7 +305,7 @@ pub(crate) fn info(json: bool) -> ExitCode {
     }
     let managed = receipt
         .as_ref()
-        .map(|r| identity(r, exe.as_deref()))
+        .map(|r| identity(r, exe.as_deref(), VERSION))
         .unwrap_or_else(|| Err("there is no readable install receipt".to_string()));
 
     if json {
@@ -707,7 +707,8 @@ fn repeats_a_key_but_for_case(value: &Json) -> bool {
 
 /// Whether a `binary` or `record` entry with a SHA-256, other than the
 /// receipt, is still what the installer wrote, as far as `oskac` can tell
-/// without computing a SHA-256: a binary only if it is this `oskac`, and a
+/// without computing a SHA-256: a binary only if it is this `oskac` (or the
+/// kept copy, whose SHA-256 is computed), and a
 /// record only if it is the `version` file holding the receipt's version.
 /// Anything else is kept, with why.
 fn unchanged_in_home(
@@ -719,8 +720,25 @@ fn unchanged_in_home(
     match entry.kind {
         Kind::Binary => {
             let this = executable().is_some_and(|exe| path.canonicalize().is_ok_and(|p| p == exe));
+            // The copy `self update --keep-previous` made: only at the name
+            // it gives one beside this oskac, as a regular file and not a
+            // link; the receipt's word for the path is not enough.
+            let kept = executable()
+                .and_then(|exe| crate::self_update::recorded_kept(receipt, &exe))
+                .is_some_and(|k| k.path == path)
+                && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file());
             if this {
                 Ok(())
+            } else if kept {
+                // The copy `self update --keep-previous` made: removed if it
+                // still has the SHA-256 recorded from the signed SHA256SUMS.
+                let sum = std::fs::read(path)
+                    .map(|bytes| crate::sha256::hex(&crate::sha256::digest(&bytes)));
+                if sum.is_ok_and(|sum| sum == entry.sha256) {
+                    Ok(())
+                } else {
+                    Err("changed since it was installed".to_string())
+                }
             } else {
                 Err("a binary other than this oskac, which cannot tell it is unchanged without its SHA-256; the installer's --uninstall removes it".to_string())
             }
@@ -799,7 +817,7 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
 
     // The binary and the records are this install's only when the receipt
     // records this oskac; otherwise they are skipped, and the rest goes.
-    let managed = identity(&receipt, executable().as_deref());
+    let managed = identity(&receipt, executable().as_deref(), VERSION);
     let mut outcome = Outcome::default();
     // `bin` is handled with the Oska home, after the files.
     let mut acted: HashSet<PathBuf> = HashSet::from([bin_dir.clone()]);
