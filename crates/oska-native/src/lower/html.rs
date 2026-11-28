@@ -4,7 +4,7 @@
 //! An `Html` and a `TrustedHtml` are each a struct of one `String`, so an
 //! object `[count][markup]`. `Html.raw` passes its `TrustedHtml` on as it
 //! is (same layout) and `Html.render` reads the field: both are in
-//! `intrinsics.rs`'s table. The rest build a new object, from text that
+//! `intrinsics/`'s table. The rest build a new object, from text that
 //! `std.rt`'s `html_escape` and `html_concat` make.
 
 use oska_check::program::Expr;

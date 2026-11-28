@@ -9,7 +9,7 @@
 //!    (ADR 0013), checked with [`oska_check::check_toolchain_rt`], to the
 //!    backend's code (`ir.rs`), from the generated entry point `_start`
 //!    through every function it reaches. `layout.rs` says how values are
-//!    represented and `intrinsics.rs` how body-less functions are
+//!    represented and `intrinsics/` how body-less functions are
 //!    implemented. Anything the backend cannot compile yet is refused
 //!    here, with `E0390`.
 //!    `optimize.rs` then cleans up the code and inlines small functions.
