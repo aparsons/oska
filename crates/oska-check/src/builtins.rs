@@ -17,9 +17,12 @@ use crate::collect::field_types;
 use crate::prelude;
 
 pub use crate::ty::{
-    ARGS, BOOL, DISPLAY, EQ, FLOAT, FROM, HASH, INT, LIST, OPTION, RANGE, RESULT, SCOPE, SECRET,
-    STRING, TEST_CONTEXT,
+    ARGS, BOOL, DISPLAY, EQ, FLOAT, FROM, HASH, INT, LIST, OPTION, ORD, RANGE, RESULT, SCOPE,
+    SECRET, STRING, TEST_CONTEXT,
 };
+
+/// The prelude's `Ordering`, which `cmp` returns (ADR 0034).
+pub const ORDERING: &str = "Ordering";
 
 /// The prelude's `Task`, which `Scope.spawn` returns.
 pub const TASK: &str = "Task";
@@ -62,6 +65,12 @@ pub struct TraitMethod {
 pub const EQ_EQ: TraitMethod = TraitMethod {
     trait_name: EQ,
     method: "eq",
+};
+
+/// `Ord.cmp`: what the `Ord` of an `Option` or a `List` calls on each item.
+pub const ORD_CMP: TraitMethod = TraitMethod {
+    trait_name: ORD,
+    method: "cmp",
 };
 
 /// `Hash.hash`: what a derived `Hash`, and the `Hash` of an `Option` or a
@@ -138,6 +147,13 @@ pub fn test_context_fields() -> &'static [&'static str] {
             })
             .collect()
     })
+}
+
+/// Whether the prelude method `type_name.method` is written in Oska in
+/// `std.core` (ADR 0034): a call of it is a call of a function of the
+/// program, so no backend has an intrinsic for it.
+pub fn is_core_method(type_name: &str, method: &str) -> bool {
+    crate::prelude::core_function(type_name, method).is_some()
 }
 
 #[cfg(test)]

@@ -44,12 +44,22 @@ struct Refused {
 const COMPARED: &str = "a `Secret` is not `Eq`, because comparing one can leak timing \
                         information; use `constant_time_eq`, or `ct_eq` on a secret integer";
 
+/// The message of `E0356`, wherever a secret is ordered.
+const ORDERED: &str = "ordering secrets would reveal them through a branch; compare them for \
+                       equality with `constant_time_eq`, or `ct_eq` on a secret integer, or \
+                       read the values with `.expose()`";
+
 /// The traits a secret deliberately lacks.
 const REFUSED: &[Refused] = &[
     Refused {
         trait_name: ty::EQ,
         code: codes::SECRET_COMPARED,
         message: COMPARED,
+    },
+    Refused {
+        trait_name: ty::ORD,
+        code: codes::SECRET_ORDERED,
+        message: ORDERED,
     },
     Refused {
         trait_name: ty::HASH,
@@ -416,11 +426,7 @@ impl Body<'_, '_, '_> {
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                 self.error(
                     codes::SECRET_ORDERED,
-                    format!(
-                        "`{text}` on a secret: ordering secrets would reveal them through a \
-                         branch; compare them for equality with `ct_eq`, or read the values \
-                         with `.expose()`"
-                    ),
+                    format!("`{text}` on a secret: {ORDERED}"),
                     expr.span,
                 );
                 return Operands::Error;

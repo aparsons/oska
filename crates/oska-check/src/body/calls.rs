@@ -540,7 +540,16 @@ impl Body<'_, '_, '_> {
                 // intrinsic.
                 let qualified = format!("{type_name}.{}", name.name);
                 let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
-                Some(if intrinsic {
+                // A `List` method whose body is Oska in `std.core` (ADR
+                // 0034) is a call of that function.
+                let core = if intrinsic {
+                    crate::prelude::core_function(&type_name, &name.name)
+                } else {
+                    None
+                };
+                Some(if let Some(function) = core {
+                    Callee::Function(function)
+                } else if intrinsic {
                     Callee::intrinsic(qualified)
                 } else {
                     Callee::Function(qualified)
@@ -668,6 +677,30 @@ impl Body<'_, '_, '_> {
                 format!(
                     "`{receiver}` has no method `{}`: `{}` is a method of {owners} only",
                     name.name, name.name
+                ),
+                name.span,
+            );
+            return None;
+        }
+        if name.name == "cmp" && self.infer.resolve(receiver).is_float() {
+            self.error(
+                codes::NO_MEMBER,
+                "`Float` has no `cmp`: it is not `Ord`, because `NaN` is unordered; \
+                 `total_cmp` gives a total order of floats",
+                name.span,
+            );
+            return None;
+        }
+        if matches!(name.name.as_str(), "unwrap" | "expect")
+            && matches!(type_name, "Option" | "Result")
+        {
+            self.error(
+                codes::NO_MEMBER,
+                format!(
+                    "`{type_name}` has no `{}`: it would crash where the type does not show it; \
+                     propagate the failure with `?`, give a default with `unwrap_or`, or handle \
+                     each case with `match`",
+                    name.name
                 ),
                 name.span,
             );
@@ -874,7 +907,20 @@ impl Body<'_, '_, '_> {
 
     pub(super) fn infer_args(&mut self, args: &[Arg]) {
         for arg in args {
-            self.infer(&arg.value);
+            if let ExprKind::Closure { params, .. } = &arg.value.kind {
+                // Nothing says what the closure's parameters are, and the
+                // call's own error is the one to report: give them the
+                // error type, which no operation on it reports again.
+                let expected = Ty::Fn {
+                    cap: self.infer.fresh_cap(),
+                    scoped: false,
+                    params: vec![Ty::Error; params.len()],
+                    ret: Box::new(Ty::Error),
+                };
+                self.expr(&arg.value, Some(&expected));
+            } else {
+                self.infer(&arg.value);
+            }
         }
     }
 }
