@@ -72,12 +72,19 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `missing_tool` | `curl`, `ssh-keygen`, or a SHA-256 tool is missing. |
 | `download_failed` | A file could not be downloaded, for example because that version does not exist. |
 | `bad_signature` | `SHA256SUMS` is not signed by the release key. |
-| `checksum_mismatch` | The binary does not match `SHA256SUMS`. |
-| `version_mismatch` | The signed `SHA256SUMS` is for another release than the one asked for, or the binary reports another version. |
-| `downgrade_refused` | The release to install is older than the installed `oskac`, and the run did not ask for a downgrade with both `--version` and `--allow-downgrade`. Nothing was installed. |
+| `checksum_mismatch` | The binary does not match `SHA256SUMS` (the installers and `oskac self update`). |
+| `version_mismatch` | The signed `SHA256SUMS` is for another release than the one asked for, or the binary reports another version (the installers and `oskac self update`). |
+| `downgrade_refused` | The release to install is older than the installed `oskac`, and the run did not ask for a downgrade with both `--version` and `--allow-downgrade` (the installers and `oskac self update`). Nothing was installed. |
 | `bad_index` | The release index is not signed by the release key in the `oska-index` namespace, has no signature, or is not in the index format. |
 | `stale_index` | The release index has expired. A named release still installs with `--version`. |
 | `rollback_refused` | The release index's serial is lower than the one this install already accepted, recorded in the receipt. |
+| `network_error` | `oskac self check` and `self update`: no route, DNS failure, timeout, refused connection, a redirect, a status other than 200, or a response past its size cap. |
+| `tls_error` | `oskac self check` and `self update`: the TLS handshake or the site's certificate was refused (an untrusted or expired certificate, a wrong host, a bad handshake). A wrong system clock can cause it. |
+| `bad_checksums` | `oskac self check` and `self update`: the release's `SHA256SUMS` is not signed by the release key in the `oska-release` namespace, is for another release, or is not in the checksum format. |
+| `unmanaged_install` | `oskac self update`: this `oskac` is not a managed install (no receipt, a receipt for another path or version), so it is not replaced, and no connection was made. Re-run the installer or rebuild from source. |
+| `no_previous_version` | `oskac self update --rollback`: the receipt records no previous version to go back to, or it is the version installed. Nothing was changed. |
+| `replace_failed` | `oskac self update`: the verified binary could not be moved into place; the installed `oskac` is as it was. |
+| `internal` | `oskac self check` and `self update`: the update checker could not be run or its answer was not understood. |
 | `install_failed` | The binary or the receipt could not be written into place, or neither `OSKA_HOME` nor a home directory is set. |
 | `not_installed` | `--uninstall` found no install receipt in the Oska home, or there is no Oska home because neither `OSKA_HOME` nor a home directory is set. Nothing was removed. |
 | `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, in a `.config/oska` directory, reached through a symlink anywhere in its path, or containing `..`, or a receipt it cannot read. Nothing was removed. |
@@ -243,7 +250,7 @@ Re-run the installer. It installs the latest release over the old one, and with 
 curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.2.0 --allow-downgrade
 ```
 
-There is no self-update command: `oskac self` only reports on the install and uninstalls it (see [`oskac self`](cli-reference.md#oskac-self)). To see whether an update exists before you run the installer, use [`--check`](#check-for-an-update).
+On a managed install, `oskac self update` does the same without the installer: see [Update with `oskac self update`](#update-with-oskac-self-update). To see whether an update exists first, use [`oskac self check`](#check-with-oskac-self-check) or the installer's [`--check`](#check-for-an-update).
 
 ### Check for an update
 
@@ -260,6 +267,57 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --check --json
 - `installed` is `null` when no `oskac` is installed.
 - `update_available` is `true` when the latest release is newer than the installed one, or nothing is installed. It exits 0 either way.
 - It takes the latest release from the signed index, with the same checks as an install, so it fails with `bad_index`, `stale_index` or `rollback_refused` as an install would. Before the site publishes an index, it reads `latest.json`, and `index_verified`, `index_serial` and `index_expires` are `false`, `null` and `null`.
+
+### Check with `oskac self check`
+
+`oskac self check` answers "is there a newer Oska, and is this binary a genuine one?" with no curl, no `ssh-keygen` and no system TLS library: `oskac` runs its built-in update checker, a program written in Oska, which uses Oska's own TLS client, SHA-256 and SSH signature verification. It installs, replaces and deletes nothing: the only thing it writes is the receipt's `index_serial`, raised after a verified check (never lowered). It does that for any receipt in the Oska home (`~/.oska`, or `OSKA_HOME`), even when the running `oskac` is not the managed binary, because the serial memory is shared. It uses the network only when you run it.
+
+```sh
+oskac self check --format=json
+```
+
+```json
+{"ok":true,"action":"checked","installed":"0.6.0","latest":"0.7.0","tag":"v0.7.0","comparison":"behind","update_available":true,"index_serial":5,"index_expires":"2027-02-18T14:38:45Z","serial_remembered":true,"site":"https://oskalang.dev","warnings":[],"identity":{"state":"genuine","sha256":"<SHA-256 of this oskac>","expected_sha256":"<the same, from the signed SHA256SUMS>","source":"the signed SHA256SUMS of v0.6.0","matches_receipt":true}}
+```
+
+- It always uses `https://oskalang.dev`, the release key and the root certificates built into `oskac`. No flag, variable or setting changes them in a release build. The request carries only the user agent `oskac <version>`.
+- It verifies the signed release index (the signature in the `oska-index` namespace before the index is read, then the expiry) and refuses one whose serial is below the highest this install has accepted. It exits 0 whether or not an update exists; an answer it could not verify is an error, never "no update".
+- `comparison` is `behind`, `current` or `ahead` by semver precedence, and `update_available` is true only when behind. The human output ends with the command to run when an update exists: `oskac self update` on a managed install (one the installer put in place), the installer command otherwise.
+- `serial_remembered` is `true` when an install receipt exists: after a verified check, `index_serial` in the receipt is raised to the index's serial (never lowered, written atomically). With no receipt (a source build, a copied binary) it is `false`, the rollback guard is not active for this install, and only the expiry bounds a freeze.
+- `identity.state` is `genuine` (this binary's SHA-256 equals its entry in the signed `SHA256SUMS` of the release it reports), `modified` (that release is published, but the digest differs), `unknown_release` (no published release has this version, as for a source build) or `skipped` (`--no-identify`, which also saves two downloads). None is an error. The comparison uses the signed `SHA256SUMS`, not the receipt; `matches_receipt` shows whether the file still has the digest the receipt recorded (`null` when either is missing).
+- `warnings` lists, for example, that the index expires within 30 days.
+- A failure is `{"ok": false, "error": "<code>", "message": "..."}` with exit code 1, and a usage error exits 2. The codes are `bad_index`, `stale_index`, `rollback_refused`, `network_error`, `tls_error`, `bad_checksums` and `internal` (see the table above; the same codes, with the others the table marks for `self update`, come from `self update`). If the system clock is wrong, `stale_index` and `tls_error` messages say so.
+
+### Update with `oskac self update`
+
+`oskac self update` replaces the running `oskac` with the latest release, or with release `X` for `--version X`, with no installer script. It uses the same network and trust as `self check`, and checks what the installers check: the signed release index (its signature, its expiry and a serial never below the one in the receipt), the signature on the release's `SHA256SUMS`, the SHA-256 of the downloaded binary, and the version the new binary reports when `oskac` runs it. The update checker writes the download only to a staging file; `oskac` replaces itself from it in one step (on Windows by renaming the running `oskac.exe` aside first) and then writes the new version, digest and serial into the receipt.
+
+```sh
+oskac self update --format=json
+```
+
+```json
+{"ok":true,"action":"updated","from":"0.6.0","to":"0.7.0","index_serial":5,"site":"https://oskalang.dev","warnings":[]}
+```
+
+- `action` is `updated`, `current` (the latest release is the one installed; nothing changes) or `downgraded`. Never report a `downgraded` as an update.
+- **The managed-install rule.** It acts only on a managed install: one the installer put in place, whose receipt lists the path of the running `oskac` as a binary of this version. A source build, a copied binary, a package-manager install, or an `oskac` that is not the one the receipt names is refused with `unmanaged_install`, before any network use and with nothing changed. Re-run the installer, or rebuild from source. `oskac self check` works on any install.
+- **A downgrade needs a name.** `--version X` installs release `X`, newer or not. If `X` is older than the installed `oskac` it is refused with `downgrade_refused` unless the run also has `--allow-downgrade`, and then the action is `downgraded`. `--allow-downgrade` without `--version` is a usage error (exit code 2). A serial below the receipt's is still refused with `rollback_refused`, and an expired index with `stale_index` (a named release still installs with `--version`).
+- **A failure changes nothing.** A bad signature, a tampered `SHA256SUMS`, a digest that differs, a binary that reports another version, a connection cut mid-download or a failed replacement leaves the installed `oskac` and the receipt as they were, and removes the staging file. The codes are those of [the table above](#one-line-installers): `bad_index`, `stale_index`, `rollback_refused`, `network_error`, `tls_error`, `bad_checksums`, `checksum_mismatch`, `version_mismatch`, `downgrade_refused`, `unmanaged_install`, `replace_failed`, `no_previous_version` and `internal`. A failure is `{"ok": false, "error": "<code>", "message": "..."}` with exit code 1, and a usage error exits 2.
+
+#### Roll back
+
+`oskac self update --rollback` undoes an update by going back exactly one version, to the receipt's `previous_version`. It downloads that release and verifies it as it would for an install, so no old binary has to be on your machine, and reports `downgraded` with `"source":"downloaded"`. It does not combine with `--version` or `--allow-downgrade`. With no previous version recorded, or one equal to the installed version, it fails with `no_previous_version` and changes nothing.
+
+By default nothing old is kept. Run `oskac self update --keep-previous` to keep the binary it replaces, beside the live one, for that update only. The receipt records the copy in `kept_previous` (its version, path and the SHA-256 from the signed `SHA256SUMS`), and the JSON reports it as `kept_previous` (`null` when nothing was kept, for example because the replaced binary was not the published release). A rollback then has the update checker hash the copy, and uses it (`"source":"kept"`) only if that equals the recorded digest; otherwise it ignores the copy, warns, and downloads. The next update or rollback discards a kept copy unless it passes `--keep-previous` again, and `oskac self uninstall` and the installer's `--uninstall` remove it.
+
+#### What `oskac` sends, and what can go wrong
+
+- **The network is used only by `oskac self check` and `oskac self update`**, and only to `https://oskalang.dev` on port 443, when you run them. `self info`, `self uninstall`, `check`, `run`, `test`, `build` and every other command make no connection. Nothing runs in the background, at startup or on a schedule. A request carries the user agent `oskac <version>` and no identifier of you or your machine. (Later, `oskac` will also fetch packages you ask for.)
+- **The TLS and signature code is new and unaudited.** `oskac` verifies with TLS, SHA-256 and Ed25519/SSHSIG code written in Oska, not with a reviewed library ([ADR 0012](../adr/0012-tls-git-and-crypto-are-written-in-oska.md)). The signature checks mean that a flaw in the TLS code costs privacy and availability, not authenticity; a flaw in the Ed25519 or SSHSIG code would cost authenticity.
+- **A wrong clock.** A clock that is wrong or set back can make a valid index look expired (`stale_index`) or a certificate look invalid (`tls_error`), and the messages say so. It cannot make an expired index look valid, except that on an install with no receipt a clock set back can extend a freeze, because there is no remembered serial to hold the index to.
+- **The update checker and the replacement.** The update checker holds a connection narrowed to oskalang.dev and write access to one staging path, so a flaw in its file handling is bounded by that path. A flaw in the replacement code, which is Rust, is covered by the tests that a failure leaves the live binary and the receipt unchanged.
+- **After a key rotation,** an `oskac` built before it reports `bad_index`, as the installers do: download the installer again and re-run it (see [Check with `oskac self check`](#check-with-oskac-self-check)); `oskac self update` cannot trust the new key.
 
 ### Uninstall
 

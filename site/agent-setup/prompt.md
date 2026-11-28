@@ -71,13 +71,17 @@ Then offer an authority baseline, only if I agree. `oskac check <path> --update-
 
 ## 5. Update, check or uninstall later
 
-Do this only when I ask. Each command is the installer from step 1 with one more option, and each takes `--json`.
+Do this only when I ask. Each installer command is the installer from step 1 with one more option, and each takes `--json`.
 
-- **Check for an update.** Run the installer with `--check --json`. It installs and writes nothing. It prints `installed`, `latest` and `update_available`. Tell me; do not update until I say so.
-- **Update.** Run the installer again, as in step 1. It installs the latest release over the old one, with the same checks. Read its JSON:
+When `oskac` is already installed, check and update with it first, as below.
+
+- **Check for an update.** If `oskac` is installed, run `oskac self check --format=json`. It installs and changes nothing, and uses the network only to oskalang.dev. Read `installed`, `latest`, `comparison` and `update_available`, and the `identity` state (`genuine`, `modified`, `unknown_release` or `skipped`); a `modified` binary is not the published release, so tell me. If `ok` is not `true`, stop and tell me the `error` and the `message`. Tell me the verified comparison; do not update until I say so.
+  Without it, run the installer (install.sh or install.ps1) with `--check --json`: it prints `installed`, `latest` and `update_available`.
+- **Update.** If `oskac self info --format=json` shows a managed install (`receipt_matches` is `true`), run `oskac self update --format=json`. Otherwise, or if it fails with `unmanaged_install`, run the installer again, as in step 1. Either installs the latest release over the old one, with the same checks. Do not use `--version`, `--allow-downgrade`, `--rollback` or `--keep-previous` unless I ask. Read its JSON:
   - If `ok` is not `true`, stop and tell me the `error` and the `message`. The installer refuses to install an older release than the installed one (`downgrade_refused`). Do not add `--allow-downgrade` unless I ask for a named older release, with `--version`.
   - The signed release index is required once this install has accepted one: when the `receipt` from `oskac self info --format=json` (run it before updating) has an `index_serial` above 0. Then, if `index_verified` is not `true`, stop and tell me.
-  - Tell me the `action` (`updated`, `reinstalled` or `downgraded`) and the `previous_version`. Never report a `downgraded` as an update.
+  - Tell me the `action` (`updated`, `current`, `reinstalled` or `downgraded`) and the previous version (`previous_version` from the installer, `from` from `oskac self update`). Never report a `downgraded` as an update.
+- **Roll back.** Only when I ask: `oskac self update --rollback --format=json` goes back one version, downloading and verifying it. If it fails with `no_previous_version`, tell me; do not reach for the installer or an older download.
 - **Uninstall.** Run the installer with `--uninstall --json`.
   Or, with no installer, run `oskac self uninstall --format=json`. It leaves a PATH line the installer added for the installer to remove, and on Windows lists the running `oskac.exe` under `pending`, with where it was moved and how to delete it.
   Either removes only what the install receipt lists, and keeps `~/.config/oska`. Show me `removed`, `kept` and `path_hint`, and tell me what `path_hint` says to remove from my `PATH` by hand. If it fails with `not_installed` or `unsafe_path`, stop and tell me: do not delete `~/.oska` yourself.
@@ -89,7 +93,11 @@ Tell me:
 
 - the `version` you installed, and its `path`;
 - each file you added or changed, and each one you left alone, with the hooks and the baseline I agreed to or declined;
-- the commands for later, as step 5 gives them. To check for an update, run the installer with `--check --json`. To update, run the installer again, as in step 1. To uninstall, run the installer with `--uninstall --json`.
+- the commands for later, as step 5 gives them. To check for an update, run `oskac self check --format=json`.
+  Without it, run the installer (install.sh or install.ps1) with `--check --json`.
+  To update, run `oskac self update` on a managed install.
+  Otherwise run the installer again, as in step 1.
+  To uninstall, run the installer with `--uninstall --json`.
 - that `oskac self info` reports how Oska is installed, and `oskac self uninstall` also uninstalls it.
 
 The documentation index for agents is https://oskalang.dev/llms.txt.
