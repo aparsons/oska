@@ -112,7 +112,7 @@ plan() { # SET SHARD
     all=$(universe "$set")
     if [ "$set" = musl ]; then
       # oskac: only the differential suite and its own unit tests run on musl.
-      all="$all"$'\n'"oskac test native_files"$'\n'"oskac test native_parity"$'\n'"oskac test native_default"$'\n'"oskac bins"
+      all="$all"$'\n'"oskac test native_files"$'\n'"oskac test native_files_swaps"$'\n'"oskac test native_parity"$'\n'"oskac test native_default"$'\n'"oskac bins"
     fi
     # A rest-K shard first runs the targets pinned to it.
     case $shard in rest-[0-9]*)
