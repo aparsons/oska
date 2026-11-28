@@ -88,6 +88,18 @@ impl Limit {
     }
 }
 
+/// The messages of `P0044`, `P0045` and `P0051`. The interpreter and the
+/// native code both use these, so the two cannot drift.
+pub mod messages {
+    /// `P0044`.
+    pub const MAP_ENTRY_LIMIT: &str = "the map or set holds as many entries as its limit allows";
+    /// `P0045`.
+    pub const MAP_PROBE_LIMIT: &str =
+        "the map's keys or the set's items collide under every hash it tries: they look chosen to flood it";
+    /// `P0051`.
+    pub const DEQUE_ITEM_LIMIT: &str = "the deque holds as many items as its limit allows";
+}
+
 /// The panic codes of the run limits, each defined here only.
 pub mod codes {
     /// The program would have taken more than `--max-steps` steps.

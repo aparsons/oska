@@ -85,11 +85,12 @@ Under the panic's line come its **frames**, the call stack that led to it, inner
 | `P0021` | Calls nest too deep: runaway recursion. The program panics instead of overflowing the stack. |
 | `P0042` | A `Bytes` slice or endian read that runs past the end of the buffer, such as `read_u32_be(0)` on 3 bytes, `Bytes.zeroed` with a negative length, or `ct_select` between two `Secret<Bytes>` of different lengths. Check `len()` first when the buffer may be short. |
 | `P0043` | A `Bytes` that would grow past 256 MiB. Not yet checked for `String.to_bytes` or a capability's `read_bytes`. |
-| `P0044` | A `std.map` map given a new entry past its entry limit (4,194,304, or the lower `Map.with_max_entries(n)`). |
-| `P0045` | A `std.map` map whose keys collide under every hash it tries, as keys chosen to flood it do. |
+| `P0044` | A `std.map` map or `std.set` set given a new entry past its entry limit (4,194,304, or the lower `Map.with_max_entries(n)` or `Set.with_max_entries(n)`). |
+| `P0045` | A `std.map` map or `std.set` set whose keys or items collide under every hash it tries, as keys chosen to flood it do. |
 | `P0046` | `Float.to_int()` of a NaN, an infinity or a value `Int` cannot hold. Check the value first. |
 | `P0049` | `Int.to_float()` of a value beyond 2^53 or below -2^53, which a `Float` could not hold exactly. Call `to_float_rounded()` where rounding is meant. |
 | `P0050` | `Float.fmt(digits)` with `digits` below 0 or above 340. |
+| `P0051` | A `std.deque` deque given an item past its item limit (4,194,304, or the lower `Deque.with_max_entries(n)`). |
 
 The full table is in the [runtime notes](../runtime.md#panics).
 

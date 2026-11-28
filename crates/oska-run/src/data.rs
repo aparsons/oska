@@ -49,7 +49,10 @@ pub const INTRINSICS: Table = &[
     ("String.strip_suffix", Plain(string_strip_suffix)),
     ("String.is_empty", Plain(string_is_empty)),
     ("List.map", HigherOrder(list_map)),
+    ("List.pop", Mutating(list_pop)),
     ("List.push", Mutating(list_push)),
+    ("List.set", Mutating(list_set)),
+    ("List.truncate", Mutating(list_truncate)),
 ];
 
 /// `List.new()`: an empty list.
@@ -65,6 +68,54 @@ fn list_push(list: &mut Value, args: &mut Args, span: Span) -> Result<Value, Pan
         unreachable!("the checker guarantees a list, found {list:?}");
     };
     memory::push(items, args.swap_remove(0), span)?;
+    Ok(Value::Unit)
+}
+
+/// `List.set(var self, index, item)`: the item at `index` replaced by
+/// `item`. An index out of bounds panics with `P0002`, and never grows
+/// the list. A list that is shared is copied first.
+fn list_set(list: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let Value::List(items) = list else {
+        unreachable!("the checker guarantees a list, found {list:?}");
+    };
+    let index = args[0].as_int();
+    let Some(at) = usize::try_from(index).ok().filter(|&i| i < items.len()) else {
+        return Err(Panic::new(
+            codes::INDEX_OUT_OF_BOUNDS,
+            format!(
+                "index {index} is out of bounds for a list of length {}",
+                items.len()
+            ),
+            span,
+        ));
+    };
+    let item = args.swap_remove(1);
+    memory::unshared(items, span, |items| items[at] = item)?;
+    Ok(Value::Unit)
+}
+
+/// `List.pop(var self)`: the last item removed and given as `Some`, or
+/// `None` for an empty list. It frees no memory by itself.
+fn list_pop(list: &mut Value, _: &mut Args, span: Span) -> Result<Value, Panic> {
+    let Value::List(items) = list else {
+        unreachable!("the checker guarantees a list, found {list:?}");
+    };
+    if items.is_empty() {
+        return Ok(Value::option(None));
+    }
+    Ok(Value::option(memory::unshared(items, span, Vec::pop)?))
+}
+
+/// `List.truncate(var self, n)`: only the first `n` items kept. An `n` at
+/// or above the length changes nothing, and a negative one is 0.
+fn list_truncate(list: &mut Value, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let Value::List(items) = list else {
+        unreachable!("the checker guarantees a list, found {list:?}");
+    };
+    let keep = usize::try_from(args[0].as_int().max(0)).unwrap_or(usize::MAX);
+    if keep < items.len() {
+        memory::unshared(items, span, |items| items.truncate(keep))?;
+    }
     Ok(Value::Unit)
 }
 

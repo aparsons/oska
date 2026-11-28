@@ -152,6 +152,14 @@ _Avoid_: dictionary, hash table, hash map
 One key and its value in a map. `entries()` gives them in insertion order.
 _Avoid_: pair, item, member (a `std.json` member is a different type)
 
+**Set**:
+`Set<T>`, in the prelude (no `use`): a value that holds distinct items in insertion order. Items need `Eq` and `Hash`; ADR 0032 refuses `Float` and secret values as items. It is built over a `Map` and shares its limits (`P0044`, `P0045`). There is no literal: `Set.of(list)` builds one. `a.union(b)`, `a.intersection(b)` and `a.difference(b)` give a new set in `a`'s order (union: `a`'s items, then `b`'s new ones). Its items are not `Entry` values: `Entry` stays `Map`-only.
+_Avoid_: hash set
+
+**Deque**:
+`Deque<T>`, in the prelude (no `use`): a value that holds items in a line, with amortized O(1) `push_back`, `push_front`, `pop_back` and `pop_front`. A pop on an empty deque gives `None`. It has an item limit (`P0051`). There is no literal: `Deque.of(list)` builds one.
+_Avoid_: queue, stack, ring buffer
+
 **Insertion order**:
 The order in which a map's keys were first added. Iteration always follows it, on every platform and both backends. Updating a key keeps its place; removing it and adding it again moves it to the end.
 _Avoid_: hash order, sorted order

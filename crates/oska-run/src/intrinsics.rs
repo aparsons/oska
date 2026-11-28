@@ -152,6 +152,7 @@ pub const INTRINSICS: Table = &[
     ("todo", Plain(todo)),
     ("map_entry_limit", Plain(map_entry_limit)),
     ("map_probe_limit", Plain(map_probe_limit)),
+    ("deque_item_limit", Plain(deque_item_limit)),
 ];
 
 /// The intrinsic named `name`, from every module's table.
@@ -1087,10 +1088,21 @@ fn map_probe_limit(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, 
     ))
 }
 
-/// The messages of `P0044` and `P0045`, the same in the native backend.
-pub const MAP_ENTRY_LIMIT_MESSAGE: &str = "the map holds as many entries as its limit allows";
-pub const MAP_PROBE_LIMIT_MESSAGE: &str =
-    "the map's keys collide under every hash it tries: they look chosen to flood it";
+/// `std.deque`'s `P0051`: an item past the deque's item limit.
+fn deque_item_limit(_: &mut dyn Host, _: &mut Args, span: Span) -> Result<Value, Panic> {
+    Err(Panic::new(
+        codes::DEQUE_ITEM_LIMIT,
+        DEQUE_ITEM_LIMIT_MESSAGE,
+        span,
+    ))
+}
+
+/// The messages of `P0044`, `P0045` and `P0051` are the native backend's,
+/// so that the two backends cannot drift.
+use oska_check::limits::messages::{
+    DEQUE_ITEM_LIMIT as DEQUE_ITEM_LIMIT_MESSAGE, MAP_ENTRY_LIMIT as MAP_ENTRY_LIMIT_MESSAGE,
+    MAP_PROBE_LIMIT as MAP_PROBE_LIMIT_MESSAGE,
+};
 
 /// `U8.rotl(self, n)`, and `U32`'s and `U64`'s: `P0008` for an amount
 /// out of range (`ops::rotate`).

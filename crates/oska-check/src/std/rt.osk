@@ -1904,6 +1904,32 @@ pub fn list_reserve(list: Int, counted: Bool) -> Int {
     copy
 }
 
+// A list object with the items of the list at `list`, unshared (its count
+// is 1), for a change that adds no item: `list` itself when it is that
+// already, else a copy of exactly its items (retained when `counted`), and
+// `list` is counted once less.
+pub fn list_unshare(list: Int, counted: Bool) -> Int {
+    let count = rt_mem_load64(list)
+    if count == 1 {
+        return list
+    }
+    let length = rt_mem_load64(rt_mem_add(list, 8))
+    let copy = list_new(length)
+    copy_bytes(rt_mem_add(copy, 24), rt_mem_add(list, 24), rt_mem_shl(length, 3))
+    rt_mem_store64(rt_mem_add(copy, 8), length)
+    if counted {
+        var i = 0
+        while i < length {
+            retain(rt_mem_load64(rt_mem_add(list, rt_mem_add(24, rt_mem_shl(i, 3)))))
+            i = rt_mem_add(i, 1)
+        }
+    }
+    if count > 0 {
+        rt_mem_store64(list, rt_mem_sub(count, 1))
+    }
+    copy
+}
+
 // Add the word `item` to the end of the list at `list`, which is unshared:
 // the list's address afterwards, which moves when it grows.
 fn list_add(list: Int, item: Int) -> Int {
