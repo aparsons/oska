@@ -101,15 +101,9 @@ impl<'p> Lowering<'p> {
         self.functions.len() - 1
     }
 
-    /// The entry point, `_start`: map the stack and run `_main` on it,
-    /// which calls `main` with its capabilities, reports an `Err` it
-    /// returns, and exits. The stack's size is a placeholder until every
-    /// function is lowered ([`Lowering::size_stack`]).
-    pub(super) fn entry(&mut self) -> Result<FnId, Diagnostic> {
+    /// `_main`, which `_start` runs on the program's stack.
+    fn entry_main(&mut self, run: FnId) -> Result<(), Diagnostic> {
         let user = self.user;
-        let start = self.reserve("_start".to_string());
-        let run = self.reserve("_main".to_string());
-
         let kind = self.kind;
         let mut body = Body::new(self, Source::User, None);
         match kind {
@@ -125,22 +119,37 @@ impl<'p> Lowering<'p> {
         body.call_runtime("exit", vec![zero], NOWHERE)?;
         body.push(Inst::Return(zero));
         self.functions[run] = body.finish("_main", 0, NOWHERE)?;
+        Ok(())
+    }
+
+    /// On Windows, the vectored exception handler's entry, which Windows
+    /// calls with `EXCEPTION_POINTERS *` and which returns to it (ADR
+    /// 0020): `std.rt`'s `on_exception`. `None` elsewhere.
+    fn exception_callback(&mut self, start_kind: Start) -> Result<Option<FnId>, Diagnostic> {
+        if start_kind != Start::Windows {
+            return Ok(None);
+        }
+        let callback = self.reserve("_on_exception".to_string());
+        let mut body = Body::new(self, Source::User, None);
+        let pointers = body.temp();
+        let result = body.call_runtime("on_exception", vec![pointers], NOWHERE)?;
+        body.push(Inst::Return(result));
+        self.functions[callback] = body.finish("_on_exception", 1, NOWHERE)?;
+        Ok(Some(callback))
+    }
+
+    /// The entry point, `_start`: map the stack and run `_main` on it,
+    /// which calls `main` with its capabilities, reports an `Err` it
+    /// returns, and exits. The stack's size is a placeholder until every
+    /// function is lowered ([`Lowering::size_stack`]).
+    pub(super) fn entry(&mut self) -> Result<FnId, Diagnostic> {
+        let start = self.reserve("_start".to_string());
+        let run = self.reserve("_main".to_string());
+
+        self.entry_main(run)?;
 
         let start_kind = self.target.platform().start;
-        // On Windows, the vectored exception handler's entry, which
-        // Windows calls with `EXCEPTION_POINTERS *` and which returns to
-        // it (ADR 0020): `std.rt`'s `on_exception`.
-        let callback = if start_kind == Start::Windows {
-            let callback = self.reserve("_on_exception".to_string());
-            let mut body = Body::new(self, Source::User, None);
-            let pointers = body.temp();
-            let result = body.call_runtime("on_exception", vec![pointers], NOWHERE)?;
-            body.push(Inst::Return(result));
-            self.functions[callback] = body.finish("_on_exception", 1, NOWHERE)?;
-            Some(callback)
-        } else {
-            None
-        };
+        let callback = self.exception_callback(start_kind)?;
         self.callback = callback;
         let mut body = Body::new(self, Source::User, None);
         // On macOS, `_start` is called as `main(argc, argv)`: its
@@ -253,6 +262,104 @@ impl<'p> Lowering<'p> {
         size
     }
 
+    /// Lower an instance that is not a function of the program: the
+    /// drop, debug, equality, closure, test and task functions the backend
+    /// generates.
+    fn generated_function(
+        &mut self,
+        instance: &Instance,
+        origin: Span,
+    ) -> Result<ir::Function, Diagnostic> {
+        match instance {
+            Instance::Drop(source, ty) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.drop_function(ty)?;
+                body.finish(&qualified(instance), 1, NOWHERE)
+            }
+            Instance::Debug(source, ty) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.debug_function(ty)?;
+                body.finish(&qualified(instance), 1, NOWHERE)
+            }
+            Instance::Unshare(source, ty) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.unshare_function(ty)?;
+                body.finish(&qualified(instance), 1, NOWHERE)
+            }
+            Instance::ListEq(source, ty, at) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.list_eq_function(ty, at.unwrap_or(NOWHERE))?;
+                body.finish(&qualified(instance), 2, NOWHERE)
+            }
+            Instance::Equal(source, ty, at) => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                body.equal_function(ty, at.unwrap_or(origin))?;
+                body.finish(&qualified(instance), 2, NOWHERE)
+            }
+            Instance::Hash(source, ty, at) => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                body.hash_function(ty, at.unwrap_or(origin))?;
+                body.finish(&qualified(instance), 1, NOWHERE)
+            }
+            Instance::Compare(source, ty, at) => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                body.compare_function(ty, at.unwrap_or(origin))?;
+                body.finish(&qualified(instance), 2, NOWHERE)
+            }
+            Instance::Closure(index) => {
+                let source = self.closures[*index].source;
+                let runtime_origin = (source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, source, runtime_origin);
+                let (params, span) = body.closure_function(*index)?;
+                body.finish(&qualified(instance), params, span)
+            }
+            Instance::ClosureDrop(index) => {
+                let source = self.closures[*index].source;
+                let runtime_origin = (source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, source, runtime_origin);
+                body.closure_drop_function(*index)?;
+                body.finish(&qualified(instance), 1, NOWHERE)
+            }
+            Instance::Test(index) => {
+                let mut body = Body::new(self, Source::User, None);
+                let span = body.test_function(*index)?;
+                body.finish(&qualified(instance), 1, span)
+            }
+            Instance::TaskRunner { result, start, end } => {
+                let mut body = Body::new(self, Source::User, None);
+                let at = Span {
+                    start: *start,
+                    end: *end,
+                };
+                body.task_runner(result, at)?;
+                body.finish(&qualified(instance), 1, NOWHERE)
+            }
+            Instance::RunTasks => {
+                let mut body = Body::new(self, Source::User, None);
+                body.run_tasks_function()?;
+                body.finish(&qualified(instance), 2, NOWHERE)
+            }
+            Instance::Thunk {
+                source,
+                intrinsic,
+                name,
+                type_args,
+                ty,
+            } => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                let params = body.thunk_function(*intrinsic, name, type_args, ty, origin)?;
+                body.finish(&qualified(instance), params, NOWHERE)
+            }
+            Instance::Function { .. } | Instance::Requires { .. } => {
+                unreachable!("a function of the program is lowered by `function`")
+            }
+        }
+    }
+
     /// Lower the function `instance` names.
     pub(super) fn function(
         &mut self,
@@ -270,89 +377,7 @@ impl<'p> Lowering<'p> {
                 name,
                 type_args,
             } => (*source, name, type_args),
-            Instance::Drop(source, ty) => {
-                let mut body = Body::new(self, *source, Some(origin));
-                body.drop_function(ty)?;
-                return body.finish(&qualified(instance), 1, NOWHERE);
-            }
-            Instance::Debug(source, ty) => {
-                let mut body = Body::new(self, *source, Some(origin));
-                body.debug_function(ty)?;
-                return body.finish(&qualified(instance), 1, NOWHERE);
-            }
-            Instance::Unshare(source, ty) => {
-                let mut body = Body::new(self, *source, Some(origin));
-                body.unshare_function(ty)?;
-                return body.finish(&qualified(instance), 1, NOWHERE);
-            }
-            Instance::ListEq(source, ty, at) => {
-                let mut body = Body::new(self, *source, Some(origin));
-                body.list_eq_function(ty, at.unwrap_or(NOWHERE))?;
-                return body.finish(&qualified(instance), 2, NOWHERE);
-            }
-            Instance::Equal(source, ty, at) => {
-                let runtime_origin = (*source == Source::Runtime).then_some(origin);
-                let mut body = Body::new(self, *source, runtime_origin);
-                body.equal_function(ty, at.unwrap_or(origin))?;
-                return body.finish(&qualified(instance), 2, NOWHERE);
-            }
-            Instance::Hash(source, ty, at) => {
-                let runtime_origin = (*source == Source::Runtime).then_some(origin);
-                let mut body = Body::new(self, *source, runtime_origin);
-                body.hash_function(ty, at.unwrap_or(origin))?;
-                return body.finish(&qualified(instance), 1, NOWHERE);
-            }
-            Instance::Compare(source, ty, at) => {
-                let runtime_origin = (*source == Source::Runtime).then_some(origin);
-                let mut body = Body::new(self, *source, runtime_origin);
-                body.compare_function(ty, at.unwrap_or(origin))?;
-                return body.finish(&qualified(instance), 2, NOWHERE);
-            }
-            Instance::Closure(index) => {
-                let source = self.closures[*index].source;
-                let runtime_origin = (source == Source::Runtime).then_some(origin);
-                let mut body = Body::new(self, source, runtime_origin);
-                let (params, span) = body.closure_function(*index)?;
-                return body.finish(&qualified(instance), params, span);
-            }
-            Instance::ClosureDrop(index) => {
-                let source = self.closures[*index].source;
-                let runtime_origin = (source == Source::Runtime).then_some(origin);
-                let mut body = Body::new(self, source, runtime_origin);
-                body.closure_drop_function(*index)?;
-                return body.finish(&qualified(instance), 1, NOWHERE);
-            }
-            Instance::Test(index) => {
-                let mut body = Body::new(self, Source::User, None);
-                let span = body.test_function(*index)?;
-                return body.finish(&qualified(instance), 1, span);
-            }
-            Instance::TaskRunner { result, start, end } => {
-                let mut body = Body::new(self, Source::User, None);
-                let at = Span {
-                    start: *start,
-                    end: *end,
-                };
-                body.task_runner(result, at)?;
-                return body.finish(&qualified(instance), 1, NOWHERE);
-            }
-            Instance::RunTasks => {
-                let mut body = Body::new(self, Source::User, None);
-                body.run_tasks_function()?;
-                return body.finish(&qualified(instance), 2, NOWHERE);
-            }
-            Instance::Thunk {
-                source,
-                intrinsic,
-                name,
-                type_args,
-                ty,
-            } => {
-                let runtime_origin = (*source == Source::Runtime).then_some(origin);
-                let mut body = Body::new(self, *source, runtime_origin);
-                let params = body.thunk_function(*intrinsic, name, type_args, ty, origin)?;
-                return body.finish(&qualified(instance), params, NOWHERE);
-            }
+            _ => return self.generated_function(instance, origin),
         };
         let program = self.program(source);
         let runtime_origin = (source == Source::Runtime).then_some(origin);

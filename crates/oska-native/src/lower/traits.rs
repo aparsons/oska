@@ -364,122 +364,143 @@ impl Body<'_, '_> {
         match ty {
             Type::Named { name, args } if name == builtins::LIST => {
                 let item = args.first().cloned().unwrap_or(Type::Unit);
-                let length = self.load(a, layout::LIST_LEN);
-                let other = self.load(b, layout::LIST_LEN);
-                // The shared length, then the first items that differ.
-                let shared = self.copy(length);
-                let end = self.label();
-                self.push(Inst::Branch {
-                    cond: Cond::Le,
-                    lhs: length,
-                    rhs: other,
-                    target: end,
-                });
-                self.push(Inst::Copy {
-                    dst: shared,
-                    src: other,
-                });
-                self.push(Inst::Label(end));
-                let zero = self.constant(0);
-                let at = self.copy(zero);
-                let (head, done) = (self.label(), self.label());
-                self.push(Inst::Label(head));
-                self.push(Inst::Branch {
-                    cond: Cond::Ge,
-                    lhs: at,
-                    rhs: shared,
-                    target: done,
-                });
-                let x = self.item(a, at);
-                let y = self.item(b, at);
-                let order = self.compare(&item, x, y, span)?;
-                let next = self.label();
-                self.push(Inst::JumpIfZero {
-                    cond: order,
-                    target: next,
-                });
-                self.push(Inst::Return(order));
-                self.push(Inst::Label(next));
-                let one = self.constant(1);
-                self.push(Inst::Binary {
-                    op: BinOp::Add,
-                    dst: at,
-                    lhs: at,
-                    rhs: one,
-                });
-                self.push(Inst::Jump(head));
-                self.push(Inst::Label(done));
-                let (below, above) = (self.temp(), self.temp());
-                self.push(Inst::Compare {
-                    cond: Cond::Lt,
-                    dst: below,
-                    lhs: length,
-                    rhs: other,
-                });
-                self.push(Inst::Compare {
-                    cond: Cond::Gt,
-                    dst: above,
-                    lhs: length,
-                    rhs: other,
-                });
-                let order = self.binary_op(BinOp::Sub, above, below);
-                self.push(Inst::Return(order));
-                Ok(())
+                self.compare_lists(&item, a, b, span)
             }
-            _ => {
-                let Some(Fields::Enum(variants)) = self.fields_of(ty) else {
-                    return Err(self.refuse(span, &format!("ordering values of `{ty}`")));
-                };
-                // `Option`: the variant without a field is `None`.
-                let Some(none) = variants.iter().position(Vec::is_empty) else {
-                    return Err(self.refuse(span, &format!("ordering values of `{ty}`")));
-                };
-                let none = self.constant(none as i64);
-                let tag = self.load(a, layout::ENUM_TAG);
-                let other = self.load(b, layout::ENUM_TAG);
-                let same = self.label();
-                self.push(Inst::Branch {
-                    cond: Cond::Eq,
-                    lhs: tag,
-                    rhs: other,
-                    target: same,
-                });
-                // The tags differ: the one that is `None` is first.
-                let (is_none, is_some) = (self.label(), self.label());
-                self.push(Inst::Branch {
-                    cond: Cond::Eq,
-                    lhs: tag,
-                    rhs: none,
-                    target: is_none,
-                });
-                let greater = self.constant(1);
-                self.push(Inst::Return(greater));
-                self.push(Inst::Label(is_none));
-                let less = self.constant(-1);
-                self.push(Inst::Return(less));
-                self.push(Inst::Label(same));
-                // The same variant: two `None`s are equal.
-                self.push(Inst::Branch {
-                    cond: Cond::Ne,
-                    lhs: tag,
-                    rhs: none,
-                    target: is_some,
-                });
-                let equal = self.constant(0);
-                self.push(Inst::Return(equal));
-                self.push(Inst::Label(is_some));
-                let field = variants
-                    .iter()
-                    .find_map(|fields| fields.first())
-                    .cloned()
-                    .unwrap_or(Type::Unit);
-                let x = self.load(a, layout::enum_field(0));
-                let y = self.load(b, layout::enum_field(0));
-                let order = self.compare(&field, x, y, span)?;
-                self.push(Inst::Return(order));
-                Ok(())
-            }
+            _ => self.compare_options(ty, a, b, span),
         }
+    }
+
+    /// Lists `a` and `b` of `item`s: the first items that differ order
+    /// them, else the lengths do.
+    fn compare_lists(
+        &mut self,
+        item: &Type,
+        a: Temp,
+        b: Temp,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let length = self.load(a, layout::LIST_LEN);
+        let other = self.load(b, layout::LIST_LEN);
+        // The shared length, then the first items that differ.
+        let shared = self.copy(length);
+        let end = self.label();
+        self.push(Inst::Branch {
+            cond: Cond::Le,
+            lhs: length,
+            rhs: other,
+            target: end,
+        });
+        self.push(Inst::Copy {
+            dst: shared,
+            src: other,
+        });
+        self.push(Inst::Label(end));
+        let zero = self.constant(0);
+        let at = self.copy(zero);
+        let (head, done) = (self.label(), self.label());
+        self.push(Inst::Label(head));
+        self.push(Inst::Branch {
+            cond: Cond::Ge,
+            lhs: at,
+            rhs: shared,
+            target: done,
+        });
+        let x = self.item(a, at);
+        let y = self.item(b, at);
+        let order = self.compare(item, x, y, span)?;
+        let next = self.label();
+        self.push(Inst::JumpIfZero {
+            cond: order,
+            target: next,
+        });
+        self.push(Inst::Return(order));
+        self.push(Inst::Label(next));
+        let one = self.constant(1);
+        self.push(Inst::Binary {
+            op: BinOp::Add,
+            dst: at,
+            lhs: at,
+            rhs: one,
+        });
+        self.push(Inst::Jump(head));
+        self.push(Inst::Label(done));
+        let (below, above) = (self.temp(), self.temp());
+        self.push(Inst::Compare {
+            cond: Cond::Lt,
+            dst: below,
+            lhs: length,
+            rhs: other,
+        });
+        self.push(Inst::Compare {
+            cond: Cond::Gt,
+            dst: above,
+            lhs: length,
+            rhs: other,
+        });
+        let order = self.binary_op(BinOp::Sub, above, below);
+        self.push(Inst::Return(order));
+        Ok(())
+    }
+
+    /// `Option`s `a` and `b` of the type `ty`.
+    fn compare_options(
+        &mut self,
+        ty: &Type,
+        a: Temp,
+        b: Temp,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Some(Fields::Enum(variants)) = self.fields_of(ty) else {
+            return Err(self.refuse(span, &format!("ordering values of `{ty}`")));
+        };
+        // `Option`: the variant without a field is `None`.
+        let Some(none) = variants.iter().position(Vec::is_empty) else {
+            return Err(self.refuse(span, &format!("ordering values of `{ty}`")));
+        };
+        let none = self.constant(none as i64);
+        let tag = self.load(a, layout::ENUM_TAG);
+        let other = self.load(b, layout::ENUM_TAG);
+        let same = self.label();
+        self.push(Inst::Branch {
+            cond: Cond::Eq,
+            lhs: tag,
+            rhs: other,
+            target: same,
+        });
+        // The tags differ: the one that is `None` is first.
+        let (is_none, is_some) = (self.label(), self.label());
+        self.push(Inst::Branch {
+            cond: Cond::Eq,
+            lhs: tag,
+            rhs: none,
+            target: is_none,
+        });
+        let greater = self.constant(1);
+        self.push(Inst::Return(greater));
+        self.push(Inst::Label(is_none));
+        let less = self.constant(-1);
+        self.push(Inst::Return(less));
+        self.push(Inst::Label(same));
+        // The same variant: two `None`s are equal.
+        self.push(Inst::Branch {
+            cond: Cond::Ne,
+            lhs: tag,
+            rhs: none,
+            target: is_some,
+        });
+        let equal = self.constant(0);
+        self.push(Inst::Return(equal));
+        self.push(Inst::Label(is_some));
+        let field = variants
+            .iter()
+            .find_map(|fields| fields.first())
+            .cloned()
+            .unwrap_or(Type::Unit);
+        let x = self.load(a, layout::enum_field(0));
+        let y = self.load(b, layout::enum_field(0));
+        let order = self.compare(&field, x, y, span)?;
+        self.push(Inst::Return(order));
+        Ok(())
     }
 
     // ---- Hash -------------------------------------------------------------
@@ -583,81 +604,99 @@ impl Body<'_, '_> {
                     src: hash,
                 });
             }
-            Some(Fields::Enum(variants)) => {
-                let tag = self.load(a, layout::ENUM_TAG);
-                let hash = self.call_runtime("int_hash", vec![tag], NOWHERE)?;
-                self.push(Inst::Copy {
-                    dst: state,
-                    src: hash,
-                });
-                let end = self.label();
-                for (index, fields) in variants.iter().enumerate() {
-                    if fields.is_empty() {
-                        continue;
-                    }
-                    let next = self.label();
-                    let want = self.constant(index as i64);
-                    self.push(Inst::Branch {
-                        cond: Cond::Ne,
-                        lhs: tag,
-                        rhs: want,
-                        target: next,
-                    });
-                    for (at, field) in fields.iter().enumerate() {
-                        let x = self.load(a, layout::enum_field(at));
-                        let mixed = self.hash_mixed(field, x, state, span)?;
-                        self.push(Inst::Copy {
-                            dst: state,
-                            src: mixed,
-                        });
-                    }
-                    self.push(Inst::Jump(end));
-                    self.push(Inst::Label(next));
-                }
-                self.push(Inst::Label(end));
+            Some(Fields::Enum(variants)) => self.hash_variants(&variants, a, state, span)?,
+            None => self.hash_list(ty, a, state, span)?,
+        }
+        self.push(Inst::Return(state));
+        Ok(())
+    }
+
+    /// Mix the tag and the fields of the enum `a` with `variants` into
+    /// `state`.
+    fn hash_variants(
+        &mut self,
+        variants: &[Vec<Type>],
+        a: Temp,
+        state: Temp,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let tag = self.load(a, layout::ENUM_TAG);
+        let hash = self.call_runtime("int_hash", vec![tag], NOWHERE)?;
+        self.push(Inst::Copy {
+            dst: state,
+            src: hash,
+        });
+        let end = self.label();
+        for (index, fields) in variants.iter().enumerate() {
+            if fields.is_empty() {
+                continue;
             }
-            None => {
-                let Type::Named { name, args } = ty else {
-                    return Err(self.refuse(span, &format!("hashing values of `{ty}`")));
-                };
-                if name != builtins::LIST {
-                    return Err(self.refuse(span, &format!("hashing values of `{ty}`")));
-                }
-                let item_ty = args.first().cloned().unwrap_or(Type::Unit);
-                let length = self.load(a, layout::LIST_LEN);
-                let seed = self.call_runtime("int_hash", vec![length], NOWHERE)?;
-                self.push(Inst::Copy {
-                    dst: state,
-                    src: seed,
-                });
-                let zero = self.constant(0);
-                let at = self.copy(zero);
-                let (head, done) = (self.label(), self.label());
-                self.push(Inst::Label(head));
-                self.push(Inst::Branch {
-                    cond: Cond::Ge,
-                    lhs: at,
-                    rhs: length,
-                    target: done,
-                });
-                let x = self.item(a, at);
-                let mixed = self.hash_mixed(&item_ty, x, state, span)?;
+            let next = self.label();
+            let want = self.constant(index as i64);
+            self.push(Inst::Branch {
+                cond: Cond::Ne,
+                lhs: tag,
+                rhs: want,
+                target: next,
+            });
+            for (at, field) in fields.iter().enumerate() {
+                let x = self.load(a, layout::enum_field(at));
+                let mixed = self.hash_mixed(field, x, state, span)?;
                 self.push(Inst::Copy {
                     dst: state,
                     src: mixed,
                 });
-                let one = self.constant(1);
-                self.push(Inst::Binary {
-                    op: BinOp::Add,
-                    dst: at,
-                    lhs: at,
-                    rhs: one,
-                });
-                self.push(Inst::Jump(head));
-                self.push(Inst::Label(done));
             }
+            self.push(Inst::Jump(end));
+            self.push(Inst::Label(next));
         }
-        self.push(Inst::Return(state));
+        self.push(Inst::Label(end));
+
+        Ok(())
+    }
+
+    /// Mix the length and the items of the list `a` of type `ty` into
+    /// `state`.
+    fn hash_list(&mut self, ty: &Type, a: Temp, state: Temp, span: Span) -> Result<(), Diagnostic> {
+        let Type::Named { name, args } = ty else {
+            return Err(self.refuse(span, &format!("hashing values of `{ty}`")));
+        };
+        if name != builtins::LIST {
+            return Err(self.refuse(span, &format!("hashing values of `{ty}`")));
+        }
+        let item_ty = args.first().cloned().unwrap_or(Type::Unit);
+        let length = self.load(a, layout::LIST_LEN);
+        let seed = self.call_runtime("int_hash", vec![length], NOWHERE)?;
+        self.push(Inst::Copy {
+            dst: state,
+            src: seed,
+        });
+        let zero = self.constant(0);
+        let at = self.copy(zero);
+        let (head, done) = (self.label(), self.label());
+        self.push(Inst::Label(head));
+        self.push(Inst::Branch {
+            cond: Cond::Ge,
+            lhs: at,
+            rhs: length,
+            target: done,
+        });
+        let x = self.item(a, at);
+        let mixed = self.hash_mixed(&item_ty, x, state, span)?;
+        self.push(Inst::Copy {
+            dst: state,
+            src: mixed,
+        });
+        let one = self.constant(1);
+        self.push(Inst::Binary {
+            op: BinOp::Add,
+            dst: at,
+            lhs: at,
+            rhs: one,
+        });
+        self.push(Inst::Jump(head));
+        self.push(Inst::Label(done));
+
         Ok(())
     }
 

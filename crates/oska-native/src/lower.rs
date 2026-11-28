@@ -331,38 +331,7 @@ pub fn program(
         callback: None,
     };
     let entry = lowering.entry()?;
-    while let Some((instance, id, origin, requester)) = lowering.queue.pop() {
-        lowering.frame = lowering.frame_of(&instance, requester);
-        lowering.uncounted = matches!(
-            &instance,
-            Instance::Function { source: Source::Runtime, name, .. }
-                if COUNTED_MEMORY.iter().any(|(_, counted)| counted == name)
-        );
-        lowering.functions[id] = lowering.function(&instance, origin)?;
-        if matches!(
-            instance,
-            Instance::Function {
-                source: Source::User,
-                ..
-            } | Instance::Closure(_)
-                | Instance::Test(_)
-        ) {
-            lowering.user_functions.push(id);
-        }
-        if matches!(
-            instance,
-            Instance::Requires { .. }
-                | Instance::TaskRunner { .. }
-                | Instance::RunTasks
-                | Instance::Thunk { .. }
-                | Instance::Equal(..)
-                | Instance::Hash(..)
-                | Instance::Compare(..)
-                | Instance::ListEq(..)
-        ) {
-            lowering.between_functions.push(id);
-        }
-    }
+    lowering.drain_queue()?;
     optimize::module(&mut lowering.functions);
     // The code is final: no secret may decide a branch or an address.
     crate::constant_time::verify(&lowering.functions)?;
@@ -375,22 +344,7 @@ pub fn program(
     } else {
         GLOBALS + u32::from(limits.max_steps.is_some())
     };
-    // The most arguments any call passes, or any function takes, past
-    // those the target passes in registers: they share one area after
-    // the globals.
-    let extra_args = lowering
-        .functions
-        .iter()
-        .flat_map(|function| {
-            let calls = function.insts.iter().filter_map(|inst| match inst {
-                Inst::Call { args, .. } | Inst::CallIndirect { args, .. } => Some(args.len()),
-                _ => None,
-            });
-            calls.chain([function.params as usize])
-        })
-        .map(|count| count.saturating_sub(target.register_args()))
-        .max()
-        .unwrap_or(0) as u32;
+    let extra_args = lowering.extra_args();
     Ok(ir::Module {
         functions: lowering.functions,
         entry,
@@ -400,6 +354,65 @@ pub fn program(
         callback: lowering.callback,
         stack,
     })
+}
+
+impl Lowering<'_> {
+    /// Lower every queued instance, which may queue more, and note the
+    /// user's functions and the generated ones that run between counted
+    /// calls (for the stack's size).
+    fn drain_queue(&mut self) -> Result<(), Diagnostic> {
+        while let Some((instance, id, origin, requester)) = self.queue.pop() {
+            self.frame = self.frame_of(&instance, requester);
+            self.uncounted = matches!(
+                &instance,
+                Instance::Function { source: Source::Runtime, name, .. }
+                    if COUNTED_MEMORY.iter().any(|(_, counted)| counted == name)
+            );
+            self.functions[id] = self.function(&instance, origin)?;
+            if matches!(
+                instance,
+                Instance::Function {
+                    source: Source::User,
+                    ..
+                } | Instance::Closure(_)
+                    | Instance::Test(_)
+            ) {
+                self.user_functions.push(id);
+            }
+            if matches!(
+                instance,
+                Instance::Requires { .. }
+                    | Instance::TaskRunner { .. }
+                    | Instance::RunTasks
+                    | Instance::Thunk { .. }
+                    | Instance::Equal(..)
+                    | Instance::Hash(..)
+                    | Instance::Compare(..)
+                    | Instance::ListEq(..)
+            ) {
+                self.between_functions.push(id);
+            }
+        }
+        Ok(())
+    }
+
+    /// The most arguments any call passes, or any function takes, past
+    /// those the target passes in registers: they share one area after
+    /// the globals.
+    fn extra_args(&self) -> u32 {
+        self.functions
+            .iter()
+            .flat_map(|function| {
+                let calls = function.insts.iter().filter_map(|inst| match inst {
+                    Inst::Call { args, .. } | Inst::CallIndirect { args, .. } => Some(args.len()),
+                    _ => None,
+                });
+                calls.chain([function.params as usize])
+            })
+            .map(|count| count.saturating_sub(self.target.register_args()))
+            .max()
+            .unwrap_or(0) as u32
+    }
 }
 
 struct Lowering<'p> {
