@@ -40,7 +40,24 @@
 // back. The one back gives `None` for JSON it does not accept, and then the
 // open fails with `Corrupt`.
 //
-// This version writes the classification `public` and the trust flag only.
+// Labels (ADR 0040, spec #842). A record's label is its classification and
+// its trust flag, both in the header, so the seal authenticates them: a
+// label edited in the file makes the record not open. Opening reads the
+// label only after the seal opened. The classification is `public` until
+// data classification (ADR 0029, spec #770) is built; it is written as a
+// name, so a later level is a new name and a new `Classification` variant
+// with a higher rank, not a change of format. A name this version does not
+// know is `Corrupt`: a store never reads a label it cannot rank. A read
+// gives the higher of the record's label and the label of the capability
+// that opened the store, never lower than either. Nothing here lowers a
+// label; once classification exists, only `Declassify` may.
+//
+// Trust. The checker's trust flag is gone at run time, so the store writes
+// it as data. A record written through `Codec.new` is `untrusted`: its text
+// came from outside, and reads decode it as untrusted text. A record
+// written through `Codec.validated` is `trusted`: its author says that
+// every value `from_value` returns passed a validator, which runs again on
+// every read, so a changed file cannot make a trusted value.
 
 // For maintainers: this file is Oska source, checked under the rules for
 // user code and run as Oska by both backends. The comment block directly
@@ -77,10 +94,115 @@ impl StoreError {
     }
 }
 
+// How sure the store is of a record's text. `Untrusted` is the higher.
+pub enum Trust {
+    Trusted,
+    Untrusted,
+}
+
+// How secret a record is. `Public` is the only level until ADR 0029 is
+// built; a later level is a new variant, ranked above the ones before it.
+pub enum Classification {
+    Public,
+}
+
+impl Classification {
+    // The name written to the file.
+    pub fn name(self) -> String {
+        match self {
+            Classification.Public => "public"
+        }
+    }
+
+    // The level named `text`, or `None` for a name this version does not know.
+    fn parse(text: Untrusted<String>) -> Option<Classification> {
+        if text == "public" {
+            Some(Classification.Public)
+        } else {
+            None
+        }
+    }
+
+    // A higher number is a higher level.
+    fn rank(self) -> Int {
+        match self {
+            Classification.Public => 0
+        }
+    }
+}
+
+impl Trust {
+    // The name written to the file.
+    fn name(self) -> String {
+        match self {
+            Trust.Trusted => "trusted"
+            Trust.Untrusted => "untrusted"
+        }
+    }
+
+    fn parse(text: Untrusted<String>) -> Option<Trust> {
+        if text == "trusted" {
+            Some(Trust.Trusted)
+        } else if text == "untrusted" {
+            Some(Trust.Untrusted)
+        } else {
+            None
+        }
+    }
+
+    fn rank(self) -> Int {
+        match self {
+            Trust.Trusted => 0
+            Trust.Untrusted => 1
+        }
+    }
+}
+
+// The label of a record: its classification and its trust flag.
+pub struct Label {
+    classification: Classification,
+    trust: Trust,
+}
+
+impl Label {
+    // A label of `classification` and `trust`.
+    pub fn new(classification: Classification, trust: Trust) -> Label {
+        Label(classification: classification, trust: trust)
+    }
+
+    // The classification's name, such as `public`.
+    pub fn classification_name(self) -> String {
+        self.classification.name()
+    }
+
+    // Whether the record's text is trusted.
+    pub fn is_trusted(self) -> Bool {
+        self.trust.rank() == 0
+    }
+}
+
+// The higher of two labels, each part by itself: never lower than either.
+// This is the rule of a read (ADR 0040): the label of the record and the
+// label of the capability that opened the store.
+pub fn higher(a: Label, b: Label) -> Label {
+    let c = if a.classification.rank() >= b.classification.rank() { a.classification } else { b.classification }
+    let t = if a.trust.rank() >= b.trust.rank() { a.trust } else { b.trust }
+    Label(classification: c, trust: t)
+}
+
+// The label of what a directory capability reads. It has no classification
+// of its own until ADR 0029 is built, so this is the lowest label: it
+// raises nothing. It is the one place a capability's classification joins
+// a read.
+fn capability_label(read: DirRead) -> Label {
+    Label(classification: Classification.Public, trust: Trust.Trusted)
+}
+
 // How a record of type `T` becomes JSON and comes back.
 pub struct Codec<T> {
     to_value: fn(T) -> json.Value,
     from_value: fn(json.Value) -> Option<T>,
+    trust: Trust,
 }
 
 impl<T> Codec<T> {
@@ -97,9 +219,16 @@ impl<T> Codec<T> {
 
 impl<T> Codec<T> {
     // A codec from `to_value` and `from_value`. `from_value` gives `None`
-    // for JSON that is not a `T`.
+    // for JSON that is not a `T`. Its records are labelled `untrusted`.
     pub fn new(to_value: fn(T) -> json.Value, from_value: fn(json.Value) -> Option<T>) -> Codec<T> {
-        Codec(to_value: to_value, from_value: from_value)
+        Codec(to_value: to_value, from_value: from_value, trust: Trust.Untrusted)
+    }
+
+    // A codec whose `from_value` validates every text it returns, so its
+    // records are labelled `trusted`. Use it only when that is true: the
+    // label says so to every reader.
+    pub fn validated(to_value: fn(T) -> json.Value, from_value: fn(json.Value) -> Option<T>) -> Codec<T> {
+        Codec(to_value: to_value, from_value: from_value, trust: Trust.Trusted)
     }
 }
 
@@ -108,6 +237,8 @@ impl<T> Codec<T> {
 // line was found.
 struct State<T> {
     index: Map<Untrusted<String>, T>,
+    labels: Map<Untrusted<String>, Label>,
+    floor: Label,
     seq: Int,
     head: Untrusted<String>,
     torn: Bool,
@@ -157,17 +288,19 @@ fn derive(key: Secret<Bytes>, seq: Int, purpose: String) -> Option<Secret<Bytes>
     hkdf.expand(prk, "{purpose} {seq}".to_bytes(), 32)
 }
 
-fn header_of(seq: Int, prev: Untrusted<String>) -> Untrusted<String> {
+fn header_of(seq: Int, prev: Untrusted<String>, label: Label) -> Untrusted<String> {
+    let class = label.classification.name()
+    let trust = label.trust.name()
     json.encode(json.Value.Object([
         json.Member(key: "seq", value: json.Value.Number(json.Number.from_int(seq))),
         json.Member(key: "prev", value: json.Value.Text(prev)),
-        json.Member(key: "class", value: json.Value.Text("public")),
-        json.Member(key: "trust", value: json.Value.Text("untrusted")),
+        json.Member(key: "class", value: json.Value.Text(class)),
+        json.Member(key: "trust", value: json.Value.Text(trust)),
     ]))
 }
 
 // The line's text after its hash: the header, a space, and the seal.
-fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, op: String, name: Untrusted<String>, value: Option<json.Value>) -> Result<Untrusted<String>, StoreError> {
+fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, label: Label, op: String, name: Untrusted<String>, value: Option<json.Value>) -> Result<Untrusted<String>, StoreError> {
     var members = [
         json.Member(key: "op", value: json.Value.Text(op)),
         json.Member(key: "key", value: json.Value.Text(name)),
@@ -179,7 +312,7 @@ fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, op: String, na
         None => {}
     }
     let plain = Secret.new(copied(json.encode(json.Value.Object(members)).to_bytes()))
-    let header = header_of(seq, prev)
+    let header = header_of(seq, prev, label)
     let enc = match derive(key, seq, "key") {
         Some(k) => k
         None => {
@@ -206,6 +339,14 @@ fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, op: String, na
     Ok("{header} {nonce_hex}{sealed_hex}")
 }
 
+// The label in an authenticated header, or `None` if it is missing or names
+// a classification or trust this version does not know.
+fn label_of(head: json.Value) -> Option<Label> {
+    let c = Classification.parse(head.text("class")?)?
+    let t = Trust.parse(head.text("trust")?)?
+    Some(Label(classification: c, trust: t))
+}
+
 fn corrupt(line: Int, why: String) -> StoreError {
     StoreError.Corrupt("line {line}: {why}")
 }
@@ -229,8 +370,8 @@ fn unseal(key: Secret<Bytes>, seq: Int, header: Untrusted<String>, sealed_hex: U
 
 // Read the log text into a state. `lenient` is not a mode: the torn last
 // line is always dropped and reported in `torn`.
-fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>) -> Result<State<T>, StoreError> {
-    var state = State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: "")
+fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>, floor: Label) -> Result<State<T>, StoreError> {
+    var state = State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: "")
     let lines = text.split("\n")
     let count = lines.len()
     var n = 0
@@ -281,6 +422,13 @@ fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>) -> Re
                 return Err(corrupt(number, "the record does not open: the key is wrong or the seal was changed"))
             }
         }
+        // The header is authenticated now, so its label is the writer's.
+        let written = match label_of(head) {
+            Some(l) => l
+            None => {
+                return Err(corrupt(number, "the label is not one this version knows"))
+            }
+        }
         let name = match value.text("key") {
             Some(k) => k
             None => {
@@ -296,13 +444,17 @@ fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>) -> Re
             }
             }
             match codec.decode(stored) {
-                Some(t) => state.index.put(name, t)
+                Some(t) => {
+                    state.index.put(name, t)
+                    state.labels.put(name, higher(written, floor))
+                }
                 None => {
                 return Err(corrupt(number, "the value is not of the store's type"))
             }
             }
         } else if op == Some("delete") {
             let _ = state.index.remove(name)
+            let _ = state.labels.remove(name)
         } else {
             return Err(corrupt(number, "an unknown operation"))
         }
@@ -332,9 +484,10 @@ fn read_log(read: DirRead) -> Result<Option<Untrusted<String>>, StoreError> {
 }
 
 fn load<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>) -> Result<State<T>, StoreError> {
+    let floor = capability_label(read)
     match read_log(read)? {
-        Some(text) => replay(text, key, codec)
-        None => Ok(State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: ""))
+        Some(text) => replay(text, key, codec, floor)
+        None => Ok(State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: ""))
     }
 }
 
@@ -356,11 +509,12 @@ pub fn read<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>) -> Result<Rea
 // After an `Err` from `put` or `delete`, drop the store and open it again:
 // the log may or may not hold the record.
 pub fn open<T, R>(read: DirRead, dir: DirWrite, key: Secret<Bytes>, codec: Codec<T>, body: cap fn(Store<T>) -> R) -> Result<R, StoreError> {
+    let floor = capability_label(read)
     let locked = dir.with_lock(|locked: DirWrite| {
         let text = read_log(read)?
         let state = match text {
-            Some(t) => replay(t, key, codec)?
-            None => State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: "")
+            Some(t) => replay(t, key, codec, floor)?
+            None => State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: "")
         }
         if text.is_none() || state.torn {
             rewrite(locked, state.kept)?
@@ -402,6 +556,12 @@ impl<T> Reader<T> {
     pub fn len(self) -> Int {
         self.state.index.len()
     }
+
+    // The label of the record under `key`: the higher of the label it was
+    // written with and the capability's. `None` if there is no record.
+    pub fn label(self, key: Untrusted<String>) -> Option<Label> {
+        self.state.labels.get(key)
+    }
 }
 
 impl<T> Store<T> {
@@ -415,22 +575,37 @@ impl<T> Store<T> {
         self.state.index.len()
     }
 
+    // The label of the record under `key`, as `Reader.label` gives it.
+    pub fn label(self, key: Untrusted<String>) -> Option<Label> {
+        self.state.labels.get(key)
+    }
+
+    // The label a new record gets: its codec's trust, and never less than
+    // the capability's label.
+    fn new_label(self) -> Label {
+        higher(Label(classification: Classification.Public, trust: self.codec.trust), self.state.floor)
+    }
+
     // Write `value` under `key`, replacing a record that was there. It
     // appends the record to the log and syncs the file, and only then
     // returns `Ok`: the write is acknowledged and survives a crash.
     pub fn put(var self, key: Untrusted<String>, value: T) -> Result<(), StoreError> {
-        let body = body_of(self.key, self.state.seq + 1, self.state.head, "put", key, Some(self.codec.encode(value)))?
+        let label = self.new_label()
+        let body = body_of(self.key, self.state.seq + 1, self.state.head, label, "put", key, Some(self.codec.encode(value)))?
         self.commit(body)?
         self.state.index.put(key, value)
+        self.state.labels.put(key, label)
         Ok(())
     }
 
     // Remove the record under `key`. A key with no record still writes a
     // `delete` record. Acknowledged as `put` is.
     pub fn delete(var self, key: Untrusted<String>) -> Result<(), StoreError> {
-        let body = body_of(self.key, self.state.seq + 1, self.state.head, "delete", key, None)?
+        let label = self.new_label()
+        let body = body_of(self.key, self.state.seq + 1, self.state.head, label, "delete", key, None)?
         self.commit(body)?
         let _ = self.state.index.remove(key)
+        let _ = self.state.labels.remove(key)
         Ok(())
     }
 

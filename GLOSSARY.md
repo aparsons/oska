@@ -201,7 +201,7 @@ The secret value that seals the records of one store at rest. Holding the direct
 _Avoid_: password, master key
 
 **Record label**:
-The classification and trust that a store writes with each record and restores on read. A read gives the higher of the record label and the classification of the capability that opened the store; only `Declassify` lowers it. Decided in ADR 0040 and not built yet.
+The classification and trust that a store writes with each record and restores on read. A read gives the higher of the record label and the classification of the capability that opened the store; only `Declassify` lowers it. Decided in ADR 0040. Built with the trust flag; the classification is `Public` until ADR 0029 is built.
 _Avoid_: row security, policy, tag
 
 **Approval**:
