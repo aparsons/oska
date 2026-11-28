@@ -46,6 +46,7 @@ mod approval;
 mod budget;
 mod bytes;
 mod confine;
+mod crash_fs;
 mod data;
 mod float;
 mod host;
@@ -67,6 +68,7 @@ mod testing;
 mod traits;
 mod value;
 
+pub use crash_fs::{explore, Crash, CrashHost, CrashRecording, Event as CrashEvent, Tears};
 pub use host::{DirLock, FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;
