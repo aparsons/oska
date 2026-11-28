@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// A `Float` key or item is refused as `sorted` refuses it: `E0265`.
+fn main() {
+    var s: SortedSet<Float> = SortedSet.new()
+    var m: SortedMap<Float, Int> = SortedMap.new()
+    let _a = s.add(1.5)
+    let _b = m.put(1.5, 2)
+}

@@ -187,6 +187,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.sorted",
+        source: include_str!("std/sorted.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.map",
         source: include_str!("std/map.osk"),
         sink_literal: None,
@@ -228,6 +234,7 @@ pub const PRELUDE_STD: &[(&str, &[&str])] = &[
     ("std.map", &["Map", "Entry"]),
     ("std.set", &["Set"]),
     ("std.deque", &["Deque"]),
+    ("std.sorted", &["SortedMap", "SortedSet", "SortedEntry"]),
 ];
 
 /// The methods whose bodies are Oska functions of `std.core` (ADR 0034),
