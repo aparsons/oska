@@ -160,6 +160,14 @@ _Avoid_: hash set
 `Deque<T>`, in the prelude (no `use`): a value that holds items in a line, with amortized O(1) `push_back`, `push_front`, `pop_back` and `pop_front`. A pop on an empty deque gives `None`. It has an item limit (`P0051`). There is no literal: `Deque.of(list)` builds one.
 _Avoid_: queue, stack, ring buffer
 
+**SortedMap**:
+`SortedMap<K, V>`, in the prelude (no `use`): a value that holds entries in ascending key order, over a sorted `List` with binary search (O(log n) `get`, O(n) `put` and `remove`). Keys need `Ord` (ADR 0034); `Float` and `Secret` keys are refused. `first` and `last` give an `Option`. A repeated key in `SortedMap.of(entries)` keeps the last value. A bad user `Ord` gives a wrong answer, never a memory error. There is no literal and no entry-limit panic. A B-tree is a later option (ADR 0033).
+_Avoid_: ordered map, tree map
+
+**SortedSet**:
+`SortedSet<T>`, in the prelude (no `use`): a value that holds distinct items in ascending order, over a sorted `List` with binary search. Items need `Ord`; `Float` and `Secret` are refused. `SortedSet.of(list)` drops repeats. There is no literal. See `SortedMap` and ADR 0033.
+_Avoid_: tree set, ordered set
+
 **Insertion order**:
 The order in which a map's keys were first added. Iteration always follows it, on every platform and both backends. Updating a key keeps its place; removing it and adding it again moves it to the end.
 _Avoid_: hash order, sorted order
