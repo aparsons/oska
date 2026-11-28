@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
+fn main() {
+    Some(1).flat_map(|x| x + 1)
+}

@@ -64,3 +64,11 @@ fn a_qualified_removed_path_method_is_e0273() {
     assert!(!ok, "the fixture should fail to check: {stdout}");
     assert_golden(&stdout, "check_qualified_removed.json");
 }
+
+#[test]
+fn an_unknown_method_with_a_closure_argument_reports_only_e0228() {
+    let (stdout, ok) = check("unknown_method_closure.osk", Some("--format=json"));
+    assert!(!ok, "the fixture should fail to check: {stdout}");
+    assert!(!stdout.contains("E0233"), "no follow-on error: {stdout}");
+    assert_golden(&stdout, "check_unknown_method_closure.json");
+}

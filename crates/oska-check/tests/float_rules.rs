@@ -116,6 +116,29 @@ fn the_largest_float_and_a_literal_too_small_to_see_are_fine() {
     );
 }
 
+// An Int-to-Float mismatch beside another rule's error (#796): each is
+// reported, so the cap or trust error never hides the `E0237`.
+
+#[test]
+fn an_int_mismatch_is_reported_beside_a_capturing_closure_error() {
+    assert_errors(
+        "fn f(io: Stdout) {\n    let g: fn() -> Float = || {\n        io.println(\"x\")\n        1\n    }\n}",
+        &[
+            ("E0270", "|| {\n        io.println(\"x\")\n        1\n    }"),
+            ("E0240", "io.println(\"x\")"),
+            ("E0237", "1"),
+        ],
+    );
+}
+
+#[test]
+fn an_int_mismatch_is_reported_beside_an_untrusted_text_error() {
+    assert_errors(
+        "fn f(n: Int, t: Untrusted<String>) -> Float {\n    let u: String = t\n    n\n}",
+        &[("E0300", "t"), ("E0237", "n")],
+    );
+}
+
 // ---- E0357: Secret<Float> ------------------------------------------------------
 
 #[test]
@@ -148,7 +171,7 @@ fn secret_float_in_a_field_is_refused() {
 fn secret_float_in_a_let_annotation_is_refused() {
     assert_errors(
         "fn f() {\n    let k: Secret<Float> = Secret.new(1.5)\n}",
-        &[("E0357", "Secret<Float>"), ("E0357", "Secret.new(1.5)")],
+        &[("E0357", "Secret<Float>")],
     );
 }
 

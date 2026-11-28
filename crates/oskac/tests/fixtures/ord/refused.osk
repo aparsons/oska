@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: Apache-2.0
+// Each function is refused by `Ord` (ADR 0034): a `Float` and a `Secret`
+// have no order, and the message says why and what to use instead.
+
+fn float_cmp(a: Float, b: Float) -> Bool {
+    let order = a.cmp(b)
+    true
+}
+
+fn largest<T: Ord>(a: T, b: T) -> T {
+    match a.cmp(b) {
+        Ordering.Less => b
+        _ => a
+    }
+}
+
+fn float_largest(a: Float, b: Float) -> Float {
+    largest(a, b)
+}
+
+fn secret_less(k: Secret<U32>, p: U32) -> Bool {
+    k < p
+}
+
+fn secret_cmp(k: Secret<Bytes>, j: Secret<Bytes>) -> Bool {
+    let order = k.cmp(j)
+    true
+}
+
+fn secret_largest(k: Secret<U32>, j: Secret<U32>) -> Secret<U32> {
+    largest(k, j)
+}
+
+struct Version {
+    major: Int
+}
+
+impl Eq for Version {
+    fn eq(self, other: Version) -> Bool {
+        self.major == other.major
+    }
+}
+
+impl Ord for Version {
+    fn cmp(self, other: Version) -> Ordering {
+        self.major.cmp(other.major)
+    }
+}
+
+fn not_ordered(a: Version, b: Version) -> Bool {
+    a < b
+}
