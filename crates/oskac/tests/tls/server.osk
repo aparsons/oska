@@ -356,6 +356,8 @@ cap struct Session {
     // data resets the connection on some systems, and the alert it sent
     // would be lost).
     out: Bytes,
+    // The directory the `site` scenarios serve files from (#258).
+    site: DirRead,
 }
 
 fn key_length(suite: Int) -> Int {
@@ -957,6 +959,71 @@ impl Session {
         self.put_record(21, alert(1, 0))
     }
 
+    // The `site` scenarios (#258): the fixture release site. `site` answers
+    // a GET of a path with the file of that name beneath the directory (the
+    // fifth argument), or 404; `site_redirect` answers every GET with a
+    // redirect; `site_large` claims a body far past any cap; `site_cut` cuts the
+    // connection halfway through a binary (#259).
+    fn site_reply(var self, request: Bytes) -> Result<(), IoError> {
+        let asked = request.slice(1, request.len()).to_text().unwrap_or("")
+        var line = ""
+        var seen = false
+        for piece in asked.split("\r\n") {
+            if !seen {
+                line = piece
+                seen = true
+            }
+        }
+        var path = ""
+        var index = 0
+        for part in line.split(" ") {
+            if index == 1 {
+                path = part
+            }
+            index = index + 1
+        }
+        var head = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found"
+        var body = Bytes.new()
+        let scenario = self.scenario
+        if scenario == "site_redirect" {
+            head = "HTTP/1.1 302 Found\r\nLocation: https://elsewhere.test/\r\nContent-Length: 0\r\n\r\n"
+        } else if scenario == "site_large" {
+            head = "HTTP/1.1 200 OK\r\nContent-Length: 4000000\r\n\r\n"
+        } else if path.len() > 1 {
+            match self.site.read_bytes(Path.from(path.slice(1, path.len()))) {
+                Ok(found) => {
+                    let size = found.len()
+                    head = "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\n\r\n"
+                    body = found.assume_trusted()
+                }
+                Err(_) => {}
+            }
+        }
+        var out = head.to_bytes()
+        // `site_cut` cuts the connection in the middle of a download: the
+        // binary's head claims all of it, half of it comes, and the stream
+        // ends without close_notify.
+        let cut = scenario == "site_cut" && path.ends_with("oskac-fixture")
+        if cut {
+            out.append(body.slice(0, body.len() / 2))
+        } else {
+            out.append(body)
+        }
+        var at = 0
+        while at < out.len() {
+            let stop = if at + 16384 > out.len() { out.len() } else { at + 16384 }
+            self.put_record(23, out.slice(at, stop))?
+            at = stop
+        }
+        if cut {
+            // End the stream with no close_notify, now.
+            self.flush()?
+            self.connection.close()
+            return Ok(())
+        }
+        self.put_record(21, alert(1, 0))
+    }
+
     // The application exchange, as the scenario says.
     fn application(var self) -> Result<(), IoError> {
         let scenario = self.scenario
@@ -966,6 +1033,9 @@ impl Session {
         }
         if scenario.starts_with("http_") {
             return self.http(request)
+        }
+        if scenario.starts_with("site") {
+            return self.site_reply(request)
         }
         var reply = "echo:".to_bytes()
         reply.append(request.slice(1, request.len()))
@@ -1080,7 +1150,7 @@ impl Session {
 }
 
 // One connection: the scenario, then the alert the client sent, if any.
-fn serve(connection: Connection, scenario: String, chain: List<Bytes>, key: Bytes, random: Random) -> Int {
+fn serve(connection: Connection, scenario: String, chain: List<Bytes>, key: Bytes, random: Random, site: DirRead) -> Int {
     var s = Session(
         connection: connection,
         scenario: scenario,
@@ -1101,6 +1171,7 @@ fn serve(connection: Connection, scenario: String, chain: List<Bytes>, key: Byte
         padding: 0,
         alert: -1,
         out: Bytes.new(),
+        site: site,
     )
     match s.run(chain, key, random) {
         Ok(_) => {}
@@ -1132,6 +1203,7 @@ fn main(io: Stdout, log: Stderr, net: Net, fs: FsRead, random: Random, args: Arg
     }
     let chain = read_lines(fs, chain_file)?
     let key = read_lines(fs, key_file)?.at(0)
+    let site = fs.restrict_to(args.get(5).unwrap_or(".").assume_trusted())
     let listener = net.listen_only().restrict_to_loopback(0)
     let port = listener.port()
     io.println("{port}")?
@@ -1139,7 +1211,7 @@ fn main(io: Stdout, log: Stderr, net: Net, fs: FsRead, random: Random, args: Arg
     log.println("listening")?
     for _ in 0..count {
         let connection = listener.accept()?
-        let seen = serve(connection, scenario, chain, key, random)
+        let seen = serve(connection, scenario, chain, key, random, site)
         if seen >= 0 {
             log.println("alert {seen}")?
         } else {

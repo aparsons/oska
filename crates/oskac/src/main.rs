@@ -43,9 +43,13 @@ mod native_test;
 mod new;
 mod package;
 mod release;
+mod self_check;
 mod self_cmd;
+mod self_update;
+mod semver;
 mod sha256;
 mod stdin;
+mod update_checker;
 mod verdict;
 
 const USAGE: &str = "\
@@ -141,6 +145,22 @@ USAGE:
                                            install receipt
     oskac self uninstall [--format=json]   Remove this managed install, as the
                                            installer's uninstall does
+    oskac self check [--format=json] [--no-identify]
+                                           Ask oskalang.dev whether a newer
+                                           release exists, verified against the
+                                           pinned release key, and whether this
+                                           binary is the published one; with
+                                           self update, the only commands that
+                                           use the network
+    oskac self update [--version X [--allow-downgrade] | --rollback]
+                      [--keep-previous] [--format=json]
+                                           Replace this managed install with
+                                           the latest verified release, or
+                                           with release X; an older release
+                                           needs --allow-downgrade. --rollback
+                                           goes back one version.
+                                           --keep-previous keeps the replaced
+                                           binary for this update only
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -172,6 +192,16 @@ struct Flags {
     /// `--no-agent-files`: `oskac new` leaves out `AGENTS.md` and
     /// `CLAUDE.md`.
     no_agent_files: bool,
+    /// `--no-identify`: `oskac self check` does not compare this binary with
+    /// the release's signed checksums.
+    no_identify: bool,
+    /// `--allow-downgrade`: `oskac self update --version X` may install an
+    /// older release.
+    allow_downgrade: bool,
+    /// `--rollback`: `oskac self update` goes back to the previous version.
+    rollback: bool,
+    /// `--keep-previous`: `oskac self update` keeps the binary it replaces.
+    keep_previous: bool,
     /// `--update`: `oskac test` writes new and changed snapshots
     /// (`oska_run::snapshots`) instead of failing on them.
     update: bool,
@@ -249,8 +279,11 @@ impl CommandLine {
                     Some(target) => line.target = Some(target),
                     None => line.positional.push(arg),
                 },
-                "--version" if line.positional.first().is_some_and(|c| c == "release") => {
-                    match args.next() {
+                "--version"
+                    if line.positional.first().is_some_and(|c| c == "release")
+                        || line.positional.as_slice() == ["self", "update"] =>
+                {
+                    match args.next_if(|next| !next.starts_with("--")) {
                         Some(version) => line.version = Some(version),
                         None => line.positional.push(arg),
                     }
@@ -285,6 +318,10 @@ impl CommandLine {
                 "--lib" => line.flags.lib = true,
                 "--no-agent-files" => line.flags.no_agent_files = true,
                 "--update" => line.flags.update = true,
+                "--no-identify" => line.flags.no_identify = true,
+                "--allow-downgrade" => line.flags.allow_downgrade = true,
+                "--rollback" => line.flags.rollback = true,
+                "--keep-previous" => line.flags.keep_previous = true,
                 event if event.starts_with("--event=") => {
                     line.event = Some(event["--event=".len()..].to_string());
                 }
@@ -402,8 +439,11 @@ fn main() -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
+    let updating = positional.as_slice() == ["self", "update"];
     // Only `release` has a version and a key.
-    if (line.version.is_some() || line.key.is_some()) && positional.first() != Some(&"release") {
+    if (line.key.is_some() || (line.version.is_some() && !updating))
+        && positional.first() != Some(&"release")
+    {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
@@ -415,6 +455,43 @@ fn main() -> ExitCode {
             );
         } else {
             eprintln!("error: {error}");
+        }
+        return ExitCode::from(2);
+    }
+    // Only `self check` skips the identity check.
+    if flags.no_identify && positional.as_slice() != ["self", "check"] {
+        if flags.json {
+            outln!(
+                "{{\"ok\":false,\"error\":\"usage\",\"message\":\"--no-identify belongs to `oskac self check` alone\"}}"
+            );
+        } else {
+            eprint!("{USAGE}");
+        }
+        return ExitCode::from(2);
+    }
+    // Only `self update` takes `--version X` (besides `release`) and
+    // `--allow-downgrade`, which needs `--version`.
+    if flags.allow_downgrade && (!updating || line.version.is_none()) {
+        if flags.json {
+            outln!(
+                "{{\"ok\":false,\"error\":\"usage\",\"message\":\"--allow-downgrade belongs to `oskac self update --version X` alone\"}}"
+            );
+        } else {
+            eprint!("{USAGE}");
+        }
+        return ExitCode::from(2);
+    }
+    // Only `self update` rolls back or keeps the binary it replaces, and a
+    // rollback names its release itself.
+    if (flags.rollback || flags.keep_previous)
+        && (!updating || (flags.rollback && (line.version.is_some() || flags.allow_downgrade)))
+    {
+        if flags.json {
+            outln!(
+                "{{\"ok\":false,\"error\":\"usage\",\"message\":\"--rollback and --keep-previous belong to `oskac self update` alone, and --rollback takes no --version or --allow-downgrade\"}}"
+            );
+        } else {
+            eprint!("{USAGE}");
         }
         return ExitCode::from(2);
     }
@@ -447,6 +524,16 @@ fn main() -> ExitCode {
             match rest {
                 ["info"] if bare => self_cmd::info(flags.json),
                 ["uninstall"] if bare => self_cmd::uninstall(flags.json),
+                ["check"] if bare => self_check::check(flags.json, !flags.no_identify),
+                ["update"] if bare && !flags.no_identify => self_update::update(
+                    flags.json,
+                    &self_update::Request {
+                        version: line.version.clone(),
+                        allow_downgrade: flags.allow_downgrade,
+                        rollback: flags.rollback,
+                        keep_previous: flags.keep_previous,
+                    },
+                ),
                 _ => self_cmd::usage(flags.json),
             }
         }
@@ -1527,6 +1614,10 @@ mod tests {
                 lib: false,
                 no_agent_files: false,
                 update: false,
+                no_identify: false,
+                allow_downgrade: false,
+                rollback: false,
+                keep_previous: false,
             }
         );
         assert!(line.program_args.is_empty());

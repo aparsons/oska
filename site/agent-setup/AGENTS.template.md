@@ -37,4 +37,5 @@ A program is one `.osk` file, or a package: an `oska.toml` (`[package]` with a `
 - Packages and modules: https://oskalang.dev/guide/packages.md.
 - Binary data and key material: https://oskalang.dev/guide/bytes.md and https://oskalang.dev/guide/secrets.md.
 - How this `oskac` was installed: `oskac self info --format=json` (offline; it reads the install receipt).
-- Whether an update exists: run the installer with `--check --json` (it installs nothing). To update Oska, run the installer again: https://oskalang.dev/install.sh or https://oskalang.dev/install.ps1.
+- Whether an update exists, and whether this binary is the published one: `oskac self check --format=json` (it changes nothing). To update a managed install: `oskac self update`; `oskac self update --rollback` goes back one version. Use these, not an ad-hoc download.
+  For an install that is not managed, run the installer again (its `--check --json` asks and installs nothing): https://oskalang.dev/install.sh or https://oskalang.dev/install.ps1.

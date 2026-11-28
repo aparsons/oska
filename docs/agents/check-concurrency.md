@@ -37,6 +37,7 @@ Each `safe` verdict was checked by running the suites side by side on a 4-core m
 | `unsafe guard tests` | cargo package cache, briefly | safe | Builds throwaway workspaces in its own scratch dir (own `target`); the package cache lock is shared and brief, and nothing is downloaded. |
 | `intrinsic guard tests` | none | safe | Own scratch trees; the file under `target/` is in its scratch tree. |
 | `SPDX guard tests` | none | safe | Own scratch trees and own `git` repositories. |
+| `test-site guard tests` | none | safe | Own scratch trees and own `git` repositories. |
 | `kill guard tests` | none | safe | Feeds command text to the guard; kills nothing and starts no process. |
 | `workflow guard tests` | none | safe | Own scratch trees. |
 | `temp-leak wrapper tests` | none | safe | Sets `TMPDIR` to its own scratch dir; the wrapper's private dir is made under that, not under the shared `/tmp`. |

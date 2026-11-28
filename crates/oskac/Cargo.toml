@@ -14,5 +14,18 @@ oska-run = { path = "../oska-run" }
 oska-syntax = { path = "../oska-syntax" }
 oska-sys = { path = "../oska-sys" }
 
+[build-dependencies]
+oska-check = { path = "../oska-check" }
+oska-native = { path = "../oska-native" }
+oska-syntax = { path = "../oska-syntax" }
+
+[features]
+# Test builds only (spec #230): points the update checker at the loopback
+# TLS test server and the test key. The CLI tests build `oskac` with it into
+# a target directory of their own (`tests/common/test_site.rs`); a plain
+# `cargo build` or `cargo test` does not. Never in `default`, never in a release:
+# `scripts/test-site-guard/guard.sh` fails the project check if it could be.
+test-site = []
+
 [lints]
 workspace = true
