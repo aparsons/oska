@@ -335,3 +335,23 @@ fn main(io: Stdout) -> Result<(), IoError> {
     let panic = outcome.panic.as_ref().expect("the flood panics");
     assert_eq!(panic.code, "P0045", "{outcome:#?}");
 }
+
+#[test]
+fn under_max_memory_a_growing_set_stops_with_p0040() {
+    let src = "fn main(io: Stdout) {
+    var s: Set<Int> = Set.new()
+    var i = 0
+    while i < 1000000 {
+        let _ = s.add(i)
+        i = i + 1
+    }
+    let _ = io.println(\"unreached\")
+}
+";
+    let outcome = common::run_under_limit(src, 1 << 20);
+    let Some(panic) = &outcome.panic else {
+        panic!("a million items pass 1 MiB: {outcome:#?}");
+    };
+    assert_eq!(panic.code, oska_run::codes::MEMORY_LIMIT, "{panic:#?}");
+    assert_eq!(outcome.stdout, "");
+}

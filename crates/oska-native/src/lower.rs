@@ -169,19 +169,14 @@ mod panics {
     pub const BYTES_OUT_OF_RANGE: &str = "P0042";
     pub const BYTES_TOO_LONG: &str = "P0043";
     pub const MAP_ENTRY_LIMIT: &str = "P0044";
-    /// The interpreter's message for `P0044`.
-    pub const MAP_ENTRY_LIMIT_MESSAGE: &str =
-        "the map or set holds as many entries as its limit allows";
+    pub use oska_check::limits::messages::MAP_ENTRY_LIMIT as MAP_ENTRY_LIMIT_MESSAGE;
     pub const MAP_PROBE_LIMIT: &str = "P0045";
-    /// The interpreter's message for `P0045`.
-    pub const MAP_PROBE_LIMIT_MESSAGE: &str =
-        "the map's keys or the set's items collide under every hash it tries: they look chosen to flood it";
+    pub use oska_check::limits::messages::MAP_PROBE_LIMIT as MAP_PROBE_LIMIT_MESSAGE;
     pub const FLOAT_TO_INT: &str = "P0046";
     pub const INT_TO_FLOAT: &str = "P0049";
     pub const FMT_DIGITS: &str = "P0050";
     pub const DEQUE_ITEM_LIMIT: &str = "P0051";
-    /// The interpreter's message for `P0051`.
-    pub const DEQUE_ITEM_LIMIT_MESSAGE: &str = "the deque holds as many items as its limit allows";
+    pub use oska_check::limits::messages::DEQUE_ITEM_LIMIT as DEQUE_ITEM_LIMIT_MESSAGE;
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
