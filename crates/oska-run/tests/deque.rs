@@ -336,3 +336,23 @@ fn push_front_and_pop_front_are_amortized_constant_in_steps() {
         assert_eq!(outcome.stdout, format!("{want}\n"));
     }
 }
+
+#[test]
+fn under_max_memory_a_growing_deque_stops_with_p0040() {
+    let src = "fn main(io: Stdout) {
+    var d: Deque<Int> = Deque.new()
+    var i = 0
+    while i < 1000000 {
+        d.push_back(i)
+        i = i + 1
+    }
+    let _ = io.println(\"unreached\")
+}
+";
+    let outcome = common::run_under_limit(src, 1 << 20);
+    let Some(panic) = &outcome.panic else {
+        panic!("a million items pass 1 MiB: {outcome:#?}");
+    };
+    assert_eq!(panic.code, oska_run::codes::MEMORY_LIMIT, "{panic:#?}");
+    assert_eq!(outcome.stdout, "");
+}
