@@ -1,0 +1,8 @@
+crates/oskac/tests/fixtures/store_queries_bad.osk:6:42: error[E0227]: `Item` has no field `qyt`; did you mean `qty`? (bytes 138..141)
+    fix (maybe): replace with `qty`
+crates/oskac/tests/fixtures/store_queries_bad.osk:10:47: error[E0220]: expected `Int`, found `String` (bytes 234..239)
+crates/oskac/tests/fixtures/store_queries_bad.osk:15:15: error[E0228]: `store.Reader<Item>` has no method `put` (bytes 342..345)
+fn unknown_field: pure
+fn wrong_type: pure
+fn read_only_cannot_write: DirWrite (s)
+fn main: pure

@@ -51,6 +51,16 @@
 // and `Reader.opened` says so; otherwise, and whenever the log and a good
 // snapshot disagree, the open is `Corrupt`.
 //
+// Queries (spec #842, ticket #852). A `Query` is built from a record's
+// fields as functions (`Query.all().int_ge(|i: Item| i.qty, 3)`), never from
+// text, so the checker rejects a field the record lacks (with the nearest
+// field as a suggestion) and a value of the wrong type. `scan` takes a row
+// budget and fails with `Budget`, reading nothing, when the store has more
+// live records than that. Every row has its label: the stored label, already
+// the higher of the record's and the capability's. `Store.read_only` narrows
+// a writer to a `Reader`, a type with no `put`, `delete` or `snapshot`, so
+// the checker shows that it cannot write (ADR 0008).
+//
 // A record is typed by a `Codec`: a function from the value to JSON and one
 // back. The one back gives `None` for JSON it does not accept, and then the
 // open fails with `Corrupt`.
@@ -93,6 +103,9 @@ pub enum StoreError {
     Io(IoError),
     // The log is damaged: the text names the line and the reason.
     Corrupt(String),
+    // A scan was refused because the store holds more live records than
+    // the row budget: the text names both numbers.
+    Budget(String),
 }
 
 impl StoreError {
@@ -105,6 +118,7 @@ impl StoreError {
                 "store: {text}"
             }
             StoreError.Corrupt(why) => "store: corrupt log: {why}"
+            StoreError.Budget(why) => "store: scan over budget: {why}"
         }
     }
 }
@@ -282,6 +296,92 @@ struct Found<T> {
 
 fn empty_state<T>(floor: Label) -> State<T> {
     State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: "", fresh: true, first: 1, last: "", opened: "log")
+}
+
+// A record that a scan found: its key, its value, and its label, which is
+// the higher of the label it was written with and the capability's.
+pub struct Row<T> {
+    pub key: Untrusted<String>,
+    pub value: T,
+    pub label: Label,
+}
+
+// A query on records of type `T`: every condition must hold (they join with
+// "and"). A condition is built from a function that reads one field of the
+// record, as in `Query.all().int_ge(|i: Item| i.qty, 3)`, so there is no
+// query text: a field that the record does not have, or a value of the
+// wrong type, is a check error, and the checker suggests the nearest field.
+pub struct Query<T> {
+    tests: List<fn(T) -> Bool>,
+}
+
+impl<T> Query<T> {
+    // The query that every record satisfies.
+    pub fn all() -> Query<T> {
+        Query(tests: [])
+    }
+
+    fn with(self, cond: fn(T) -> Bool) -> Query<T> {
+        var tests = self.tests
+        tests.push(cond)
+        Query(tests: tests)
+    }
+
+    // Records whose `Int` field equals `n`.
+    pub fn int_eq(self, field: fn(T) -> Int, n: Int) -> Query<T> {
+        self.with(|r: T| field(r) == n)
+    }
+
+    // Records whose `Int` field is at least `n`.
+    pub fn int_ge(self, field: fn(T) -> Int, n: Int) -> Query<T> {
+        self.with(|r: T| field(r) >= n)
+    }
+
+    // Records whose `Int` field is at most `n`.
+    pub fn int_le(self, field: fn(T) -> Int, n: Int) -> Query<T> {
+        self.with(|r: T| field(r) <= n)
+    }
+
+    // Records whose text field equals `text`.
+    pub fn text_eq(self, field: fn(T) -> Untrusted<String>, text: Untrusted<String>) -> Query<T> {
+        self.with(|r: T| field(r) == text)
+    }
+
+    // Records whose text field starts with `prefix`.
+    pub fn text_starts_with(self, field: fn(T) -> Untrusted<String>, prefix: Untrusted<String>) -> Query<T> {
+        self.with(|r: T| field(r).starts_with(prefix))
+    }
+
+    fn matches(self, record: T) -> Bool {
+        for cond in self.tests {
+            if !cond(record) {
+                return false
+            }
+        }
+        true
+    }
+}
+
+// The rows of `state` that `query` matches, in the order the records were
+// first written, or `Budget` when the state holds more live records than
+// `budget`. The budget counts the records a scan would examine, not the rows
+// it returns, so a query cannot read more than the caller allowed.
+fn scan_state<T>(state: State<T>, query: Query<T>, budget: Int) -> Result<List<Row<T>>, StoreError> {
+    let live = state.index.len()
+    if live > budget {
+        return Err(StoreError.Budget("{live} live records, budget {budget}"))
+    }
+    var rows = []
+    for entry in state.index.entries() {
+        if query.matches(entry.value) {
+            let label = match state.labels.get(entry.key) {
+                Some(l) => l
+                None => state.floor
+            }
+            rows.push(Row(key: entry.key, value: entry.value, label: label))
+        }
+    }
+    Ok(rows)
 }
 
 // A store open for writing. It exists only inside the body of `open`,
@@ -825,6 +925,13 @@ impl<T> Reader<T> {
     pub fn label(self, key: Untrusted<String>) -> Option<Label> {
         self.state.labels.get(key)
     }
+
+    // The live records that `query` matches, each with its label. It fails
+    // with `Budget`, reading nothing, when the store holds more live
+    // records than `budget`.
+    pub fn scan(self, query: Query<T>, budget: Int) -> Result<List<Row<T>>, StoreError> {
+        scan_state(self.state, query, budget)
+    }
 }
 
 impl<T> Store<T> {
@@ -841,6 +948,19 @@ impl<T> Store<T> {
     // The label of the record under `key`, as `Reader.label` gives it.
     pub fn label(self, key: Untrusted<String>) -> Option<Label> {
         self.state.labels.get(key)
+    }
+
+    // The live records that `query` matches, as `Reader.scan` gives them.
+    pub fn scan(self, query: Query<T>, budget: Int) -> Result<List<Row<T>>, StoreError> {
+        scan_state(self.state, query, budget)
+    }
+
+    // The store narrowed to what a reader can do: it reads, scans and
+    // labels, and has no `put`, `delete` or `snapshot`, so a caller that is
+    // handed it cannot write (ADR 0008, narrowing). It holds no directory
+    // capability. It sees the records as of this call.
+    pub fn read_only(self) -> Reader<T> {
+        Reader(state: self.state)
     }
 
     // The label a new record gets: its codec's trust, and never less than
