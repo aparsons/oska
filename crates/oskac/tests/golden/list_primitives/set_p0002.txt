@@ -1,0 +1,6 @@
+--- stdout
+z
+--- stderr
+main.osk:5:5: error[P0002]: index 3 is out of bounds for a list of length 3 (bytes 107..125)
+    at main (main.osk:5:5)
+--- exit Some(101)

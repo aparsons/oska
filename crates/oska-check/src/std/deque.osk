@@ -1,0 +1,241 @@
+// SPDX-License-Identifier: Apache-2.0
+// `Deque<T>`, a line of items with amortized O(1) pushes and pops at both
+// ends (ADR 0032). `Deque` is in the prelude: write `Deque.new()`,
+// `d.push_back(x)` and `d.pop_front()` with no `use`. This file is the
+// module `std.deque`, which `use std.deque` still imports.
+//
+// - A deque is a value, like a `List`: it is copied on write, and a method
+//   that changes it needs a `var`. A copy made before a push or a pop does
+//   not see it.
+// - `to_list()` gives the items from front to back, and `get(i)` counts
+//   from the front. `pop_back`, `pop_front` and `get` give `None` for an
+//   empty deque or an index out of range; none of these panics.
+// - `T` has no bound: a deque never hashes or compares an item, so a
+//   `Secret` item is allowed. Two deques are equal when they hold equal
+//   items in the same order.
+//
+// Limits (ADR 0032). A deque holds at most `DEFAULT_MAX_ENTRIES` items;
+// `Deque.with_max_entries(n)` sets a lower limit. A push past the limit
+// panics with `P0051`. `--max-memory` bounds a growing deque with `P0040`.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+//
+// The items live in `ring`, a list whose length is 0 or a power of two
+// (at least `MIN_RING`), one slot for each place an item can be: a free
+// slot holds `None`. The front item is at `head`, and the item `i` places
+// behind it is at `(head + i)` modulo the ring's length. A push writes a
+// free slot with `List.set`. A full ring is rebuilt into one of twice the
+// length, which copies each item once and is paid for by the pushes
+// before it. A pop writes `None` into the slot it frees; when the count
+// falls below a quarter of the ring, the ring is rebuilt at half the
+// length (never below `MIN_RING`). Every end operation is O(1) apart from
+// a rebuild, and each rebuild loop iteration is a step on both backends.
+
+// The most items a deque starts with room for, and the most it can be
+// given. Its ring is then 4,194,304 slots.
+const DEFAULT_MAX_ENTRIES: Int = 4194304
+
+// The fewest slots a ring has once it holds anything.
+const MIN_RING: Int = 8
+
+// A line of items, with both ends open.
+pub struct Deque<T> {
+    ring: List<Option<T>>,
+    head: Int,
+    count: Int,
+    limit: Int,
+}
+
+impl<T> Deque<T> {
+    // An empty deque.
+    pub fn new() -> Deque<T> {
+        Deque.with_max_entries(DEFAULT_MAX_ENTRIES)
+    }
+
+    // An empty deque that holds at most `limit` items (never more than
+    // `new()` allows, and a negative number is 0): a push past it panics
+    // with `P0051`.
+    pub fn with_max_entries(limit: Int) -> Deque<T> {
+        var most = limit
+        if most > DEFAULT_MAX_ENTRIES {
+            most = DEFAULT_MAX_ENTRIES
+        }
+        if most < 0 {
+            most = 0
+        }
+        let empty = Deque(ring: [], head: 0, count: 0, limit: most)
+        empty
+    }
+
+    // A deque of `items`, the first at the front. More items than the
+    // limit panics with `P0051`.
+    pub fn of(items: List<T>) -> Deque<T> {
+        var made: Deque<T> = Deque.new()
+        for item in items {
+            made.push_back(item)
+        }
+        made
+    }
+
+    // The number of items.
+    pub fn len(self) -> Int {
+        self.count
+    }
+
+    // Whether it holds no item.
+    pub fn is_empty(self) -> Bool {
+        self.count == 0
+    }
+
+    // The item `index` places from the front (0 is the front), or `None`
+    // when the index is out of range.
+    pub fn get(self, index: Int) -> Option<T> {
+        if index < 0 || index >= self.count {
+            return None
+        }
+        self.ring.at(self.place(index))
+    }
+
+    // Add `item` at the back. The deque must be a `var`. A deque that
+    // holds as many items as its limit panics with `P0051`.
+    pub fn push_back(var self, item: T) {
+        if self.count >= self.limit {
+            deque_item_limit()
+            return
+        }
+        self.make_room()
+        let at = self.place(self.count)
+        self.ring.set(at, Some(item))
+        self.count = self.count + 1
+    }
+
+    // Add `item` at the front. The deque must be a `var`. A deque that
+    // holds as many items as its limit panics with `P0051`.
+    pub fn push_front(var self, item: T) {
+        if self.count >= self.limit {
+            deque_item_limit()
+            return
+        }
+        self.make_room()
+        let size = self.ring.len()
+        let at = (self.head + size - 1) % size
+        self.ring.set(at, Some(item))
+        self.head = at
+        self.count = self.count + 1
+    }
+
+    // Remove the back item and give it as `Some`, or `None` for an empty
+    // deque. The deque must be a `var`.
+    pub fn pop_back(var self) -> Option<T> {
+        if self.count == 0 {
+            return None
+        }
+        let at = self.place(self.count - 1)
+        let item = self.ring.at(at)
+        self.ring.set(at, None)
+        self.count = self.count - 1
+        self.shrink_if_sparse()
+        item
+    }
+
+    // Remove the front item and give it as `Some`, or `None` for an empty
+    // deque. The deque must be a `var`.
+    pub fn pop_front(var self) -> Option<T> {
+        if self.count == 0 {
+            return None
+        }
+        let item = self.ring.at(self.head)
+        self.ring.set(self.head, None)
+        self.head = (self.head + 1) % self.ring.len()
+        self.count = self.count - 1
+        self.shrink_if_sparse()
+        item
+    }
+
+    // The items from front to back, as a new list.
+    pub fn to_list(self) -> List<T> {
+        var out: List<T> = []
+        var i = 0
+        while i < self.count {
+            match self.ring.at(self.place(i)) {
+                Some(item) => { out.push(item) }
+                None => {}
+            }
+            i = i + 1
+        }
+        out
+    }
+
+    // The ring slot of the item `index` places from the front. The ring
+    // is not empty when this is called.
+    fn place(self, index: Int) -> Int {
+        (self.head + index) % self.ring.len()
+    }
+
+    // Make sure a free slot exists: the first push makes a ring of
+    // `MIN_RING`, and a full ring is rebuilt at twice its length.
+    fn make_room(var self) {
+        let size = self.ring.len()
+        if self.count < size {
+            return
+        }
+        if size == 0 {
+            self.rebuild(MIN_RING)
+        } else {
+            self.rebuild(size * 2)
+        }
+    }
+
+    // Halve the ring when under a quarter of it is in use.
+    fn shrink_if_sparse(var self) {
+        let size = self.ring.len()
+        if size > MIN_RING && self.count * 4 < size {
+            self.rebuild(size / 2)
+        }
+    }
+
+    // Move the items, front first, into a ring of `size` slots, with the
+    // front at slot 0. `size` is a power of two and holds every item.
+    fn rebuild(var self, size: Int) {
+        var fresh: List<Option<T>> = []
+        var i = 0
+        while i < self.count {
+            fresh.push(self.ring.at(self.place(i)))
+            i = i + 1
+        }
+        while i < size {
+            fresh.push(None)
+            i = i + 1
+        }
+        self.ring = fresh
+        self.head = 0
+    }
+}
+
+impl<T: Eq> Eq for Deque<T> {
+    fn eq(self, other: Deque<T>) -> Bool {
+        if self.count != other.count {
+            return false
+        }
+        var i = 0
+        while i < self.count {
+            match self.get(i) {
+                Some(a) => {
+                    match other.get(i) {
+                        Some(b) => {
+                            if a != b {
+                                return false
+                            }
+                        }
+                        None => { return false }
+                    }
+                }
+                None => { return false }
+            }
+            i = i + 1
+        }
+        true
+    }
+}

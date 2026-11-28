@@ -172,6 +172,9 @@ impl Body<'_, '_> {
         let map_panic = match name {
             "map_entry_limit" => Some((panics::MAP_ENTRY_LIMIT, panics::MAP_ENTRY_LIMIT_MESSAGE)),
             "map_probe_limit" => Some((panics::MAP_PROBE_LIMIT, panics::MAP_PROBE_LIMIT_MESSAGE)),
+            "deque_item_limit" => {
+                Some((panics::DEQUE_ITEM_LIMIT, panics::DEQUE_ITEM_LIMIT_MESSAGE))
+            }
             _ => None,
         };
         if let Some((code, message)) = map_panic {

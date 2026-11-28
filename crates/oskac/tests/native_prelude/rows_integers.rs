@@ -46,6 +46,15 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "deque_item_limit",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("before")?
+    deque_item_limit()
+    io.println("after")
+}"#,
+    ),
+    (
         "map_probe_limit",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {

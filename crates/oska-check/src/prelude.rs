@@ -181,6 +181,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.deque",
+        source: include_str!("std/deque.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.map",
         source: include_str!("std/map.osk"),
         sink_literal: None,
@@ -199,6 +205,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.set",
+        source: include_str!("std/set.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.mcp",
         source: include_str!("std/mcp.osk"),
         sink_literal: None,
@@ -212,7 +224,11 @@ pub static STD_MODULES: &[StdModule] = &[
 /// is joined to a program only when the program's text writes one of the
 /// names (a program that never says `Map` or `Entry` is unchanged).
 /// `use std.map` still works.
-pub const PRELUDE_STD: &[(&str, &[&str])] = &[("std.map", &["Map", "Entry"])];
+pub const PRELUDE_STD: &[(&str, &[&str])] = &[
+    ("std.map", &["Map", "Entry"]),
+    ("std.set", &["Set"]),
+    ("std.deque", &["Deque"]),
+];
 
 /// The methods whose bodies are Oska functions of `std.core` (ADR 0034),
 /// by type: `List` (functions `list_<name>`), `Option` (`option_<name>`)

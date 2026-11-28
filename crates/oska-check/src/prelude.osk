@@ -875,6 +875,18 @@ impl<T> List<T> {
     // The item at `index`. An index out of bounds is a bug: it panics
     // (`P0002`). Use `get` when the index may be out of bounds.
     pub fn at(self, index: Int) -> T
+    // Replace the item at `index` with `item`. The list must be a `var`.
+    // An index below 0 or not below the length panics (`P0002`, as `at`
+    // does); `set` never grows the list. A copy made before the call does
+    // not see the change.
+    pub fn set(var self, index: Int, item: T)
+    // Remove the last item and give it as `Some`, or `None` for an empty
+    // list. The list must be a `var`. It frees no memory by itself.
+    pub fn pop(var self) -> Option<T>
+    // Keep the first `n` items. An `n` at or above the length changes
+    // nothing, and a negative `n` counts as 0. The list must be a `var`.
+    // It frees no memory by itself.
+    pub fn truncate(var self, n: Int)
     // A new list of `f` applied to each item, in order.
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
     // A new list of the items for which `keep` is true, in order.
@@ -1428,6 +1440,9 @@ pub fn map_entry_limit()
 // For `std.map` only (ADR 0028): a map whose probes pass the limit under
 // every hash of its list panics with `P0045`.
 pub fn map_probe_limit()
+// For `std.deque` only (ADR 0032): a deque that would pass its item
+// limit panics with `P0051`.
+pub fn deque_item_limit()
 
 // ---- Core traits -------------------------------------------------------
 

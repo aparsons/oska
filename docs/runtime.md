@@ -154,13 +154,14 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
 | `P0042` | A `Bytes` range out of bounds: `slice(start, end)` with `start` below 0, `end` past the length, or `start` past `end`; an endian read (`read_u16_be` and the rest) whose bytes do not all lie inside the buffer; `Bytes.zeroed` with a negative length; or `ct_select` between two `Secret<Bytes>` of different lengths. The message names the range or offset and the length, or both lengths. Spans the call. An index out of bounds in `at` or `set` is `P0002`, as in `List.at`. |
 | `P0043` | A `Bytes` would grow past 256 MiB: `push`, `append` or an endian push whose result would be longer, or `Bytes.zeroed` with a longer length. The runtime panics instead of running out of memory, and the buffer is not changed. The message names the length it would have had. Spans the call. Not yet checked where a whole buffer is made at once from outside: `String.to_bytes` and the capabilities' `read_bytes` (`DirRead`, `FileRead`) give a buffer of any length without this panic, and a file no memory holds is an `IoError` ("out of memory"). |
-| `P0044` | A `std.map` map was given a new entry past its entry limit: `put` of a key the map does not hold, when it already holds as many entries as the limit allows. The limit is 4,194,304 entries, or the lower number given to `Map.with_max_entries`. An update of a key the map holds is no new entry. The map is not changed. Spans the `put` inside `std.map`. |
-| `P0045` | A `std.map` map's keys collide under every hash it tries. A `put` that cannot place its key within 64 slots of where it hashes rebuilds the table under the next of three fixed hashes (the key's `Hash`, then two mixes of it), and panics when the last fails too. Keys with one 64-bit hash, such as those chosen to flood the map, end here after a bounded number of steps. Spans the `put` inside `std.map`. |
+| `P0044` | A `std.map` map or `std.set` set was given a new entry past its entry limit: `put` of a key the map does not hold, or `add` (or a `union`) of an item the set does not hold, when it already holds as many entries as the limit allows. The limit is 4,194,304 entries, or the lower number given to `Map.with_max_entries` or `Set.with_max_entries`. An update of a key the map holds is no new entry. The map or set is not changed. Spans the `put` inside `std.map`. |
+| `P0045` | A `std.map` map's keys, or a `std.set` set's items, collide under every hash it tries (a set is built over a map). A `put` that cannot place its key within 64 slots of where it hashes rebuilds the table under the next of three fixed hashes (the key's `Hash`, then two mixes of it), and panics when the last fails too. Keys with one 64-bit hash, such as those chosen to flood the map, end here after a bounded number of steps. Spans the `put` inside `std.map`. |
 | `P0046` | `Float.to_int()` of a NaN, an infinity or a value that does not fit `Int` (below -2^63 or at 2^63 or above). The value is truncated toward zero, so `-0.9` is `0`. The message names the value as `to_string` prints it. Spans the call. |
 | `P0047` | A NaN reached a function that has no answer for NaN and so needs a number (ADR 0027), where returning a NaN would hide the bug. The message names the function. Spans the call. No function raises it yet, so it has no example. |
 | `P0048` | A statistic of no input: a mean, a minimum or a maximum of an empty list, which has no value. The message names the function. Spans the call. No function raises it yet, so it has no example. |
 | `P0049` | `Int.to_float()` of a value above 2^53 or below -2^53, which a `Float` could not hold exactly. The runtime refuses instead of rounding; `to_float_rounded()` names the rounding and converts any `Int`. The message names the value. Spans the call. |
 | `P0050` | `Float.fmt(digits)` with `digits` below 0 or above 340. The message names the count. Spans the call. |
+| `P0051` | A `std.deque` deque was given an item past its item limit: `push_back` or `push_front` when it already holds as many items as the limit allows (4,194,304, or the lower `Deque.with_max_entries(n)`). Spans the call. |
 
 ### Panic examples
 
@@ -688,6 +689,26 @@ fn main() {
 fn main() {
     let price = 2.5
     let text = price.fmt(2)
+}
+```
+
+#### `P0051`
+
+```oska error=P0051
+fn main() {
+    var d: Deque<Int> = Deque.with_max_entries(2)
+    d.push_back(1)
+    d.push_back(2)
+    d.push_front(3)
+}
+```
+
+```oska fixed=P0051
+fn main() {
+    var d: Deque<Int> = Deque.with_max_entries(3)
+    d.push_back(1)
+    d.push_back(2)
+    d.push_front(3)
 }
 ```
 
