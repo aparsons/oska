@@ -47,4 +47,19 @@ The prelude needs these confined capability methods (ADR 0008), each on the inte
 
 So the primitives are: `append`, file `sync`, `rename` inside one capability, directory `sync`, `remove_file`, and the exclusive lock that gives one writer. `append`, `rename` and `remove_file` are ticket #679; file `sync` and directory `sync` are the next ticket of the spec; the lock is `DirWrite.with_lock(f)` (#846): scoped, because Oska has no destructors, it holds `.oska-lock` in the directory for the length of `f`, and a second lock fails with `L0001`.
 
+### Which method is which step
+
+| Step of the order | Method | Ticket |
+| --- | --- | --- |
+| 1 Write a record | `FileWrite.append(text)` | #679 |
+| 2 Acknowledge: `sync` the log | `FileWrite.sync()` | #845 |
+| 3.1 Snapshot to a temporary file | `FileWrite.write_bytes(bytes)` or `DirWrite.write_bytes(path, bytes)` | existing |
+| 3.2 `sync` the temporary file | `FileWrite.sync()` | #845 |
+| 3.3 `rename` over the snapshot's name | `DirWrite.rename(from, to)` | #679 |
+| 3.4 `sync` the directory | `DirWrite.sync()` | #845 |
+| 3.5 Remove the log's front | `DirWrite.remove_file(path)` | #679 |
+| One writer | `DirWrite.with_lock(f)` | #846 |
+
+`FileWrite.sync` on macOS is `F_FULLFSYNC`, so `Ok` means the drive's cache is empty too; the model's "durable" is that. On Windows a directory flush is not documented to make a rename durable (`docs/runtime.md`), so step 3.4 there rests on what NTFS's journal gives.
+
 The model has one writer. The lock capability is what makes that true, and a second writer is out of scope for the first version.
