@@ -533,6 +533,34 @@ impl Dir {
         lone_file(handle, info, names)
     }
 
+    /// Flush the regular file reached by walking `names` beneath this one,
+    /// data and metadata, to stable storage (`File::sync_all`, which is
+    /// `FlushFileBuffers`). It is opened for writing, which that call
+    /// needs, but never created or changed; a reparse point, a directory
+    /// and a file with another hard link are refused, as for a read.
+    pub fn sync_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
+        let parent = self.walk(parents)?;
+        let (handle, info) = open_name(
+            parent.as_ref().unwrap_or(self),
+            last.as_ref(),
+            Open::FILE_SYNC,
+            names,
+        )?;
+        lone_file(handle, info, names)?
+            .sync_all()
+            .map_err(|error| refusal::at(&refusal::joined(names), error))
+    }
+
+    /// Flush this directory with `FlushFileBuffers` on a new handle of it
+    /// opened with write access, which that call needs. Windows has no
+    /// documented promise that this makes a rename durable (see
+    /// `docs/runtime.md`); NTFS journals the change itself, and this asks
+    /// for what the system offers.
+    pub fn sync(&self) -> io::Result<()> {
+        File::from(open_at(self, &[], Open::DIRECTORY_SYNC)?).sync_all()
+    }
+
     /// Remove the regular file reached by walking `names` beneath this
     /// one. A reparse point, a directory and a file with another hard link
     /// are refused, as for a read, so a removal never reaches past the
@@ -740,6 +768,24 @@ impl Open {
     const FILE_APPEND: Open = Open {
         access: nt::FILE_APPEND,
         disposition: nt::FILE_OPEN_IF,
+        options: 0,
+        share: nt::FILE_SHARE_ALL,
+    };
+
+    /// An existing file, to flush: opened for writing, which
+    /// `FlushFileBuffers` needs, and never created.
+    const FILE_SYNC: Open = Open {
+        access: nt::FILE_WRITE,
+        disposition: nt::FILE_OPEN,
+        options: 0,
+        share: nt::FILE_SHARE_ALL,
+    };
+
+    /// A directory, to flush: as [`Open::DIRECTORY`], with the right to
+    /// add files and subdirectories, which `FlushFileBuffers` needs.
+    const DIRECTORY_SYNC: Open = Open {
+        access: nt::DIRECTORY | nt::FILE_GENERIC_WRITE,
+        disposition: nt::FILE_OPEN,
         options: 0,
         share: nt::FILE_SHARE_ALL,
     };

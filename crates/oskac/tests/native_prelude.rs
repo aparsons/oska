@@ -302,6 +302,23 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "DirWrite.sync",
+        Run::Main,
+        r#"fn main(write: FsWrite) -> Result<(), IoError> {
+    write.restrict_to(".").sync()
+}"#,
+    ),
+    (
+        "FileWrite.sync",
+        Run::Main,
+        r#"fn main(io: Stdout, write: FsWrite) -> Result<(), IoError> {
+    match write.restrict_to_file("missing.txt").sync() {
+        Ok(_) => io.println("synced")
+        Err(e) => io.println(e.message)
+    }
+}"#,
+    ),
+    (
         "FileRead.metadata",
         Run::Main,
         r#"fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {

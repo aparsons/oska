@@ -103,6 +103,7 @@ pub const INTRINSICS: Table = &[
     ("DirWrite.remove_file", Plain(fs_remove_file)),
     ("DirWrite.rename", Plain(fs_rename)),
     ("DirWrite.restrict_to", Plain(dir_restrict_to)),
+    ("DirWrite.sync", Plain(fs_sync)),
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.with_lock", HigherOrder(fs_with_lock)),
     ("DirWrite.write", Plain(fs_write)),
@@ -113,6 +114,7 @@ pub const INTRINSICS: Table = &[
     ("FileRead.read_bytes", Plain(file_read_bytes)),
     ("FileRead.read_to_string", Plain(file_read_to_string)),
     ("FileWrite.append", Plain(file_append)),
+    ("FileWrite.sync", Plain(file_sync)),
     ("FileWrite.write", Plain(file_write)),
     ("FileWrite.write_bytes", Plain(file_write_bytes)),
     ("Fs.read_only", Plain(fs_read_only)),
@@ -957,6 +959,20 @@ fn fs_append(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, 
 fn file_append(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     let contents = text(args, 1).as_bytes();
     let result = file_root(&args[0]).and_then(|root| host.append_file_beneath(root, &[], contents));
+    io_unit(result, span)
+}
+
+/// `DirWrite.sync(self)`: flush the directory the capability is rooted
+/// at.
+fn fs_sync(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let result =
+        root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| host.sync_dir_beneath(root));
+    io_unit(result, span)
+}
+
+/// `FileWrite.sync(self)`: flush the one file the capability reaches.
+fn file_sync(host: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let result = file_root(&args[0]).and_then(|root| host.sync_file_beneath(root, &[]));
     io_unit(result, span)
 }
 
