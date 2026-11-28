@@ -546,7 +546,7 @@ fail_rc() {
 # and macOS alike).
 descendants() {
   local c
-  for c in $(ps -A -o pid= -o ppid= | awk -v p="$1" '$2 == p { print $1 }'); do
+  for c in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'); do
     descendants "$c"
     printf '%s\n' "$c"
   done
@@ -555,25 +555,52 @@ descendants() {
 # The concurrent run's state, global so the EXIT trap can clean up.
 q_tmp=      # the private buffer directory
 q_pids=()   # the launch_step subshell of each queued step, by place
+# queued_pids: the launch_step subshell of each queued step and the runner it
+# started (its pid file), then everything below them, deepest first.
+queued_pids() {
+  local p f
+  for p in ${q_pids[@]+"${q_pids[@]}"}; do
+    descendants "$p"
+    printf '%s\n' "$p"
+  done
+  if [ -n "$q_tmp" ]; then
+    for f in "$q_tmp"/*.pid; do
+      [ -f "$f" ] || continue
+      p=$(cat "$f" 2>/dev/null) || continue
+      [ -n "$p" ] || continue
+      descendants "$p"
+      printf '%s\n' "$p"
+    done
+  fi
+}
 # queue_cleanup: stops every process the queued steps started (their runners
 # and everything below), waits for them, then removes the buffer directory, so
-# nothing outlives the run or writes into a deleted directory.
+# nothing outlives the run or writes into a deleted directory. The process
+# tree is read again after each kill, because a process that was starting when
+# it was read is not in the first list, and a runner whose launch subshell is
+# gone has been adopted by init: its pid file still names it.
 queue_cleanup() {
-  local p all='' left
-  for p in ${q_pids[@]+"${q_pids[@]}"}; do
-    all="$all $(descendants "$p" | tr '\n' ' ') $p"
+  local p pid round seen='' now left
+  if [ -n "${q_pids[*]:-}" ] && ! ps -A -o pid= -o ppid= >/dev/null 2>&1; then
+    printf 'check.sh: cannot list processes (ps -A -o pid= -o ppid= failed); suites started by this run may keep running\n' >&2
+  fi
+  for round in 1 2 3; do
+    now=$(queued_pids | tr '\n' ' ')
+    [ -n "${now// /}" ] || break
+    seen="$seen $now"
+    # shellcheck disable=SC2086 # a list of pids
+    kill $now 2>/dev/null || true
+    sleep 0.1
   done
-  # shellcheck disable=SC2086 # a list of pids
-  [ -z "${all// /}" ] || kill $all 2>/dev/null || true
   for p in ${q_pids[@]+"${q_pids[@]}"}; do wait "$p" 2>/dev/null || true; done
   for p in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     left=
-    for pid in $all; do kill -0 "$pid" 2>/dev/null && left=1; done
+    for pid in $seen; do kill -0 "$pid" 2>/dev/null && left=1; done
     [ -n "$left" ] || break
     sleep 0.1
   done
   # shellcheck disable=SC2086
-  [ -z "$left" ] || kill -9 $all 2>/dev/null || true
+  [ -z "$left" ] || kill -9 $seen 2>/dev/null || true
   q_pids=()
   [ -z "$q_tmp" ] || rm -rf "$q_tmp"
   q_tmp=
@@ -674,8 +701,12 @@ run_queue() {
 # and, last, DIR/I.rc: "EXIT-CODE SECONDS".
 launch_step() {
   local dir=$1 i=$2 name=$3 start=$SECONDS rc=0
-  # run_queue's cleanup stops this subshell and everything below it.
-  bash scripts/check.sh --group scripts --internal-step "$name" >"$dir/$i.out" 2>&1 || rc=$?
+  # run_queue's cleanup stops this subshell and everything below it; the
+  # runner's pid is written down so it is found even if this subshell is gone.
+  bash scripts/check.sh --group scripts --internal-step "$name" >"$dir/$i.out" 2>&1 &
+  local runner=$!
+  echo "$runner" >"$dir/$i.pid"
+  wait "$runner" || rc=$?
   echo "$rc $((SECONDS - start))" >"$dir/$i.rc.tmp"
   mv "$dir/$i.rc.tmp" "$dir/$i.rc"
 }
