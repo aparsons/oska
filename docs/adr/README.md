@@ -10,7 +10,7 @@ As of 2026-11-28 these numbers are reserved and not yet merged:
 
 | Numbers | Held by |
 | --- | --- |
-| 0031 to 0033 | Set, Deque and sorted collections (#798) |
+| 0033 | Sorted collections (#798) |
 | 0035 | Core library (#660) |
 | 0036 | Let's Encrypt and ACME (#824) |
 | 0037 to 0039 | Web services (#826) |

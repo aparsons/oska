@@ -58,7 +58,7 @@ heavy_of() { # SET SHARD
     # (their times from CI run 45754852640: 220 s and 233 s); the other
     # targets alternate by position, as on Windows.
     "linux rest-1") echo "oskac:native_sockets oska-run:text_toolkit oskac:native_x509 oskac:native_http oska-run:postconditions" ;;
-    "linux rest-2") echo "oskac:native_tls oska-run:lean_reference oska-run:scopes oskac:native_p256 oskac:native_ecdsa oska-run:oska_core oska-run:core oskac:native_kex_primitives" ;;
+    "linux rest-2") echo "oskac:native_tls oska-run:lean_reference oska-run:scopes oskac:native_p256 oskac:native_ecdsa oska-run:oska_core oska-run:oska_core_closures oska-run:core oskac:native_kex_primitives" ;;
     # Linux `native`: some 490 s of tests in 7 binaries (CI run 45908735193),
     # in two shards of about 250 s each; the native_tests corpus cases run in
     # the same CORPUS_SPLIT slices as on macOS.
