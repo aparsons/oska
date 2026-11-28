@@ -213,14 +213,14 @@ const CLASS_OF: [u8; MAX_SMALL / ALIGN + 1] = {
 const _: () = {
     let mut class = 0;
     while class < CLASSES {
-        assert!(SIZES[class] % ALIGN == 0);
+        assert!(SIZES[class].is_multiple_of(ALIGN));
         assert!(class == 0 || SIZES[class] > SIZES[class - 1]);
         // A block holds the two words a free block uses.
         assert!(SIZES[class] >= 2 * std::mem::size_of::<*mut u8>());
         class += 1;
     }
     assert!(SIZES[CLASSES - 1] == MAX_SMALL);
-    assert!(REGION % ALIGN == 0 && REGION >= MAX_SMALL * 64);
+    assert!(REGION.is_multiple_of(ALIGN) && REGION >= MAX_SMALL * 64);
     assert!(MAX_SMALL == 1024 && HOLD_MAX == 1 << 20 && LARGE_BUCKETS == 40);
     assert!(bucket_size(0) == 1280 && bucket_size(LARGE_BUCKETS - 1) == HOLD_MAX);
     assert!(HOLD_CAP >= HOLD_MAX);

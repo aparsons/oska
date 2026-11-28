@@ -532,7 +532,7 @@ impl Body<'_, '_, '_> {
                 // types (`coherence.rs`), so one on a prelude type is an
                 // intrinsic.
                 let qualified = format!("{type_name}.{}", name.name);
-                let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
+                let intrinsic = self.decls().get(&type_name).is_none_or(|d| d.in_prelude);
                 // A `List` method whose body is Oska in `std.core` (ADR
                 // 0034) is a call of that function.
                 let core = if intrinsic {

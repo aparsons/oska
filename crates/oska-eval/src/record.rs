@@ -344,8 +344,8 @@ fn replace_path(text: &str, path: &str, placeholder: &str) -> String {
             out.chars().last()
         };
         let after = rest[at + path.len()..].chars().next();
-        let starts = before.map_or(true, |c| c.is_whitespace() || "\"'=:(".contains(c));
-        let ends = after.map_or(true, |c| c == '/' || c == '\\' || c.is_whitespace());
+        let starts = before.is_none_or(|c| c.is_whitespace() || "\"'=:(".contains(c));
+        let ends = after.is_none_or(|c| c == '/' || c == '\\' || c.is_whitespace());
         out.push_str(&rest[..at]);
         out.push_str(if starts && ends { placeholder } else { path });
         rest = &rest[at + path.len()..];

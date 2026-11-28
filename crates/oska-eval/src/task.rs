@@ -282,7 +282,7 @@ impl Fields<'_> {
             }
         }
         if let Some(title) = self.required("title") {
-            if title.as_str().map_or(true, str::is_empty) {
+            if title.as_str().is_none_or(str::is_empty) {
                 self.error("`title` must be text that is not empty".to_string());
             }
         }

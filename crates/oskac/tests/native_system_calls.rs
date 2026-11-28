@@ -90,7 +90,12 @@ fn code(elf: &[u8]) -> &[u8] {
 
 /// The numbers of the system calls in aarch64 code.
 fn aarch64_calls(code: &[u8]) -> BTreeSet<u32> {
-    let words: Vec<u32> = code.chunks_exact(4).map(|w| u32_at(w, 0)).collect();
+    let words: Vec<u32> = code
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32_at(w, 0))
+        .collect();
     words
         .windows(2)
         .filter(|pair| pair[1] == 0xd400_0001)

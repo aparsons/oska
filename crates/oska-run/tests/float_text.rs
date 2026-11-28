@@ -139,7 +139,7 @@ impl Rng {
             digits.push(char::from(b'0' + (self.next() % 10) as u8));
         }
         let mut out = String::new();
-        if self.next() % 4 == 0 {
+        if self.next().is_multiple_of(4) {
             out.push('-');
         }
         let point = self.next() % (count + 1);
