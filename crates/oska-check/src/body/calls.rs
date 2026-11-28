@@ -479,20 +479,7 @@ impl Body<'_, '_, '_> {
         if self.removed_path_method(&receiver, base, &name.name, args, span) {
             return Ty::Error;
         }
-        let found = match &receiver {
-            Ty::Named(type_name, _, _) => self.type_method(&receiver, type_name, name),
-            Ty::Unit | Ty::Fn { .. } => self.type_method(&receiver, &receiver.to_string(), name),
-            Ty::Param(p) => self.bound_method(p, name),
-            Ty::Var(_) => {
-                self.error(
-                    codes::CANNOT_INFER,
-                    format!("the type must be known before `.{}`", name.name),
-                    name.span,
-                );
-                None
-            }
-            Ty::Error | Ty::Never => None,
-        };
+        let found = self.find_method(&receiver, name);
         let Some(sig) = found else {
             self.infer_args(args);
             return Ty::Error;
@@ -526,30 +513,7 @@ impl Body<'_, '_, '_> {
         }
         self.audit_call(&type_name, &name.name, span);
         self.attenuation_call(&type_name, &sig, args, span);
-        let callee = match &sig.trait_name {
-            None => {
-                // Inherent methods are only declared on the module's own
-                // types (`coherence.rs`), so one on a prelude type is an
-                // intrinsic.
-                let qualified = format!("{type_name}.{}", name.name);
-                let intrinsic = self.decls().get(&type_name).is_none_or(|d| d.in_prelude);
-                // A `List` method whose body is Oska in `std.core` (ADR
-                // 0034) is a call of that function.
-                let core = if intrinsic {
-                    crate::prelude::core_function(&type_name, &name.name)
-                } else {
-                    None
-                };
-                Some(if let Some(function) = core {
-                    Callee::Function(function)
-                } else if intrinsic {
-                    Callee::intrinsic(qualified)
-                } else {
-                    Callee::Function(qualified)
-                })
-            }
-            Some(trait_name) => self.trait_callee(&receiver, trait_name, &name.name),
-        };
+        let callee = self.method_callee(&receiver, &sig, &type_name, &name.name);
         let resolution = match (callee, &sig.trait_name) {
             (Some(callee), _) if sig.receiver == Receiver::VarSelf => {
                 Resolution::MutatingMethod(callee)
@@ -595,6 +559,59 @@ impl Body<'_, '_, '_> {
                 }
                 ret
             }
+        }
+    }
+
+    /// The method `name` of the receiver's type, or of the bound that its
+    /// type parameter has. `None` once an error is reported.
+    fn find_method(&mut self, receiver: &Ty, name: &Ident) -> Option<FnSig> {
+        match receiver {
+            Ty::Named(type_name, _, _) => self.type_method(receiver, type_name, name),
+            Ty::Unit | Ty::Fn { .. } => self.type_method(receiver, &receiver.to_string(), name),
+            Ty::Param(p) => self.bound_method(p, name),
+            Ty::Var(_) => {
+                self.error(
+                    codes::CANNOT_INFER,
+                    format!("the type must be known before `.{}`", name.name),
+                    name.span,
+                );
+                None
+            }
+            Ty::Error | Ty::Never => None,
+        }
+    }
+
+    /// What a method call reaches, for the checked program.
+    fn method_callee(
+        &mut self,
+        receiver: &Ty,
+        sig: &FnSig,
+        type_name: &str,
+        name: &str,
+    ) -> Option<Callee> {
+        match &sig.trait_name {
+            None => {
+                // Inherent methods are only declared on the module's own
+                // types (`coherence.rs`), so one on a prelude type is an
+                // intrinsic.
+                let qualified = format!("{type_name}.{}", name);
+                let intrinsic = self.decls().get(type_name).is_none_or(|d| d.in_prelude);
+                // A `List` method whose body is Oska in `std.core` (ADR
+                // 0034) is a call of that function.
+                let core = if intrinsic {
+                    crate::prelude::core_function(type_name, name)
+                } else {
+                    None
+                };
+                Some(if let Some(function) = core {
+                    Callee::Function(function)
+                } else if intrinsic {
+                    Callee::intrinsic(qualified)
+                } else {
+                    Callee::Function(qualified)
+                })
+            }
+            Some(trait_name) => self.trait_callee(receiver, trait_name, name),
         }
     }
 

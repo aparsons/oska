@@ -231,8 +231,8 @@ use std::fmt;
 use oska_syntax::{json_escape, Span};
 
 use crate::program::{
-    Arm, Callee, Construct, Declaration, DeclarationKind, Expr, ExprKind, Function, IntType, Param,
-    Pattern, Place, Program, Stmt, Type, TypeDeclKind,
+    Arm, Callee, Closure, Construct, Declaration, DeclarationKind, Expr, ExprKind, Function,
+    IntType, Param, Pattern, Place, Program, Stmt, Type, TypeDeclKind,
 };
 
 /// The version of the core IR [`export`] writes.
@@ -889,63 +889,13 @@ impl Core<'_> {
                 callee,
                 type_args,
                 args,
-            } => match callee {
-                Callee::Function(name) if type_args.is_empty() => node(
-                    "Call",
-                    vec![
-                        ("function", Json::Str(name.clone())),
-                        ("args", self.exprs(args)?),
-                    ],
-                ),
-                Callee::Function(name) => {
-                    return refuse(format!("a call of the generic function `{name}`"), span)
-                }
-                Callee::Intrinsic(name)
-                    if TASK_BUILTINS.contains(&name.as_str())
-                        && self.scope.borrow().scopes == 0 =>
-                {
-                    // A handle is held only in a `scope`'s block, so a
-                    // checked program cannot reach this guard. It is kept to
-                    // fail closed.
-                    return refuse(format!("the built-in `{name}` outside a `scope`"), span);
-                }
-                Callee::Intrinsic(name) if BUILTINS.contains(&name.as_str()) => node(
-                    "Builtin",
-                    vec![
-                        ("name", Json::Str(name.to_string())),
-                        ("args", self.exprs(args)?),
-                    ],
-                ),
-                Callee::Intrinsic(name) => return refuse(format!("the built-in `{name}`"), span),
-                Callee::Trait { trait_name, method } => {
-                    return refuse(format!("the trait method `{trait_name}.{method}`"), span)
-                }
-            },
+            } => self.call_expr(span, callee, type_args, args)?,
             ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
-            } => {
-                let mut fields = vec![
-                    ("cond", self.expr(cond)?),
-                    ("then", self.expr(then_branch)?),
-                ];
-                if let Some(else_branch) = else_branch {
-                    fields.push(("else", self.expr(else_branch)?));
-                }
-                node("If", fields)
-            }
-            ExprKind::Block { stmts, value } => self.scoped(|| {
-                let stmts = stmts
-                    .iter()
-                    .map(|s| self.stmt(s))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut fields = vec![("stmts", Json::Arr(stmts))];
-                if let Some(value) = value {
-                    fields.push(("value", self.expr(value)?));
-                }
-                Ok(node("Block", fields))
-            })?,
+            } => self.if_expr(cond, then_branch, else_branch.as_deref())?,
+            ExprKind::Block { stmts, value } => self.block_expr(stmts, value.as_deref())?,
             ExprKind::Str(value) => node("Str", vec![("value", Json::Str(value.clone()))]),
             ExprKind::Interpolated(_) => return refuse("an interpolated string", span),
             ExprKind::SelfValue => {
@@ -957,113 +907,16 @@ impl Core<'_> {
             }
             ExprKind::List(_) => return refuse("a list", span),
             ExprKind::Construct { ctor, fields } if ctor.ty == "Result" => {
-                // `Ok(v)` or `Err(v)`, of a `Result` type of Oska Core.
-                self.ty(&e.ty, span)?;
-                let kind = match (ctor.variant.as_deref(), fields.as_slice()) {
-                    (Some("Ok"), [_]) => "Ok",
-                    (Some("Err"), [_]) => "Err",
-                    _ => return refuse(format!("the constructor `{}`", e.ty), span),
-                };
-                node(kind, vec![("value", self.expr(&fields[0])?)])
+                self.result_expr(e, span, ctor, fields)?
             }
             ExprKind::Construct { ctor, fields } => {
                 let mut parts = self.ctor(ctor, span)?;
                 parts.push(("fields", self.exprs(fields)?));
                 node("Construct", parts)
             }
-            ExprKind::Field { base, index } => {
-                let json = self.expr(base)?;
-                // Only a struct of the module has fields to read: an
-                // `IoError`'s are outside Oska Core.
-                if !matches!(&base.ty, Type::Named { name, .. } if self.types.contains(name)) {
-                    self.ty(&base.ty, base.span)?;
-                    return refuse(format!("a field of `{}`", base.ty), span);
-                }
-                node(
-                    "Field",
-                    vec![("base", json), ("index", Json::Int(*index as i128))],
-                )
-            }
-            ExprKind::Match { scrutinee, arms } => {
-                let json = self.expr(scrutinee)?;
-                self.ty(&scrutinee.ty, scrutinee.span)?;
-                let arms = arms
-                    .iter()
-                    .map(|arm| self.arm(arm, &scrutinee.ty, span))
-                    .collect::<Result<Vec<_>, _>>()?;
-                node(
-                    "Match",
-                    vec![("scrutinee", json), ("arms", Json::Arr(arms))],
-                )
-            }
-            ExprKind::Closure(closure) => {
-                if closure.captures_self {
-                    return refuse("a closure that reads `self`", span);
-                }
-                // The closure's type is not written: its result type is
-                // refused at the closure, before its parameters and body.
-                let Type::Fn { cap, ret, .. } = &e.ty else {
-                    return refuse(format!("a closure of type `{}`", e.ty), span);
-                };
-                let ret = self.ty(ret, span)?;
-                // A closure captures slots, by value, and sees no var: a
-                // `var` it reads is refused.
-                let captures = closure
-                    .captures
-                    .iter()
-                    .map(|&slot| match self.binding(slot, span)? {
-                        Binding::Slot(n) if self.scope.borrow().handles.contains(&n) => {
-                            refuse("a closure that captures a scope's or a task's handle", span)
-                        }
-                        Binding::Slot(n) => Ok(Json::Int(n as i128)),
-                        Binding::Var(_) => refuse("a closure that captures a `var`", span),
-                        Binding::Outer => {
-                            unreachable!("Core::binding refuses a var of an enclosing function")
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let height = {
-                    let scope = self.scope.borrow();
-                    if scope.bindings.len() != closure.height {
-                        return refuse("a closure the export cannot number", span);
-                    }
-                    scope.slots
-                };
-                let inner = Scope {
-                    bindings: self
-                        .scope
-                        .borrow()
-                        .bindings
-                        .iter()
-                        .map(|b| match b {
-                            Binding::Slot(n) => Binding::Slot(*n),
-                            Binding::Var(_) | Binding::Outer => Binding::Outer,
-                        })
-                        .collect(),
-                    slots: height,
-                    vars: 0,
-                    receiver: None,
-                    handles: BTreeSet::new(),
-                    scopes: 0,
-                };
-                let outer = self.scope.replace(inner);
-                let body = self
-                    .params(&closure.params, span)
-                    .and_then(|params| Ok((params, self.expr(&closure.body)?)));
-                self.scope.replace(outer);
-                let (params, body) = body?;
-                node(
-                    "Closure",
-                    vec![
-                        ("params", params),
-                        ("captures", Json::Arr(captures)),
-                        ("height", Json::Int(height as i128)),
-                        ("cap", Json::Bool(*cap)),
-                        ("ret", ret),
-                        ("body", body),
-                    ],
-                )
-            }
+            ExprKind::Field { base, index } => self.field_expr(span, base, *index)?,
+            ExprKind::Match { scrutinee, arms } => self.match_expr(span, scrutinee, arms)?,
+            ExprKind::Closure(closure) => self.closure_expr(e, span, closure)?,
             ExprKind::CallValue { callee, args } => node(
                 "CallValue",
                 vec![("callee", self.expr(callee)?), ("args", self.exprs(args)?)],
@@ -1073,65 +926,279 @@ impl Core<'_> {
                 type_args,
                 receiver,
                 args,
-            } => match callee {
-                Callee::Function(name) if type_args.is_empty() => node(
-                    "MutatingCall",
-                    vec![
-                        ("function", Json::Str(name.clone())),
-                        ("receiver", self.place(receiver, span)?),
-                        ("args", self.exprs(args)?),
-                    ],
-                ),
-                Callee::Function(name) => {
-                    return refuse(format!("a call of the generic function `{name}`"), span)
-                }
-                Callee::Intrinsic(name) => return refuse(format!("the built-in `{name}`"), span),
-                Callee::Trait { trait_name, method } => {
-                    return refuse(format!("the trait method `{trait_name}.{method}`"), span)
-                }
-            },
+            } => self.mutating_call(span, callee, type_args, receiver, args)?,
             ExprKind::Range { .. } => return refuse("a range", span),
             ExprKind::Try {
                 operand,
                 convert,
                 type_args,
-            } => {
-                // `?` on a `Result`, converting its error with the `from`
-                // the checker chose, if any. `?` on an `Option` is outside
-                // Oska Core. A program from source cannot reach this guard:
-                // such a `?` needs an `Option` result type, refused before
-                // the body. It is kept to fail closed.
-                if !matches!(&operand.ty, Type::Named { name, .. } if name == "Result") {
-                    return refuse(format!("`?` on `{}`", operand.ty), span);
-                }
-                let mut fields = vec![("operand", self.expr(operand)?)];
-                match convert {
-                    None => {}
-                    Some(Callee::Function(name)) if type_args.is_empty() => {
-                        fields.push(("convert", Json::Str(name.clone())));
-                    }
-                    Some(_) => return refuse("a `?` that converts with a generic function", span),
-                }
-                node("Try", fields)
-            }
+            } => self.try_expr(span, operand, convert, type_args)?,
             ExprKind::FnValue { .. } => return refuse("a function used as a value", span),
-            ExprKind::Scope(body) => {
-                if self.scope.borrow().scopes > 0 {
-                    return refuse("a `scope` in the block of another `scope`", span);
-                }
-                if holds_handle(&e.ty) {
-                    return refuse(
-                        format!("a `scope` whose value, of type `{}`, outlives it", e.ty),
-                        span,
-                    );
-                }
-                self.scoped(|| {
-                    self.bind_handle();
-                    self.scope.borrow_mut().scopes += 1;
-                    Ok(node("Scope", vec![("body", self.expr(body)?)]))
-                })?
-            }
+            ExprKind::Scope(body) => self.scope_expr(e, span, body)?,
             ExprKind::Unsupported(what) => return refuse(what.clone(), span),
+        })
+    }
+
+    /// A read of a field of a struct of the module.
+    fn field_expr(&self, span: Span, base: &Expr, index: usize) -> Result<Json, Refusal> {
+        let json = self.expr(base)?;
+        // Only a struct of the module has fields to read: an
+        // `IoError`'s are outside Oska Core.
+        if !matches!(&base.ty, Type::Named { name, .. } if self.types.contains(name)) {
+            self.ty(&base.ty, base.span)?;
+            return refuse(format!("a field of `{}`", base.ty), span);
+        }
+        Ok(node(
+            "Field",
+            vec![("base", json), ("index", Json::Int(index as i128))],
+        ))
+    }
+
+    /// An `if`, with or without `else`.
+    fn if_expr(
+        &self,
+        cond: &Expr,
+        then_branch: &Expr,
+        else_branch: Option<&Expr>,
+    ) -> Result<Json, Refusal> {
+        let mut fields = vec![
+            ("cond", self.expr(cond)?),
+            ("then", self.expr(then_branch)?),
+        ];
+        if let Some(else_branch) = else_branch {
+            fields.push(("else", self.expr(else_branch)?));
+        }
+        Ok(node("If", fields))
+    }
+
+    /// A block: its statements in a scope of their own, then its value.
+    fn block_expr(&self, stmts: &[Stmt], value: Option<&Expr>) -> Result<Json, Refusal> {
+        self.scoped(|| {
+            let stmts = stmts
+                .iter()
+                .map(|s| self.stmt(s))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut fields = vec![("stmts", Json::Arr(stmts))];
+            if let Some(value) = value {
+                fields.push(("value", self.expr(value)?));
+            }
+            Ok(node("Block", fields))
+        })
+    }
+
+    /// A call of a function or built-in.
+    fn call_expr(
+        &self,
+        span: Span,
+        callee: &Callee,
+        type_args: &[Type],
+        args: &[Expr],
+    ) -> Result<Json, Refusal> {
+        Ok(match callee {
+            Callee::Function(name) if type_args.is_empty() => node(
+                "Call",
+                vec![
+                    ("function", Json::Str(name.clone())),
+                    ("args", self.exprs(args)?),
+                ],
+            ),
+            Callee::Function(name) => {
+                return refuse(format!("a call of the generic function `{name}`"), span)
+            }
+            Callee::Intrinsic(name)
+                if TASK_BUILTINS.contains(&name.as_str()) && self.scope.borrow().scopes == 0 =>
+            {
+                // A handle is held only in a `scope`'s block, so a
+                // checked program cannot reach this guard. It is kept to
+                // fail closed.
+                return refuse(format!("the built-in `{name}` outside a `scope`"), span);
+            }
+            Callee::Intrinsic(name) if BUILTINS.contains(&name.as_str()) => node(
+                "Builtin",
+                vec![
+                    ("name", Json::Str(name.to_string())),
+                    ("args", self.exprs(args)?),
+                ],
+            ),
+            Callee::Intrinsic(name) => return refuse(format!("the built-in `{name}`"), span),
+            Callee::Trait { trait_name, method } => {
+                return refuse(format!("the trait method `{trait_name}.{method}`"), span)
+            }
+        })
+    }
+
+    /// `Ok(v)` or `Err(v)`, of a `Result` type of Oska Core.
+    fn result_expr(
+        &self,
+        e: &Expr,
+        span: Span,
+        ctor: &Construct,
+        fields: &[Expr],
+    ) -> Result<Json, Refusal> {
+        // `Ok(v)` or `Err(v)`, of a `Result` type of Oska Core.
+        self.ty(&e.ty, span)?;
+        let kind = match (ctor.variant.as_deref(), fields) {
+            (Some("Ok"), [_]) => "Ok",
+            (Some("Err"), [_]) => "Err",
+            _ => return refuse(format!("the constructor `{}`", e.ty), span),
+        };
+        Ok(node(kind, vec![("value", self.expr(&fields[0])?)]))
+    }
+
+    /// A `match`: its scrutinee, then its arms.
+    fn match_expr(&self, span: Span, scrutinee: &Expr, arms: &[Arm]) -> Result<Json, Refusal> {
+        let json = self.expr(scrutinee)?;
+        self.ty(&scrutinee.ty, scrutinee.span)?;
+        let arms = arms
+            .iter()
+            .map(|arm| self.arm(arm, &scrutinee.ty, span))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(node(
+            "Match",
+            vec![("scrutinee", json), ("arms", Json::Arr(arms))],
+        ))
+    }
+
+    /// A closure: captures by value, no `var`, no `self`.
+    fn closure_expr(&self, e: &Expr, span: Span, closure: &Closure) -> Result<Json, Refusal> {
+        if closure.captures_self {
+            return refuse("a closure that reads `self`", span);
+        }
+        // The closure's type is not written: its result type is
+        // refused at the closure, before its parameters and body.
+        let Type::Fn { cap, ret, .. } = &e.ty else {
+            return refuse(format!("a closure of type `{}`", e.ty), span);
+        };
+        let ret = self.ty(ret, span)?;
+        // A closure captures slots, by value, and sees no var: a
+        // `var` it reads is refused.
+        let captures = closure
+            .captures
+            .iter()
+            .map(|&slot| match self.binding(slot, span)? {
+                Binding::Slot(n) if self.scope.borrow().handles.contains(&n) => {
+                    refuse("a closure that captures a scope's or a task's handle", span)
+                }
+                Binding::Slot(n) => Ok(Json::Int(n as i128)),
+                Binding::Var(_) => refuse("a closure that captures a `var`", span),
+                Binding::Outer => {
+                    unreachable!("Core::binding refuses a var of an enclosing function")
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let height = {
+            let scope = self.scope.borrow();
+            if scope.bindings.len() != closure.height {
+                return refuse("a closure the export cannot number", span);
+            }
+            scope.slots
+        };
+        let inner = Scope {
+            bindings: self
+                .scope
+                .borrow()
+                .bindings
+                .iter()
+                .map(|b| match b {
+                    Binding::Slot(n) => Binding::Slot(*n),
+                    Binding::Var(_) | Binding::Outer => Binding::Outer,
+                })
+                .collect(),
+            slots: height,
+            vars: 0,
+            receiver: None,
+            handles: BTreeSet::new(),
+            scopes: 0,
+        };
+        let outer = self.scope.replace(inner);
+        let body = self
+            .params(&closure.params, span)
+            .and_then(|params| Ok((params, self.expr(&closure.body)?)));
+        self.scope.replace(outer);
+        let (params, body) = body?;
+        Ok(node(
+            "Closure",
+            vec![
+                ("params", params),
+                ("captures", Json::Arr(captures)),
+                ("height", Json::Int(height as i128)),
+                ("cap", Json::Bool(*cap)),
+                ("ret", ret),
+                ("body", body),
+            ],
+        ))
+    }
+
+    /// A call of a mutating method.
+    fn mutating_call(
+        &self,
+        span: Span,
+        callee: &Callee,
+        type_args: &[Type],
+        receiver: &Place,
+        args: &[Expr],
+    ) -> Result<Json, Refusal> {
+        Ok(match callee {
+            Callee::Function(name) if type_args.is_empty() => node(
+                "MutatingCall",
+                vec![
+                    ("function", Json::Str(name.clone())),
+                    ("receiver", self.place(receiver, span)?),
+                    ("args", self.exprs(args)?),
+                ],
+            ),
+            Callee::Function(name) => {
+                return refuse(format!("a call of the generic function `{name}`"), span)
+            }
+            Callee::Intrinsic(name) => return refuse(format!("the built-in `{name}`"), span),
+            Callee::Trait { trait_name, method } => {
+                return refuse(format!("the trait method `{trait_name}.{method}`"), span)
+            }
+        })
+    }
+
+    /// `?` on a `Result`.
+    fn try_expr(
+        &self,
+        span: Span,
+        operand: &Expr,
+        convert: &Option<Callee>,
+        type_args: &[Type],
+    ) -> Result<Json, Refusal> {
+        // `?` on a `Result`, converting its error with the `from`
+        // the checker chose, if any. `?` on an `Option` is outside
+        // Oska Core. A program from source cannot reach this guard:
+        // such a `?` needs an `Option` result type, refused before
+        // the body. It is kept to fail closed.
+        if !matches!(&operand.ty, Type::Named { name, .. } if name == "Result") {
+            return refuse(format!("`?` on `{}`", operand.ty), span);
+        }
+        let mut fields = vec![("operand", self.expr(operand)?)];
+        match convert {
+            None => {}
+            Some(Callee::Function(name)) if type_args.is_empty() => {
+                fields.push(("convert", Json::Str(name.clone())));
+            }
+            Some(_) => return refuse("a `?` that converts with a generic function", span),
+        }
+        Ok(node("Try", fields))
+    }
+
+    /// A `scope` block.
+    fn scope_expr(&self, e: &Expr, span: Span, body: &Expr) -> Result<Json, Refusal> {
+        if self.scope.borrow().scopes > 0 {
+            return refuse("a `scope` in the block of another `scope`", span);
+        }
+        if holds_handle(&e.ty) {
+            return refuse(
+                format!("a `scope` whose value, of type `{}`, outlives it", e.ty),
+                span,
+            );
+        }
+        self.scoped(|| {
+            self.bind_handle();
+            self.scope.borrow_mut().scopes += 1;
+            Ok(node("Scope", vec![("body", self.expr(body)?)]))
         })
     }
 

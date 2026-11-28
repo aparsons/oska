@@ -6,7 +6,8 @@
 use std::collections::{HashMap, HashSet};
 
 use oska_syntax::ast::{
-    Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind, Visibility,
+    EnumDecl, Field, Fields, FnDecl, GenericParam, ImplDecl, Item, ItemKind, Module, StructDecl,
+    TraitDecl, Type, TypeKind, Visibility,
 };
 use oska_syntax::Span;
 
@@ -502,134 +503,10 @@ impl Items {
                     let key = key_of(decls, &sig.name, in_prelude);
                     self.fns.entry(key).or_insert(sig);
                 }
-                ItemKind::Struct(s) => {
-                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&s.generics);
-                    let private: Vec<&Field> = match &s.fields {
-                        Fields::Named(list) | Fields::Positional(list) => {
-                            list.iter().filter(|f| !f.public).collect()
-                        }
-                        Fields::Unit => Vec::new(),
-                    };
-                    let info = StructInfo {
-                        generics: lower.generics.clone(),
-                        fields: lower.fields(&s.fields),
-                        sealed: in_prelude && !private.is_empty(),
-                        hidden_fields: if in_prelude {
-                            private
-                                .iter()
-                                .filter_map(|f| f.name.as_ref().map(|n| n.name.clone()))
-                                .collect()
-                        } else {
-                            Vec::new()
-                        },
-                        declared: (!in_prelude).then(|| {
-                            let all: &[Field] = match &s.fields {
-                                Fields::Named(list) | Fields::Positional(list) => list,
-                                Fields::Unit => &[],
-                            };
-                            let private = all
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, f)| !f.public)
-                                .map(|(i, f)| (i, f.span.start))
-                                .collect();
-                            (Declared::of(item), private)
-                        }),
-                    };
-                    let key = key_of(decls, &s.name.name, in_prelude);
-                    self.structs.entry(key).or_insert(info);
-                }
-                ItemKind::Enum(e) => {
-                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&e.generics);
-                    let variants = e
-                        .variants
-                        .iter()
-                        .map(|v| (v.name.name.clone(), lower.fields(&v.fields)))
-                        .collect::<Vec<_>>();
-                    let key = key_of(decls, &e.name.name, in_prelude);
-                    if in_prelude {
-                        for (variant, _) in &variants {
-                            self.bare_variants.insert(variant.clone(), key.clone());
-                        }
-                    }
-                    let info = EnumInfo {
-                        generics: lower.generics.clone(),
-                        variants,
-                    };
-                    self.enums.entry(key).or_insert(info);
-                }
-                ItemKind::Impl(imp) => {
-                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&imp.generics);
-                    let target = lower.ty(&imp.target);
-                    let receiver_bearing = capability_bearing(&target, decls);
-                    match &imp.trait_ref {
-                        Some(trait_ref) => {
-                            if let Some((trait_name, trait_args)) = lower.bound(trait_ref) {
-                                self.impls.push(ImplInfo {
-                                    trait_name,
-                                    trait_args,
-                                    target,
-                                    generics: lower.generics.clone(),
-                                    generic_keys: lower.generic_keys(),
-                                    bounds: lower.bounds.clone(),
-                                    receiver_bearing,
-                                    span: (!in_prelude).then_some(item.span),
-                                });
-                            }
-                        }
-                        None => {
-                            let Some(type_name) = target.head().map(str::to_string) else {
-                                continue;
-                            };
-                            for method in &imp.methods {
-                                if let ItemKind::Fn(f) = &method.kind {
-                                    let mut sig =
-                                        lower.signature(f, &imp.generics, Some(target.clone()));
-                                    if f.receiver.is_some() && receiver_bearing {
-                                        sig.pure = false;
-                                    }
-                                    sig.follows_trust = follows_trust(method);
-                                    sig.declared = (!in_prelude).then(|| Declared::of(method));
-                                    self.inherent
-                                        .entry(type_name.clone())
-                                        .or_default()
-                                        .push(sig);
-                                }
-                            }
-                        }
-                    }
-                }
-                ItemKind::Trait(t) => {
-                    let self_ty = Ty::Param(ty::SELF.into());
-                    let lower = Lower::in_scope(decls, in_prelude)
-                        .with_generics(&t.generics)
-                        .with_self(self_ty.clone());
-                    let methods = t
-                        .methods
-                        .iter()
-                        .filter_map(|m| match &m.kind {
-                            ItemKind::Fn(f) => {
-                                // The trait's own generics are not in the
-                                // signature's: they are replaced, not
-                                // instantiated, when the method is used.
-                                let mut sig = lower.signature(f, &[], Some(self_ty.clone()));
-                                sig.trait_name = Some(key_of(decls, &t.name.name, in_prelude));
-                                sig.follows_trust = follows_trust(m);
-                                Some((sig, f.body.is_some()))
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    let info = TraitInfo {
-                        generics: lower.generics.clone(),
-                        generic_keys: lower.generic_keys(),
-                        self_key: (!in_prelude).then_some(GenericKey(t.name.span)),
-                        methods,
-                        declared: (!in_prelude).then(|| Declared::of(item)),
-                    };
-                    let key = key_of(decls, &t.name.name, in_prelude);
-                    self.traits.entry(key).or_insert(info);
-                }
+                ItemKind::Struct(s) => self.add_struct(item, s, decls, in_prelude),
+                ItemKind::Enum(e) => self.add_enum(e, decls, in_prelude),
+                ItemKind::Impl(imp) => self.add_impl(item, imp, decls, in_prelude),
+                ItemKind::Trait(t) => self.add_trait(item, t, decls, in_prelude),
                 ItemKind::Const(c) => {
                     if !in_prelude {
                         let ty = Lower::in_scope(decls, in_prelude).ty(&c.ty);
@@ -644,6 +521,141 @@ impl Items {
                 ItemKind::Use(_) | ItemKind::Test(_) => {}
             }
         }
+    }
+
+    /// One `struct`.
+    fn add_struct(&mut self, item: &Item, s: &StructDecl, decls: &Decls, in_prelude: bool) {
+        let lower = Lower::in_scope(decls, in_prelude).with_generics(&s.generics);
+        let private: Vec<&Field> = match &s.fields {
+            Fields::Named(list) | Fields::Positional(list) => {
+                list.iter().filter(|f| !f.public).collect()
+            }
+            Fields::Unit => Vec::new(),
+        };
+        let info = StructInfo {
+            generics: lower.generics.clone(),
+            fields: lower.fields(&s.fields),
+            sealed: in_prelude && !private.is_empty(),
+            hidden_fields: if in_prelude {
+                private
+                    .iter()
+                    .filter_map(|f| f.name.as_ref().map(|n| n.name.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            declared: (!in_prelude).then(|| {
+                let all: &[Field] = match &s.fields {
+                    Fields::Named(list) | Fields::Positional(list) => list,
+                    Fields::Unit => &[],
+                };
+                let private = all
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| !f.public)
+                    .map(|(i, f)| (i, f.span.start))
+                    .collect();
+                (Declared::of(item), private)
+            }),
+        };
+        let key = key_of(decls, &s.name.name, in_prelude);
+        self.structs.entry(key).or_insert(info);
+    }
+
+    /// One `enum`.
+    fn add_enum(&mut self, e: &EnumDecl, decls: &Decls, in_prelude: bool) {
+        let lower = Lower::in_scope(decls, in_prelude).with_generics(&e.generics);
+        let variants = e
+            .variants
+            .iter()
+            .map(|v| (v.name.name.clone(), lower.fields(&v.fields)))
+            .collect::<Vec<_>>();
+        let key = key_of(decls, &e.name.name, in_prelude);
+        if in_prelude {
+            for (variant, _) in &variants {
+                self.bare_variants.insert(variant.clone(), key.clone());
+            }
+        }
+        let info = EnumInfo {
+            generics: lower.generics.clone(),
+            variants,
+        };
+        self.enums.entry(key).or_insert(info);
+    }
+
+    /// One `impl`, inherent or of a trait.
+    fn add_impl(&mut self, item: &Item, imp: &ImplDecl, decls: &Decls, in_prelude: bool) {
+        let lower = Lower::in_scope(decls, in_prelude).with_generics(&imp.generics);
+        let target = lower.ty(&imp.target);
+        let receiver_bearing = capability_bearing(&target, decls);
+        match &imp.trait_ref {
+            Some(trait_ref) => {
+                if let Some((trait_name, trait_args)) = lower.bound(trait_ref) {
+                    self.impls.push(ImplInfo {
+                        trait_name,
+                        trait_args,
+                        target,
+                        generics: lower.generics.clone(),
+                        generic_keys: lower.generic_keys(),
+                        bounds: lower.bounds.clone(),
+                        receiver_bearing,
+                        span: (!in_prelude).then_some(item.span),
+                    });
+                }
+            }
+            None => {
+                let Some(type_name) = target.head().map(str::to_string) else {
+                    return;
+                };
+                for method in &imp.methods {
+                    if let ItemKind::Fn(f) = &method.kind {
+                        let mut sig = lower.signature(f, &imp.generics, Some(target.clone()));
+                        if f.receiver.is_some() && receiver_bearing {
+                            sig.pure = false;
+                        }
+                        sig.follows_trust = follows_trust(method);
+                        sig.declared = (!in_prelude).then(|| Declared::of(method));
+                        self.inherent
+                            .entry(type_name.clone())
+                            .or_default()
+                            .push(sig);
+                    }
+                }
+            }
+        }
+    }
+
+    /// One `trait`.
+    fn add_trait(&mut self, item: &Item, t: &TraitDecl, decls: &Decls, in_prelude: bool) {
+        let self_ty = Ty::Param(ty::SELF.into());
+        let lower = Lower::in_scope(decls, in_prelude)
+            .with_generics(&t.generics)
+            .with_self(self_ty.clone());
+        let methods = t
+            .methods
+            .iter()
+            .filter_map(|m| match &m.kind {
+                ItemKind::Fn(f) => {
+                    // The trait's own generics are not in the
+                    // signature's: they are replaced, not
+                    // instantiated, when the method is used.
+                    let mut sig = lower.signature(f, &[], Some(self_ty.clone()));
+                    sig.trait_name = Some(key_of(decls, &t.name.name, in_prelude));
+                    sig.follows_trust = follows_trust(m);
+                    Some((sig, f.body.is_some()))
+                }
+                _ => None,
+            })
+            .collect();
+        let info = TraitInfo {
+            generics: lower.generics.clone(),
+            generic_keys: lower.generic_keys(),
+            self_key: (!in_prelude).then_some(GenericKey(t.name.span)),
+            methods,
+            declared: (!in_prelude).then(|| Declared::of(item)),
+        };
+        let key = key_of(decls, &t.name.name, in_prelude);
+        self.traits.entry(key).or_insert(info);
     }
 
     /// Find [`Items::untrusted_holders`]: grow the set until no struct or

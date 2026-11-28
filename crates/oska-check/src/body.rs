@@ -935,25 +935,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.float_literal_check(text, false, expr.span);
                 Ty::float()
             }
-            ExprKind::Str(parts) => {
-                // The string is untrusted when any text in a hole is.
-                let trust = self.infer.fresh_trust();
-                for part in parts {
-                    if let StrPart::Hole { path, span } = part {
-                        let ty = self.hole(path);
-                        self.interpolated_hole(&ty, *span);
-                        let display = purity::Reaches::Dispatch {
-                            what: "interpolation",
-                            method: "`Display.to_string`",
-                        };
-                        self.contract_dispatch(*span, display, vec![ty.clone()]);
-                        self.defer(*span, &ty, Deferred::Display);
-                        self.infer
-                            .join_into(&ty, trust, &self.items.untrusted_holders);
-                    }
-                }
-                Ty::string().with_trust(trust)
-            }
+            ExprKind::Str(parts) => self.string_expr(parts),
             ExprKind::SinkStr { tag, .. } => self.sink_literal(tag, expr.span),
             ExprKind::Bool(_) => Ty::bool(),
             ExprKind::Unit => Ty::Unit,
@@ -964,129 +946,174 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Unary { op, operand } => self.unary(expr, *op, operand, expected),
             ExprKind::Binary { op, lhs, rhs } => self.binary(expr, *op, lhs, rhs, expected),
             ExprKind::Try(operand) => self.try_expr(expr, operand),
-            ExprKind::Range { start, end } => {
-                let ty = self.infer(start);
-                if self.is_secret(&ty) {
-                    self.secret_branch("a range bound", start.span, None);
-                    self.infer(end);
-                    return Ty::Error;
-                }
-                let end_ty = self.expr(end, Some(&ty));
-                if self.is_secret(&end_ty) {
-                    self.secret_branch("a range bound", end.span, None);
-                    return Ty::Error;
-                }
-                let ty = self.expect(&end_ty, &ty, end.span);
-                let ty = self.infer.shallow(&ty);
-                if !ty.is_error() && !ty.is_integer() {
-                    self.error(
-                        codes::BAD_OPERAND,
-                        format!("`..` needs integer bounds, found `{ty}`"),
-                        expr.span,
-                    );
-                    return Ty::Error;
-                }
-                Ty::range(ty)
-            }
-            ExprKind::List(elements) => {
-                let expected = expected.map(|e| self.infer.shallow(e));
-                let element = match expected.as_ref().and_then(|e| e.args_of(ty::LIST, 1)) {
-                    Some([element]) => element.clone(),
-                    _ => self.infer.fresh(),
-                };
-                for e in elements {
-                    self.check(e, &element);
-                }
-                Ty::list(element)
-            }
+            ExprKind::Range { start, end } => self.range_expr(expr, start, end),
+            ExprKind::List(elements) => self.list_expr(elements, expected),
             ExprKind::Closure { params, body } => self.closure(params, body, expected, expr.span),
             ExprKind::If {
                 cond,
                 then_block,
                 else_branch,
-            } => {
-                self.condition(cond, "an `if` condition");
-                let Some(else_branch) = else_branch else {
-                    // Without `else` the value is `()`, and the block's own
-                    // value is discarded.
-                    self.block(then_block, None, false);
-                    return Ty::Unit;
-                };
-                let then = self.block(then_block, expected, true);
-                match expected {
-                    Some(expected) => self.check(else_branch, expected),
-                    None if self.infer.shallow(&then) == Ty::Never => self.infer(else_branch),
-                    None => {
-                        let joined = self.join(&then);
-                        self.check(else_branch, &joined);
-                        joined
-                    }
-                }
-            }
+            } => self.if_expr(cond, then_block, else_branch, expected),
             ExprKind::Block(block) => self.block(block, expected, true),
-            ExprKind::Scope { handle, body } => {
-                // The handle is the prelude's `Scope`; its `spawn` and the
-                // task's `join` are ordinary prelude methods.
-                //
-                // A `var` from outside the block that cannot hold a handle
-                // yet must not be able to after it: the block would have
-                // stored its handle, or a closure capturing it, there.
-                // This is conservative: it also rejects storing a closure
-                // that captures an enclosing block's handle.
-                let outer_vars: Vec<usize> = (0..self.locals.len())
-                    .filter(|&i| {
-                        let local = &self.locals[i];
-                        matches!(local.binding, Binding::Var)
-                            && !self.infer.resolve(&local.ty).holds_scope()
-                    })
-                    .collect();
-                self.scope_blocks.push(ScopeBlock {
-                    handle: self.locals.len(),
-                    kept: Vec::new(),
-                });
-                self.locals.push(Local {
-                    name: handle.name.clone(),
-                    ty: Ty::named(ty::SCOPE),
-                    binding: Binding::Pattern,
-                    field: None,
-                });
-                let ty = self.block(body, expected, true);
-                self.locals.pop();
-                let block = self.scope_blocks.pop().expect("the block's own frame");
-                // A `var` that already held a handle, of an enclosing
-                // block, is caught by what was written to it: a value
-                // mentioning one of this block's locals that holds one.
-                let kept = outer_vars
-                    .into_iter()
-                    .map(|i| &self.locals[i])
-                    .find(|local| self.infer.resolve(&local.ty).holds_scope())
-                    .map(|local| local.name.clone())
-                    .or_else(|| {
-                        block
-                            .kept
-                            .into_iter()
-                            .find(|(_, ty)| self.infer.resolve(ty).holds_scope())
-                            .map(|(name, _)| name)
-                    });
-                if let Some(name) = kept {
-                    self.out.diagnostics.push(decl_rules::scope_escapes(
-                        expr.span,
-                        &format!("be kept in `{name}`, which outlives the block"),
-                    ));
-                }
-                if self.infer.resolve(&ty).holds_scope() {
-                    self.out.diagnostics.push(decl_rules::scope_escapes(
-                        expr.span,
-                        "be the value of its `scope` block",
-                    ));
-                    return Ty::Error;
-                }
-                ty
-            }
+            ExprKind::Scope { handle, body } => self.scope_expr(expr, handle, body, expected),
             ExprKind::Match { scrutinee, arms } => {
                 self.match_expr(expr.span, scrutinee, arms, expected)
             }
         }
+    }
+
+    /// A string literal: its trust is the join of the trust of the text in its holes.
+    fn string_expr(&mut self, parts: &[StrPart]) -> Ty {
+        // The string is untrusted when any text in a hole is.
+        let trust = self.infer.fresh_trust();
+        for part in parts {
+            if let StrPart::Hole { path, span } = part {
+                let ty = self.hole(path);
+                self.interpolated_hole(&ty, *span);
+                let display = purity::Reaches::Dispatch {
+                    what: "interpolation",
+                    method: "`Display.to_string`",
+                };
+                self.contract_dispatch(*span, display, vec![ty.clone()]);
+                self.defer(*span, &ty, Deferred::Display);
+                self.infer
+                    .join_into(&ty, trust, &self.items.untrusted_holders);
+            }
+        }
+        Ty::string().with_trust(trust)
+    }
+
+    /// A range `start..end`: integer bounds of one type.
+    fn range_expr(&mut self, expr: &Expr, start: &Expr, end: &Expr) -> Ty {
+        let ty = self.infer(start);
+        if self.is_secret(&ty) {
+            self.secret_branch("a range bound", start.span, None);
+            self.infer(end);
+            return Ty::Error;
+        }
+        let end_ty = self.expr(end, Some(&ty));
+        if self.is_secret(&end_ty) {
+            self.secret_branch("a range bound", end.span, None);
+            return Ty::Error;
+        }
+        let ty = self.expect(&end_ty, &ty, end.span);
+        let ty = self.infer.shallow(&ty);
+        if !ty.is_error() && !ty.is_integer() {
+            self.error(
+                codes::BAD_OPERAND,
+                format!("`..` needs integer bounds, found `{ty}`"),
+                expr.span,
+            );
+            return Ty::Error;
+        }
+        Ty::range(ty)
+    }
+
+    /// A list literal: its elements share one type.
+    fn list_expr(&mut self, elements: &[Expr], expected: Option<&Ty>) -> Ty {
+        let expected = expected.map(|e| self.infer.shallow(e));
+        let element = match expected.as_ref().and_then(|e| e.args_of(ty::LIST, 1)) {
+            Some([element]) => element.clone(),
+            _ => self.infer.fresh(),
+        };
+        for e in elements {
+            self.check(e, &element);
+        }
+        Ty::list(element)
+    }
+
+    /// An `if`, with or without `else`.
+    fn if_expr(
+        &mut self,
+        cond: &Expr,
+        then_block: &Block,
+        else_branch: &Option<Box<Expr>>,
+        expected: Option<&Ty>,
+    ) -> Ty {
+        self.condition(cond, "an `if` condition");
+        let Some(else_branch) = else_branch else {
+            // Without `else` the value is `()`, and the block's own
+            // value is discarded.
+            self.block(then_block, None, false);
+            return Ty::Unit;
+        };
+        let then = self.block(then_block, expected, true);
+        match expected {
+            Some(expected) => self.check(else_branch, expected),
+            None if self.infer.shallow(&then) == Ty::Never => self.infer(else_branch),
+            None => {
+                let joined = self.join(&then);
+                self.check(else_branch, &joined);
+                joined
+            }
+        }
+    }
+
+    /// A `scope` block: its handle must not outlive it.
+    fn scope_expr(
+        &mut self,
+        expr: &Expr,
+        handle: &Ident,
+        body: &Block,
+        expected: Option<&Ty>,
+    ) -> Ty {
+        // The handle is the prelude's `Scope`; its `spawn` and the
+        // task's `join` are ordinary prelude methods.
+        //
+        // A `var` from outside the block that cannot hold a handle
+        // yet must not be able to after it: the block would have
+        // stored its handle, or a closure capturing it, there.
+        // This is conservative: it also rejects storing a closure
+        // that captures an enclosing block's handle.
+        let outer_vars: Vec<usize> = (0..self.locals.len())
+            .filter(|&i| {
+                let local = &self.locals[i];
+                matches!(local.binding, Binding::Var)
+                    && !self.infer.resolve(&local.ty).holds_scope()
+            })
+            .collect();
+        self.scope_blocks.push(ScopeBlock {
+            handle: self.locals.len(),
+            kept: Vec::new(),
+        });
+        self.locals.push(Local {
+            name: handle.name.clone(),
+            ty: Ty::named(ty::SCOPE),
+            binding: Binding::Pattern,
+            field: None,
+        });
+        let ty = self.block(body, expected, true);
+        self.locals.pop();
+        let block = self.scope_blocks.pop().expect("the block's own frame");
+        // A `var` that already held a handle, of an enclosing
+        // block, is caught by what was written to it: a value
+        // mentioning one of this block's locals that holds one.
+        let kept = outer_vars
+            .into_iter()
+            .map(|i| &self.locals[i])
+            .find(|local| self.infer.resolve(&local.ty).holds_scope())
+            .map(|local| local.name.clone())
+            .or_else(|| {
+                block
+                    .kept
+                    .into_iter()
+                    .find(|(_, ty)| self.infer.resolve(ty).holds_scope())
+                    .map(|(name, _)| name)
+            });
+        if let Some(name) = kept {
+            self.out.diagnostics.push(decl_rules::scope_escapes(
+                expr.span,
+                &format!("be kept in `{name}`, which outlives the block"),
+            ));
+        }
+        if self.infer.resolve(&ty).holds_scope() {
+            self.out.diagnostics.push(decl_rules::scope_escapes(
+                expr.span,
+                "be the value of its `scope` block",
+            ));
+            return Ty::Error;
+        }
+        ty
     }
 
     /// A fresh variable that `ty` flows into, as the type of an `if` or
@@ -1967,37 +1994,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         span: Span,
     ) -> Ty {
         let expected_fn = expected.cloned();
-        let expected = match expected.map(|e| self.infer.resolve(e)) {
-            Some(Ty::Fn {
-                params: expected_params,
-                ret,
-                ..
-            }) if expected_params.len() == params.len() => Some((expected_params, *ret)),
-            _ => None,
-        };
-        let mut param_tys = Vec::new();
-        for (i, param) in params.iter().enumerate() {
-            let hint = expected.as_ref().map(|(ps, _)| ps[i].clone());
-            let ty = match (&param.ty, hint) {
-                (Some(written), hint) => {
-                    self.check_written(written);
-                    let ty = self.lower.ty(written);
-                    match hint {
-                        // The caller passes a value of the expected
-                        // parameter type into the written one.
-                        Some(hint) => self.expect(&hint, &ty, written.span),
-                        None => ty,
-                    }
-                }
-                (None, Some(hint)) => hint,
-                (None, None) => self.infer.fresh(),
-            };
-            param_tys.push(ty);
-        }
-        let ret = match &expected {
-            Some((_, ret)) => ret.clone(),
-            None => self.infer.fresh(),
-        };
+        let (param_tys, ret) = self.closure_signature(params, expected);
         let height = self.locals.len();
         self.closures.push(ClosureFrame {
             height,
@@ -2035,27 +2032,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .iter()
             .find(|(_, ty)| self.bearing(ty))
             .map(|(name, _)| name.clone());
-        let cap = match captured {
-            Some(_) => Cap::Bearing,
-            // A capture whose type is not solved yet may still turn out
-            // capability-bearing, and one that holds a type parameter may
-            // be instantiated with something capability-bearing: decided
-            // once the body is checked.
-            None if frame
-                .captures
-                .iter()
-                .any(|(_, ty)| self.capture_is_open(ty)) =>
-            {
-                let cap = self.infer.fresh_cap();
-                self.open_closures.push(OpenClosure {
-                    cap,
-                    span,
-                    captures: frame.captures.clone(),
-                });
-                cap
-            }
-            None => Cap::Plain,
-        };
+        let cap = self.closure_cap(&frame, captured.is_some(), span);
         if !frame.captures.is_empty() {
             let unsolved = frame
                 .captures
@@ -2095,6 +2072,74 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::Error
             }
             _ => ty,
+        }
+    }
+
+    /// A closure's parameter types and result type: from its annotations,
+    /// else from the expected function type, else fresh.
+    fn closure_signature(
+        &mut self,
+        params: &[ClosureParam],
+        expected: Option<&Ty>,
+    ) -> (Vec<Ty>, Ty) {
+        let expected = match expected.map(|e| self.infer.resolve(e)) {
+            Some(Ty::Fn {
+                params: expected_params,
+                ret,
+                ..
+            }) if expected_params.len() == params.len() => Some((expected_params, *ret)),
+            _ => None,
+        };
+        let mut param_tys = Vec::new();
+        for (i, param) in params.iter().enumerate() {
+            let hint = expected.as_ref().map(|(ps, _)| ps[i].clone());
+            let ty = match (&param.ty, hint) {
+                (Some(written), hint) => {
+                    self.check_written(written);
+                    let ty = self.lower.ty(written);
+                    match hint {
+                        // The caller passes a value of the expected
+                        // parameter type into the written one.
+                        Some(hint) => self.expect(&hint, &ty, written.span),
+                        None => ty,
+                    }
+                }
+                (None, Some(hint)) => hint,
+                (None, None) => self.infer.fresh(),
+            };
+            param_tys.push(ty);
+        }
+        let ret = match &expected {
+            Some((_, ret)) => ret.clone(),
+            None => self.infer.fresh(),
+        };
+        (param_tys, ret)
+    }
+
+    /// A closure's capability: bearing when it captured something
+    /// capability-bearing, open when a capture's type is not settled yet.
+    fn closure_cap(&mut self, frame: &ClosureFrame, captured: bool, span: Span) -> Cap {
+        match captured {
+            true => Cap::Bearing,
+            // A capture whose type is not solved yet may still turn out
+            // capability-bearing, and one that holds a type parameter may
+            // be instantiated with something capability-bearing: decided
+            // once the body is checked.
+            false
+                if frame
+                    .captures
+                    .iter()
+                    .any(|(_, ty)| self.capture_is_open(ty)) =>
+            {
+                let cap = self.infer.fresh_cap();
+                self.open_closures.push(OpenClosure {
+                    cap,
+                    span,
+                    captures: frame.captures.clone(),
+                });
+                cap
+            }
+            false => Cap::Plain,
         }
     }
 
@@ -2204,42 +2249,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ty,
                 value,
             } => {
-                self.require_lowercase(name);
-                // `let _ = value.field` only discards the field.
-                self.discarded_field = match &value.kind {
-                    ExprKind::Field { name: field, .. } if name.name == "_" => Some(field.span),
-                    _ => None,
-                };
-                let ty = match ty {
-                    Some(written) => {
-                        self.check_written(written);
-                        let ty = self.lower.ty(written);
-                        if self.secret_inner(&ty).is_some_and(|inner| inner.is_float()) {
-                            self.secret_float_written.push(value.span);
-                        }
-                        self.check(value, &ty);
-                        ty
-                    }
-                    None => {
-                        let ty = self.infer(value);
-                        if name.name != "_" {
-                            self.inferred_lets.push((name.clone(), ty.clone()));
-                        }
-                        ty
-                    }
-                };
-                self.discarded_field = None;
-                let binding = if *mutable {
-                    Binding::Var
-                } else {
-                    let keyword = Span {
-                        start: stmt.span.start,
-                        end: stmt.span.start + "let".len(),
-                    };
-                    Binding::Let(keyword)
-                };
-                self.typed(name.span, &ty);
-                self.bind(&name.name, ty, binding);
+                self.let_stmt(stmt.span, *mutable, name, ty.as_ref(), value);
             }
             StmtKind::Assign { target, value } => {
                 let ty = self.infer(target);
@@ -2281,44 +2291,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 iter,
                 body,
             } => {
-                let ty = self.infer(iter);
-                let element = match self.infer.resolve(&ty) {
-                    Ty::Named(name, args, _) if name == ty::LIST && args.len() == 1 => {
-                        args[0].clone()
-                    }
-                    // Only integers can be counted through: a `Range` of
-                    // anything else is a pair of bounds, not a sequence.
-                    Ty::Named(name, args, _) if name == ty::RANGE && args.len() == 1 => {
-                        let item = self.infer.resolve(&args[0]);
-                        if !(item.is_integer()
-                            || matches!(item, Ty::Error | Ty::Never | Ty::Var(_)))
-                        {
-                            self.error(
-                                codes::NOT_ITERABLE,
-                                format!(
-                                    "cannot iterate over `Range<{item}>`; a range is iterable only over an integer type"
-                                ),
-                                iter.span,
-                            );
-                        }
-                        args[0].clone()
-                    }
-                    Ty::Error => Ty::Error,
-                    other => {
-                        self.error(
-                            codes::NOT_ITERABLE,
-                            format!("cannot iterate over `{other}`; expected a `List` or a range"),
-                            iter.span,
-                        );
-                        Ty::Error
-                    }
-                };
-                self.require_lowercase(binding);
-                let height = self.locals.len();
-                self.typed(binding.span, &element);
-                self.bind(&binding.name, element, Binding::Loop);
-                self.loop_body(body);
-                self.locals.truncate(height);
+                self.for_stmt(binding, iter, body);
             }
             StmtKind::While { cond, body } => {
                 self.condition(cond, "a `while` condition");
@@ -2326,6 +2299,93 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             StmtKind::Expr(expr) => self.expr_stmt(expr),
         }
+    }
+
+    /// `let` or `var`: check the value against the written type, else infer
+    /// it, and bind the name.
+    fn let_stmt(
+        &mut self,
+        span: Span,
+        mutable: bool,
+        name: &Ident,
+        ty: Option<&Type>,
+        value: &Expr,
+    ) {
+        self.require_lowercase(name);
+        // `let _ = value.field` only discards the field.
+        self.discarded_field = match &value.kind {
+            ExprKind::Field { name: field, .. } if name.name == "_" => Some(field.span),
+            _ => None,
+        };
+        let ty = match ty {
+            Some(written) => {
+                self.check_written(written);
+                let ty = self.lower.ty(written);
+                if self.secret_inner(&ty).is_some_and(|inner| inner.is_float()) {
+                    self.secret_float_written.push(value.span);
+                }
+                self.check(value, &ty);
+                ty
+            }
+            None => {
+                let ty = self.infer(value);
+                if name.name != "_" {
+                    self.inferred_lets.push((name.clone(), ty.clone()));
+                }
+                ty
+            }
+        };
+        self.discarded_field = None;
+        let binding = if mutable {
+            Binding::Var
+        } else {
+            let keyword = Span {
+                start: span.start,
+                end: span.start + "let".len(),
+            };
+            Binding::Let(keyword)
+        };
+        self.typed(name.span, &ty);
+        self.bind(&name.name, ty, binding);
+    }
+
+    /// `for binding in iter { body }`: the binding takes the element type of
+    /// a list or an integer range.
+    fn for_stmt(&mut self, binding: &Ident, iter: &Expr, body: &Block) {
+        let ty = self.infer(iter);
+        let element = match self.infer.resolve(&ty) {
+            Ty::Named(name, args, _) if name == ty::LIST && args.len() == 1 => args[0].clone(),
+            // Only integers can be counted through: a `Range` of
+            // anything else is a pair of bounds, not a sequence.
+            Ty::Named(name, args, _) if name == ty::RANGE && args.len() == 1 => {
+                let item = self.infer.resolve(&args[0]);
+                if !(item.is_integer() || matches!(item, Ty::Error | Ty::Never | Ty::Var(_))) {
+                    self.error(
+                        codes::NOT_ITERABLE,
+                        format!(
+                            "cannot iterate over `Range<{item}>`; a range is iterable only over an integer type"
+                        ),
+                        iter.span,
+                    );
+                }
+                args[0].clone()
+            }
+            Ty::Error => Ty::Error,
+            other => {
+                self.error(
+                    codes::NOT_ITERABLE,
+                    format!("cannot iterate over `{other}`; expected a `List` or a range"),
+                    iter.span,
+                );
+                Ty::Error
+            }
+        };
+        self.require_lowercase(binding);
+        let height = self.locals.len();
+        self.typed(binding.span, &element);
+        self.bind(&binding.name, element, Binding::Loop);
+        self.loop_body(body);
+        self.locals.truncate(height);
     }
 
     fn loop_body(&mut self, body: &Block) {
