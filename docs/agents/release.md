@@ -254,4 +254,4 @@ Nothing in the repo can check these settings, so verify them before a release.
   scripts/release/sign-index.sh --previous-key old-release.pub new-key new-release.pub https://oskalang.dev out
   gh release upload vX.Y.Z out/release-index.json out/release-index.json.sig
   ```
-  `vX.Y.Z` is the newest stable release. Installers already pinned to the old key refuse the new index with `bad_index`; like their copies of the old key, they have to be downloaded again.
+  `vX.Y.Z` is the newest stable release. Installers already pinned to the old key refuse the new index with `bad_index`; like their copies of the old key, they have to be downloaded again. An `oskac` built before the rotation reports `bad_index` from `self check` and `self update` for the same reason: the fix is to re-run the installer (downloaded again), which pins the new key.

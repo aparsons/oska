@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+// The block of `checker.osk` between `BEGIN pinned` and `END pinned`, as
+// the test-only build feature `test-site` replaces it (spec #230): the
+// site, its port, the root the TLS connection trusts and the release key
+// come from the arguments `oskac` passes in a test build, which point the
+// checker at the loopback TLS test server and the test key. A release
+// build never contains this text: a guard in `scripts/check.sh` keeps the
+// feature out of releases, and a test requires the release source to have
+// no trust assertion.
+
+fn site_host(args: Args) -> String {
+    args.get(12).unwrap_or("127.0.0.1").assume_trusted()
+}
+
+fn site_port(args: Args) -> Int {
+    args.get(13).unwrap_or("0").assume_trusted().parse_int().unwrap_or(0)
+}
+
+fn release_key(args: Args) -> String {
+    args.get(15).unwrap_or("").assume_trusted()
+}
+
+fn trust_config(args: Args) -> Result<x509.TrustConfig, String> {
+    let root = Bytes.from_hex(args.get(14).unwrap_or("").assume_trusted()).unwrap_or(Bytes.new())
+    match x509.TrustConfig.only_roots([]).with_root_der(root) {
+        Ok(trust) => Ok(trust)
+        Err(_) => Err("the test root is malformed")
+    }
+}
