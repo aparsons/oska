@@ -1,0 +1,314 @@
+// SPDX-License-Identifier: Apache-2.0
+// `SortedMap<K, V>` and `SortedSet<T>`, collections read back in key order
+// (ADR 0033). Both are in the prelude: write `SortedMap.new()`,
+// `m.put(k, v)` and `s.to_list()` with no `use`. This file is the module
+// `std.sorted`, which `use std.sorted` still imports.
+//
+// - Each is a value, like a `List`: it is copied on write, and a method
+//   that changes it needs a `var`.
+// - `to_list()` gives the entries or items in ascending order of `Ord.cmp`,
+//   whatever the order of the calls. Two keys are the same key when
+//   `a.cmp(b)` is `Equal`; `==` is never used on a key.
+// - `get` and `contains` take O(log n) calls of `cmp`. `put`, `add` and
+//   `remove` find the place the same way, then move the items after it,
+//   which is O(n) loop steps. `first` and `last` are O(1).
+// - A missing key is never a panic: `get` and `remove` of one give `None`
+//   (`false` for a set), and `first` and `last` of an empty collection are
+//   `None`.
+// - A key or item type needs `Ord`: an integer, `Bool`, `String`, an
+//   `Option` or `List` of an `Ord` type, or a type with `impl Ord`. `Float`
+//   and `Secret` are refused as for `Ord` (`E0265`, `E0351`). A `Secret`
+//   value in a `SortedMap` is allowed, because a value is never compared.
+// - A `cmp` that is not a total order gives a wrong answer (a key missed, a
+//   repeat, an unsorted `to_list()`), never a memory error: every index is
+//   checked by `List`, and every loop ends within `--max-steps`.
+// - There is no entry limit and no new panic code. `--max-steps` and
+//   `--max-memory` (`P0040`) bound a growing collection.
+
+// For maintainers: a set is one list kept ascending with no repeats, a map
+// the same over `SortedEntry` values (ADR 0033). The search never writes an
+// operator on a key (`<` is `E0223` for a user type); it calls `cmp` and
+// matches the `Ordering`. `find` keeps `low` and `high` inside `0..=len`
+// and halves the gap each round, so it ends after at most `log2(len) + 1`
+// rounds whatever `cmp` answers, and every index it returns is at most
+// `len`. A move shifts items with `List.set` only at indexes between
+// `at` and `len`.
+
+// One key and its value, as `sorted_map.to_list()` gives them.
+pub struct SortedEntry<K, V> { pub key: K, pub value: V }
+
+// Where a search ended: `at` is the index of the key when `hit`, and else
+// the index it would go in (0 to the length).
+struct Spot { at: Int, hit: Bool }
+
+// A map of values by key, ascending by key.
+pub struct SortedMap<K, V> {
+    entries: List<SortedEntry<K, V>>,
+}
+
+impl<K: Ord, V> SortedMap<K, V> {
+    // An empty map.
+    pub fn new() -> SortedMap<K, V> {
+        SortedMap(entries: [])
+    }
+
+    // A map of `entries`, put in order: a key that occurs again takes the
+    // later value, as `put` does.
+    pub fn of(entries: List<SortedEntry<K, V>>) -> SortedMap<K, V> {
+        var made: SortedMap<K, V> = SortedMap.new()
+        for entry in entries {
+            made.put(entry.key, entry.value)
+        }
+        made
+    }
+
+    // The number of entries.
+    pub fn len(self) -> Int {
+        self.entries.len()
+    }
+
+    // Whether it holds no entry.
+    pub fn is_empty(self) -> Bool {
+        self.entries.len() == 0
+    }
+
+    // Whether it holds `key`.
+    pub fn contains(self, key: K) -> Bool {
+        self.find(key).hit
+    }
+
+    // The value of `key`, or `None` when it is not in the map.
+    pub fn get(self, key: K) -> Option<V> {
+        let spot = self.find(key)
+        if !spot.hit {
+            return None
+        }
+        Some(self.entries.at(spot.at).value)
+    }
+
+    // Set the value of `key` and say whether the key is new: `false` when
+    // it was there, which keeps its key and takes the new value. The map
+    // must be a `var`.
+    pub fn put(var self, key: K, value: V) -> Bool {
+        let spot = self.find(key)
+        if spot.hit {
+            let old = self.entries.at(spot.at)
+            self.entries.set(spot.at, SortedEntry(key: old.key, value: value))
+            return false
+        }
+        let size = self.entries.len()
+        self.entries.push(SortedEntry(key: key, value: value))
+        var i = size
+        while i > spot.at {
+            self.entries.set(i, self.entries.at(i - 1))
+            i = i - 1
+        }
+        self.entries.set(spot.at, SortedEntry(key: key, value: value))
+        true
+    }
+
+    // Take `key` out and give its value as `Some`, or `None` when it was
+    // not there. The entries left keep their order. The map must be a
+    // `var`.
+    pub fn remove(var self, key: K) -> Option<V> {
+        let spot = self.find(key)
+        if !spot.hit {
+            return None
+        }
+        let old = self.entries.at(spot.at)
+        let size = self.entries.len()
+        var i = spot.at
+        while i < size - 1 {
+            self.entries.set(i, self.entries.at(i + 1))
+            i = i + 1
+        }
+        self.entries.pop()
+        Some(old.value)
+    }
+
+    // The entry with the least key, or `None` for an empty map.
+    pub fn first(self) -> Option<SortedEntry<K, V>> {
+        if self.entries.len() == 0 {
+            return None
+        }
+        Some(self.entries.at(0))
+    }
+
+    // The entry with the greatest key, or `None` for an empty map.
+    pub fn last(self) -> Option<SortedEntry<K, V>> {
+        let size = self.entries.len()
+        if size == 0 {
+            return None
+        }
+        Some(self.entries.at(size - 1))
+    }
+
+    // Every entry, in ascending key order, as a new list.
+    pub fn to_list(self) -> List<SortedEntry<K, V>> {
+        self.entries
+    }
+
+    // A binary search for `key`.
+    fn find(self, key: K) -> Spot {
+        var low = 0
+        var high = self.entries.len()
+        while low < high {
+            let middle = low + (high - low) / 2
+            match self.entries.at(middle).key.cmp(key) {
+                Ordering.Less => { low = middle + 1 }
+                Ordering.Equal => { return Spot(at: middle, hit: true) }
+                Ordering.Greater => { high = middle }
+            }
+        }
+        Spot(at: low, hit: false)
+    }
+}
+
+impl<K: Ord, V: Eq> Eq for SortedMap<K, V> {
+    fn eq(self, other: SortedMap<K, V>) -> Bool {
+        let size = self.entries.len()
+        if size != other.entries.len() {
+            return false
+        }
+        var i = 0
+        while i < size {
+            let a = self.entries.at(i)
+            let b = other.entries.at(i)
+            match a.key.cmp(b.key) {
+                Ordering.Equal => {}
+                _ => { return false }
+            }
+            if a.value != b.value {
+                return false
+            }
+            i = i + 1
+        }
+        true
+    }
+}
+
+// A collection of distinct items, ascending.
+pub struct SortedSet<T> {
+    items: List<T>,
+}
+
+impl<T: Ord> SortedSet<T> {
+    // An empty set.
+    pub fn new() -> SortedSet<T> {
+        SortedSet(items: [])
+    }
+
+    // A set of `items`, added in order: a repeat is dropped.
+    pub fn of(items: List<T>) -> SortedSet<T> {
+        var made: SortedSet<T> = SortedSet.new()
+        for item in items {
+            made.add(item)
+        }
+        made
+    }
+
+    // The number of items.
+    pub fn len(self) -> Int {
+        self.items.len()
+    }
+
+    // Whether it holds no item.
+    pub fn is_empty(self) -> Bool {
+        self.items.len() == 0
+    }
+
+    // Whether it holds `item`.
+    pub fn contains(self, item: T) -> Bool {
+        self.find(item).hit
+    }
+
+    // Put `item` in its place and say whether the set changed: `false`
+    // when it already held the item. The set must be a `var`.
+    pub fn add(var self, item: T) -> Bool {
+        let spot = self.find(item)
+        if spot.hit {
+            return false
+        }
+        let size = self.items.len()
+        self.items.push(item)
+        var i = size
+        while i > spot.at {
+            self.items.set(i, self.items.at(i - 1))
+            i = i - 1
+        }
+        self.items.set(spot.at, item)
+        true
+    }
+
+    // Take `item` out and say whether the set held it. The items left
+    // keep their order. The set must be a `var`.
+    pub fn remove(var self, item: T) -> Bool {
+        let spot = self.find(item)
+        if !spot.hit {
+            return false
+        }
+        let size = self.items.len()
+        var i = spot.at
+        while i < size - 1 {
+            self.items.set(i, self.items.at(i + 1))
+            i = i + 1
+        }
+        self.items.pop()
+        true
+    }
+
+    // The least item, or `None` for an empty set.
+    pub fn first(self) -> Option<T> {
+        if self.items.len() == 0 {
+            return None
+        }
+        Some(self.items.at(0))
+    }
+
+    // The greatest item, or `None` for an empty set.
+    pub fn last(self) -> Option<T> {
+        let size = self.items.len()
+        if size == 0 {
+            return None
+        }
+        Some(self.items.at(size - 1))
+    }
+
+    // Every item, in ascending order, as a new list.
+    pub fn to_list(self) -> List<T> {
+        self.items
+    }
+
+    // A binary search for `item`.
+    fn find(self, item: T) -> Spot {
+        var low = 0
+        var high = self.items.len()
+        while low < high {
+            let middle = low + (high - low) / 2
+            match self.items.at(middle).cmp(item) {
+                Ordering.Less => { low = middle + 1 }
+                Ordering.Equal => { return Spot(at: middle, hit: true) }
+                Ordering.Greater => { high = middle }
+            }
+        }
+        Spot(at: low, hit: false)
+    }
+}
+
+impl<T: Ord> Eq for SortedSet<T> {
+    fn eq(self, other: SortedSet<T>) -> Bool {
+        let size = self.items.len()
+        if size != other.items.len() {
+            return false
+        }
+        var i = 0
+        while i < size {
+            match self.items.at(i).cmp(other.items.at(i)) {
+                Ordering.Equal => {}
+                _ => { return false }
+            }
+            i = i + 1
+        }
+        true
+    }
+}

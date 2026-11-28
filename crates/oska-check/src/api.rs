@@ -52,6 +52,7 @@ pub const MODULES: &[&str] = &[
     "std.map",
     "std.set",
     "std.deque",
+    "std.sorted",
 ];
 
 /// What kind of item an entry is.

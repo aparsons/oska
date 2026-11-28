@@ -242,6 +242,7 @@ fn every_public_item_of_the_prelude_and_std_is_listed() {
         ("std.map", "crates/oska-check/src/std/map.osk"),
         ("std.set", "crates/oska-check/src/std/set.osk"),
         ("std.deque", "crates/oska-check/src/std/deque.osk"),
+        ("std.sorted", "crates/oska-check/src/std/sorted.osk"),
     ];
     for (module, path) in sources {
         let src = std::fs::read_to_string(repo_root().join(path)).expect("the source should read");
@@ -289,7 +290,8 @@ fn the_modules_are_listed_in_order_and_std_rt_is_left_out() {
             "std.http",
             "std.map",
             "std.set",
-            "std.deque"
+            "std.deque",
+            "std.sorted"
         ]
     );
     assert!(items.iter().all(|i| !field(i, "name").starts_with("rt_")));
