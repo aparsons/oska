@@ -31,6 +31,12 @@ pub fn rt_sys_close(fd: Int) -> Int
 pub fn rt_sys_mkdirat(dirfd: Int, path: Int, mode: Int) -> Int
 pub fn rt_sys_fstat(fd: Int, buf: Int) -> Int
 pub fn rt_sys_ftruncate(fd: Int, length: Int) -> Int
+// `unlinkat(dirfd, path, flags)`: remove the file, or with `AT_REMOVEDIR`
+// the empty directory, `path` names beneath `dirfd`.
+pub fn rt_sys_unlinkat(dirfd: Int, path: Int, flags: Int) -> Int
+// `renameat(olddirfd, oldpath, newdirfd, newpath)`; on Linux
+// `renameat2` with no flags, since arm64 has no `renameat`.
+pub fn rt_sys_renameat(olddirfd: Int, oldpath: Int, newdirfd: Int, newpath: Int) -> Int
 pub fn rt_sys_readlinkat(dirfd: Int, path: Int, buf: Int, size: Int) -> Int
 // Put the working directory's path, NUL-terminated, in the `size` bytes
 // at `buf`: on success a result >= 0, which says nothing more.
@@ -103,6 +109,9 @@ pub fn rt_sys_nt_create_file(handle: Int, access: Int, attributes: Int, status: 
 // `NtQueryInformationFile(handle, status, buf, length, class)`: an
 // `NTSTATUS`.
 pub fn rt_sys_nt_query_information_file(handle: Int, status: Int, buf: Int, length: Int, class: Int) -> Int
+// `NtSetInformationFile(handle, status, buf, length, class)`: an
+// `NTSTATUS`.
+pub fn rt_sys_nt_set_information_file(handle: Int, status: Int, buf: Int, length: Int, class: Int) -> Int
 // `NtQueryDirectoryFile(handle, NULL, NULL, NULL, status, buf, length,
 // class, single, NULL, restart)`: an `NTSTATUS`.
 pub fn rt_sys_nt_query_directory_file(handle: Int, event: Int, apc: Int, context: Int, status: Int, buf: Int, length: Int, class: Int, single: Int, name: Int, restart: Int) -> Int
@@ -291,6 +300,9 @@ struct Platform {
     o_nonblock: Int,
     o_cloexec: Int,
     at_fdcwd: Int,
+    // `O_APPEND`, and `unlinkat`'s `AT_REMOVEDIR`.
+    o_append: Int,
+    at_removedir: Int,
     // `fcntl`'s `F_DUPFD_CLOEXEC`.
     f_dupfd_cloexec: Int,
     // The `ioctl` request that succeeds only on a terminal (Linux's
@@ -383,6 +395,8 @@ fn linux_aarch64() -> Platform {
         o_nonblock: 2048,
         o_cloexec: 524288,
         at_fdcwd: -100,
+        o_append: 1024,
+        at_removedir: 512,
         f_dupfd_cloexec: 1030,
         tty_request: 21505,
         termios_bytes: 36,
@@ -441,6 +455,8 @@ fn linux_x86_64() -> Platform {
         o_nonblock: 2048,
         o_cloexec: 524288,
         at_fdcwd: -100,
+        o_append: 1024,
+        at_removedir: 512,
         f_dupfd_cloexec: 1030,
         tty_request: 21505,
         termios_bytes: 36,
@@ -504,6 +520,8 @@ fn macos() -> Platform {
         o_nonblock: 4,
         o_cloexec: 16777216,
         at_fdcwd: -2,
+        o_append: 8,
+        at_removedir: 128,
         f_dupfd_cloexec: 67,
         tty_request: 1078490131,
         termios_bytes: 72,
@@ -563,6 +581,8 @@ fn windows_x86_64() -> Platform {
         o_nonblock: 0,
         o_cloexec: 0,
         at_fdcwd: 0,
+        o_append: 0,
+        at_removedir: 0,
         f_dupfd_cloexec: 0,
         tty_request: 0,
         termios_bytes: 0,
@@ -6257,6 +6277,321 @@ fn make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
     Ok(())
 }
 
+// ---- Asking, appending, removing and renaming ------------------------------
+//
+// Confined as the operations above are (`oska-sys`'s `Dir::exists`,
+// `metadata`, `append_file`, `delete_file`, `delete_dir` and `move_file`):
+// every name is walked beneath the root's handle and none is followed, and
+// a name that is to be read, appended to, removed or renamed over is
+// refused unless it is a regular file with one link. `remove_dir` removes
+// an empty directory only.
+
+// The errors that say a name is not there: `ENOENT`, and on Windows
+// `ERROR_FILE_NOT_FOUND` (2) or `ERROR_PATH_NOT_FOUND` (3).
+fn not_there(errno: Int) -> Bool {
+    errno == 2 || (on_windows() && errno == 3)
+}
+
+// `openat`'s flags to look at a name: to read its kind and size, or to
+// see that it is there. On Windows, only the right to read attributes.
+fn file_probe_flags() -> Int {
+    if on_windows() {
+        return win_attributes()
+    }
+    file_read_flags()
+}
+
+// A file to append to, created when missing and never emptied:
+// `O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`.
+fn file_append_flags() -> Int {
+    if on_windows() {
+        return win_file_append()
+    }
+    rt_mem_or(file_write_flags(), rt_mem_platform().o_append)
+}
+
+// Whether anything is at the path `names` reach beneath `root`: false when
+// a name, or a directory before it, is not there; no names ask about
+// `root` itself. Nothing is followed.
+fn exists_beneath(root: Int, names: List<String>) -> Result<Bool, IoError> {
+    let count = names.len()
+    var at = root
+    var i = 0
+    while i < count {
+        let last = i + 1 == count
+        var flags = directory_flags()
+        if last {
+            flags = file_probe_flags()
+        }
+        let fd = open_name(at, names.at(i), flags)
+        if at != root {
+            close(at)
+        }
+        if fd < 0 {
+            let errno = 0 - fd
+            if not_there(errno) {
+                return Ok(false)
+            }
+            // There, though not to be opened for reading.
+            if last && !on_windows() && errno == 13 {
+                return Ok(true)
+            }
+            return Err(refusal(errno, joined(names, i + 1), !last))
+        }
+        if last {
+            close(fd)
+            return Ok(true)
+        }
+        at = fd
+        i = i + 1
+    }
+    Ok(true)
+}
+
+// The `Metadata` of what the open `fd`, reached by `names`, is: a
+// directory, a regular file with one link and its size, or neither.
+fn described(fd: Int, names: List<String>) -> Result<Metadata, IoError> {
+    if on_windows() {
+        let info = win_info(fd)
+        if info < 0 {
+            return Err(io_error(0 - info))
+        }
+        if win_is_dir(info) {
+            return Ok(Metadata(kind: FileKind.Directory, size: 0))
+        }
+        if rt_mem_shr(info, 32) > 1 {
+            return Err(hard_linked(names))
+        }
+        return Ok(Metadata(kind: FileKind.File, size: win_file_size(fd)))
+    }
+    let platform = rt_mem_platform()
+    let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
+    let stat = rt_mem_add(buffer, 8)
+    let result = rt_sys_fstat(fd, stat)
+    let mode = load_bits(rt_mem_add(stat, platform.stat_mode), platform.stat_mode_bits)
+    let links = load_bits(rt_mem_add(stat, platform.stat_nlink), platform.stat_nlink_bits)
+    let size = rt_mem_load64(rt_mem_add(stat, platform.stat_size))
+    free(buffer)
+    if result < 0 {
+        return Err(io_error(0 - result))
+    }
+    // `S_IFMT`, `S_IFDIR` and `S_IFREG`.
+    let kind = rt_mem_and(mode, 61440)
+    if kind == 16384 {
+        return Ok(Metadata(kind: FileKind.Directory, size: 0))
+    }
+    if kind != 32768 {
+        return Ok(Metadata(kind: FileKind.Other, size: 0))
+    }
+    if links > 1 {
+        return Err(hard_linked(names))
+    }
+    Ok(Metadata(kind: FileKind.File, size: size))
+}
+
+// The error for the file `names` reach having more than one hard link.
+fn hard_linked(names: List<String>) -> IoError {
+    let path = joined(names, names.len())
+    io_error_text("`{path}` has more than one hard link, and confined access never opens one")
+}
+
+// The kind and size of what `names` reach beneath `root`, none of them a
+// symlink: no names describe `root` itself.
+fn metadata_beneath(root: Int, names: List<String>) -> Result<Metadata, IoError> {
+    let count = names.len()
+    var fd = 0
+    if count == 0 {
+        fd = open_dir(root, names)?
+    } else {
+        let parent = walk(root, names, count - 1)?
+        fd = open_name(parent, names.at(count - 1), file_probe_flags())
+        if parent != root {
+            close(parent)
+        }
+        if fd < 0 {
+            return Err(refusal(0 - fd, joined(names, count), false))
+        }
+    }
+    let result = described(fd, names)
+    close(fd)
+    result
+}
+
+// Add `contents` to the end of the regular file reached by walking
+// `names` beneath `root`, which is created when missing.
+fn append_beneath(root: Int, names: List<String>, contents: String) -> Result<(), IoError> {
+    let object = rt_mem_text(contents)
+    let count = names.len()
+    let parent = walk(root, names, count - 1)?
+    let opened = open_name(parent, names.at(count - 1), file_append_flags())
+    if parent != root {
+        close(parent)
+    }
+    if opened < 0 {
+        // A directory cannot be opened for writing: said as `lone_file`
+        // says it, on every platform.
+        if !on_windows() && 0 - opened == 21 {
+            let path = joined(names, count)
+            return Err(io_error_text("`{path}` is not a regular file"))
+        }
+        return Err(refusal(0 - opened, joined(names, count), false))
+    }
+    let fd = opened
+    match lone_file(fd, names) {
+        Ok(_) => {}
+        Err(e) => {
+            close(fd)
+            return Err(e)
+        }
+    }
+    let written = write_all(fd, text_data(object), text_length(object))
+    close(fd)
+    if written < 0 {
+        return Err(io_error(0 - written))
+    }
+    Ok(())
+}
+
+// Whether `names`' last name in the directory `parent` is a regular file
+// with one link, opened for the check and closed again.
+fn check_lone(parent: Int, names: List<String>, flags: Int) -> Result<(), IoError> {
+    let count = names.len()
+    let fd = open_name(parent, names.at(count - 1), flags)
+    if fd < 0 {
+        return Err(refusal(0 - fd, joined(names, count), false))
+    }
+    let checked = lone_file(fd, names)
+    close(fd)
+    checked
+}
+
+// `unlinkat(parent, name, flags)`, retried when a signal interrupts it:
+// 0, or the negative `errno`.
+fn unlink_name(parent: Int, name: String, flags: Int) -> Int {
+    let path = c_string(name)
+    if path == 0 {
+        return 0 - nul_in_name()
+    }
+    var removed = rt_sys_unlinkat(parent, text_data(path), flags)
+    while interrupted(removed) {
+        removed = rt_sys_unlinkat(parent, text_data(path), flags)
+    }
+    free(path)
+    removed
+}
+
+// Remove the regular file reached by walking `names` (one at least)
+// beneath `root`.
+fn remove_file_beneath(root: Int, names: List<String>) -> Result<(), IoError> {
+    let count = names.len()
+    let parent = walk(root, names, count - 1)?
+    let removed = remove_file_in(parent, names)
+    if parent != root {
+        close(parent)
+    }
+    removed
+}
+
+fn remove_file_in(parent: Int, names: List<String>) -> Result<(), IoError> {
+    if on_windows() {
+        return win_remove(parent, names, false)
+    }
+    check_lone(parent, names, file_read_flags())?
+    let count = names.len()
+    let removed = unlink_name(parent, names.at(count - 1), 0)
+    if removed < 0 {
+        return Err(refusal(0 - removed, joined(names, count), false))
+    }
+    Ok(())
+}
+
+// Remove the empty directory reached by walking `names` (one at least)
+// beneath `root`.
+fn remove_dir_beneath(root: Int, names: List<String>) -> Result<(), IoError> {
+    let count = names.len()
+    let parent = walk(root, names, count - 1)?
+    let removed = remove_dir_in(parent, names)
+    if parent != root {
+        close(parent)
+    }
+    removed
+}
+
+fn remove_dir_in(parent: Int, names: List<String>) -> Result<(), IoError> {
+    if on_windows() {
+        return win_remove(parent, names, true)
+    }
+    let count = names.len()
+    // Opened first, so a symlink or a file at the name is refused in words.
+    let fd = open_name(parent, names.at(count - 1), directory_flags())
+    if fd < 0 {
+        return Err(refusal(0 - fd, joined(names, count), true))
+    }
+    close(fd)
+    let removed = unlink_name(parent, names.at(count - 1), rt_mem_platform().at_removedir)
+    if removed < 0 {
+        return Err(refusal(0 - removed, joined(names, count), false))
+    }
+    Ok(())
+}
+
+// Move the regular file reached by walking `from` beneath `root` to the
+// path `to` reaches, replacing a regular file there.
+fn rename_beneath(root: Int, from: List<String>, to: List<String>) -> Result<(), IoError> {
+    let from_parent = walk(root, from, from.len() - 1)?
+    let to_parent = match walk(root, to, to.len() - 1) {
+        Ok(fd) => fd
+        Err(e) => {
+            if from_parent != root {
+                close(from_parent)
+            }
+            return Err(e)
+        }
+    }
+    let moved = rename_in(from_parent, from, to_parent, to)
+    if to_parent != root {
+        close(to_parent)
+    }
+    if from_parent != root {
+        close(from_parent)
+    }
+    moved
+}
+
+fn rename_in(from_parent: Int, from: List<String>, to_parent: Int, to: List<String>) -> Result<(), IoError> {
+    if on_windows() {
+        return win_rename(from_parent, from, to_parent, to)
+    }
+    check_lone(from_parent, from, file_read_flags())?
+    let to_count = to.len()
+    let there = open_name(to_parent, to.at(to_count - 1), file_read_flags())
+    if there >= 0 {
+        let checked = lone_file(there, to)
+        close(there)
+        checked?
+    } else if !not_there(0 - there) {
+        return Err(refusal(0 - there, joined(to, to_count), false))
+    }
+    if joined(from, from.len()) == joined(to, to_count) {
+        return Ok(())
+    }
+    let old = c_string(from.at(from.len() - 1))
+    let new = c_string(to.at(to_count - 1))
+    if old == 0 || new == 0 {
+        return Err(io_error_text(os_error(nul_in_name())))
+    }
+    var moved = rt_sys_renameat(from_parent, text_data(old), to_parent, text_data(new))
+    while interrupted(moved) {
+        moved = rt_sys_renameat(from_parent, text_data(old), to_parent, text_data(new))
+    }
+    free(old)
+    free(new)
+    if moved < 0 {
+        return Err(refusal(0 - moved, joined(from, from.len()), false))
+    }
+    Ok(())
+}
+
 // ---- Listing ---------------------------------------------------------------
 
 // The names of the entries of the directory `dir`, without `.` and `..`,
@@ -6738,6 +7073,94 @@ pub fn file_write_bytes(root: Root, contents: Bytes) -> Result<(), IoError> {
         return fake_put_file(root.path, raw_text_of(contents))
     }
     write_bytes_beneath(root.handle, file_names(root), contents)
+}
+
+// `DirRead.exists(path)`: `.` is the root itself.
+pub fn dir_exists(root: Root, path: Path) -> Result<Bool, IoError> {
+    usable(root)?
+    let names = confine_names(path_text(path))?
+    if faking() {
+        return fake_exists(root.path, names)
+    }
+    win_check_names(names)?
+    exists_beneath(root.handle, names)
+}
+
+// `DirRead.metadata(path)`.
+pub fn dir_metadata(root: Root, path: Path) -> Result<Metadata, IoError> {
+    usable(root)?
+    let names = confine_names(path_text(path))?
+    if faking() {
+        return fake_metadata(fake_walk(root.path, names)?, joined(names, names.len()))
+    }
+    win_check_names(names)?
+    metadata_beneath(root.handle, names)
+}
+
+// `FileRead.metadata()`.
+pub fn file_metadata(root: Root) -> Result<Metadata, IoError> {
+    usable(root)?
+    if faking() {
+        return fake_metadata(root.path, joined(file_names(root), 1))
+    }
+    metadata_beneath(root.handle, file_names(root))
+}
+
+// `DirWrite.append(path, contents)`.
+pub fn dir_append(root: Root, path: Path, contents: String) -> Result<(), IoError> {
+    usable(root)?
+    let names = names_to_create(path_text(path))?
+    if faking() {
+        return fake_append(fake_walk(root.path, names)?, joined(names, names.len()), contents)
+    }
+    win_check_names(names)?
+    append_beneath(root.handle, names, contents)
+}
+
+// `FileWrite.append(contents)`.
+pub fn file_append(root: Root, contents: String) -> Result<(), IoError> {
+    usable(root)?
+    if faking() {
+        return fake_append(root.path, joined(file_names(root), 1), contents)
+    }
+    append_beneath(root.handle, file_names(root), contents)
+}
+
+// `DirWrite.remove_file(path)`.
+pub fn dir_remove_file(root: Root, path: Path) -> Result<(), IoError> {
+    usable(root)?
+    let names = names_to_create(path_text(path))?
+    if faking() {
+        return fake_remove_file(fake_walk(root.path, names)?, joined(names, names.len()))
+    }
+    win_check_names(names)?
+    remove_file_beneath(root.handle, names)
+}
+
+// `DirWrite.remove_dir(path)`.
+pub fn dir_remove_dir(root: Root, path: Path) -> Result<(), IoError> {
+    usable(root)?
+    let names = names_to_create(path_text(path))?
+    if faking() {
+        return fake_remove_dir(fake_walk(root.path, names)?, joined(names, names.len()))
+    }
+    win_check_names(names)?
+    remove_dir_beneath(root.handle, names)
+}
+
+// `DirWrite.rename(from, to)`.
+pub fn dir_rename(root: Root, from: Path, to: Path) -> Result<(), IoError> {
+    usable(root)?
+    let from_names = names_to_create(path_text(from))?
+    let to_names = names_to_create(path_text(to))?
+    if faking() {
+        let from_path = fake_walk(root.path, from_names)?
+        let to_path = fake_walk(root.path, to_names)?
+        return fake_rename(from_path, joined(from_names, from_names.len()), to_path, joined(to_names, to_names.len()))
+    }
+    win_check_names(from_names)?
+    win_check_names(to_names)?
+    rename_beneath(root.handle, from_names, to_names)
 }
 
 // The test host keeps a file's bytes in a text object, UTF-8 or not: the
@@ -8579,6 +9002,153 @@ fn fake_entries(path: String) -> Result<List<String>, IoError> {
     Ok(names)
 }
 
+// Whether anything is at the path `names` reach beneath `root`.
+fn fake_exists(root: String, names: List<String>) -> Result<Bool, IoError> {
+    match fake_walk(root, names) {
+        Ok(path) => Ok(fake_file(path) >= 0 || fake_is_dir(path))
+        Err(_) => Ok(false)
+    }
+}
+
+fn fake_missing(shown: String) -> IoError {
+    io_error_text("`{shown}`: not found")
+}
+
+fn fake_not_regular(shown: String) -> IoError {
+    io_error_text("`{shown}` is not a regular file")
+}
+
+// The kind and size of what is at `path`, named `shown` in messages.
+fn fake_metadata(path: String, shown: String) -> Result<Metadata, IoError> {
+    let at = fake_file(path)
+    if at >= 0 {
+        return Ok(Metadata(kind: FileKind.File, size: text_length(rt_mem_text(word_list(37).at(at)))))
+    }
+    if fake_is_dir(path) {
+        return Ok(Metadata(kind: FileKind.Directory, size: 0))
+    }
+    Err(fake_missing(shown))
+}
+
+// Add `contents` to the file at `path`, created when missing.
+fn fake_append(path: String, shown: String, contents: String) -> Result<(), IoError> {
+    let at = fake_file(path)
+    if at < 0 && fake_is_dir(path) {
+        return Err(fake_not_regular(shown))
+    }
+    if at < 0 {
+        return fake_put_file(path, contents)
+    }
+    var kept: List<String> = []
+    var i = 0
+    for text in take_word_list(37) {
+        if i == at {
+            kept.push("{text}{contents}")
+        } else {
+            kept.push(text)
+        }
+        i = i + 1
+    }
+    put_word_list(37, kept)
+    Ok(())
+}
+
+// Make `path`'s parent a directory that stays, as it is when its last
+// entry goes.
+fn fake_keep_parent(path: String) {
+    let parent = fake_parent(path)
+    if parent == "/" {
+        return
+    }
+    for dir in word_list(38) {
+        if dir == parent {
+            return
+        }
+    }
+    var dirs = take_word_list(38)
+    dirs.push(parent)
+    put_word_list(38, dirs)
+}
+
+// Remove the file at `path` and give its contents; refused when it is a
+// directory or not there.
+fn fake_take_file(path: String, shown: String) -> Result<String, IoError> {
+    let at = fake_file(path)
+    if at < 0 {
+        if fake_is_dir(path) {
+            return Err(fake_not_regular(shown))
+        }
+        return Err(fake_missing(shown))
+    }
+    fake_keep_parent(path)
+    let taken = word_list(37).at(at)
+    var paths: List<String> = []
+    var texts: List<String> = []
+    var i = 0
+    let old_texts = take_word_list(37)
+    for old in take_word_list(36) {
+        if i != at {
+            paths.push(old)
+            texts.push(old_texts.at(i))
+        }
+        i = i + 1
+    }
+    put_word_list(36, paths)
+    put_word_list(37, texts)
+    Ok(taken)
+}
+
+fn fake_remove_file(path: String, shown: String) -> Result<(), IoError> {
+    let _ = fake_take_file(path, shown)?
+    Ok(())
+}
+
+fn fake_remove_dir(path: String, shown: String) -> Result<(), IoError> {
+    if fake_file(path) >= 0 {
+        return Err(io_error_text("`{shown}` is a symlink or not a directory, and confined access never follows a symlink"))
+    }
+    if !fake_is_dir(path) {
+        return Err(fake_missing(shown))
+    }
+    let inside = "{path}/"
+    for dir in word_list(38) {
+        if dir.starts_with(inside) {
+            return Err(io_error_text("`{shown}`: directory not empty"))
+        }
+    }
+    for file in word_list(36) {
+        if file.starts_with(inside) {
+            return Err(io_error_text("`{shown}`: directory not empty"))
+        }
+    }
+    fake_keep_parent(path)
+    var kept: List<String> = []
+    for dir in take_word_list(38) {
+        if dir != path {
+            kept.push(dir)
+        }
+    }
+    put_word_list(38, kept)
+    Ok(())
+}
+
+fn fake_rename(from: String, from_shown: String, to: String, to_shown: String) -> Result<(), IoError> {
+    if fake_file(from) < 0 {
+        if fake_is_dir(from) {
+            return Err(fake_not_regular(from_shown))
+        }
+        return Err(fake_missing(from_shown))
+    }
+    if fake_file(to) < 0 && fake_is_dir(to) {
+        return Err(fake_not_regular(to_shown))
+    }
+    if from == to {
+        return Ok(())
+    }
+    let contents = fake_take_file(from, from_shown)?
+    fake_put_file(to, contents)
+}
+
 // ---- Windows ---------------------------------------------------------------
 //
 // What Windows does differently (ADR 0020). The process has no `argc` and
@@ -8832,6 +9402,20 @@ fn win_file_write() -> Int {
     4
 }
 
+// A file to append to (created when missing, writes only at the end); a
+// name only to look at; a name to remove or rename.
+fn win_file_append() -> Int {
+    5
+}
+
+fn win_attributes() -> Int {
+    6
+}
+
+fn win_removing() -> Int {
+    7
+}
+
 // No Win32 error: what `win_open_name` gives, negated, for a name that is
 // not one plain component (empty, `.`, `..`, or holding `/`, `\`, `:` or
 // NUL), which Windows refuses before any call.
@@ -9041,6 +9625,16 @@ fn win_open_name(dirfd: Int, name: String, kind: Int) -> Int {
         // `FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES`, `FILE_OPEN_IF`.
         access = 1180054
         disposition = 3
+    } else if kind == win_file_append() {
+        // The same without `FILE_WRITE_DATA`: writes only at the end.
+        access = 1180052
+        disposition = 3
+    } else if kind == win_attributes() {
+        // `FILE_READ_ATTRIBUTES | SYNCHRONIZE`.
+        access = 1048704
+    } else if kind == win_removing() {
+        // `DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE`.
+        access = 1114240
     }
     var handle = 0
     if name == "." {
@@ -9159,6 +9753,124 @@ fn win_lone_file(handle: Int, names: List<String>) -> Result<(), IoError> {
     }
     if rt_mem_shr(info, 32) > 1 {
         return Err(io_error_text("`{path}` has more than one hard link, and confined access never opens one"))
+    }
+    Ok(())
+}
+
+// `win_dispose`: mark the open `handle` (opened with `DELETE`) to be
+// deleted when it closes, `FileDispositionInformation`: 0 or a Win32
+// error, negated.
+fn win_dispose(handle: Int) -> Int {
+    // An `IO_STATUS_BLOCK` (16 bytes) and the one `BOOLEAN`.
+    let block = alloc(32)
+    let status = rt_mem_add(block, 8)
+    let delete = rt_mem_add(block, 24)
+    rt_mem_store64(delete, 1)
+    let result = rt_sys_nt_set_information_file(handle, status, delete, 1, 13)
+    free(block)
+    if result < 0 {
+        return result
+    }
+    0
+}
+
+// Remove the file, or when `directory` the empty directory, the last of
+// `names` is in `parent`, as `Dir::delete_file` and `Dir::delete_dir` do.
+fn win_remove(parent: Int, names: List<String>, directory: Bool) -> Result<(), IoError> {
+    let count = names.len()
+    let path = joined(names, count)
+    let handle = win_open_name(parent, names.at(count - 1), win_removing())
+    if handle < 0 {
+        return Err(refusal(0 - handle, path, false))
+    }
+    let info = win_info(handle)
+    if info < 0 {
+        close(handle)
+        return Err(io_error(0 - info))
+    }
+    if directory && !win_is_dir(info) {
+        close(handle)
+        return Err(io_error_text("`{path}` is a symlink or not a directory, and confined access never follows a symlink"))
+    }
+    if !directory {
+        if win_is_dir(info) {
+            close(handle)
+            return Err(io_error_text("`{path}` is not a regular file"))
+        }
+        if rt_mem_shr(info, 32) > 1 {
+            close(handle)
+            return Err(hard_linked(names))
+        }
+    }
+    let result = win_dispose(handle)
+    close(handle)
+    if result < 0 {
+        return Err(refusal(0 - result, path, false))
+    }
+    Ok(())
+}
+
+// Move the file `from` names in `from_parent` to `to` in `to_parent`, as
+// `Dir::move_file` does: `FileRenameInformation`, replacing a file.
+fn win_rename(from_parent: Int, from: List<String>, to_parent: Int, to: List<String>) -> Result<(), IoError> {
+    let from_count = from.len()
+    let to_count = to.len()
+    let from_path = joined(from, from_count)
+    let handle = win_open_name(from_parent, from.at(from_count - 1), win_removing())
+    if handle < 0 {
+        return Err(refusal(0 - handle, from_path, false))
+    }
+    let info = win_info(handle)
+    if info < 0 {
+        close(handle)
+        return Err(io_error(0 - info))
+    }
+    if win_is_dir(info) {
+        close(handle)
+        return Err(io_error_text("`{from_path}` is not a regular file"))
+    }
+    if rt_mem_shr(info, 32) > 1 {
+        close(handle)
+        return Err(hard_linked(from))
+    }
+    let there = win_open_name(to_parent, to.at(to_count - 1), win_attributes())
+    if there >= 0 {
+        let checked = win_lone_file(there, to)
+        close(there)
+        match checked {
+            Ok(_) => {}
+            Err(e) => {
+                close(handle)
+                return Err(e)
+            }
+        }
+    } else if !not_there(0 - there) {
+        close(handle)
+        return Err(refusal(0 - there, joined(to, to_count), false))
+    }
+    if from_path == joined(to, to_count) {
+        close(handle)
+        return Ok(())
+    }
+    let wide = win_wide(to.at(to_count - 1))
+    let units = rt_mem_add(wide, 16)
+    let bytes = rt_mem_shl(rt_mem_load64(rt_mem_add(wide, 8)), 1)
+    // An `IO_STATUS_BLOCK` (16 bytes) then `FILE_RENAME_INFORMATION`:
+    // `ReplaceIfExists` at 0, `RootDirectory` at 8, `FileNameLength` at
+    // 16 and `FileName` from 20.
+    let block = alloc(rt_mem_and(rt_mem_add(rt_mem_add(bytes, 20), 31), -8))
+    let status = rt_mem_add(block, 8)
+    let rename = rt_mem_add(block, 24)
+    rt_mem_store64(rename, 1)
+    rt_mem_store64(rt_mem_add(rename, 8), to_parent)
+    rt_mem_store64(rt_mem_add(rename, 16), bytes)
+    copy_bytes(rt_mem_add(rename, 20), units, bytes)
+    let result = rt_sys_nt_set_information_file(handle, status, rename, rt_mem_add(bytes, 20), 10)
+    free(block)
+    free(wide)
+    close(handle)
+    if result < 0 {
+        return Err(refusal(0 - result, from_path, false))
     }
     Ok(())
 }

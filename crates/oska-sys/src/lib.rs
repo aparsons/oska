@@ -20,8 +20,10 @@
 //! [`Dir`] is a handle for a directory, beneath
 //! which paths are opened one component at a time without following a
 //! symlink, or on Windows any other reparse point (a junction or a mount
-//! point), to read a file, write one, create a directory or list one, and
-//! on Unix to rename or remove a file within one directory.
+//! point), to read a file, write one, append to one, create a directory,
+//! list one, ask what a name is, move a file within the directory, or
+//! remove a file or an empty directory; and on Unix to rename or remove a
+//! file within one directory by its own name.
 //! A file with more than one link is refused. Because every component is
 //! opened relative to the handle of the one before, and none is followed,
 //! there is no separate check for another process to race: a symlink or
@@ -48,6 +50,7 @@
 mod heap;
 #[cfg(target_arch = "x86_64")]
 mod mem;
+mod meta;
 mod net;
 mod refusal;
 #[cfg(unix)]
@@ -65,6 +68,7 @@ pub use heap::{SizeClassAlloc, HOLD_CAP, HOLD_MAX};
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]
 pub use mem::{copy_slice, move_within, MemPath, ERMS_MIN};
+pub use meta::{Kind, Meta};
 pub use net::{exchange_datagram, NetListener, NetStream};
 #[cfg(unix)]
 pub use unix::system_name_servers;

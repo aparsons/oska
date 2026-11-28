@@ -12,6 +12,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::refusal;
+use crate::{Kind, Meta};
 
 /// The C library's declarations this crate uses, with each platform's
 /// values from its own headers. Only the targets Oska releases for are
@@ -87,11 +88,18 @@ mod c {
     pub const O_RDONLY: c_int = 0;
     pub const O_WRONLY: c_int = 1;
 
+    /// `ENOENT` and `EACCES`: the same on every Unix Oska targets.
+    pub const ENOENT: i32 = 2;
+    pub const EACCES: i32 = 13;
+    pub const EISDIR: i32 = 21;
+
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     mod values {
         use std::os::raw::c_int;
         pub type Mode = u32;
         pub const O_CREAT: c_int = 0o100;
+        pub const O_APPEND: c_int = 0o2000;
+        pub const AT_REMOVEDIR: c_int = 0x200;
         pub const D_NAME_OFFSET: usize = 19;
         pub const O_NONBLOCK: c_int = 0o4000;
         pub const O_DIRECTORY: c_int = 0o200000;
@@ -107,6 +115,8 @@ mod c {
         use std::os::raw::c_int;
         pub type Mode = u32;
         pub const O_CREAT: c_int = 0o100;
+        pub const O_APPEND: c_int = 0o2000;
+        pub const AT_REMOVEDIR: c_int = 0x200;
         pub const D_NAME_OFFSET: usize = 19;
         pub const O_NONBLOCK: c_int = 0o4000;
         pub const O_DIRECTORY: c_int = 0o40000;
@@ -125,6 +135,8 @@ mod c {
         use std::os::raw::c_int;
         pub type Mode = u16;
         pub const O_CREAT: c_int = 0x200;
+        pub const O_APPEND: c_int = 0x8;
+        pub const AT_REMOVEDIR: c_int = 0x80;
         /// `struct dirent` with 64-bit inodes, the layout of the
         /// `$INODE64` functions on Intel and the only one on Apple silicon.
         pub const D_NAME_OFFSET: usize = 21;
@@ -167,6 +179,10 @@ mod c {
     /// to be a regular one. `O_NONBLOCK` makes opening a FIFO with no
     /// reader fail rather than wait.
     pub const FILE_WRITE: c_int = O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK;
+
+    /// Flags for opening or creating a file to append to: as
+    /// [`FILE_WRITE`], with every write at the end.
+    pub const FILE_APPEND: c_int = FILE_WRITE | O_APPEND;
 
     /// The mode of a new file and a new directory, before the umask.
     pub const FILE_MODE: Mode = 0o666;
@@ -315,16 +331,7 @@ impl Dir {
     /// names, as for [`Dir::open_dir`]. Neither is followed: a symlink at
     /// `to` is replaced itself, never written through.
     pub fn rename(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
-        let from_name = plain_name(from)?;
-        let to_name = plain_name(to)?;
-        let fd = self.fd.as_raw_fd();
-        retried(|| {
-            // SAFETY: both names are NUL-terminated strings that outlive
-            // the call, and `fd` is the descriptor of this live `Dir`.
-            unsafe { c::renameat(fd, from_name.as_ptr(), fd, to_name.as_ptr()) }
-        })
-        .map(drop)
-        .map_err(|error| {
+        rename_at(self, from, self, to).map_err(|error| {
             io::Error::new(
                 error.kind(),
                 format!(
@@ -340,14 +347,161 @@ impl Dir {
     /// Remove the file `name` of this directory, a single name as for
     /// [`Dir::open_dir`]. A symlink is removed itself, never followed.
     pub fn remove_file(&self, name: &OsStr) -> io::Result<()> {
-        let c_name = plain_name(name)?;
-        retried(|| {
-            // SAFETY: `c_name` is a NUL-terminated string that outlives
-            // the call, and `self.fd` the descriptor of this live `Dir`.
-            unsafe { c::unlinkat(self.fd.as_raw_fd(), c_name.as_ptr(), 0) }
+        unlink_at(self, name, 0).map_err(|error| refusal::at(&name.to_string_lossy(), error))
+    }
+
+    /// Whether anything is at the path `names` reach beneath this one:
+    /// `false` when a name, or a directory before it, is not there, and
+    /// no names ask about this directory itself. A symlink anywhere on
+    /// the way is refused, as for a read, whether it dangles or not.
+    pub fn exists<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<bool> {
+        let Some((last, parents)) = names.split_last() else {
+            return Ok(true);
+        };
+        let walked = match self.walk(parents) {
+            Ok(walked) => walked,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let parent = walked.as_ref().unwrap_or(self);
+        match open_name(parent, last.as_ref(), c::FILE_READ) {
+            Ok(_) => Ok(true),
+            Err(error) => match error.raw_os_error() {
+                Some(c::ENOENT) => Ok(false),
+                // There, though not to be opened for reading.
+                Some(c::EACCES) => Ok(true),
+                _ => Err(refused(error, &refusal::joined(names), "file")),
+            },
+        }
+    }
+
+    /// What the path `names` reach beneath this one is, and for a regular
+    /// file its size. A symlink is refused, and so is a regular file with
+    /// another hard link, as for a read. No names describe this
+    /// directory itself.
+    pub fn metadata<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<Meta> {
+        let file = match names.split_last() {
+            None => File::from(self.fd.try_clone()?),
+            Some((last, parents)) => {
+                let parent = self.walk(parents)?;
+                let fd = open_name(parent.as_ref().unwrap_or(self), last.as_ref(), c::FILE_READ)
+                    .map_err(|error| refused(error, &refusal::joined(names), "file"))?;
+                File::from(fd)
+            }
+        };
+        let metadata = file.metadata()?;
+        if metadata.is_dir() {
+            return Ok(Meta {
+                kind: Kind::Directory,
+                size: 0,
+            });
+        }
+        if !metadata.is_file() {
+            return Ok(Meta {
+                kind: Kind::Other,
+                size: 0,
+            });
+        }
+        let file = lone_file(file, names)?;
+        Ok(Meta {
+            kind: Kind::File,
+            size: file.metadata()?.len(),
         })
-        .map(drop)
-        .map_err(|error| refusal::at(&name.to_string_lossy(), error))
+    }
+
+    /// The regular file reached by walking `names` beneath this one, open
+    /// for appending: created, with mode `0o666` less the umask, when
+    /// nothing is there, and never emptied. Names, symlinks and hard links
+    /// are as for [`Dir::create_file`].
+    pub fn append_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
+        let parent = self.walk(parents)?;
+        let fd = open_name(
+            parent.as_ref().unwrap_or(self),
+            last.as_ref(),
+            c::FILE_APPEND,
+        )
+        .map_err(|error| match error.raw_os_error() {
+            // A directory cannot be opened for writing: said as
+            // `lone_file` says it, on every platform.
+            Some(c::EISDIR) => refusal::not_a_file(names),
+            _ => refused(error, &refusal::joined(names), "file"),
+        })?;
+        lone_file(File::from(fd), names)
+    }
+
+    /// Remove the regular file reached by walking `names` beneath this
+    /// one. A symlink, a directory and a file with another hard link are
+    /// refused, as for a read, so a removal never reaches past the walk.
+    /// Names are as for [`Dir::open_dir`]; there must be one.
+    pub fn delete_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
+        let walked = self.walk(parents)?;
+        let parent = walked.as_ref().unwrap_or(self);
+        self.check_lone(parent, last.as_ref(), names)?;
+        unlink_at(parent, last.as_ref(), 0)
+            .map_err(|error| refusal::at(&refusal::joined(names), error))
+    }
+
+    /// Remove the empty directory reached by walking `names` beneath this
+    /// one. A symlink is refused, and so is a directory with anything in
+    /// it. Names are as for [`Dir::open_dir`]; there must be one.
+    pub fn delete_dir<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
+        let walked = self.walk(parents)?;
+        let parent = walked.as_ref().unwrap_or(self);
+        // Opened first, so a symlink or a file at the name is refused in
+        // words, as for any walk.
+        open_name(parent, last.as_ref(), c::DIRECTORY)
+            .map_err(|error| refused(error, &refusal::joined(names), "directory"))?;
+        unlink_at(parent, last.as_ref(), c::AT_REMOVEDIR)
+            .map_err(|error| refusal::at(&refusal::joined(names), error))
+    }
+
+    /// Move the regular file reached by walking `from` beneath this one to
+    /// the path `to` reaches beneath it, replacing a regular file already
+    /// there in one step. Both walks stay beneath this directory; every
+    /// name before the last is a directory. A symlink, a directory or a
+    /// file with another hard link at either name is refused. Moving a
+    /// file to its own name changes nothing.
+    pub fn move_file<N: AsRef<OsStr>, M: AsRef<OsStr>>(
+        &self,
+        from: &[N],
+        to: &[M],
+    ) -> io::Result<()> {
+        let (from_last, from_parents) = from.split_last().ok_or_else(refusal::no_name)?;
+        let (to_last, to_parents) = to.split_last().ok_or_else(refusal::no_name)?;
+        let from_walked = self.walk(from_parents)?;
+        let from_dir = from_walked.as_ref().unwrap_or(self);
+        self.check_lone(from_dir, from_last.as_ref(), from)?;
+        let to_walked = self.walk(to_parents)?;
+        let to_dir = to_walked.as_ref().unwrap_or(self);
+        match open_name(to_dir, to_last.as_ref(), c::FILE_READ) {
+            Ok(fd) => {
+                lone_file(File::from(fd), to)?;
+            }
+            Err(error) if error.raw_os_error() == Some(c::ENOENT) => {}
+            Err(error) => return Err(refused(error, &refusal::joined(to), "file")),
+        }
+        if refusal::joined(from) == refusal::joined(to) {
+            return Ok(());
+        }
+        rename_at(from_dir, from_last.as_ref(), to_dir, to_last.as_ref())
+            .map_err(|error| refusal::at(&refusal::joined(from), error))
+    }
+
+    /// Refuse the name `last` of `parent`, reached by `names`, unless it
+    /// is a regular file with one link, which is opened for the check and
+    /// closed again: the check is on the open handle.
+    fn check_lone<N: AsRef<OsStr>>(
+        &self,
+        parent: &Dir,
+        last: &OsStr,
+        names: &[N],
+    ) -> io::Result<()> {
+        let fd = open_name(parent, last, c::FILE_READ)
+            .map_err(|error| refused(error, &refusal::joined(names), "file"))?;
+        lone_file(File::from(fd), names).map(drop)
     }
 
     /// The names of the entries of this directory, in the order the
@@ -494,6 +648,41 @@ fn retried(mut call: impl FnMut() -> c_int) -> io::Result<c_int> {
             return Err(error);
         }
     }
+}
+
+/// `unlinkat(dir, name, flags)`: remove the file, or with `AT_REMOVEDIR`
+/// the empty directory, `name` of `dir`, or a symlink there itself. Not
+/// retried but on a signal.
+fn unlink_at(dir: &Dir, name: &OsStr, flags: c_int) -> io::Result<()> {
+    let c_name = plain_name(name)?;
+    retried(|| {
+        // SAFETY: `c_name` is a NUL-terminated string that outlives the
+        // call, and `dir.fd` the descriptor of a live `Dir`, borrowed for
+        // the call.
+        unsafe { c::unlinkat(dir.fd.as_raw_fd(), c_name.as_ptr(), flags) }
+    })
+    .map(drop)
+}
+
+/// `renameat(from_dir, from, to_dir, to)`: neither name is followed, and
+/// what `to` names is replaced in one step.
+fn rename_at(from_dir: &Dir, from: &OsStr, to_dir: &Dir, to: &OsStr) -> io::Result<()> {
+    let from_name = plain_name(from)?;
+    let to_name = plain_name(to)?;
+    retried(|| {
+        // SAFETY: both names are NUL-terminated strings that outlive the
+        // call, and each descriptor is that of a live `Dir`, borrowed for
+        // the call.
+        unsafe {
+            c::renameat(
+                from_dir.fd.as_raw_fd(),
+                from_name.as_ptr(),
+                to_dir.fd.as_raw_fd(),
+                to_name.as_ptr(),
+            )
+        }
+    })
+    .map(drop)
 }
 
 /// `file`, opened by walking `names`, if it is a regular file with only
