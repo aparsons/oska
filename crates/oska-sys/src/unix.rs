@@ -430,6 +430,25 @@ impl Dir {
         lone_file(File::from(fd), names)
     }
 
+    /// Flush the regular file reached by walking `names` beneath this one,
+    /// data and metadata, to stable storage (`File::sync_all`: `fsync` on
+    /// Linux, `fcntl(F_FULLFSYNC)` on macOS, which asks the drive to empty
+    /// its own cache too). The file is opened for reading, as for
+    /// [`Dir::open_file`], so it is never created, and a symlink, a
+    /// directory and a file with another hard link are refused as there.
+    pub fn sync_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
+        self.open_file(names)?
+            .sync_all()
+            .map_err(|error| refusal::at(&refusal::joined(names), error))
+    }
+
+    /// Flush this directory to stable storage, so a name made, removed or
+    /// moved in it is durable: `File::sync_all` on a new handle of it
+    /// (`fsync` on Linux, `fcntl(F_FULLFSYNC)` on macOS).
+    pub fn sync(&self) -> io::Result<()> {
+        File::from(self.fd.try_clone()?).sync_all()
+    }
+
     /// Remove the regular file reached by walking `names` beneath this
     /// one. A symlink, a directory and a file with another hard link are
     /// refused, as for a read, so a removal never reaches past the walk.

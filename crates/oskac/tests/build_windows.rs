@@ -47,6 +47,7 @@ const IMPORTS: [(&str, &[&str]); 5] = [
             "CloseHandle",
             "GetFinalPathNameByHandleW",
             "SetEndOfFile",
+            "FlushFileBuffers",
         ],
     ),
     (

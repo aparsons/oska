@@ -32,9 +32,11 @@ const EVERY_CALL: &str = r#"fn main(io: Stdout, input: Stdin, fs: Fs, clock: Clo
     write.rename(Path.new("b.txt"), Path.new("e.txt"))?
     write.remove_file(Path.new("e.txt"))?
     write.remove_dir(Path.new("c"))?
+    write.sync()?
     let file = fs.write_only().restrict_to_file("root/d.txt")
     file.write("d")?
     file.append("d")?
+    file.sync()?
     let size = fs.read_only().restrict_to_file("root/d.txt").metadata()?
     io.println(clock.now_millis().to_string())?
     io.println(random.next_int().to_string())?
@@ -127,11 +129,11 @@ fn x86_64_calls(code: &[u8]) -> BTreeSet<u32> {
 fn a_linux_aarch64_executable_makes_the_system_calls_it_made_before() {
     // `asm-generic/unistd.h`: getcwd, fcntl, ioctl, mkdirat, ftruncate,
     // openat, close, getdents64, read, write, readlinkat, fstat,
-    // exit_group, clock_gettime, kill, sigaltstack, rt_sigaction, getpid,
-    // munmap, mmap, getrandom, unlinkat, renameat2.
+    // fsync, exit_group, clock_gettime, kill, sigaltstack, rt_sigaction,
+    // getpid, munmap, mmap, getrandom, unlinkat, renameat2.
     let expected = [
-        17, 25, 29, 34, 35, 46, 56, 57, 61, 63, 64, 78, 80, 94, 113, 129, 132, 134, 172, 215, 222,
-        276, 278,
+        17, 25, 29, 34, 35, 46, 56, 57, 61, 63, 64, 78, 80, 82, 94, 113, 129, 132, 134, 172, 215,
+        222, 276, 278,
     ];
     let elf = build("linux-aarch64");
     assert_eq!(aarch64_calls(code(&elf)), BTreeSet::from(expected));
@@ -140,12 +142,12 @@ fn a_linux_aarch64_executable_makes_the_system_calls_it_made_before() {
 #[test]
 fn a_linux_x86_64_executable_makes_the_system_calls_it_made_before() {
     // `arch/x86/entry/syscalls/syscall_64.tbl`: read, write, close, fstat,
-    // mmap, munmap, rt_sigaction, ioctl, getpid, kill, fcntl, ftruncate,
-    // getcwd, sigaltstack, getdents64, clock_gettime, exit_group, openat,
+    // mmap, munmap, rt_sigaction, ioctl, getpid, kill, fcntl, fsync,
+    // ftruncate, getcwd, sigaltstack, getdents64, clock_gettime, exit_group, openat,
     // mkdirat, readlinkat, getrandom, unlinkat, renameat2.
     let expected = [
-        0, 1, 3, 5, 9, 11, 13, 16, 39, 62, 72, 77, 79, 131, 217, 228, 231, 257, 258, 263, 267, 316,
-        318,
+        0, 1, 3, 5, 9, 11, 13, 16, 39, 62, 72, 74, 77, 79, 131, 217, 228, 231, 257, 258, 263, 267,
+        316, 318,
     ];
     let elf = build("linux-x86_64");
     assert_eq!(x86_64_calls(code(&elf)), BTreeSet::from(expected));

@@ -628,6 +628,14 @@ impl Host for TestHost<'_> {
         self.world().append_file_beneath(root, names, contents)
     }
 
+    fn sync_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        self.world().sync_file_beneath(root, names)
+    }
+
+    fn sync_dir_beneath(&mut self, root: &RootHandle) -> io::Result<()> {
+        self.world().sync_dir_beneath(root)
+    }
+
     fn remove_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
         self.world().remove_file_beneath(root, names)
     }
@@ -664,6 +672,13 @@ impl Host for TestHost<'_> {
 
     fn net_name_servers(&mut self) -> io::Result<Vec<String>> {
         self.world().net_name_servers()
+    }
+
+    fn syncs(&self) -> Vec<String> {
+        match &self.fake {
+            Some(fake) => fake.syncs(),
+            None => self.given.syncs(),
+        }
     }
 
     fn net_attempts(&self) -> Vec<String> {

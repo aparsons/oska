@@ -244,8 +244,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("DirWrite.remove_file", Prelude::Runtime("dir_remove_file")),
     ("DirWrite.remove_dir", Prelude::Runtime("dir_remove_dir")),
     ("DirWrite.rename", Prelude::Runtime("dir_rename")),
+    ("DirWrite.sync", Prelude::Runtime("dir_sync")),
     ("FileRead.metadata", Prelude::Runtime("file_metadata")),
     ("FileWrite.append", Prelude::Runtime("file_append")),
+    ("FileWrite.sync", Prelude::Runtime("file_sync")),
     ("DirWrite.write", Prelude::Runtime("dir_write")),
     ("DirWrite.write_bytes", Prelude::Runtime("dir_write_bytes")),
     ("DirWrite.create_dir", Prelude::Runtime("dir_create_dir")),
@@ -547,6 +549,11 @@ pub enum Sys {
     // Windows has none: its directory lock is an open that shares nothing
     // (`std.rt`'s `lock_open`).
     Flock,
+    // `fsync(fd)`: Linux's call. macOS has no row: it flushes with
+    // `fcntl(fd, F_FULLFSYNC)` (`std.rt`'s `sync_open`), which reaches the
+    // drive's platters where its `fsync` stops at the cache. Windows uses
+    // `FlushFileBuffers`.
+    Fsync,
     Mmap,
     Munmap,
     ClockGettime,
@@ -584,6 +591,8 @@ pub enum Sys {
     CloseHandle,
     FinalPathName,
     SetEndOfFile,
+    // `FlushFileBuffers(handle)`: the handle needs write access.
+    FlushFileBuffers,
     NtCreateFile,
     NtQueryInformationFile,
     NtSetInformationFile,
@@ -814,6 +823,7 @@ fn linux_aarch64_syscall(call: Sys) -> Option<u16> {
         Sys::Getcwd => 17,
         Sys::Fcntl => 25,
         Sys::Flock => 32,
+        Sys::Fsync => 82,
         Sys::Mmap => 222,
         Sys::Munmap => 215,
         Sys::ClockGettime => 113,
@@ -874,6 +884,7 @@ fn linux_x86_64_syscall(call: Sys) -> Option<u16> {
         Sys::Getcwd => 79,
         Sys::Fcntl => 72,
         Sys::Flock => 73,
+        Sys::Fsync => 74,
         Sys::Mmap => 9,
         Sys::Munmap => 11,
         Sys::ClockGettime => 228,
@@ -1216,6 +1227,7 @@ fn windows_only(call: Sys) -> bool {
             | Sys::CloseHandle
             | Sys::FinalPathName
             | Sys::SetEndOfFile
+            | Sys::FlushFileBuffers
             | Sys::NtCreateFile
             | Sys::NtQueryInformationFile
             | Sys::NtSetInformationFile
@@ -1322,6 +1334,8 @@ const CLOSE_HANDLE: Import = win("CloseHandle", 1);
 const FINAL_PATH_NAME: Import = win("GetFinalPathNameByHandleW", 4);
 /// `SetEndOfFile(h)`: the file ends at the handle's position.
 const SET_END_OF_FILE: Import = win("SetEndOfFile", 1);
+/// `FlushFileBuffers(h)`: 0 on failure.
+const FLUSH_FILE_BUFFERS: Import = win("FlushFileBuffers", 1);
 /// An `ntdll` function: an `NTSTATUS`, negative for an error, which the
 /// backend turns into a Win32 error ([`Fails::Status`]).
 const fn nt(symbol: &'static str, args: u8) -> Import {
@@ -1462,7 +1476,7 @@ const GET_ADAPTERS_ADDRESSES: Import = Import {
 /// Every function a Windows executable imports, `kernel32.dll`'s first:
 /// always all of them, so the import table depends on the target alone.
 /// [`GET_LAST_ERROR`] is first ([`Platform::errno`]).
-const WINDOWS_IMPORTS: [&Import; 40] = [
+const WINDOWS_IMPORTS: [&Import; 41] = [
     &GET_LAST_ERROR,
     &GET_STD_HANDLE,
     &WRITE_FILE,
@@ -1482,6 +1496,7 @@ const WINDOWS_IMPORTS: [&Import; 40] = [
     &CLOSE_HANDLE,
     &FINAL_PATH_NAME,
     &SET_END_OF_FILE,
+    &FLUSH_FILE_BUFFERS,
     &NT_CREATE_FILE,
     &NT_QUERY_INFORMATION_FILE,
     &NT_SET_INFORMATION_FILE,
@@ -1527,6 +1542,7 @@ fn windows_call(call: Sys) -> OsCall {
         Sys::CloseHandle => &CLOSE_HANDLE,
         Sys::FinalPathName => &FINAL_PATH_NAME,
         Sys::SetEndOfFile => &SET_END_OF_FILE,
+        Sys::FlushFileBuffers => &FLUSH_FILE_BUFFERS,
         Sys::NtCreateFile => &NT_CREATE_FILE,
         Sys::NtQueryInformationFile => &NT_QUERY_INFORMATION_FILE,
         Sys::NtSetInformationFile => &NT_SET_INFORMATION_FILE,
@@ -1580,6 +1596,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_getcwd", Runtime::Syscall(Sys::Getcwd)),
     ("rt_sys_fcntl", Runtime::Syscall(Sys::Fcntl)),
     ("rt_sys_flock", Runtime::Syscall(Sys::Flock)),
+    ("rt_sys_fsync", Runtime::Syscall(Sys::Fsync)),
     ("rt_sys_mmap", Runtime::Syscall(Sys::Mmap)),
     ("rt_sys_munmap", Runtime::Syscall(Sys::Munmap)),
     ("rt_sys_clock_gettime", Runtime::Syscall(Sys::ClockGettime)),
@@ -1608,6 +1625,10 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     (
         "rt_sys_set_end_of_file",
         Runtime::Syscall(Sys::SetEndOfFile),
+    ),
+    (
+        "rt_sys_flush_file_buffers",
+        Runtime::Syscall(Sys::FlushFileBuffers),
     ),
     ("rt_sys_nt_create_file", Runtime::Syscall(Sys::NtCreateFile)),
     (
@@ -1794,6 +1815,7 @@ mod tests {
             ("rt_sys_getcwd", 17, 79, &[]),
             ("rt_sys_fcntl", 25, 72, &[]),
             ("rt_sys_flock", 32, 73, &[]),
+            ("rt_sys_fsync", 82, 74, &[]),
             ("rt_sys_mmap", 222, 9, &[]),
             ("rt_sys_munmap", 215, 11, &[]),
             ("rt_sys_clock_gettime", 113, 228, &[]),
@@ -1872,9 +1894,11 @@ mod tests {
     write.rename(Path.new("b.txt"), Path.new("e.txt"))?
     write.remove_file(Path.new("e.txt"))?
     write.remove_dir(Path.new("c"))?
+    write.sync()?
     let file = fs.write_only().restrict_to_file("root/d.txt")
     file.write("d")?
     file.append("d")?
+    file.sync()?
     let size = fs.read_only().restrict_to_file("root/d.txt").metadata()?
     let listener = net.listen_only().restrict_to_loopback(0)
     let host = net.restrict_to("127.0.0.1", listener.port())
@@ -1949,6 +1973,7 @@ mod tests {
             (73, 5),
             (78, 4),
             (80, 2),
+            (82, 1),
             (94, 1),
             (113, 2),
             (129, 2),
@@ -1996,6 +2021,7 @@ mod tests {
             (62, 2),
             (72, 3),
             (73, 2),
+            (74, 1),
             (77, 2),
             (79, 2),
             (131, 2),
@@ -2156,7 +2182,8 @@ mod tests {
             let Runtime::Syscall(call) = implementation else {
                 continue;
             };
-            if windows_only(*call) {
+            // `fsync` is Linux's: macOS flushes with `fcntl(F_FULLFSYNC)`.
+            if windows_only(*call) || *call == Sys::Fsync {
                 assert_eq!((platform.call)(*call), OsCall::Absent, "`{name}`");
                 continue;
             }
@@ -2400,6 +2427,15 @@ mod tests {
                 "rt_sys_set_end_of_file",
                 K,
                 "SetEndOfFile",
+                1,
+                false,
+                Zero,
+                &[],
+            ),
+            (
+                "rt_sys_flush_file_buffers",
+                K,
+                "FlushFileBuffers",
                 1,
                 false,
                 Zero,

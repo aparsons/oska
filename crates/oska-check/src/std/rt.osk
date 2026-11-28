@@ -44,6 +44,9 @@ pub fn rt_sys_getcwd(buf: Int, size: Int) -> Int
 pub fn rt_sys_fcntl(fd: Int, command: Int, arg: Int) -> Int
 // `flock(fd, operation)`: Unix only. 0 on success, else `-errno`.
 pub fn rt_sys_flock(fd: Int, operation: Int) -> Int
+// `fsync(fd)`: Linux's call. macOS uses `fcntl(F_FULLFSYNC)` instead, and
+// Windows `FlushFileBuffers`.
+pub fn rt_sys_fsync(fd: Int) -> Int
 pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int
 pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
 pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
@@ -105,6 +108,9 @@ pub fn rt_sys_close_handle(handle: Int) -> Int
 pub fn rt_sys_final_path_name(handle: Int, units: Int, count: Int, flags: Int) -> Int
 // `SetEndOfFile(handle)`.
 pub fn rt_sys_set_end_of_file(handle: Int) -> Int
+// `FlushFileBuffers(handle)`: the handle must have been opened with write
+// access.
+pub fn rt_sys_flush_file_buffers(handle: Int) -> Int
 // `NtCreateFile(handle, access, attributes, status, NULL, file_attributes,
 // share, disposition, options, NULL, 0)`: an `NTSTATUS`.
 pub fn rt_sys_nt_create_file(handle: Int, access: Int, attributes: Int, status: Int, size: Int, file_attributes: Int, share: Int, disposition: Int, options: Int) -> Int
@@ -307,6 +313,10 @@ struct Platform {
     at_removedir: Int,
     // `fcntl`'s `F_DUPFD_CLOEXEC`.
     f_dupfd_cloexec: Int,
+    // `fcntl`'s `F_FULLFSYNC`, which macOS needs to reach the drive's
+    // platters (its `fsync` stops at the drive's cache); 0 where `fsync`
+    // is the whole flush.
+    f_fullfsync: Int,
     // The `ioctl` request that succeeds only on a terminal (Linux's
     // `TCGETS`), and the bytes of the `struct termios` it fills.
     tty_request: Int,
@@ -400,6 +410,7 @@ fn linux_aarch64() -> Platform {
         o_append: 1024,
         at_removedir: 512,
         f_dupfd_cloexec: 1030,
+        f_fullfsync: 0,
         tty_request: 21505,
         termios_bytes: 36,
         map_private_anonymous: 34,
@@ -460,6 +471,7 @@ fn linux_x86_64() -> Platform {
         o_append: 1024,
         at_removedir: 512,
         f_dupfd_cloexec: 1030,
+        f_fullfsync: 0,
         tty_request: 21505,
         termios_bytes: 36,
         map_private_anonymous: 34,
@@ -525,6 +537,7 @@ fn macos() -> Platform {
         o_append: 8,
         at_removedir: 128,
         f_dupfd_cloexec: 67,
+        f_fullfsync: 51,
         tty_request: 1078490131,
         termios_bytes: 72,
         map_private_anonymous: 4098,
@@ -586,6 +599,7 @@ fn windows_x86_64() -> Platform {
         o_append: 0,
         at_removedir: 0,
         f_dupfd_cloexec: 0,
+        f_fullfsync: 0,
         tty_request: 0,
         termios_bytes: 0,
         map_private_anonymous: 0,
@@ -6428,6 +6442,65 @@ fn append_beneath(root: Int, names: List<String>, contents: String) -> Result<()
     Ok(())
 }
 
+// Flush the open `fd` to stable storage: `FlushFileBuffers` on Windows,
+// `fcntl(F_FULLFSYNC)` on macOS and `fsync` elsewhere. 0 or more, or the
+// negative error.
+fn sync_open(fd: Int) -> Int {
+    if on_windows() {
+        return rt_sys_flush_file_buffers(fd)
+    }
+    let full = rt_mem_platform().f_fullfsync
+    var done = flush_call(fd, full)
+    while interrupted(done) {
+        done = flush_call(fd, full)
+    }
+    done
+}
+
+fn flush_call(fd: Int, full: Int) -> Int {
+    if full != 0 {
+        return rt_sys_fcntl(fd, full, 0)
+    }
+    rt_sys_fsync(fd)
+}
+
+// Flush the regular file reached by walking `names` (one at least)
+// beneath `root`: opened to read on Unix, to write on Windows, and never
+// created.
+fn sync_file_beneath(root: Int, names: List<String>) -> Result<(), IoError> {
+    var flags = file_read_flags()
+    if on_windows() {
+        flags = win_file_sync()
+    }
+    let fd = open_file(root, names, flags)?
+    let done = sync_open(fd)
+    close(fd)
+    if done < 0 {
+        return Err(refusal(0 - done, joined(names, names.len()), false))
+    }
+    Ok(())
+}
+
+// Flush the directory `root`, which a Unix `fsync` takes as it is open, and
+// Windows only on a new handle with write access.
+fn sync_dir_beneath(root: Int) -> Result<(), IoError> {
+    var fd = root
+    if on_windows() {
+        fd = win_open_name(root, ".", win_directory_sync())
+        if fd < 0 {
+            return Err(io_error(0 - fd))
+        }
+    }
+    let done = sync_open(fd)
+    if on_windows() {
+        close(fd)
+    }
+    if done < 0 {
+        return Err(io_error(0 - done))
+    }
+    Ok(())
+}
+
 // Whether `names`' last name in the directory `parent` is a regular file
 // with one link, opened for the check and closed again.
 fn check_lone(parent: Int, names: List<String>, flags: Int) -> Result<(), IoError> {
@@ -7210,6 +7283,31 @@ pub fn file_append(root: Root, contents: String) -> Result<(), IoError> {
         return fake_append(root.path, joined(file_names(root), 1), contents)
     }
     append_beneath(root.handle, file_names(root), contents)
+}
+
+// `DirWrite.sync()`.
+pub fn dir_sync(root: Root) -> Result<(), IoError> {
+    usable(root)?
+    if faking() {
+        return Ok(())
+    }
+    sync_dir_beneath(root.handle)
+}
+
+// `FileWrite.sync()`.
+pub fn file_sync(root: Root) -> Result<(), IoError> {
+    usable(root)?
+    if faking() {
+        let shown = joined(file_names(root), 1)
+        if fake_file(root.path) < 0 {
+            if fake_is_dir(root.path) {
+                return Err(fake_not_regular(shown))
+            }
+            return Err(fake_missing(shown))
+        }
+        return Ok(())
+    }
+    sync_file_beneath(root.handle, file_names(root))
 }
 
 // `DirWrite.remove_file(path)`.
@@ -9507,6 +9605,17 @@ fn win_file_lock() -> Int {
     8
 }
 
+// An existing file to flush: opened for writing, which `FlushFileBuffers`
+// needs, and never created. An existing directory to flush: opened with
+// the right to add files, for the same reason.
+fn win_file_sync() -> Int {
+    9
+}
+
+fn win_directory_sync() -> Int {
+    10
+}
+
 // No Win32 error: what `win_open_name` gives, negated, for a name that is
 // not one plain component (empty, `.`, `..`, or holding `/`, `\`, `:` or
 // NUL), which Windows refuses before any call.
@@ -9716,6 +9825,12 @@ fn win_open_name(dirfd: Int, name: String, kind: Int) -> Int {
         access = 1180054
         disposition = 3
         share = 0
+    } else if kind == win_file_sync() {
+        // `FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES`, `FILE_OPEN`.
+        access = 1180054
+    } else if kind == win_directory_sync() {
+        // The directory's access with `FILE_GENERIC_WRITE`.
+        access = 1179959
     } else if kind == win_file_read() {
         // `FILE_GENERIC_READ`.
         access = 1179785
@@ -9765,7 +9880,7 @@ fn win_open_name(dirfd: Int, name: String, kind: Int) -> Int {
         close(handle)
         return 0 - eloop()
     }
-    if kind == win_directory() && !win_is_dir(info) {
+    if (kind == win_directory() || kind == win_directory_sync()) && !win_is_dir(info) {
         close(handle)
         return 0 - enotdir()
     }

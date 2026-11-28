@@ -31,6 +31,8 @@ fn linux_shared() -> Vec<(&'static str, i128)> {
         ("o_append", 0o2000),
         ("at_removedir", 0x200),
         ("f_dupfd_cloexec", 1030),
+        // No `F_FULLFSYNC`: `fsync` is the whole flush.
+        ("f_fullfsync", 0),
         // asm-generic/ioctls.h: TCGETS.
         ("tty_request", 0x5401),
         // asm-generic/termbits.h, `struct termios`, which TCGETS fills:

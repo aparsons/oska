@@ -208,6 +208,23 @@ pub trait Host: Send {
         Err(no_file_operation("rename"))
     }
 
+    /// Flush the regular file reached by walking `names` beneath `root`,
+    /// none of them a symlink, to stable storage, data and metadata, as
+    /// `FileWrite.sync` asks. It must exist: nothing is created. A file
+    /// with more than one hard link is refused as a write refuses it.
+    /// When `root` is itself a file, `names` is empty.
+    fn sync_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        let _ = (root, names);
+        Err(no_file_operation("sync"))
+    }
+
+    /// Flush the directory `root` to stable storage, so a name made,
+    /// removed or moved in it is durable, as `DirWrite.sync` asks.
+    fn sync_dir_beneath(&mut self, root: &RootHandle) -> io::Result<()> {
+        let _ = root;
+        Err(no_file_operation("sync"))
+    }
+
     /// Open a connection to `host` at `port`, as `HostConnect.connect`
     /// asks. A host with no network refuses with an error whose message is
     /// the same every time.
@@ -247,6 +264,13 @@ pub trait Host: Send {
     /// returns them: `host:port`, or `loopback:port` for a listener. A host
     /// that records none returns none.
     fn net_attempts(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The syncs a program has asked for, in order: `file ` or `dir `
+    /// and the path, as a host that models a crash reads them. A host
+    /// that records none returns none.
+    fn syncs(&self) -> Vec<String> {
         Vec::new()
     }
 
@@ -712,6 +736,18 @@ impl Host for RealHost {
         dir.append_file(&names)?.write_all(contents)
     }
 
+    fn sync_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        let (dir, names) = target(root, names)?;
+        dir.sync_file(&names)
+    }
+
+    fn sync_dir_beneath(&mut self, root: &RootHandle) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        root_dir(root)?.sync()
+    }
+
     fn remove_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
         if root.is_file() {
             return Err(a_file_root(root));
@@ -965,6 +1001,10 @@ pub struct FakeHost {
     /// Where the program tried to connect or listen, which this host
     /// refused.
     net_attempts: Vec<String>,
+    /// Every `sync` that succeeded, in order: `file ` or `dir ` and the
+    /// path. This host loses nothing in a crash, so a sync changes
+    /// nothing; the record is for a host that does (#847).
+    syncs: Vec<String>,
     /// The directories whose lock is held, shared with each [`DirLock`]
     /// that releases its own on drop.
     locked: Arc<Mutex<BTreeSet<PathBuf>>>,
@@ -997,6 +1037,7 @@ impl Default for FakeHost {
             links: BTreeMap::new(),
             random: SplitMix64::new(FAKE_SEED),
             net_attempts: Vec::new(),
+            syncs: Vec::new(),
             locked: Arc::default(),
         }
     }
@@ -1582,6 +1623,31 @@ impl Host for FakeHost {
         }
     }
 
+    fn sync_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        if !root.is_file() && names.is_empty() {
+            return Err(no_name());
+        }
+        let path = self.walk_file(root, names)?;
+        if !self.files.contains_key(&path) {
+            return Err(match self.is_dir(&path) {
+                true => not_a_regular_file(root, names),
+                false => missing(root, names),
+            });
+        }
+        self.syncs.push(format!("file {}", path.display()));
+        Ok(())
+    }
+
+    fn sync_dir_beneath(&mut self, root: &RootHandle) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        // The capability holds the directory open, so as on a real system
+        // a sync still succeeds when the directory has since been removed.
+        self.syncs.push(format!("dir {}", root.path.display()));
+        Ok(())
+    }
+
     fn remove_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
         if root.is_file() {
             return Err(a_file_root(root));
@@ -1673,6 +1739,10 @@ impl Host for FakeHost {
     ) -> io::Result<Vec<u8>> {
         self.net_attempts.push(format!("{host}:{port}"));
         Err(no_network())
+    }
+
+    fn syncs(&self) -> Vec<String> {
+        self.syncs.clone()
     }
 
     fn net_attempts(&self) -> Vec<String> {
