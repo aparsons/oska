@@ -38,10 +38,15 @@ const NATIVE_NET_ATTEMPTS: &str =
     "a native plain test refuses `t.net` as the interpreter does, but \
 does not record where it was asked to go: `t.net_attempts` is a later ticket of spec #228";
 
-/// The types, or `Type.method` names, that no backend implements, with
-/// why. A program given a type that has no runtime is refused before it
-/// runs, by the interpreter (`E0370`) and the native backend alike.
-/// `TestContext.net_attempts` has a runtime on the interpreter only.
+/// The types, or `Type.method` names, that not every backend implements,
+/// with why. A program given a type that has no runtime is refused before
+/// it runs, by the interpreter (`E0370`) and the native backend alike.
+/// `TestContext.net_attempts` has a runtime on the interpreter only. A
+/// `List`, `Option` or `Result` method written in Oska in `std.core`
+/// (ADR 0034) is not here: [`required`] skips it by
+/// `builtins::is_core_method`, as `oska-run` does, because a call of it is
+/// a call of a function of the program, and `oska-run`'s `list_methods` and
+/// `option_result` tests run each on both backends.
 /// `std.sql` and `std.proc` have no runtime on either backend either: a
 /// program importing one is refused (`E0371`), so their body-less
 /// functions are not scanned at all.
@@ -1054,6 +1059,69 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "String.to_uppercase",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("àb ß".to_uppercase())
+}"#,
+    ),
+    (
+        "String.trim_start",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let padded = "  é "
+    let cut = padded.trim_start()
+    io.println("[{cut}]")
+}"#,
+    ),
+    (
+        "String.trim_end",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let padded = "  é "
+    let cut = padded.trim_end()
+    io.println("[{cut}]")
+}"#,
+    ),
+    (
+        "String.find",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let at = "héllo".find("l").unwrap_or(-1)
+    io.println("{at}")
+}"#,
+    ),
+    (
+        "String.split_once",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let parts = "a=b".split_once("=").unwrap_or([])
+    io.println("/".join(parts))
+}"#,
+    ),
+    (
+        "String.strip_prefix",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("foobar".strip_prefix("foo").unwrap_or("none"))
+}"#,
+    ),
+    (
+        "String.strip_suffix",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("foobar".strip_suffix("bar").unwrap_or("none"))
+}"#,
+    ),
+    (
+        "String.is_empty",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let e = shown("".is_empty())
+    io.println(e)
+}"#,
+    ),
+    (
         "String.parse_int",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {
@@ -1253,6 +1321,183 @@ fn main(io: Stdout) -> Result<(), IoError> {
     let x: U64 = 18446744073709551615
     let a = x.eq(18446744073709551615)
     io.println(shown(a))
+}"#,
+    ),
+    (
+        "Int.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = 3.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I8.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I8 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I16.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I16 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I32.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I32 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "I64.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: I64 = -3
+    let a = x.cmp(-4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U8.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 3
+    let a = x.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U16.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U16 = 3
+    let a = x.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U32.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 3
+    let a = x.cmp(4)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "U64.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 18446744073709551615
+    let a = x.cmp(1)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "Bool.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = false.cmp(true)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "String.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = "b".cmp("ab")
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "Option.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = Some("b").cmp(None)
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
+}"#,
+    ),
+    (
+        "List.cmp",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let a = [[1, 2], [3]].cmp([[1, 2, 0]])
+    let word = match a {
+        Ordering.Less => "less"
+        Ordering.Equal => "equal"
+        Ordering.Greater => "greater"
+    }
+    io.println(word)
 }"#,
     ),
     (
@@ -2405,9 +2650,11 @@ fn required() -> Vec<String> {
     }
     names.retain(|name| {
         let owner = name.split('.').next().unwrap_or("");
+        let (ty, method) = name.split_once('.').unwrap_or((name, ""));
         !EXEMPT
             .iter()
             .any(|(e, _)| *e == owner || *e == name.as_str())
+            && !oska_check::builtins::is_core_method(ty, method)
     });
     names
 }

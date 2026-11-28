@@ -40,6 +40,14 @@ pub const INTRINSICS: Table = &[
     ("String.starts_with", Plain(string_starts_with)),
     ("String.to_lowercase", Plain(string_to_lowercase)),
     ("String.trim", Plain(string_trim)),
+    ("String.trim_start", Plain(string_trim_start)),
+    ("String.trim_end", Plain(string_trim_end)),
+    ("String.to_uppercase", Plain(string_to_uppercase)),
+    ("String.find", Plain(string_find)),
+    ("String.split_once", Plain(string_split_once)),
+    ("String.strip_prefix", Plain(string_strip_prefix)),
+    ("String.strip_suffix", Plain(string_strip_suffix)),
+    ("String.is_empty", Plain(string_is_empty)),
     ("List.map", HigherOrder(list_map)),
     ("List.push", Mutating(list_push)),
 ];
@@ -126,6 +134,76 @@ fn string_parse_int(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value,
 /// `String.trim(self)`: without leading and trailing whitespace.
 fn string_trim(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
     memory::text_within(&args[0], args[0].as_str().trim(), span)
+}
+
+/// `String.trim_start(self)`: without leading whitespace.
+fn string_trim_start(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    memory::text_within(&args[0], args[0].as_str().trim_start(), span)
+}
+
+/// `String.trim_end(self)`: without trailing whitespace.
+fn string_trim_end(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    memory::text_within(&args[0], args[0].as_str().trim_end(), span)
+}
+
+/// `String.to_uppercase(self)`: each character's own Unicode upper-case
+/// mapping when it is one character; a character whose upper case is
+/// several (`ß`) stays as it is, because the native runtime's table holds
+/// the one-character mappings only.
+fn string_to_uppercase(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let upper: String = args[0]
+        .as_str()
+        .chars()
+        .map(|c| {
+            let mut mapped = c.to_uppercase();
+            match (mapped.next(), mapped.next()) {
+                (Some(one), None) => one,
+                _ => c,
+            }
+        })
+        .collect();
+    memory::text(&upper, span)
+}
+
+/// `String.find(self, needle)`: the position, in characters, of the first
+/// occurrence of `needle`; an empty `needle` is at 0.
+fn string_find(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    let text = args[0].as_str();
+    let found = text
+        .find(args[1].as_str())
+        .map(|byte| Value::int(text[..byte].chars().count() as i128));
+    Ok(Value::option(found))
+}
+
+/// `String.split_once(self, separator)`: the text before and after the
+/// first `separator`, as a list of two.
+fn string_split_once(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    let Some((before, after)) = args[0].as_str().split_once(args[1].as_str()) else {
+        return Ok(Value::none());
+    };
+    let items = vec![memory::text(before, span)?, memory::text(after, span)?];
+    Ok(Value::some(memory::list(items, span)?))
+}
+
+/// `String.strip_prefix(self, prefix)`.
+fn string_strip_prefix(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    match args[0].as_str().strip_prefix(args[1].as_str()) {
+        Some(rest) => Ok(Value::some(memory::text_within(&args[0], rest, span)?)),
+        None => Ok(Value::none()),
+    }
+}
+
+/// `String.strip_suffix(self, suffix)`.
+fn string_strip_suffix(_: &mut dyn Host, args: &mut Args, span: Span) -> Result<Value, Panic> {
+    match args[0].as_str().strip_suffix(args[1].as_str()) {
+        Some(rest) => Ok(Value::some(memory::text_within(&args[0], rest, span)?)),
+        None => Ok(Value::none()),
+    }
+}
+
+/// `String.is_empty(self)`.
+fn string_is_empty(_: &mut dyn Host, args: &mut Args, _: Span) -> Result<Value, Panic> {
+    Ok(Value::Bool(args[0].as_str().is_empty()))
 }
 
 /// `String.to_lowercase(self)`: each character's own Unicode lower-case

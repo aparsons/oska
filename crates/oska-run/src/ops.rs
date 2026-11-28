@@ -29,10 +29,10 @@ pub fn binary(
         BinaryOp::And | BinaryOp::Or | BinaryOp::Implies => Value::Bool(rhs.as_bool()),
         BinaryOp::Eq => Value::Bool(lhs == rhs),
         BinaryOp::Ne => Value::Bool(lhs != rhs),
-        BinaryOp::Lt => Value::Bool(lhs.as_int() < rhs.as_int()),
-        BinaryOp::Le => Value::Bool(lhs.as_int() <= rhs.as_int()),
-        BinaryOp::Gt => Value::Bool(lhs.as_int() > rhs.as_int()),
-        BinaryOp::Ge => Value::Bool(lhs.as_int() >= rhs.as_int()),
+        BinaryOp::Lt => Value::Bool(order(&lhs, &rhs).is_lt()),
+        BinaryOp::Le => Value::Bool(order(&lhs, &rhs).is_le()),
+        BinaryOp::Gt => Value::Bool(order(&lhs, &rhs).is_gt()),
+        BinaryOp::Ge => Value::Bool(order(&lhs, &rhs).is_ge()),
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
             let int = int.expect("the checker records the type of integer arithmetic");
             Value::Int(arithmetic(op, lhs.as_int(), rhs.as_int(), int, span)?, int)
@@ -51,6 +51,17 @@ pub fn binary(
         }
     };
     Ok(value)
+}
+
+/// How `lhs` orders against `rhs`, two values of one `Ord` type (ADR 0034):
+/// integers by value, `Bool` with `false` first, and text by code point,
+/// which is the order of its UTF-8 bytes.
+pub fn order(lhs: &Value, rhs: &Value) -> std::cmp::Ordering {
+    match (lhs, rhs) {
+        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        (Value::Str(a), Value::Str(b)) => a.as_bytes().cmp(b.as_bytes()),
+        _ => lhs.as_int().cmp(&rhs.as_int()),
+    }
 }
 
 /// Unary `-` on an integer of type `int`.
