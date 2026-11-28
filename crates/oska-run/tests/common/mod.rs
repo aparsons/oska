@@ -405,6 +405,11 @@ impl TempTree {
     /// for more, with `{root}` in `body` the root's absolute path. The
     /// helpers in [`SHOWN`] are in scope.
     pub fn saw(&self, body: &str) -> String {
+        self.saw_with(body, "")
+    }
+
+    /// [`TempTree::saw`] with `helpers`, more Oska functions, in scope.
+    pub fn saw_with(&self, body: &str, helpers: &str) -> String {
         let literal = |at: &str| literal(self.path(at));
         let root = literal("root");
         let src = format!(
@@ -418,7 +423,7 @@ impl TempTree {
              \n\
              fn said(seen: Untrusted<String>, line: Untrusted<String>) -> Untrusted<String> {{\n\
              \x20   \"{{seen}}\\n{{line}}\"\n\
-             }}\n{SHOWN}",
+             }}\n{SHOWN}{helpers}",
             report = literal("report"),
             body = body
                 .replace("say(", "seen = said(seen, ")

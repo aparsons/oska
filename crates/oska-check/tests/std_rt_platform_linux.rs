@@ -27,6 +27,9 @@ fn linux_shared() -> Vec<(&'static str, i128)> {
         // linux/fcntl.h: AT_FDCWD, and F_DUPFD_CLOEXEC
         // (F_LINUX_SPECIFIC_BASE + 6).
         ("at_fdcwd", -100),
+        // asm-generic/fcntl.h: O_APPEND; linux/fcntl.h: AT_REMOVEDIR.
+        ("o_append", 0o2000),
+        ("at_removedir", 0x200),
         ("f_dupfd_cloexec", 1030),
         // asm-generic/ioctls.h: TCGETS.
         ("tty_request", 0x5401),
