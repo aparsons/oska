@@ -248,11 +248,7 @@ fn text_keys_order_by_code_point_and_options_and_lists_are_keys() {
     Ok(())
 }
 "#;
-    assert_runs(
-        &src,
-        &[],
-        "[]\n[B]\n[a]\n[ab]\n[b]\n[é]\n3 -5\n0\n1\n2\n1\n",
-    );
+    assert_runs(src, &[], "[]\n[B]\n[a]\n[ab]\n[b]\n[é]\n3 -5\n0\n1\n2\n1\n");
 }
 
 #[test]
@@ -287,7 +283,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
     Ok(())
 }
 "#;
-    assert_runs(&src, &[], "1.2 one-two\n1.9 again\n2.0 two\n");
+    assert_runs(src, &[], "1.2 one-two\n1.9 again\n2.0 two\n");
 }
 
 #[test]
