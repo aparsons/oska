@@ -882,7 +882,7 @@ impl Emitter {
             (Width::W32, false) => (4, 0xb900_0000, 0xb820_6800),
             (Width::W64, false) => (8, 0xf900_0000, 0xf820_6800),
         };
-        if offset % size == 0 && offset / size < 4096 {
+        if offset.is_multiple_of(size) && offset / size < 4096 {
             self.put(immediate | (offset / size) << 10 | base << 5 | rt);
         } else {
             self.constant(X11, i64::from(offset));

@@ -228,7 +228,7 @@ fn threads_that_allocate_grow_and_free_large_blocks_never_hold_past_the_cap() {
                         0 | 1 if live.len() < 16 => {
                             let size = 1025 + next(&mut state) % (2 * HOLD_MAX);
                             let tag = (size % 251) as u8 + 1;
-                            let buffer = if size % 2 == 0 {
+                            let buffer = if size.is_multiple_of(2) {
                                 let mut zeroed = vec![0u8; size];
                                 assert!(zeroed.iter().step_by(4099).all(|&byte| byte == 0));
                                 zeroed.fill(tag);
@@ -242,7 +242,7 @@ fn threads_that_allocate_grow_and_free_large_blocks_never_hold_past_the_cap() {
                             let at = next(&mut state) % live.len();
                             let (mut buffer, tag) = live.swap_remove(at);
                             assert!(buffer.iter().step_by(4099).all(|&byte| byte == tag));
-                            if next(&mut state) % 2 == 0 {
+                            if next(&mut state).is_multiple_of(2) {
                                 drop(buffer);
                             } else {
                                 let size = 1 + next(&mut state) % (2 * HOLD_MAX);
