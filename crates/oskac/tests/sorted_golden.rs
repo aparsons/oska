@@ -8,13 +8,16 @@
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test sorted_golden` and review
 //! the diff.
 
+mod common;
+
+use common::portable::literal_path;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// `oskac check --format=json` on the fixture `name`: its stdout, and
 /// whether it succeeded.
 fn check(name: &str) -> (String, bool) {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = literal_path(Path::new(env!("CARGO_MANIFEST_DIR")), &["..", ".."]);
     let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
         .args([
             "check",

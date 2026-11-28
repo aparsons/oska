@@ -17,7 +17,7 @@
 //   `None`.
 // - A key or item type needs `Ord`: an integer, `Bool`, `String`, an
 //   `Option` or `List` of an `Ord` type, or a type with `impl Ord`. `Float`
-//   and `Secret` are refused as for `Ord` (`E0265`, `E0351`). A `Secret`
+//   and `Secret` are refused as for `Ord` (`E0265`, `E0356`). A `Secret`
 //   value in a `SortedMap` is allowed, because a value is never compared.
 // - A `cmp` that is not a total order gives a wrong answer (a key missed, a
 //   repeat, an unsorted `to_list()`), never a memory error: every index is
