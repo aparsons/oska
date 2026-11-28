@@ -605,7 +605,7 @@ impl Model {
             }
             Event::Remove(path) => {
                 self.visible.remove(path);
-                self.keep_ancestors(&path.join("x"));
+                self.keep_ancestors(path);
                 self.change_name(NameChange::Remove(path.clone()), &[parent_of(path)]);
             }
             Event::RemoveDir(path) => {
@@ -615,8 +615,8 @@ impl Model {
                 if let Some(inode) = self.visible.remove(from) {
                     self.visible.insert(to.clone(), inode);
                 }
-                self.keep_ancestors(&from.join("x"));
-                self.keep_ancestors(&to.join("x"));
+                self.keep_ancestors(from);
+                self.keep_ancestors(to);
                 self.change_name(
                     NameChange::Rename(from.clone(), to.clone()),
                     &[parent_of(from), parent_of(to)],
