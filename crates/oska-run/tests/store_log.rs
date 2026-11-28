@@ -155,13 +155,11 @@ fn the_log_is_a_chain_of_hashed_records() {
 #[test]
 fn a_second_writer_is_refused_while_the_first_holds_the_store() {
     let mut host = world();
-    let ops = format!(
-        "        let again = store.open(read, dir, codec, |t: store.Store<Item>| 1)\n\
-         match again {{\n\
-         \x20   Ok(_) => {{ let _ = io.println(\"second writer\") }}\n\
-         \x20   Err(e) => {{ let _ = io.println(e.message()) }}\n\
-         }}\n"
-    );
+    let ops = "        let again = store.open(read, dir, codec, |t: store.Store<Item>| 1)\n\
+         match again {\n\
+         \x20   Ok(_) => { let _ = io.println(\"second writer\") }\n\
+         \x20   Err(e) => { let _ = io.println(e.message()) }\n\
+         }\n";
     // The inner open runs inside the outer one's closure, which holds the
     // lock. `io` is captured, so the closure is a `cap fn`.
     let body = format!(
@@ -231,10 +229,10 @@ fn a_changed_record_is_an_error_on_open() {
 fn a_reordered_or_removed_record_is_an_error_on_open() {
     let host = world_with_log(3);
     let log = lines(&host);
-    let swapped = vec![log[0].clone(), log[2].clone(), log[1].clone()];
+    let swapped = [log[0].clone(), log[2].clone(), log[1].clone()];
     let out = opens_with(&format!("{}\n", swapped.join("\n")));
     assert!(out.starts_with("store: corrupt log: line 2:"), "{out}");
-    let removed = vec![log[0].clone(), log[2].clone()];
+    let removed = [log[0].clone(), log[2].clone()];
     let out = opens_with(&format!("{}\n", removed.join("\n")));
     assert!(out.starts_with("store: corrupt log: line 2:"), "{out}");
     // A removed first record leaves a chain that starts in the middle.
