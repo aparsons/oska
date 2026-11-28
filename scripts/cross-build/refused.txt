@@ -9,6 +9,7 @@ crates/oskac/tests/fixtures/bytes_trust.osk E0300
 crates/oskac/tests/fixtures/cap_fn_join_plain.osk E0270
 crates/oskac/tests/fixtures/contract_placement.osk E0218
 crates/oskac/tests/fixtures/qualified_removed.osk E0273
+crates/oskac/tests/fixtures/unknown_method_closure.osk E0228
 
 # Packages whose layout is refused.
 crates/oskac/tests/fixtures/packages/bad_name E0410

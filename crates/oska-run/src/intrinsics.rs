@@ -1206,6 +1206,12 @@ mod tests {
         let missing: Vec<&String> = names
             .iter()
             .filter(|name| !exempt.iter().any(|e| e == owner(name)))
+            // A `List` method written in Oska in `std.core` (ADR 0034) is
+            // a call of that function, not of an intrinsic.
+            .filter(|name| {
+                let (ty, method) = name.split_once('.').unwrap_or((name, ""));
+                !builtins::is_core_method(ty, method)
+            })
             .filter(|name| !implemented(name))
             .collect();
         assert!(

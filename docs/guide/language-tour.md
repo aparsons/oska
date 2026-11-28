@@ -43,6 +43,7 @@ Things to notice:
 - `U8`, `U32` and `U64` have the bitwise operators `&`, `|`, `^` and `~`, the shifts `<<` and `>>`, and the rotations `x.rotl(n)` and `x.rotr(n)`. A shift or rotation by the type's width or more panics (`P0008`), and so does a rotation by a negative amount; a shift amount is unsigned, so it is never below 0. Where a bitwise or shift operator meets a different operator, parentheses are required (`E0108`): write `(x & mask) == 0`.
 - `+`, `-` and `*` never wrap. `U8`, `U32` and `U64` wrap only when asked: `x.wrapping_add(y)`, `x.wrapping_sub(y)` and `x.wrapping_mul(y)`.
 - Integer types convert only explicitly. `Int`, `U8`, `U16`, `U32` and `U64` convert to each other with `to_int()`, `to_u8()`, `to_u16()`, `to_u32()` and `to_u64()`, which panic (`P0001`) when the value does not fit: `b.to_int()` turns a byte into a length, `n.to_u8()` checks that a count fits a byte. `wrapping_to_u8()`, `wrapping_to_u16()` and `wrapping_to_u32()`, from a wider unsigned type, keep the low bits instead.
+- `<`, `<=`, `>` and `>=` work on every `Ord` type, as `==` works on every `Eq` type: the integers, `Float`, `Bool` (`false` before `true`) and `String`. Text compares by Unicode code point, the same on every platform: `""` is first, a prefix is before a longer text, and `"Z"` is before `"a"`. `a.cmp(b)` gives an `Ordering`, which you `match` as `Ordering.Less`, `Ordering.Equal` or `Ordering.Greater`. `Float` has no `cmp`, because `NaN` is unordered: use `total_cmp`. A `Secret` is not ordered at all, because an ordering that stops at the first difference leaks through timing (`E0356`): use `constant_time_eq`. Write `impl Ord for` on your own type, and `T: Ord` to take any such type.
 - A module-level `const NAME: T = expr` is in scope in every function, method, and test of the module, with the type it declares. A wrong-typed initializer is a type error, as for `let`.
 
 ## Structs, methods, and mutation
@@ -178,7 +179,32 @@ fn main(io: Stdout) -> Result<(), IoError> {
 2 3 10
 ```
 
-`List.get` returns an `Option`. `List.at` panics with `P0002` when the index is out of bounds, because that is a bug. A closure is written `|x| expr` or `|x| { ... }`. A closure that captures a capability has the type `cap fn`; see [capabilities](capabilities.md).
+`List` also has `filter`, `fold`, `any`, `all`, `find`, `contains`, `first`, `last`, `is_empty`, `reverse` and `concat`; none changes the list, and `oskac doc List` describes each. `List.get` returns an `Option`. `List.at` panics with `P0002` when the index is out of bounds, because that is a bug. A closure is written `|x| expr` or `|x| { ... }`. A closure that captures a capability has the type `cap fn`; see [capabilities](capabilities.md).
+
+### `Option` and `Result` methods
+
+`Option` has `map`, `and_then`, `filter`, `unwrap_or`, `unwrap_or_else`, `is_some` and `is_none`; `Result` has `map`, `map_err`, `and_then`, `unwrap_or`, `unwrap_or_else`, `is_ok`, `is_err`, `ok` and `err`. There is no `unwrap` or `expect`: a call of one is `E0228`, and the message lists the three ways that keep the failure in the type, `?`, `unwrap_or` and `match`.
+
+```oska
+fn parse_port(text: String) -> Result<Int, String> {
+    if text == "80" { Ok(80) } else { Err("not a port: {text}") }
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let port = parse_port("80").map(|p| p + 1).unwrap_or_else(|why| why.len())
+    let bad = parse_port("x").map_err(|why| "bad input ({why})").err()
+    let shown = match bad {
+        Some(why) => why
+        None => "fine"
+    }
+    io.println("{port} {shown}")?
+    Ok(())
+}
+```
+
+```console cmd=run
+81 bad input (not a port: x)
+```
 
 ## Generics and traits
 
@@ -269,7 +295,24 @@ Inside a method, a hole may start with `self`, as in `"{self.name}"`. `Bool` has
 
 ## Text
 
-Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `join`, `chars`, `slice`, `repeat`, and `parse_int`. `+` works only on numbers, so build strings by interpolation.
+Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `join`, `chars`, `slice`, `repeat`, `parse_int`, `to_lowercase`, `to_uppercase`, `trim_start`, `trim_end`, `find`, `split_once`, `strip_prefix`, `strip_suffix`, and `is_empty`. `+` works only on numbers, so build strings by interpolation.
+
+`find` gives the position in characters of the first match, which `slice` takes as it is, and an empty needle is found at 0. `split_once` gives the text before and after the first separator as a list of two, `strip_prefix` and `strip_suffix` give the rest of the text, and each of the three gives `None` when the text does not match. `to_uppercase` keeps a character whose upper case is several characters, so `"ß"` stays `"ß"`.
+
+```oska
+fn main(io: Stdout) -> Result<(), IoError> {
+    let line = "  name=Zoë  "
+    let kept = line.trim_start().trim_end()
+    let parts = kept.split_once("=").unwrap_or([])
+    let key = parts.at(0)
+    let at = kept.find("=").unwrap_or(-1)
+    let rest = kept.slice(at + 1, kept.len())
+    let shout = rest.to_uppercase()
+    io.println("{key} {at} {shout}")
+}
+```
+
+This prints `name 4 ZOË`.
 
 Text also carries a trust flag: text from outside the program is an **untrusted value**. That is why a plain `String` parameter is a **structural position**. See [untrusted data and secrets](untrusted-data.md).
 
