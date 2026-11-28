@@ -1023,8 +1023,8 @@ for jobs in 4 1; do
   # The "(Ns)" line is the step's own timing only when the step runs in this
   # process (OSKA_CHECK_JOBS=1); in concurrent mode the child prints one too,
   # so only the slowest-steps entry proves the parent timed the failed step.
-  own_time=0
-  [ "$jobs" -ne 1 ] || grep -qE '^\([0-9]+s\)$' <<<"$out" && own_time=1
+  own_time=1
+  if [ "$jobs" -eq 1 ] && ! grep -qE '^\([0-9]+s\)$' <<<"$out"; then own_time=0; fi
   if [ "$status" -ne 0 ] && [ "$own_time" -eq 1 ] && grep -q '^Slowest steps:$' <<<"$out" &&
     grep -qE '^ +[0-9]+s  installer tests' <<<"$out"; then
     ok "a failing run prints the failing suite's seconds and the slowest steps (OSKA_CHECK_JOBS=$jobs)"
@@ -1159,7 +1159,7 @@ wait'
     ok "$sig stops every suite process and removes the buffer directory"
   else
     hint=
-    [ "$sig_status" != hung ] || [ "${#reset_int[@]}" -gt 1 ] || hint=" (an ignored SIGINT can only be reset with perl, which is not installed)"
+    [ "${#reset_int[@]}" -gt 1 ] || hint=" (an ignored SIGINT can only be reset with perl, which is not installed)"
     bad "$sig stops every suite process and removes the buffer directory" "exit $sig_status (want $want)$hint, alive:$alive, left: $(ls -A "$work/sig-tmp"), gc: $gc1 $gc2"
   fi
 done

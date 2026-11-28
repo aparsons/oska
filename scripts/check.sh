@@ -555,23 +555,31 @@ descendants() {
 # The concurrent run's state, global so the EXIT trap can clean up.
 q_tmp=      # the private buffer directory
 q_pids=()   # the launch_step subshell of each queued step, by place
-# queued_pids: the launch_step subshell of each queued step and the runner it
-# started (its pid file), then everything below them, deepest first.
+# queued_pids: the launch_step subshell of each unfinished queued step and the
+# runner it started (its pid file), then everything below them, deepest first.
+# A step with a result file has ended, and its pid may belong to another
+# process by now, so it is left alone.
 queued_pids() {
-  local p f
-  for p in ${q_pids[@]+"${q_pids[@]}"}; do
+  local i p
+  [ -n "$q_tmp" ] && [ "${#q_pids[@]}" -gt 0 ] || return 0
+  for i in "${!q_pids[@]}"; do
+    [ ! -f "$q_tmp/$i.rc" ] || continue
+    p=${q_pids[i]}
+    descendants "$p"
+    printf '%s\n' "$p"
+    p=$(cat "$q_tmp/$i.pid" 2>/dev/null) || continue
+    [ -n "$p" ] || continue
     descendants "$p"
     printf '%s\n' "$p"
   done
-  if [ -n "$q_tmp" ]; then
-    for f in "$q_tmp"/*.pid; do
-      [ -f "$f" ] || continue
-      p=$(cat "$f" 2>/dev/null) || continue
-      [ -n "$p" ] || continue
-      descendants "$p"
-      printf '%s\n' "$p"
-    done
-  fi
+}
+# unfinished_steps: the places of the queued steps that have no result yet.
+unfinished_steps() {
+  local i
+  [ -n "$q_tmp" ] && [ "${#q_pids[@]}" -gt 0 ] || return 0
+  for i in "${!q_pids[@]}"; do
+    [ -f "$q_tmp/$i.rc" ] || printf '%s ' "$i"
+  done
 }
 # queue_cleanup: stops every process the queued steps started (their runners
 # and everything below), waits for them, then removes the buffer directory, so
@@ -581,7 +589,7 @@ queued_pids() {
 # gone has been adopted by init: its pid file still names it.
 queue_cleanup() {
   local p pid round seen='' now left
-  if [ -n "${q_pids[*]:-}" ] && ! ps -A -o pid= -o ppid= >/dev/null 2>&1; then
+  if [ -n "$(unfinished_steps)" ] && ! ps -A -o pid= -o ppid= >/dev/null 2>&1; then
     printf 'check.sh: cannot list processes (ps -A -o pid= -o ppid= failed); suites started by this run may keep running\n' >&2
   fi
   for round in 1 2 3; do
