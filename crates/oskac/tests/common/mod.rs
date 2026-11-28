@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+pub mod agent_setup;
 pub mod frames;
 pub mod golden;
 pub mod hook;
