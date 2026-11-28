@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: Apache-2.0
+use std.store
+
+struct Item { name: String, qty: Int }
+
+fn unknown_field() -> store.Query<Item> {
+    store.Query.all().int_ge(|i: Item| i.qyt, 2)
+}
+
+fn wrong_type() -> store.Query<Item> {
+    store.Query.all().int_ge(|i: Item| i.qty, "two")
+}
+
+fn read_only_cannot_write(s: store.Store<Item>) -> Bool {
+    let r = s.read_only()
+    let _ = r.put("k", Item(name: "pen", qty: 1))
+    true
+}
+
+fn main() {
+}
