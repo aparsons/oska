@@ -741,6 +741,7 @@ impl Open {
         access: nt::FILE_APPEND,
         disposition: nt::FILE_OPEN_IF,
         options: 0,
+        share: nt::FILE_SHARE_ALL,
     };
 
     /// An existing name, to remove or to move.
@@ -748,6 +749,7 @@ impl Open {
         access: nt::REMOVE,
         disposition: nt::FILE_OPEN,
         options: 0,
+        share: nt::FILE_SHARE_ALL,
     };
 
     /// Whatever is at a name, only to read its attributes.
