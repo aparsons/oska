@@ -112,21 +112,7 @@ impl Body<'_, '_> {
     ) -> Result<Temp, Diagnostic> {
         let result = match callee {
             Callee::Function(name) if self.program().functions.contains_key(name) => {
-                let type_args: Vec<Type> = type_args.iter().map(|t| self.ty(t)).collect();
-                let mutated = self.mutated_receiver(name, &type_args);
-                let result = self.call_program(name, type_args, args.clone(), span)?;
-                if let (Some(ty), Some(&receiver)) = (mutated, args.first()) {
-                    // A mutating method called on a value, not a place:
-                    // it took the receiver's reference and gives back the
-                    // receiver it changed, which is released here.
-                    let after = self.second_result();
-                    self.owned.remove(&receiver);
-                    if self.counted(&ty) {
-                        self.owned.insert(after, ty);
-                    }
-                    self.consume(after)?;
-                }
-                result
+                self.program_call(name, type_args, &args, span)?
             }
             Callee::Function(name) => match intrinsics::runtime(name) {
                 // Only `std.rt` may name an intrinsic (the checker's
@@ -139,73 +125,18 @@ impl Body<'_, '_> {
             // `dbg(value)` writes the value's text to stderr and returns
             // the value: its reference passes on.
             Callee::Intrinsic(name) if name == "dbg" => {
-                let (Some(&value), Some(ty)) = (args.first(), type_args.first()) else {
-                    return Err(self.refuse(span, "`dbg`"));
-                };
-                let ty = self.ty(ty);
-                let text = self.debug_text(&ty, value, span)?;
-                // `[dbg] `, the text and a newline.
-                self.spend_output(text, 7, span)?;
-                self.call_runtime("dbg_write", vec![text], span)?;
-                self.release(text, &Type::String)?;
-                return Ok(value);
+                return self.dbg_call(&args, type_args, span);
             }
             Callee::Intrinsic(name) => match intrinsics::prelude(name) {
-                Some(Prelude::Runtime(function)) => {
-                    self.call_runtime(function, args.clone(), span)?
-                }
-                Some(Prelude::WriteLine(function)) => {
-                    let Some(&line) = args.get(1) else {
-                        return Err(self.refuse(span, &format!("`{name}`")));
-                    };
-                    // The line and a newline.
-                    self.spend_output(line, 1, span)?;
-                    self.call_runtime(function, args.clone(), span)?
-                }
-                Some(Prelude::Confirm) => {
-                    let &[_, summary, details] = args.as_slice() else {
-                        return Err(self.refuse(span, &format!("`{name}`")));
-                    };
-                    let question =
-                        self.call_runtime("approval_prompt", vec![summary, details], span)?;
-                    self.spend_output(question, 0, span)?;
-                    let mut with_question = args.clone();
-                    with_question.push(question);
-                    let result = self.call_runtime("approver_confirm", with_question, span)?;
-                    self.release(question, &Type::String)?;
-                    result
-                }
                 // The argument is the result: its reference passes on.
                 Some(Prelude::Identity) => match args.first() {
                     Some(&value) => return Ok(value),
                     None => return Err(self.refuse(span, &format!("`{name}`"))),
                 },
-                Some(Prelude::Field(index)) => match args.first() {
-                    Some(&value) => {
-                        let field = self.load(value, layout::struct_field(index));
-                        if self.counted(ret) {
-                            self.retain(field);
-                        }
-                        field
-                    }
-                    None => return Err(self.refuse(span, &format!("`{name}`"))),
-                },
-                Some(Prelude::Checked(function, check)) => {
-                    let result = self.call_runtime(function, args.clone(), span)?;
-                    self.check(check, result, &args, span)?;
-                    result
-                }
-                Some(Prelude::ByteRead { width, big, secret }) => {
-                    let &[bytes, offset] = args.as_slice() else {
-                        return Err(self.refuse(span, &format!("`{name}`")));
-                    };
-                    self.byte_read(bytes, offset, width, big, secret, span)?
-                }
+                Some(prelude) => self.prelude_call(name, prelude, &args, ret, span)?,
                 // Called on a value, not a place: `mutating_call` handles
                 // a place, and only a place can be `var`.
-                Some(Prelude::Mutating(..)) | None => {
-                    return Err(self.refuse(span, &format!("`{name}`")))
-                }
+                None => return Err(self.refuse(span, &format!("`{name}`"))),
             },
             Callee::Trait { trait_name, method } => {
                 return Err(self.refuse(
@@ -219,6 +150,112 @@ impl Body<'_, '_> {
         }
         self.own(result, ret);
         Ok(result)
+    }
+
+    /// A call of a function of the program, with the receiver a mutating
+    /// method gave back released when the call was on a value.
+    fn program_call(
+        &mut self,
+        name: &str,
+        type_args: &[Type],
+        args: &[Temp],
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let type_args: Vec<Type> = type_args.iter().map(|t| self.ty(t)).collect();
+        let mutated = self.mutated_receiver(name, &type_args);
+        let result = self.call_program(name, type_args, args.to_vec(), span)?;
+        if let (Some(ty), Some(&receiver)) = (mutated, args.first()) {
+            // A mutating method called on a value, not a place:
+            // it took the receiver's reference and gives back the
+            // receiver it changed, which is released here.
+            let after = self.second_result();
+            self.owned.remove(&receiver);
+            if self.counted(&ty) {
+                self.owned.insert(after, ty);
+            }
+            self.consume(after)?;
+        }
+        Ok(result)
+    }
+
+    /// `dbg(value)` writes the value's text to stderr and returns the
+    /// value: its reference passes on.
+    fn dbg_call(
+        &mut self,
+        args: &[Temp],
+        type_args: &[Type],
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        let (Some(&value), Some(ty)) = (args.first(), type_args.first()) else {
+            return Err(self.refuse(span, "`dbg`"));
+        };
+        let ty = self.ty(ty);
+        let text = self.debug_text(&ty, value, span)?;
+        // `[dbg] `, the text and a newline.
+        self.spend_output(text, 7, span)?;
+        self.call_runtime("dbg_write", vec![text], span)?;
+        self.release(text, &Type::String)?;
+        Ok(value)
+    }
+
+    /// A call of a prelude intrinsic the runtime supplies, other than the
+    /// identity one: the result, not yet owned.
+    fn prelude_call(
+        &mut self,
+        name: &str,
+        prelude: Prelude,
+        args: &[Temp],
+        ret: &Type,
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
+        Ok(match prelude {
+            Prelude::Runtime(function) => self.call_runtime(function, args.to_vec(), span)?,
+            Prelude::WriteLine(function) => {
+                let Some(&line) = args.get(1) else {
+                    return Err(self.refuse(span, &format!("`{name}`")));
+                };
+                // The line and a newline.
+                self.spend_output(line, 1, span)?;
+                self.call_runtime(function, args.to_vec(), span)?
+            }
+            Prelude::Confirm => {
+                let &[_, summary, details] = args else {
+                    return Err(self.refuse(span, &format!("`{name}`")));
+                };
+                let question =
+                    self.call_runtime("approval_prompt", vec![summary, details], span)?;
+                self.spend_output(question, 0, span)?;
+                let mut with_question = args.to_vec();
+                with_question.push(question);
+                let result = self.call_runtime("approver_confirm", with_question, span)?;
+                self.release(question, &Type::String)?;
+                result
+            }
+            Prelude::Field(index) => match args.first() {
+                Some(&value) => {
+                    let field = self.load(value, layout::struct_field(index));
+                    if self.counted(ret) {
+                        self.retain(field);
+                    }
+                    field
+                }
+                None => return Err(self.refuse(span, &format!("`{name}`"))),
+            },
+            Prelude::Checked(function, check) => {
+                let result = self.call_runtime(function, args.to_vec(), span)?;
+                self.check(check, result, args, span)?;
+                result
+            }
+            Prelude::ByteRead { width, big, secret } => {
+                let &[bytes, offset] = args else {
+                    return Err(self.refuse(span, &format!("`{name}`")));
+                };
+                self.byte_read(bytes, offset, width, big, secret, span)?
+            }
+            Prelude::Identity | Prelude::Mutating(..) => {
+                return Err(self.refuse(span, &format!("`{name}`")))
+            }
+        })
     }
 
     /// For a mutating method of the program, `name` (one that may change

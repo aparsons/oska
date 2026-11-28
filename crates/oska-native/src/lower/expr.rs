@@ -30,49 +30,12 @@ impl Body<'_, '_> {
                 Some(receiver) => Ok(self.read(receiver, &expr.ty)),
                 None => Err(self.refuse(span, "`self` outside a method")),
             },
-            ExprKind::Block { stmts, value } => {
-                let height = self.slots.len();
-                for stmt in stmts {
-                    self.stmt(stmt)?;
-                }
-                let value = match value {
-                    Some(value) => self.expr(value)?,
-                    None => self.constant(0),
-                };
-                self.close_scope(height)?;
-                Ok(value)
-            }
+            ExprKind::Block { stmts, value } => self.block_expr(stmts, value.as_deref()),
             ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
-            } => {
-                let result = self.temp();
-                let (otherwise, end) = (self.label(), self.label());
-                self.branch_unless(cond, otherwise)?;
-                let then_value = self.expr(then_branch)?;
-                self.push(Inst::Copy {
-                    dst: result,
-                    src: then_value,
-                });
-                // Not held on the other branch, which may leave the
-                // function (`?`) and releases what is held.
-                let then_owned = self.owned.remove(&then_value);
-                self.push(Inst::Jump(end));
-                self.push(Inst::Label(otherwise));
-                let else_value = match else_branch {
-                    Some(else_branch) => self.expr(else_branch)?,
-                    None => self.constant(0),
-                };
-                self.push(Inst::Copy {
-                    dst: result,
-                    src: else_value,
-                });
-                self.push(Inst::Label(end));
-                let else_owned = self.owned.remove(&else_value);
-                self.merge_owned(vec![then_owned, else_owned], result);
-                Ok(result)
-            }
+            } => self.if_expr(cond, then_branch, else_branch.as_deref()),
             ExprKind::Not(operand) => {
                 let value = self.expr(operand)?;
                 let one = self.constant(1);
@@ -88,101 +51,12 @@ impl Body<'_, '_> {
             ExprKind::Binary { op, lhs, rhs, int } => self.binary(*op, lhs, rhs, *int, span),
             ExprKind::Interpolated(parts) => self.interpolated(parts),
             ExprKind::Construct { ctor, fields } => self.construct(expr, ctor, fields),
-            ExprKind::Range { start, end } => {
-                // A range is the prelude's struct `Range(start:, end:)`.
-                let ctor = Construct {
-                    ty: builtins::RANGE.to_string(),
-                    variant: None,
-                };
-                self.construct(expr, &ctor, &[(**start).clone(), (**end).clone()])
-            }
+            ExprKind::Range { start, end } => self.range_expr(expr, start, end),
             ExprKind::Call {
                 callee,
                 type_args,
                 args,
-            } => {
-                if let Some(kind) =
-                    secret_expansion(callee, |name| secrets::expand(name, args, &expr.ty, span))
-                {
-                    let kind = secret_bytes_read(kind);
-                    return self.expr(&Expr {
-                        kind,
-                        ty: expr.ty.clone(),
-                        span,
-                    });
-                }
-                if let Some(word) = self.borrowed_word(callee, args) {
-                    return Ok(word);
-                }
-                let receiver = args.first().map(|arg| &arg.ty);
-                let (callee, type_args) = self.resolve(callee, type_args, receiver, span)?;
-                let values = if matches!(&callee, Callee::Intrinsic(name) if borrows_arguments(name))
-                {
-                    self.borrowed_args(&args.iter().collect::<Vec<_>>())?
-                } else {
-                    let mut values = Vec::with_capacity(args.len());
-                    for arg in args {
-                        values.push(self.expr(arg)?);
-                    }
-                    values
-                };
-                if let Callee::Intrinsic(name) = &callee {
-                    if let Some(value) = self.data_intrinsic(name, args, &values, expr)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.eq_intrinsic(name, args, &values, span)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.hash_intrinsic(name, args, &values, span)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.cmp_intrinsic(name, args, &values, span)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.rotation_intrinsic(name, args, &values, span)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.int_method_intrinsic(name, args, &values, span)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.float_intrinsic(name, &values, span)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.test_intrinsic(name, &type_args, &values, span)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.task_intrinsic(name, &values, expr)? {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.html_intrinsic(name, &values, expr)? {
-                        return Ok(value);
-                    }
-                    if name == "todo" {
-                        let todo = self.panic_static(panics::TODO, panics::NOT_WRITTEN, span)?;
-                        self.push(Inst::Jump(todo));
-                        // Never reached: a value of no type, holding nothing.
-                        return Ok(self.constant(0));
-                    }
-                    let map_panic = match name.as_str() {
-                        "map_entry_limit" => {
-                            Some((panics::MAP_ENTRY_LIMIT, panics::MAP_ENTRY_LIMIT_MESSAGE))
-                        }
-                        "map_probe_limit" => {
-                            Some((panics::MAP_PROBE_LIMIT, panics::MAP_PROBE_LIMIT_MESSAGE))
-                        }
-                        _ => None,
-                    };
-                    if let Some((code, message)) = map_panic {
-                        let label = self.panic_static(code, message, span)?;
-                        self.push(Inst::Jump(label));
-                        return Ok(self.constant(0));
-                    }
-                }
-                self.call(&callee, &type_args, values, &expr.ty, span)
-            }
+            } => self.call_expr(expr, callee, type_args, args),
             ExprKind::Field { base, index } => self.field(base, *index, &expr.ty),
             ExprKind::List(items) => self.list_literal(expr, items),
             ExprKind::Match { scrutinee, arms } => self.match_arms(scrutinee, arms),
@@ -191,16 +65,7 @@ impl Body<'_, '_> {
                 type_args,
                 receiver,
                 args,
-            } => match secret_expansion(callee, |name| {
-                secrets::expand_mutating(name, receiver, args)
-            }) {
-                Some(kind) => self.expr(&Expr {
-                    kind,
-                    ty: expr.ty.clone(),
-                    span,
-                }),
-                None => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
-            },
+            } => self.mutating_call_expr(expr, callee, type_args, receiver, args),
             ExprKind::Try {
                 operand,
                 convert,
@@ -211,6 +76,185 @@ impl Body<'_, '_> {
             ExprKind::FnValue { callee, type_args } => self.fn_value(expr, callee, type_args),
             ExprKind::CallValue { callee, args } => self.call_value(callee, args, expr),
             other => Err(self.refuse(span, &describe(other))),
+        }
+    }
+
+    fn call_expr(
+        &mut self,
+        expr: &Expr,
+        callee: &Callee,
+        type_args: &[Type],
+        args: &[Expr],
+    ) -> Result<Temp, Diagnostic> {
+        let span = expr.span;
+        if let Some(kind) =
+            secret_expansion(callee, |name| secrets::expand(name, args, &expr.ty, span))
+        {
+            let kind = secret_bytes_read(kind);
+            return self.expr(&Expr {
+                kind,
+                ty: expr.ty.clone(),
+                span,
+            });
+        }
+        if let Some(word) = self.borrowed_word(callee, args) {
+            return Ok(word);
+        }
+        let receiver = args.first().map(|arg| &arg.ty);
+        let (callee, type_args) = self.resolve(callee, type_args, receiver, span)?;
+        let values = if matches!(&callee, Callee::Intrinsic(name) if borrows_arguments(name)) {
+            self.borrowed_args(&args.iter().collect::<Vec<_>>())?
+        } else {
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push(self.expr(arg)?);
+            }
+            values
+        };
+        if let Callee::Intrinsic(name) = &callee {
+            if let Some(value) = self.intrinsic_value(name, &type_args, args, &values, expr)? {
+                return Ok(value);
+            }
+        }
+        self.call(&callee, &type_args, values, &expr.ty, span)
+    }
+
+    /// The value of a call to an intrinsic the lowering gives its own code,
+    /// or `None` for one that is an ordinary call.
+    fn intrinsic_value(
+        &mut self,
+        name: &str,
+        type_args: &[Type],
+        args: &[Expr],
+        values: &[Temp],
+        expr: &Expr,
+    ) -> Result<Option<Temp>, Diagnostic> {
+        let span = expr.span;
+        if let Some(value) = self.data_intrinsic(name, args, values, expr)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.eq_intrinsic(name, args, values, span)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.hash_intrinsic(name, args, values, span)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.cmp_intrinsic(name, args, values, span)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.rotation_intrinsic(name, args, values, span)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.int_method_intrinsic(name, args, values, span)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.float_intrinsic(name, values, span)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.list_intrinsic(name, args, values, expr)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.test_intrinsic(name, type_args, values, span)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.task_intrinsic(name, values, expr)? {
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.html_intrinsic(name, values, expr)? {
+            return Ok(Some(value));
+        }
+        if name == "todo" {
+            let todo = self.panic_static(panics::TODO, panics::NOT_WRITTEN, span)?;
+            self.push(Inst::Jump(todo));
+            // Never reached: a value of no type, holding nothing.
+            return Ok(Some(self.constant(0)));
+        }
+        let map_panic = match name {
+            "map_entry_limit" => Some((panics::MAP_ENTRY_LIMIT, panics::MAP_ENTRY_LIMIT_MESSAGE)),
+            "map_probe_limit" => Some((panics::MAP_PROBE_LIMIT, panics::MAP_PROBE_LIMIT_MESSAGE)),
+            _ => None,
+        };
+        if let Some((code, message)) = map_panic {
+            let label = self.panic_static(code, message, span)?;
+            self.push(Inst::Jump(label));
+            return Ok(Some(self.constant(0)));
+        }
+        Ok(None)
+    }
+
+    fn block_expr(&mut self, stmts: &[Stmt], value: Option<&Expr>) -> Result<Temp, Diagnostic> {
+        let height = self.slots.len();
+        for stmt in stmts {
+            self.stmt(stmt)?;
+        }
+        let value = match value {
+            Some(value) => self.expr(value)?,
+            None => self.constant(0),
+        };
+        self.close_scope(height)?;
+        Ok(value)
+    }
+
+    fn if_expr(
+        &mut self,
+        cond: &Expr,
+        then_branch: &Expr,
+        else_branch: Option<&Expr>,
+    ) -> Result<Temp, Diagnostic> {
+        let result = self.temp();
+        let (otherwise, end) = (self.label(), self.label());
+        self.branch_unless(cond, otherwise)?;
+        let then_value = self.expr(then_branch)?;
+        self.push(Inst::Copy {
+            dst: result,
+            src: then_value,
+        });
+        // Not held on the other branch, which may leave the
+        // function (`?`) and releases what is held.
+        let then_owned = self.owned.remove(&then_value);
+        self.push(Inst::Jump(end));
+        self.push(Inst::Label(otherwise));
+        let else_value = match else_branch {
+            Some(else_branch) => self.expr(else_branch)?,
+            None => self.constant(0),
+        };
+        self.push(Inst::Copy {
+            dst: result,
+            src: else_value,
+        });
+        self.push(Inst::Label(end));
+        let else_owned = self.owned.remove(&else_value);
+        self.merge_owned(vec![then_owned, else_owned], result);
+        Ok(result)
+    }
+
+    fn range_expr(&mut self, expr: &Expr, start: &Expr, end: &Expr) -> Result<Temp, Diagnostic> {
+        // A range is the prelude's struct `Range(start:, end:)`.
+        let ctor = Construct {
+            ty: builtins::RANGE.to_string(),
+            variant: None,
+        };
+        self.construct(expr, &ctor, &[start.clone(), end.clone()])
+    }
+
+    fn mutating_call_expr(
+        &mut self,
+        expr: &Expr,
+        callee: &Callee,
+        type_args: &[Type],
+        receiver: &oska_check::program::Place,
+        args: &[Expr],
+    ) -> Result<Temp, Diagnostic> {
+        let span = expr.span;
+        match secret_expansion(callee, |name| {
+            secrets::expand_mutating(name, receiver, args)
+        }) {
+            Some(kind) => self.expr(&Expr {
+                kind,
+                ty: expr.ty.clone(),
+                span,
+            }),
+            None => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
         }
     }
 

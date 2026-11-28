@@ -14,59 +14,27 @@ impl Body<'_, '_> {
         span: Span,
     ) -> Result<(), Diagnostic> {
         match check {
-            Check::Slice => {
-                let label =
-                    self.panic_text(panics::SLICE_OUT_OF_BOUNDS, "panic_slice", args, span)?;
-                self.push(Inst::JumpIfZero {
-                    cond: result,
-                    target: label,
-                });
-            }
+            Check::Slice => self.panic_if_zero(
+                result,
+                panics::SLICE_OUT_OF_BOUNDS,
+                "panic_slice",
+                args,
+                span,
+            ),
             Check::Secret => {
-                // The report quotes the name, which the program made:
-                // under `--max-output`, no more of it than the limit has
-                // left (`std.rt`'s `cut_quoted`).
-                let label = match self.lowering.limits.max_output {
-                    None => {
-                        self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?
-                    }
-                    Some(limit) => {
-                        let mut with_limit = args.to_vec();
-                        with_limit.push(self.limit_constant(limit));
-                        self.panic_text(
-                            panics::MISSING_SECRET,
-                            "panic_missing_secret_cut",
-                            &with_limit,
-                            span,
-                        )?
-                    }
-                };
+                let label = self.missing_secret_panic(args, span)?;
                 self.push(Inst::JumpIfZero {
                     cond: result,
                     target: label,
                 });
+                Ok(())
             }
-            Check::Repeat => {
-                let negative = self.panic_text(
-                    panics::NEGATIVE_REPEAT,
-                    "panic_repeat_negative",
-                    &args[1..],
-                    span,
-                )?;
-                self.push(Inst::JumpIfZero {
-                    cond: result,
-                    target: negative,
-                });
-                let long =
-                    self.panic_text(panics::TEXT_TOO_LONG, "panic_repeat_long", args, span)?;
-                let zero = self.constant(0);
-                self.push(Inst::Branch {
-                    cond: Cond::Lt,
-                    lhs: result,
-                    rhs: zero,
-                    target: long,
-                });
-            }
+            Check::Repeat => self.panic_if_zero_or_negative(
+                result,
+                (panics::NEGATIVE_REPEAT, "panic_repeat_negative", &args[1..]),
+                (panics::TEXT_TOO_LONG, "panic_repeat_long", args),
+                span,
+            ),
             Check::Zeroed | Check::SecureBytes => {
                 // `Random.secure_bytes` passes the capability first.
                 let args = if matches!(check, Check::SecureBytes) {
@@ -74,34 +42,20 @@ impl Body<'_, '_> {
                 } else {
                     args
                 };
-                let negative = self.panic_text(
-                    panics::BYTES_OUT_OF_RANGE,
-                    "panic_bytes_negative",
-                    args,
+                self.panic_if_zero_or_negative(
+                    result,
+                    (panics::BYTES_OUT_OF_RANGE, "panic_bytes_negative", args),
+                    (panics::BYTES_TOO_LONG, "panic_bytes_long", args),
                     span,
-                )?;
-                self.push(Inst::JumpIfZero {
-                    cond: result,
-                    target: negative,
-                });
-                let long =
-                    self.panic_text(panics::BYTES_TOO_LONG, "panic_bytes_long", args, span)?;
-                let zero = self.constant(0);
-                self.push(Inst::Branch {
-                    cond: Cond::Lt,
-                    lhs: result,
-                    rhs: zero,
-                    target: long,
-                });
+                )
             }
-            Check::BytesSelect => {
-                let label =
-                    self.panic_text(panics::BYTES_OUT_OF_RANGE, "panic_bytes_select", args, span)?;
-                self.push(Inst::JumpIfZero {
-                    cond: result,
-                    target: label,
-                });
-            }
+            Check::BytesSelect => self.panic_if_zero(
+                result,
+                panics::BYTES_OUT_OF_RANGE,
+                "panic_bytes_select",
+                args,
+                span,
+            ),
             Check::BytesSlice | Check::BytesIndex | Check::BytesAppend => {
                 // `set`'s arguments are the bytes, the index and the byte:
                 // its report names only the first two.
@@ -112,27 +66,76 @@ impl Body<'_, '_> {
                     }
                     _ => (panics::BYTES_TOO_LONG, "panic_bytes_append", args),
                 };
-                let label = self.panic_text(code, function, args, span)?;
-                self.push(Inst::JumpIfZero {
-                    cond: result,
-                    target: label,
-                });
+                self.panic_if_zero(result, code, function, args, span)
             }
             Check::BytesGrow(width) => {
                 let extra = self.constant(i64::from(width));
-                let label = self.panic_text(
+                self.panic_if_zero(
+                    result,
                     panics::BYTES_TOO_LONG,
                     "panic_bytes_grow",
                     &[args[0], extra],
                     span,
-                )?;
-                self.push(Inst::JumpIfZero {
-                    cond: result,
-                    target: label,
-                });
+                )
             }
         }
+    }
+
+    /// Jump to the text panic `function` of `args` when `result` is 0.
+    fn panic_if_zero(
+        &mut self,
+        result: Temp,
+        code: &'static str,
+        function: &str,
+        args: &[Temp],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let label = self.panic_text(code, function, args, span)?;
+        self.push(Inst::JumpIfZero {
+            cond: result,
+            target: label,
+        });
         Ok(())
+    }
+
+    /// The `negative` text panic when `result` is 0, then the `long` one
+    /// when it is below 0; each is a code, a function and its arguments.
+    fn panic_if_zero_or_negative(
+        &mut self,
+        result: Temp,
+        negative: (&'static str, &str, &[Temp]),
+        long: (&'static str, &str, &[Temp]),
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        self.panic_if_zero(result, negative.0, negative.1, negative.2, span)?;
+        let long = self.panic_text(long.0, long.1, long.2, span)?;
+        let zero = self.constant(0);
+        self.push(Inst::Branch {
+            cond: Cond::Lt,
+            lhs: result,
+            rhs: zero,
+            target: long,
+        });
+        Ok(())
+    }
+
+    /// The panic for a secret the program lacks. The report quotes the
+    /// name, which the program made: under `--max-output`, no more of it
+    /// than the limit has left (`std.rt`'s `cut_quoted`).
+    fn missing_secret_panic(&mut self, args: &[Temp], span: Span) -> Result<Label, Diagnostic> {
+        match self.lowering.limits.max_output {
+            None => self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span),
+            Some(limit) => {
+                let mut with_limit = args.to_vec();
+                with_limit.push(self.limit_constant(limit));
+                self.panic_text(
+                    panics::MISSING_SECRET,
+                    "panic_missing_secret_cut",
+                    &with_limit,
+                    span,
+                )
+            }
+        }
     }
 
     /// `Bytes.at` (`width` 1) or an endian read of `width` bytes of the
