@@ -42,6 +42,7 @@ Each note answers one question, with its sources and the date it was written. A 
 
 ## How the project itself is built
 
+- [Where can the Oska code base be improved, and in what order?](2026-11-improve-the-code-base.md) (2026-11-28): `unsafe` and panics are already well controlled, so the work is structural. Split the oversized native-backend and CLI files, break up the longest functions, align the lint config and `rust-version` with the docs, and add aarch64 encoder tests.
 These notes are about this repository's development process, not about the language.
 
 - [An AI-driven software factory on Claude Code](2026-11-claude-code-software-factory.md) (2026-11-12): the project's spec, ticket, review and merge flow, and what would make it a complete factory.
