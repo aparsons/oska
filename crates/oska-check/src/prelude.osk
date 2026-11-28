@@ -741,6 +741,27 @@ impl<T> Option<T> {
     pub fn is_some(self) -> Bool
     // The value, or `default` when there is none.
     pub fn unwrap_or(self, default: T) -> T
+    // Whether there is no value.
+    //
+    //     Some(1).is_none()  // false
+    pub fn is_none(self) -> Bool
+    // `Some(f(value))`, or `None` when there is none.
+    //
+    //     Some(2).map(|x| x * 3)  // Some(6)
+    pub fn map<U>(self, f: fn(T) -> U) -> Option<U>
+    // `f(value)`, or `None` when there is none: `f` may itself give `None`.
+    //
+    //     Some(4).and_then(|x| if x > 3 { Some(x) } else { None })  // Some(4)
+    pub fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U>
+    // The value, or what `f()` gives when there is none. `f` runs only
+    // then.
+    //
+    //     Some(1).filter(|x| x > 5).unwrap_or_else(|| 9)  // 9
+    pub fn unwrap_or_else(self, f: fn() -> T) -> T
+    // The value if `keep` is true for it, otherwise `None`.
+    //
+    //     Some(5).filter(|x| x > 3)  // Some(5)
+    pub fn filter(self, keep: fn(T) -> Bool) -> Option<T>
 }
 
 // The outcome of an operation that can fail: `Ok(value)`, or `Err(error)`.
@@ -755,6 +776,34 @@ impl<T, E> Result<T, E> {
     pub fn is_ok(self) -> Bool
     // The `Ok` value, or `default` for an `Err`.
     pub fn unwrap_or(self, default: T) -> T
+    // Whether it is `Err`.
+    //
+    //     "x".parse_int().ok_or("bad").is_err()  // true
+    pub fn is_err(self) -> Bool
+    // `Ok(f(value))` for an `Ok`, the `Err` unchanged otherwise.
+    //
+    //     "12".parse_int().ok_or("bad").map(|x| x + 1)  // Ok(13)
+    pub fn map<U>(self, f: fn(T) -> U) -> Result<U, E>
+    // `Err(f(error))` for an `Err`, the `Ok` unchanged otherwise.
+    //
+    //     "x".parse_int().ok_or("bad").map_err(|e| e.len())  // Err(3)
+    pub fn map_err<F>(self, f: fn(E) -> F) -> Result<T, F>
+    // `f(value)` for an `Ok`, the `Err` unchanged otherwise.
+    //
+    //     "12".parse_int().ok_or("bad").and_then(|x| if x > 20 { Ok(x) } else { Err("small") })  // Err("small")
+    pub fn and_then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E>
+    // The `Ok` value, or what `f(error)` gives for an `Err`.
+    //
+    //     "x".parse_int().ok_or("bad").unwrap_or_else(|e| e.len())  // 3
+    pub fn unwrap_or_else(self, f: fn(E) -> T) -> T
+    // `Some(value)` for an `Ok`, `None` for an `Err`.
+    //
+    //     "12".parse_int().ok_or("bad").ok()  // Some(12)
+    pub fn ok(self) -> Option<T>
+    // `Some(error)` for an `Err`, `None` for an `Ok`.
+    //
+    //     "x".parse_int().ok_or("bad").err()  // Some("bad")
+    pub fn err(self) -> Option<E>
 }
 
 // A growable list. `[a, b, c]` makes one, and `for item in list` visits
@@ -778,6 +827,78 @@ impl<T> List<T> {
     pub fn at(self, index: Int) -> T
     // A new list of `f` applied to each item, in order.
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
+    // A new list of the items for which `keep` is true, in order.
+    //
+    //     [1, 2, 3, 4].filter(|x| x % 2 == 0)  // [2, 4]
+    pub fn filter(self, keep: fn(T) -> Bool) -> List<T>
+    // `f` applied to `init` and the first item, then to that result and
+    // the next item, and so on: `init` for an empty list.
+    //
+    //     [1, 2, 3].fold(0, |acc, x| acc + x)  // 6
+    pub fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A
+    // Whether `check` is true for some item. It stops at the first item
+    // that passes, so it is false for an empty list.
+    //
+    //     [1, 2, 3].any(|x| x > 2)  // true
+    pub fn any(self, check: fn(T) -> Bool) -> Bool
+    // Whether `check` is true for every item. It stops at the first item
+    // that fails, so it is true for an empty list.
+    //
+    //     [1, 2, 3].all(|x| x > 2)  // false
+    pub fn all(self, check: fn(T) -> Bool) -> Bool
+    // The first item for which `check` is true, or `None`.
+    //
+    //     [1, 2, 3].find(|x| x > 1)  // Some(2)
+    pub fn find(self, check: fn(T) -> Bool) -> Option<T>
+    // The first item, or `None` for an empty list.
+    //
+    //     [7, 8].first()  // Some(7)
+    pub fn first(self) -> Option<T>
+    // The last item, or `None` for an empty list.
+    //
+    //     [7, 8].last()  // Some(8)
+    pub fn last(self) -> Option<T>
+    // Whether the list has no item.
+    //
+    //     ["a"].is_empty()  // false
+    pub fn is_empty(self) -> Bool
+    // A new list of the items in the opposite order.
+    //
+    //     [1, 2, 3].reverse()  // [3, 2, 1]
+    pub fn reverse(self) -> List<T>
+    // A new list of the items of this list, then those of `other`.
+    //
+    //     [1, 2].concat([3])  // [1, 2, 3]
+    pub fn concat(self, other: List<T>) -> List<T>
+    // A new list of the items ordered by `cmp`, which says how its first
+    // argument orders against its second. The sort is stable: items that
+    // `cmp` calls equal keep their order. It takes O(n log n) time and one
+    // extra list. A `cmp` that is not a total order gives some order of the
+    // same items and never reads out of bounds. This list is not changed,
+    // so a `cmp` that panics leaves it as it was.
+    //
+    //     ["pear", "fig", "apple"].sorted_by(|a, b| a.len().cmp(b.len()))  // ["fig", "pear", "apple"]
+    pub fn sorted_by(self, cmp: fn(T, T) -> Ordering) -> List<T>
+}
+
+impl<T: Ord> List<T> {
+    // A new list of the items in ascending order. The sort is stable and
+    // takes O(n log n) time. This list is not changed.
+    //
+    //     [3, 1, 2].sorted()  // [1, 2, 3]
+    pub fn sorted(self) -> List<T>
+    // Put the items in ascending order, as `sorted` does. The list must be
+    // a `var`. It is changed only when the sort has finished.
+    //
+    //     xs.sort()  // xs, a var list [3, 1, 2], is [1, 2, 3]
+    pub fn sort(var self)
+}
+
+impl<T: Eq> List<T> {
+    // Whether some item equals `item`.
+    //
+    //     [1, 2, 3].contains(2)  // true
+    pub fn contains(self, item: T) -> Bool
 }
 
 // A packed buffer of bytes: a value, like `List`, copied on write. A
@@ -937,6 +1058,55 @@ impl String {
     // `σ`, wherever it stands.
     #[follows_trust]
     pub fn to_lowercase(self) -> String
+    // Every letter in upper case, one character at a time, by the
+    // character's own Unicode mapping: `"àb".to_uppercase()` is `"ÀB"`.
+    // A character whose upper case is several characters stays as it is,
+    // so `"ß"` is `"ß"`.
+    //
+    //     "abc".to_uppercase()  // "ABC"
+    #[follows_trust]
+    pub fn to_uppercase(self) -> String
+    // Without leading whitespace (Unicode's `White_Space`).
+    //
+    //     "  a ".trim_start()  // "a "
+    #[follows_trust]
+    pub fn trim_start(self) -> String
+    // Without trailing whitespace (Unicode's `White_Space`).
+    //
+    //     "  a ".trim_end()  // "  a"
+    #[follows_trust]
+    pub fn trim_end(self) -> String
+    // The position, in characters, of the first place `needle` occurs, or
+    // `None`. The position is a trusted `Int`, whatever the text's trust,
+    // and fits `slice`. An empty `needle` is found at 0, in any text.
+    //
+    //     "hello".find("ll")  // Some(2)
+    #[follows_trust]
+    pub fn find(self, needle: String) -> Option<Int>
+    // The text before and after the first `separator`, as a list of
+    // exactly two texts, or `None` when it does not occur. An empty
+    // `separator` is found at the start: `["", text]`.
+    //
+    //     "a=b".split_once("=")  // Some(["a", "b"])
+    #[follows_trust]
+    pub fn split_once(self, separator: String) -> Option<List<String>>
+    // The text after `prefix`, or `None` when it does not start with it.
+    // An empty `prefix` leaves the text whole.
+    //
+    //     "foobar".strip_prefix("foo")  // Some("bar")
+    #[follows_trust]
+    pub fn strip_prefix(self, prefix: String) -> Option<String>
+    // The text before `suffix`, or `None` when it does not end with it.
+    // An empty `suffix` leaves the text whole.
+    //
+    //     "foobar".strip_suffix("bar")  // Some("foo")
+    #[follows_trust]
+    pub fn strip_suffix(self, suffix: String) -> Option<String>
+    // Whether the text has no characters.
+    //
+    //     "".is_empty()  // true
+    #[follows_trust]
+    pub fn is_empty(self) -> Bool
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>
@@ -1236,6 +1406,50 @@ impl<T: Eq> Eq for Option<T> { fn eq(self, other: Option<T>) -> Bool }
 impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Bool }
 impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
 impl Eq for Bytes { fn eq(self, other: Bytes) -> Bool }
+
+// The result of comparing two values: `Ordering.Less`, `Ordering.Equal` or
+// `Ordering.Greater`, matched in call style like any variant.
+pub enum Ordering {
+    Less,
+    Equal,
+    Greater,
+}
+
+// A total order (ADR 0034): `<`, `<=`, `>` and `>=` work on the integer
+// types, `Bool`, `String`, and an `Option` or `List` of an `Ord` type, as
+// `cmp` and a test of its result. On a type of your own with `impl Ord`,
+// call `cmp`. The integer types, `Bool` (`false`
+// before `true`) and `String` are `Ord`; a type of your own is `Ord` when it
+// writes `impl Ord for`. `Float` is not (a `NaN` is unordered: use
+// `total_cmp`), and neither is a `Secret` (an ordering that stops at the
+// first difference leaks through timing: use `constant_time_eq`).
+pub trait Ord {
+    // How `self` orders against `other`. The result is trusted.
+    //
+    //     [1, 2].cmp([1, 3])  // Ordering.Less
+    fn cmp(self, other: Self) -> Ordering
+}
+
+impl Ord for Int { fn cmp(self, other: Int) -> Ordering }
+impl Ord for I8 { fn cmp(self, other: I8) -> Ordering }
+impl Ord for I16 { fn cmp(self, other: I16) -> Ordering }
+impl Ord for I32 { fn cmp(self, other: I32) -> Ordering }
+impl Ord for I64 { fn cmp(self, other: I64) -> Ordering }
+impl Ord for U8 { fn cmp(self, other: U8) -> Ordering }
+impl Ord for U16 { fn cmp(self, other: U16) -> Ordering }
+impl Ord for U32 { fn cmp(self, other: U32) -> Ordering }
+impl Ord for U64 { fn cmp(self, other: U64) -> Ordering }
+// `false` is before `true`.
+impl Ord for Bool { fn cmp(self, other: Bool) -> Ordering }
+// By Unicode code point, which is the order of the UTF-8 bytes: the same on
+// every platform and backend, with no locale, case folding or normalization.
+// `""` is before every other text, and a prefix before a longer text.
+impl Ord for String { fn cmp(self, other: String) -> Ordering }
+// `None` is before every `Some`; two `Some`s order by their items.
+impl<T: Ord> Ord for Option<T> { fn cmp(self, other: Option<T>) -> Ordering }
+// Lexicographic: the first items that differ decide, and a prefix is before a
+// longer list, so `[]` is before every other list.
+impl<T: Ord> Ord for List<T> { fn cmp(self, other: List<T>) -> Ordering }
 
 // A value that can be hashed.
 pub trait Hash {
