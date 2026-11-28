@@ -36,6 +36,21 @@
 // not show that the end of the log was cut off at a line break; that needs
 // a signed checkpoint, which is a later spec.
 //
+// Snapshots (spec #842, ticket #851). `Store.snapshot` writes the live
+// records, each with its own label, as one sealed line in `snapshot`, under
+// keys of their own (the snapshot's sequence number is a record's, so the
+// purpose names differ). The order is the one in `formal/tla/store-log.md`:
+// write `snapshot.tmp`, sync it, rename it, sync the directory, and only
+// then drop the log's front, by replacing `log` with its last record
+// through a temporary file and a rename (atomic; durable after the directory
+// sync). The last record stays, so a missing snapshot shows as a log that
+// starts after record 1. Opening checks the snapshot's hash and seal, checks
+// that the log's record at the snapshot's sequence number hashes to the
+// snapshot's `prev`, and replays only the records after it. A snapshot that
+// does not check falls back to the whole log when the log starts at record 1,
+// and `Reader.opened` says so; otherwise, and whenever the log and a good
+// snapshot disagree, the open is `Corrupt`.
+//
 // A record is typed by a `Codec`: a function from the value to JSON and one
 // back. The one back gives `None` for JSON it does not accept, and then the
 // open fails with `Corrupt`.
@@ -243,6 +258,30 @@ struct State<T> {
     head: Untrusted<String>,
     torn: Bool,
     kept: Untrusted<String>,
+    fresh: Bool,
+    first: Int,
+    last: Untrusted<String>,
+    opened: String,
+}
+
+// A snapshot that was read and checked: the live records and their labels
+// as of record `seq`, whose line hashes to `head`.
+struct Snap<T> {
+    seq: Int,
+    head: Untrusted<String>,
+    index: Map<Untrusted<String>, T>,
+    labels: Map<Untrusted<String>, Label>,
+}
+
+// What looking for the snapshot found: the snapshot, or the reason it is
+// damaged (`why` is empty when it is missing or good).
+struct Found<T> {
+    snap: Option<Snap<T>>,
+    why: String,
+}
+
+fn empty_state<T>(floor: Label) -> State<T> {
+    State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: "", fresh: true, first: 1, last: "", opened: "log")
 }
 
 // A store open for writing. It exists only inside the body of `open`,
@@ -299,27 +338,16 @@ fn header_of(seq: Int, prev: Untrusted<String>, label: Label) -> Untrusted<Strin
     ]))
 }
 
-// The line's text after its hash: the header, a space, and the seal.
-fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, label: Label, op: String, name: Untrusted<String>, value: Option<json.Value>) -> Result<Untrusted<String>, StoreError> {
-    var members = [
-        json.Member(key: "op", value: json.Value.Text(op)),
-        json.Member(key: "key", value: json.Value.Text(name)),
-    ]
-    match value {
-        Some(v) => {
-            members.push(json.Member(key: "value", value: v))
-        }
-        None => {}
-    }
-    let plain = Secret.new(copied(json.encode(json.Value.Object(members)).to_bytes()))
-    let header = header_of(seq, prev, label)
-    let enc = match derive(key, seq, "key") {
+// The text after the hash: the header, a space, and the seal of `plain`
+// under the keys that `key_purpose` and `nonce_purpose` name.
+fn seal(key: Secret<Bytes>, seq: Int, key_purpose: String, nonce_purpose: String, header: Untrusted<String>, plain: Secret<Bytes>) -> Result<Untrusted<String>, StoreError> {
+    let enc = match derive(key, seq, key_purpose) {
         Some(k) => k
         None => {
             return Err(StoreError.Corrupt("no record key"))
         }
     }
-    let nonce_key = match derive(key, seq, "nonce") {
+    let nonce_key = match derive(key, seq, nonce_purpose) {
         Some(k) => k
         None => {
             return Err(StoreError.Corrupt("no record key"))
@@ -339,6 +367,22 @@ fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, label: Label, 
     Ok("{header} {nonce_hex}{sealed_hex}")
 }
 
+// The line's text after its hash: the header, a space, and the seal.
+fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, label: Label, op: String, name: Untrusted<String>, value: Option<json.Value>) -> Result<Untrusted<String>, StoreError> {
+    var members = [
+        json.Member(key: "op", value: json.Value.Text(op)),
+        json.Member(key: "key", value: json.Value.Text(name)),
+    ]
+    match value {
+        Some(v) => {
+            members.push(json.Member(key: "value", value: v))
+        }
+        None => {}
+    }
+    let plain = Secret.new(copied(json.encode(json.Value.Object(members)).to_bytes()))
+    seal(key, seq, "key", "nonce", header_of(seq, prev, label), plain)
+}
+
 // The label in an authenticated header, or `None` if it is missing or names
 // a classification or trust this version does not know.
 fn label_of(head: json.Value) -> Option<Label> {
@@ -354,12 +398,12 @@ fn corrupt(line: Int, why: String) -> StoreError {
 // The content of a record: `sealed_hex` is its nonce and seal as hex, and
 // `header` is the authenticated data. `None` for a wrong key, a changed
 // header or seal, or content that is not JSON.
-fn unseal(key: Secret<Bytes>, seq: Int, header: Untrusted<String>, sealed_hex: Untrusted<String>) -> Option<json.Value> {
+fn unseal(key: Secret<Bytes>, seq: Int, purpose: String, header: Untrusted<String>, sealed_hex: Untrusted<String>) -> Option<json.Value> {
     let raw = Bytes.from_hex(sealed_hex)?
     if raw.len() < 12 {
         return None
     }
-    let enc = derive(key, seq, "key")?
+    let enc = derive(key, seq, purpose)?
     let plain = chacha20poly1305.open(enc, raw.slice(0, 12), header.to_bytes(), raw.slice(12, raw.len()))?
     let text = reveal(plain).to_text()?
     match json.parse(text) {
@@ -368,14 +412,102 @@ fn unseal(key: Secret<Bytes>, seq: Int, header: Untrusted<String>, sealed_hex: U
     }
 }
 
+// The sequence number in a line's header, or 0 if it does not read. It
+// checks nothing: the replay does.
+fn first_seq(line: Untrusted<String>) -> Int {
+    let parts = match line.split_once(" ") {
+        Some(p) => p
+        None => {
+            return 0
+        }
+    }
+    let halves = match parts.at(1).split_once(" ") {
+        Some(p) => p
+        None => {
+            return 0
+        }
+    }
+    match json.parse(halves.at(0)) {
+        Ok(v) => {
+            match v.int("seq") {
+                Some(n) => n
+                None => 0
+            }
+        }
+        Err(_) => 0
+    }
+}
+
 // Read the log text into a state. `lenient` is not a mode: the torn last
-// line is always dropped and reported in `torn`.
-fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>, floor: Label) -> Result<State<T>, StoreError> {
-    var state = State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: "")
+// line is always dropped and reported in `torn`. With a snapshot, the
+// records up to its own are not read: the line it ends at must hash to the
+// snapshot's `head`, and the records after it are checked as always. A log
+// that starts after record 1 (its front was dropped after a snapshot) needs
+// the snapshot, and without it the open fails.
+fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>, floor: Label, found: Found<T>) -> Result<State<T>, StoreError> {
+    var state: State<T> = empty_state(floor)
+    state.fresh = false
     let lines = text.split("\n")
     let count = lines.len()
     var n = 0
     var kept = []
+    let why = found.why
+    if why.len() > 0 {
+        state.opened = "log (the snapshot is damaged: {why})"
+    }
+    var first = 1
+    if count > 1 {
+        first = first_seq(lines.at(0))
+    }
+    match found.snap {
+        Some(snap) => {
+            let ends = snap.seq
+            if count < 2 {
+                return Err(corrupt(1, "the log has no records, and the snapshot ends at record {ends}"))
+            }
+            if first < 1 {
+                return Err(corrupt(1, "the first record does not read"))
+            }
+            if first > ends {
+                return Err(corrupt(1, "the log starts at record {first}, after the record {ends} that the snapshot ends at"))
+            }
+            let at = ends - first
+            if at > count - 2 {
+                return Err(corrupt(1, "the snapshot ends at record {ends}, which the log does not reach"))
+            }
+            let line = lines.at(at)
+            let parts = match line.split_once(" ") {
+                Some(p) => p
+                None => {
+                    return Err(corrupt(at + 1, "no hash"))
+                }
+            }
+            if hash(parts.at(1)) != parts.at(0) {
+                return Err(corrupt(at + 1, "the hash does not match the record"))
+            }
+            if parts.at(0) != snap.head {
+                return Err(corrupt(at + 1, "the record is not the one the snapshot ends at"))
+            }
+            state.index = snap.index
+            for entry in snap.labels.entries() {
+                state.labels.put(entry.key, higher(entry.value, floor))
+            }
+            state.seq = ends
+            state.head = snap.head
+            state.first = first
+            state.opened = "snapshot"
+            while n <= at {
+                kept.push(lines.at(n))
+                n = n + 1
+            }
+        }
+        None => {
+            if first > 1 {
+                let reason = if why.len() > 0 { "damaged: {why}" } else { "missing" }
+                return Err(corrupt(1, "the log starts at record {first} and the snapshot is {reason}"))
+            }
+        }
+    }
     while n < count {
         let line = lines.at(n)
         let number = n + 1
@@ -416,7 +548,7 @@ fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>, floor
         if head.text("prev") != Some(state.head) {
             return Err(corrupt(number, "the record does not follow the one before"))
         }
-        let value = match unseal(key, state.seq + 1, header, halves.at(1)) {
+        let value = match unseal(key, state.seq + 1, "key", header, halves.at(1)) {
             Some(v) => v
             None => {
                 return Err(corrupt(number, "the record does not open: the key is wrong or the seal was changed"))
@@ -463,6 +595,9 @@ fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>, floor
         kept.push(line)
     }
     state.kept = "\n".join(kept)
+    if kept.len() > 0 {
+        state.last = kept.at(kept.len() - 1)
+    }
     Ok(state)
 }
 
@@ -483,12 +618,135 @@ fn read_log(read: DirRead) -> Result<Option<Untrusted<String>>, StoreError> {
     }
 }
 
-fn load<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>) -> Result<State<T>, StoreError> {
-    let floor = capability_label(read)
-    match read_log(read)? {
-        Some(text) => replay(text, key, codec, floor)
-        None => Ok(State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: ""))
+// The snapshot, if it is there and checks: its text is one line, the
+// SHA-256 of the rest, a space, and a header and a seal as a record has
+// them, under keys of its own. The seal holds every live record with its
+// own label, so a snapshot lowers no label. A snapshot that does not check
+// is not an error here: `why` says why, and the replay decides.
+fn find_snapshot<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>, floor: Label) -> Result<Found<T>, StoreError> {
+    let present = match read.exists(Path.new("snapshot")) {
+        Ok(p) => p
+        Err(e) => {
+            return Err(StoreError.Io(e))
+        }
     }
+    if !present {
+        return Ok(Found(snap: None, why: ""))
+    }
+    let text = match read.read_to_string(Path.new("snapshot")) {
+        Ok(t) => t
+        Err(_) => {
+            return Ok(Found(snap: None, why: "it cannot be read"))
+        }
+    }
+    Ok(parse_snapshot(text, key, codec, floor))
+}
+
+fn parse_snapshot<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>, floor: Label) -> Found<T> {
+    let lines = text.split("\n")
+    if lines.len() != 2 {
+        return Found(snap: None, why: "it is not one line")
+    }
+    if lines.at(1).len() > 0 {
+        return Found(snap: None, why: "it is cut short")
+    }
+    let parts = match lines.at(0).split_once(" ") {
+        Some(p) => p
+        None => {
+            return Found(snap: None, why: "no hash")
+        }
+    }
+    if hash(parts.at(1)) != parts.at(0) {
+        return Found(snap: None, why: "the hash does not match the snapshot")
+    }
+    let halves = match parts.at(1).split_once(" ") {
+        Some(p) => p
+        None => {
+            return Found(snap: None, why: "no seal")
+        }
+    }
+    let head = match json.parse(halves.at(0)) {
+        Ok(v) => v
+        Err(_) => {
+            return Found(snap: None, why: "the header is not JSON")
+        }
+    }
+    let seq = match head.int("seq") {
+        Some(n) => n
+        None => {
+            return Found(snap: None, why: "no sequence number")
+        }
+    }
+    let prev = match head.text("prev") {
+        Some(p) => p
+        None => {
+            return Found(snap: None, why: "no link to the log")
+        }
+    }
+    if seq < 1 {
+        return Found(snap: None, why: "the sequence number is not a record's")
+    }
+    let content = match unseal(key, seq, "snapshot key", halves.at(0), halves.at(1)) {
+        Some(v) => v
+        None => {
+            return Found(snap: None, why: "it does not open: the key is wrong or the seal was changed")
+        }
+    }
+    let records = match content.list("records") {
+        Some(r) => r
+        None => {
+            return Found(snap: None, why: "no records")
+        }
+    }
+    var snap: Snap<T> = Snap(seq: seq, head: prev, index: Map.new(), labels: Map.new())
+    for record in records {
+        let name = match record.text("key") {
+            Some(k) => k
+            None => {
+                return Found(snap: None, why: "a record without a key")
+            }
+        }
+        let written = match label_of(record) {
+            Some(l) => l
+            None => {
+                return Found(snap: None, why: "a label this version does not know")
+            }
+        }
+        let stored = match record.get("value") {
+            Some(v) => v
+            None => {
+                return Found(snap: None, why: "a record without a value")
+            }
+        }
+        match codec.decode(stored) {
+            Some(t) => {
+                snap.index.put(name, t)
+                snap.labels.put(name, written)
+            }
+            None => {
+                return Found(snap: None, why: "a value that is not of the store's type")
+            }
+        }
+    }
+    Found(snap: Some(snap), why: "")
+}
+
+// What the files say, through the snapshot when it checks.
+fn recover<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>, floor: Label) -> Result<State<T>, StoreError> {
+    let found = find_snapshot(read, key, codec, floor)?
+    match read_log(read)? {
+        Some(text) => replay(text, key, codec, floor, found)
+        None => {
+            if found.snap.is_some() || found.why.len() > 0 {
+                return Err(StoreError.Corrupt("the log is missing, and a snapshot is there"))
+            }
+            Ok(empty_state(floor))
+        }
+    }
+}
+
+fn load<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>) -> Result<State<T>, StoreError> {
+    recover(read, key, codec, capability_label(read))
 }
 
 // Open the store in the directory `read` reaches, for reading only. A torn
@@ -511,12 +769,8 @@ pub fn read<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>) -> Result<Rea
 pub fn open<T, R>(read: DirRead, dir: DirWrite, key: Secret<Bytes>, codec: Codec<T>, body: cap fn(Store<T>) -> R) -> Result<R, StoreError> {
     let floor = capability_label(read)
     let locked = dir.with_lock(|locked: DirWrite| {
-        let text = read_log(read)?
-        let state = match text {
-            Some(t) => replay(t, key, codec, floor)?
-            None => State(index: Map.new(), labels: Map.new(), floor: floor, seq: 0, head: FIRST, torn: false, kept: "")
-        }
-        if text.is_none() || state.torn {
+        let state = recover(read, key, codec, floor)?
+        if state.fresh || state.torn {
             rewrite(locked, state.kept)?
         }
         Ok(body(Store(dir: locked, key: key, codec: codec, state: state)))
@@ -555,6 +809,15 @@ impl<T> Reader<T> {
     // How many records there are.
     pub fn len(self) -> Int {
         self.state.index.len()
+    }
+
+    // How the store was opened, as a line of text: `snapshot` (the snapshot
+    // and the tail of the log), `log` (the whole log, there being no
+    // snapshot), or `log (the snapshot is damaged: ...)`, the whole log
+    // after a snapshot that did not check. A damaged snapshot never passes
+    // without this saying so.
+    pub fn opened(self) -> String {
+        self.state.opened
     }
 
     // The label of the record under `key`: the higher of the label it was
@@ -616,6 +879,62 @@ impl<T> Store<T> {
         sync_io(file.sync())?
         self.state.seq = self.state.seq + 1
         self.state.head = id
+        self.state.last = "{id} {body}"
         Ok(())
     }
+
+    // Write a snapshot of every live record and drop the log's front, so
+    // the next open reads the snapshot and only the records after it. The
+    // order is the one in `formal/tla/store-log.md`: write the snapshot to
+    // `snapshot.tmp`, sync it, rename it over `snapshot`, sync the
+    // directory, and only then replace the log with its last record, the
+    // one the snapshot ends at (kept so that a snapshot taken away shows).
+    // The snapshot covers only records that `put` already synced. A crash
+    // at any step opens to a prefix of the acknowledged writes. The log is
+    // replaced as a whole through a temporary file and a `rename`, so
+    // dropping its front is atomic and, after the directory sync, durable.
+    // A store with no records writes nothing.
+    pub fn snapshot(var self) -> Result<(), StoreError> {
+        if self.state.seq == 0 {
+            return Ok(())
+        }
+        let text = snapshot_text(self.key, self.codec, self.state)?
+        let tmp = Path.new("snapshot.tmp")
+        sync_io(self.dir.write(tmp, text))?
+        sync_io(self.dir.restrict_to_file(tmp).sync())?
+        sync_io(self.dir.rename(tmp, Path.new("snapshot")))?
+        sync_io(self.dir.sync())?
+        if self.state.first < self.state.seq {
+            rewrite(self.dir, self.state.last)?
+            self.state.first = self.state.seq
+        }
+        Ok(())
+    }
+}
+
+// The text of the snapshot of `state`.
+fn snapshot_text<T>(key: Secret<Bytes>, codec: Codec<T>, state: State<T>) -> Result<Untrusted<String>, StoreError> {
+    var records = []
+    for entry in state.index.entries() {
+        let label = match state.labels.get(entry.key) {
+            Some(l) => l
+            None => state.floor
+        }
+        records.push(json.Value.Object([
+            json.Member(key: "key", value: json.Value.Text(entry.key)),
+            json.Member(key: "class", value: json.Value.Text(label.classification.name())),
+            json.Member(key: "trust", value: json.Value.Text(label.trust.name())),
+            json.Member(key: "value", value: codec.encode(entry.value)),
+        ]))
+    }
+    let content = json.Value.Object([json.Member(key: "records", value: json.Value.List(records))])
+    let plain = Secret.new(copied(json.encode(content).to_bytes()))
+    let header = json.encode(json.Value.Object([
+        json.Member(key: "seq", value: json.Value.Number(json.Number.from_int(state.seq))),
+        json.Member(key: "prev", value: json.Value.Text(state.head)),
+        json.Member(key: "kind", value: json.Value.Text("snapshot")),
+    ]))
+    let body = seal(key, state.seq, "snapshot key", "snapshot nonce", header, plain)?
+    let id = hash(body)
+    Ok("{id} {body}\n")
 }
