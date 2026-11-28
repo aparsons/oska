@@ -3,23 +3,29 @@
 // spec #842). A module sees it only after `use std.store`.
 //
 // A store is a directory with one file, `log`: an append-only log of
-// records, one per line. Each line is the SHA-256 of the record's body in
-// hex, a space, and the body, which is canonical JSON (`std.json`) with the
-// record's sequence number, the hash of the previous line (64 zeros for the
-// first), the operation (`put` or `delete`), the key and, for a `put`, the
-// value. A record that carries the hash of the one before makes the log a
-// chain: a changed, removed or reordered record breaks it.
+// records, one per line. Each line is the SHA-256 of the rest of the line
+// in hex, a space, the record's header, a space, and its seal. The header is
+// canonical JSON (`std.json`) in the clear: the sequence number, the hash of
+// the previous line (64 zeros for the first), the record's label (its
+// classification, `public` until ADR 0029 is built, and its trust flag).
+// The seal is hex: a 12-byte nonce and the ChaCha20-Poly1305 sealing of the
+// record's content, canonical JSON with the operation (`put` or `delete`),
+// the key and, for a `put`, the value. A record that carries the hash of the
+// one before makes the log a chain: a changed, removed or reordered record
+// breaks it, and checking the chain needs no key.
 //
-// - `store.open(read, dir, codec, body)` opens the store for writing. It
-//   takes the directory's lock (`DirWrite.with_lock`) for the length of
-//   `body`, so there is one writer; a second writer gets the `IoError`
-//   `L0001`. It reads the log, then calls `body` with a `Store`.
-// - `store.read(read, codec)` opens it for reading only. Any number of
-//   readers can read at once, and a reader changes nothing on disk.
-// - `put`, `delete` and `get` work on a typed record under a text key. A
-//   `put` appends the record and syncs the file before it returns `Ok`
-//   (`formal/tla/store-log.md`): an `Ok` is an acknowledged write, and it
-//   survives a crash.
+// Sealing. The store key is a `Secret<Bytes>` that the caller gives to
+// `open` and `read`, and that is never written. Each record has its own
+// key and nonce key, which HKDF-SHA-256 derives from the store key and the
+// record's sequence number. The header is the authenticated data of the
+// seal, so a changed sequence number, previous hash or label makes the
+// record not open. The nonce comes from the record's content and its own
+// nonce key, so two different contents never share a key and nonce, even
+// when a torn write is dropped and its sequence number is used again.
+// A record that does not open, because the key is wrong or the seal was
+// changed, is `Corrupt`: a wrong key fails the open and shows nothing.
+// The store key is only ever handed to HKDF. The module has one audit site,
+// `reveal`, where a sealed or opened secret becomes bytes of the file.
 //
 // Recovery. A crash can leave the last line cut short. Opening finds the
 // longest valid prefix of the log: a last line with no line break at its
@@ -34,13 +40,14 @@
 // back. The one back gives `None` for JSON it does not accept, and then the
 // open fails with `Corrupt`.
 //
-// This version has no encryption and no labels: the log is readable text
-// to whoever can read the directory.
+// This version writes the classification `public` and the trust flag only.
 
 // For maintainers: this file is Oska source, checked under the rules for
 // user code and run as Oska by both backends. The comment block directly
 // above a `pub` item is its description in the API reference.
 
+use std.chacha20poly1305
+use std.hkdf
 use std.json
 use std.sha2
 
@@ -111,6 +118,7 @@ struct State<T> {
 // which holds the lock.
 pub cap struct Store<T> {
     dir: DirWrite,
+    key: Secret<Bytes>,
     codec: Codec<T>,
     state: State<T>,
 }
@@ -124,12 +132,45 @@ fn hash(body: Untrusted<String>) -> Untrusted<String> {
     sha2.sha256(body.to_bytes()).to_hex()
 }
 
-fn body_of(seq: Int, prev: Untrusted<String>, op: String, key: Untrusted<String>, value: Option<json.Value>) -> Untrusted<String> {
-    var members = [
+// The one audit site: a sealed or opened secret as bytes. Everything
+// reaching it is ciphertext, a nonce, or a plaintext that the caller gets
+// back from its own file.
+fn reveal(secret: Secret<Bytes>) -> Bytes {
+    secret.expose()
+}
+
+// The bytes of `data` as trusted `Bytes`, built from the integers read out
+// of it, which are trusted (as `std.hkdf` does). The copy goes only into a
+// seal or a hash, so the data cannot shape anything structural; what comes
+// back out of a seal is parsed by `json.parse`, whose text is untrusted.
+fn copied(data: Untrusted<Bytes>) -> Bytes {
+    var out = Bytes.new()
+    for i in 0..data.len() {
+        out.push(data.at(i))
+    }
+    out
+}
+
+// The key or nonce key of record `seq`: 32 bytes from HKDF of the store key.
+fn derive(key: Secret<Bytes>, seq: Int, purpose: String) -> Option<Secret<Bytes>> {
+    let prk = hkdf.extract(Secret.new("oska.store.v1".to_bytes()), key)
+    hkdf.expand(prk, "{purpose} {seq}".to_bytes(), 32)
+}
+
+fn header_of(seq: Int, prev: Untrusted<String>) -> Untrusted<String> {
+    json.encode(json.Value.Object([
         json.Member(key: "seq", value: json.Value.Number(json.Number.from_int(seq))),
         json.Member(key: "prev", value: json.Value.Text(prev)),
+        json.Member(key: "class", value: json.Value.Text("public")),
+        json.Member(key: "trust", value: json.Value.Text("untrusted")),
+    ]))
+}
+
+// The line's text after its hash: the header, a space, and the seal.
+fn body_of(key: Secret<Bytes>, seq: Int, prev: Untrusted<String>, op: String, name: Untrusted<String>, value: Option<json.Value>) -> Result<Untrusted<String>, StoreError> {
+    var members = [
         json.Member(key: "op", value: json.Value.Text(op)),
-        json.Member(key: "key", value: json.Value.Text(key)),
+        json.Member(key: "key", value: json.Value.Text(name)),
     ]
     match value {
         Some(v) => {
@@ -137,16 +178,58 @@ fn body_of(seq: Int, prev: Untrusted<String>, op: String, key: Untrusted<String>
         }
         None => {}
     }
-    json.encode(json.Value.Object(members))
+    let plain = Secret.new(copied(json.encode(json.Value.Object(members)).to_bytes()))
+    let header = header_of(seq, prev)
+    let enc = match derive(key, seq, "key") {
+        Some(k) => k
+        None => {
+            return Err(StoreError.Corrupt("no record key"))
+        }
+    }
+    let nonce_key = match derive(key, seq, "nonce") {
+        Some(k) => k
+        None => {
+            return Err(StoreError.Corrupt("no record key"))
+        }
+    }
+    var material = nonce_key
+    material.append(plain)
+    let nonce = reveal(sha2.sha256_secret(material).slice(0, 12))
+    let sealed = match chacha20poly1305.seal(enc, nonce, copied(header.to_bytes()), plain) {
+        Some(s) => reveal(s)
+        None => {
+            return Err(StoreError.Corrupt("the record does not seal"))
+        }
+    }
+    let nonce_hex = nonce.to_hex()
+    let sealed_hex = sealed.to_hex()
+    Ok("{header} {nonce_hex}{sealed_hex}")
 }
 
 fn corrupt(line: Int, why: String) -> StoreError {
     StoreError.Corrupt("line {line}: {why}")
 }
 
+// The content of a record: `sealed_hex` is its nonce and seal as hex, and
+// `header` is the authenticated data. `None` for a wrong key, a changed
+// header or seal, or content that is not JSON.
+fn unseal(key: Secret<Bytes>, seq: Int, header: Untrusted<String>, sealed_hex: Untrusted<String>) -> Option<json.Value> {
+    let raw = Bytes.from_hex(sealed_hex)?
+    if raw.len() < 12 {
+        return None
+    }
+    let enc = derive(key, seq, "key")?
+    let plain = chacha20poly1305.open(enc, raw.slice(0, 12), header.to_bytes(), raw.slice(12, raw.len()))?
+    let text = reveal(plain).to_text()?
+    match json.parse(text) {
+        Ok(v) => Some(v)
+        Err(_) => None
+    }
+}
+
 // Read the log text into a state. `lenient` is not a mode: the torn last
 // line is always dropped and reported in `torn`.
-fn replay<T>(text: Untrusted<String>, codec: Codec<T>) -> Result<State<T>, StoreError> {
+fn replay<T>(text: Untrusted<String>, key: Secret<Bytes>, codec: Codec<T>) -> Result<State<T>, StoreError> {
     var state = State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: "")
     let lines = text.split("\n")
     let count = lines.len()
@@ -173,19 +256,32 @@ fn replay<T>(text: Untrusted<String>, codec: Codec<T>) -> Result<State<T>, Store
         if hash(body) != parts.at(0) {
             return Err(corrupt(number, "the hash does not match the record"))
         }
-        let value = match json.parse(body) {
-            Ok(v) => v
-            Err(_) => {
-                return Err(corrupt(number, "the record is not JSON"))
+        let halves = match body.split_once(" ") {
+            Some(p) => p
+            None => {
+                return Err(corrupt(number, "no seal"))
             }
         }
-        if value.int("seq") != Some(state.seq + 1) {
+        let header = halves.at(0)
+        let head = match json.parse(header) {
+            Ok(v) => v
+            Err(_) => {
+                return Err(corrupt(number, "the header is not JSON"))
+            }
+        }
+        if head.int("seq") != Some(state.seq + 1) {
             return Err(corrupt(number, "the sequence number is not the next one"))
         }
-        if value.text("prev") != Some(state.head) {
+        if head.text("prev") != Some(state.head) {
             return Err(corrupt(number, "the record does not follow the one before"))
         }
-        let key = match value.text("key") {
+        let value = match unseal(key, state.seq + 1, header, halves.at(1)) {
+            Some(v) => v
+            None => {
+                return Err(corrupt(number, "the record does not open: the key is wrong or the seal was changed"))
+            }
+        }
+        let name = match value.text("key") {
             Some(k) => k
             None => {
                 return Err(corrupt(number, "no key"))
@@ -200,13 +296,13 @@ fn replay<T>(text: Untrusted<String>, codec: Codec<T>) -> Result<State<T>, Store
             }
             }
             match codec.decode(stored) {
-                Some(t) => state.index.put(key, t)
+                Some(t) => state.index.put(name, t)
                 None => {
                 return Err(corrupt(number, "the value is not of the store's type"))
             }
             }
         } else if op == Some("delete") {
-            let _ = state.index.remove(key)
+            let _ = state.index.remove(name)
         } else {
             return Err(corrupt(number, "an unknown operation"))
         }
@@ -235,9 +331,9 @@ fn read_log(read: DirRead) -> Result<Option<Untrusted<String>>, StoreError> {
     }
 }
 
-fn load<T>(read: DirRead, codec: Codec<T>) -> Result<State<T>, StoreError> {
+fn load<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>) -> Result<State<T>, StoreError> {
     match read_log(read)? {
-        Some(text) => replay(text, codec)
+        Some(text) => replay(text, key, codec)
         None => Ok(State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: ""))
     }
 }
@@ -246,8 +342,8 @@ fn load<T>(read: DirRead, codec: Codec<T>) -> Result<State<T>, StoreError> {
 // last line is left alone and ignored; a record that does not check is
 // `Corrupt`. A reader never writes, takes no lock, and sees the records
 // that were acknowledged when it opened.
-pub fn read<T>(read: DirRead, codec: Codec<T>) -> Result<Reader<T>, StoreError> {
-    let state = load(read, codec)?
+pub fn read<T>(read: DirRead, key: Secret<Bytes>, codec: Codec<T>) -> Result<Reader<T>, StoreError> {
+    let state = load(read, key, codec)?
     Ok(Reader(state: state))
 }
 
@@ -259,17 +355,17 @@ pub fn read<T>(read: DirRead, codec: Codec<T>) -> Result<Reader<T>, StoreError> 
 // A second writer, from this program or another, gets `Io` with `L0001`.
 // After an `Err` from `put` or `delete`, drop the store and open it again:
 // the log may or may not hold the record.
-pub fn open<T, R>(read: DirRead, dir: DirWrite, codec: Codec<T>, body: cap fn(Store<T>) -> R) -> Result<R, StoreError> {
+pub fn open<T, R>(read: DirRead, dir: DirWrite, key: Secret<Bytes>, codec: Codec<T>, body: cap fn(Store<T>) -> R) -> Result<R, StoreError> {
     let locked = dir.with_lock(|locked: DirWrite| {
         let text = read_log(read)?
         let state = match text {
-            Some(t) => replay(t, codec)?
+            Some(t) => replay(t, key, codec)?
             None => State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: "")
         }
         if text.is_none() || state.torn {
             rewrite(locked, state.kept)?
         }
-        Ok(body(Store(dir: locked, codec: codec, state: state)))
+        Ok(body(Store(dir: locked, key: key, codec: codec, state: state)))
     })
     match locked {
         Ok(inner) => inner
@@ -323,7 +419,7 @@ impl<T> Store<T> {
     // appends the record to the log and syncs the file, and only then
     // returns `Ok`: the write is acknowledged and survives a crash.
     pub fn put(var self, key: Untrusted<String>, value: T) -> Result<(), StoreError> {
-        let body = body_of(self.state.seq + 1, self.state.head, "put", key, Some(self.codec.encode(value)))
+        let body = body_of(self.key, self.state.seq + 1, self.state.head, "put", key, Some(self.codec.encode(value)))?
         self.commit(body)?
         self.state.index.put(key, value)
         Ok(())
@@ -332,7 +428,7 @@ impl<T> Store<T> {
     // Remove the record under `key`. A key with no record still writes a
     // `delete` record. Acknowledged as `put` is.
     pub fn delete(var self, key: Untrusted<String>) -> Result<(), StoreError> {
-        let body = body_of(self.state.seq + 1, self.state.head, "delete", key, None)
+        let body = body_of(self.key, self.state.seq + 1, self.state.head, "delete", key, None)?
         self.commit(body)?
         let _ = self.state.index.remove(key)
         Ok(())

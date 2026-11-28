@@ -31,15 +31,16 @@ fn show(io: Stdout, notes: store.Reader<Note>, id: String) -> Result<(), IoError
 fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
     let read = fs.read_only().restrict_to("notes")
     let dir = fs.write_only().restrict_to("notes")
+    let key = Secret.new("store key".to_bytes())
     let codec = store.Codec.new(to_value, from_value)
-    match store.read(read, codec) {
+    match store.read(read, key, codec) {
         Ok(notes) => {
             let n = notes.len()
             io.println("before: {n} notes")?
         }
         Err(e) => io.println(e.message())?
     }
-    let opened = store.open(read, dir, codec, |s: store.Store<Note>| {
+    let opened = store.open(read, dir, key, codec, |s: store.Store<Note>| {
         var notes = s
         let _ = notes.put("a", Note(text: "buy milk", pinned: false))
         let _ = notes.put("b", Note(text: "call back", pinned: true))
@@ -51,7 +52,7 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
         Ok(n) => io.println("wrote, {n} left")?
         Err(e) => io.println(e.message())?
     }
-    match store.read(read, codec) {
+    match store.read(read, key, codec) {
         Ok(notes) => {
             show(io, notes, "a")?
             show(io, notes, "b")?
