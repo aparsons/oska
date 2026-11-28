@@ -1,0 +1,350 @@
+// SPDX-License-Identifier: Apache-2.0
+// `std.store`: an embedded store of typed records, written in Oska (ADR 0040,
+// spec #842). A module sees it only after `use std.store`.
+//
+// A store is a directory with one file, `log`: an append-only log of
+// records, one per line. Each line is the SHA-256 of the record's body in
+// hex, a space, and the body, which is canonical JSON (`std.json`) with the
+// record's sequence number, the hash of the previous line (64 zeros for the
+// first), the operation (`put` or `delete`), the key and, for a `put`, the
+// value. A record that carries the hash of the one before makes the log a
+// chain: a changed, removed or reordered record breaks it.
+//
+// - `store.open(read, dir, codec, body)` opens the store for writing. It
+//   takes the directory's lock (`DirWrite.with_lock`) for the length of
+//   `body`, so there is one writer; a second writer gets the `IoError`
+//   `L0001`. It reads the log, then calls `body` with a `Store`.
+// - `store.read(read, codec)` opens it for reading only. Any number of
+//   readers can read at once, and a reader changes nothing on disk.
+// - `put`, `delete` and `get` work on a typed record under a text key. A
+//   `put` appends the record and syncs the file before it returns `Ok`
+//   (`formal/tla/store-log.md`): an `Ok` is an acknowledged write, and it
+//   survives a crash.
+//
+// Recovery. A crash can leave the last line cut short. Opening finds the
+// longest valid prefix of the log: a last line with no line break at its
+// end is a torn write and is dropped (a writer then rewrites the log
+// without it, through a temporary file and a `rename`). Any other record
+// that does not check, whether its hash, its sequence number or its link to
+// the one before, is an error (`Corrupt`), never skipped. A hash chain does
+// not show that the end of the log was cut off at a line break; that needs
+// a signed checkpoint, which is a later spec.
+//
+// A record is typed by a `Codec`: a function from the value to JSON and one
+// back. The one back gives `None` for JSON it does not accept, and then the
+// open fails with `Corrupt`.
+//
+// This version has no encryption and no labels: the log is readable text
+// to whoever can read the directory.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code and run as Oska by both backends. The comment block directly
+// above a `pub` item is its description in the API reference.
+
+use std.json
+use std.sha2
+
+// The hash that the first record links to: 64 zeros.
+const FIRST: String = "0000000000000000000000000000000000000000000000000000000000000000"
+
+// Why a store call failed.
+pub enum StoreError {
+    // A file operation failed: a missing directory, a lock that is held
+    // (`L0001`), a failed sync.
+    Io(IoError),
+    // The log is damaged: the text names the line and the reason.
+    Corrupt(String),
+}
+
+impl StoreError {
+    // The error as one line of text. It is untrusted: an `IoError`'s text
+    // comes from the operating system.
+    pub fn message(self) -> Untrusted<String> {
+        match self {
+            StoreError.Io(e) => {
+                let text = e.to_string()
+                "store: {text}"
+            }
+            StoreError.Corrupt(why) => "store: corrupt log: {why}"
+        }
+    }
+}
+
+// How a record of type `T` becomes JSON and comes back.
+pub struct Codec<T> {
+    to_value: fn(T) -> json.Value,
+    from_value: fn(json.Value) -> Option<T>,
+}
+
+impl<T> Codec<T> {
+    fn encode(self, value: T) -> json.Value {
+        let f = self.to_value
+        f(value)
+    }
+
+    fn decode(self, value: json.Value) -> Option<T> {
+        let f = self.from_value
+        f(value)
+    }
+}
+
+impl<T> Codec<T> {
+    // A codec from `to_value` and `from_value`. `from_value` gives `None`
+    // for JSON that is not a `T`.
+    pub fn new(to_value: fn(T) -> json.Value, from_value: fn(json.Value) -> Option<T>) -> Codec<T> {
+        Codec(to_value: to_value, from_value: from_value)
+    }
+}
+
+// What a log says once read: the live records by key, the sequence number
+// of the last record, the hash of the last line, and whether a torn last
+// line was found.
+struct State<T> {
+    index: Map<Untrusted<String>, T>,
+    seq: Int,
+    head: Untrusted<String>,
+    torn: Bool,
+    kept: Untrusted<String>,
+}
+
+// A store open for writing. It exists only inside the body of `open`,
+// which holds the lock.
+pub cap struct Store<T> {
+    dir: DirWrite,
+    codec: Codec<T>,
+    state: State<T>,
+}
+
+// A store open for reading.
+pub struct Reader<T> {
+    state: State<T>,
+}
+
+fn hash(body: Untrusted<String>) -> Untrusted<String> {
+    sha2.sha256(body.to_bytes()).to_hex()
+}
+
+fn body_of(seq: Int, prev: Untrusted<String>, op: String, key: Untrusted<String>, value: Option<json.Value>) -> Untrusted<String> {
+    var members = [
+        json.Member(key: "seq", value: json.Value.Number(json.Number.from_int(seq))),
+        json.Member(key: "prev", value: json.Value.Text(prev)),
+        json.Member(key: "op", value: json.Value.Text(op)),
+        json.Member(key: "key", value: json.Value.Text(key)),
+    ]
+    match value {
+        Some(v) => {
+            members.push(json.Member(key: "value", value: v))
+        }
+        None => {}
+    }
+    json.encode(json.Value.Object(members))
+}
+
+fn corrupt(line: Int, why: String) -> StoreError {
+    StoreError.Corrupt("line {line}: {why}")
+}
+
+// Read the log text into a state. `lenient` is not a mode: the torn last
+// line is always dropped and reported in `torn`.
+fn replay<T>(text: Untrusted<String>, codec: Codec<T>) -> Result<State<T>, StoreError> {
+    var state = State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: "")
+    let lines = text.split("\n")
+    let count = lines.len()
+    var n = 0
+    var kept = []
+    while n < count {
+        let line = lines.at(n)
+        let number = n + 1
+        n = n + 1
+        if n == count {
+            // The text after the last line break: nothing, or a torn write.
+            if line.len() > 0 {
+                state.torn = true
+            }
+            break
+        }
+        let parts = match line.split_once(" ") {
+            Some(p) => p
+            None => {
+                return Err(corrupt(number, "no hash"))
+            }
+        }
+        let body = parts.at(1)
+        if hash(body) != parts.at(0) {
+            return Err(corrupt(number, "the hash does not match the record"))
+        }
+        let value = match json.parse(body) {
+            Ok(v) => v
+            Err(_) => {
+                return Err(corrupt(number, "the record is not JSON"))
+            }
+        }
+        if value.int("seq") != Some(state.seq + 1) {
+            return Err(corrupt(number, "the sequence number is not the next one"))
+        }
+        if value.text("prev") != Some(state.head) {
+            return Err(corrupt(number, "the record does not follow the one before"))
+        }
+        let key = match value.text("key") {
+            Some(k) => k
+            None => {
+                return Err(corrupt(number, "no key"))
+            }
+        }
+        let op = value.text("op")
+        if op == Some("put") {
+            let stored = match value.get("value") {
+                Some(v) => v
+                None => {
+                return Err(corrupt(number, "a put without a value"))
+            }
+            }
+            match codec.decode(stored) {
+                Some(t) => state.index.put(key, t)
+                None => {
+                return Err(corrupt(number, "the value is not of the store's type"))
+            }
+            }
+        } else if op == Some("delete") {
+            let _ = state.index.remove(key)
+        } else {
+            return Err(corrupt(number, "an unknown operation"))
+        }
+        state.seq = state.seq + 1
+        state.head = parts.at(0)
+        kept.push(line)
+    }
+    state.kept = "\n".join(kept)
+    Ok(state)
+}
+
+// The log's text, and whether the file is there.
+fn read_log(read: DirRead) -> Result<Option<Untrusted<String>>, StoreError> {
+    let present = match read.exists(Path.new("log")) {
+        Ok(p) => p
+        Err(e) => {
+                return Err(StoreError.Io(e))
+            }
+    }
+    if !present {
+        return Ok(None)
+    }
+    match read.read_to_string(Path.new("log")) {
+        Ok(text) => Ok(Some(text))
+        Err(e) => Err(StoreError.Io(e))
+    }
+}
+
+fn load<T>(read: DirRead, codec: Codec<T>) -> Result<State<T>, StoreError> {
+    match read_log(read)? {
+        Some(text) => replay(text, codec)
+        None => Ok(State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: ""))
+    }
+}
+
+// Open the store in the directory `read` reaches, for reading only. A torn
+// last line is left alone and ignored; a record that does not check is
+// `Corrupt`. A reader never writes, takes no lock, and sees the records
+// that were acknowledged when it opened.
+pub fn read<T>(read: DirRead, codec: Codec<T>) -> Result<Reader<T>, StoreError> {
+    let state = load(read, codec)?
+    Ok(Reader(state: state))
+}
+
+// Open the store for writing and call `body` with it, holding the
+// directory's lock until `body` returns: `Ok` of what `body` returned. `read`
+// and `dir` reach the same directory. Opening recovers the longest valid
+// prefix of the log: a torn last line is cut off, durably, before `body`
+// runs. A record that does not check is `Corrupt` and `body` is not called.
+// A second writer, from this program or another, gets `Io` with `L0001`.
+// After an `Err` from `put` or `delete`, drop the store and open it again:
+// the log may or may not hold the record.
+pub fn open<T, R>(read: DirRead, dir: DirWrite, codec: Codec<T>, body: cap fn(Store<T>) -> R) -> Result<R, StoreError> {
+    let locked = dir.with_lock(|locked: DirWrite| {
+        let text = read_log(read)?
+        let state = match text {
+            Some(t) => replay(t, codec)?
+            None => State(index: Map.new(), seq: 0, head: FIRST, torn: false, kept: "")
+        }
+        if text.is_none() || state.torn {
+            rewrite(locked, state.kept)?
+        }
+        Ok(body(Store(dir: locked, codec: codec, state: state)))
+    })
+    match locked {
+        Ok(inner) => inner
+        Err(e) => Err(StoreError.Io(e))
+    }
+}
+
+// Replace the log with `kept` through a temporary file, so a crash leaves
+// the old log or the new one: write, sync the data, rename, sync the
+// directory.
+fn rewrite(dir: DirWrite, kept: Untrusted<String>) -> Result<(), StoreError> {
+    let text = if kept.len() == 0 { "{kept}" } else { "{kept}\n" }
+    let tmp = Path.new("log.tmp")
+    sync_io(dir.write(tmp, text))?
+    sync_io(dir.restrict_to_file(tmp).sync())?
+    sync_io(dir.rename(tmp, Path.new("log")))?
+    sync_io(dir.sync())
+}
+
+fn sync_io(result: Result<(), IoError>) -> Result<(), StoreError> {
+    match result {
+        Ok(()) => Ok(())
+        Err(e) => Err(StoreError.Io(e))
+    }
+}
+
+impl<T> Reader<T> {
+    // The record under `key`, or `None`.
+    pub fn get(self, key: Untrusted<String>) -> Option<T> {
+        self.state.index.get(key)
+    }
+
+    // How many records there are.
+    pub fn len(self) -> Int {
+        self.state.index.len()
+    }
+}
+
+impl<T> Store<T> {
+    // The record under `key`, or `None`.
+    pub fn get(self, key: Untrusted<String>) -> Option<T> {
+        self.state.index.get(key)
+    }
+
+    // How many records there are.
+    pub fn len(self) -> Int {
+        self.state.index.len()
+    }
+
+    // Write `value` under `key`, replacing a record that was there. It
+    // appends the record to the log and syncs the file, and only then
+    // returns `Ok`: the write is acknowledged and survives a crash.
+    pub fn put(var self, key: Untrusted<String>, value: T) -> Result<(), StoreError> {
+        let body = body_of(self.state.seq + 1, self.state.head, "put", key, Some(self.codec.encode(value)))
+        self.commit(body)?
+        self.state.index.put(key, value)
+        Ok(())
+    }
+
+    // Remove the record under `key`. A key with no record still writes a
+    // `delete` record. Acknowledged as `put` is.
+    pub fn delete(var self, key: Untrusted<String>) -> Result<(), StoreError> {
+        let body = body_of(self.state.seq + 1, self.state.head, "delete", key, None)
+        self.commit(body)?
+        let _ = self.state.index.remove(key)
+        Ok(())
+    }
+
+    fn commit(var self, body: Untrusted<String>) -> Result<(), StoreError> {
+        let id = hash(body)
+        let file = self.dir.restrict_to_file(Path.new("log"))
+        sync_io(file.append("{id} {body}\n"))?
+        sync_io(file.sync())?
+        self.state.seq = self.state.seq + 1
+        self.state.head = id
+        Ok(())
+    }
+}

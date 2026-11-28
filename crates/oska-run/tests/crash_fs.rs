@@ -253,3 +253,23 @@ fn explore_runs_the_program_once_and_calls_recovery_at_every_crash() {
     assert_eq!(calls, total);
     assert!(total >= 3);
 }
+
+#[test]
+fn a_name_that_a_crash_reverts_is_a_file_still_and_never_a_directory() {
+    // A rename that reverts leaves the old name; the new name must not
+    // appear as a directory, or a program cannot write there again.
+    let steps = "    let tmp = dir.restrict_to_file(Path.new(\"snap.tmp\"))\n\
+        \x20   tmp.write(\"snapshot\")?\n\
+        \x20   tmp.sync()?\n\
+        \x20   dir.rename(Path.new(\"snap.tmp\"), Path.new(\"snap\"))?\n";
+    let recording = record(world(), steps);
+    recording.for_each_crash(Tears::Every, |crash| {
+        let dirs = crash.fs.world().dirs;
+        assert!(
+            !dirs.contains(std::path::Path::new("/data/snap"))
+                && !dirs.contains(std::path::Path::new("/data/snap.tmp")),
+            "{}: {dirs:?}",
+            crash.describe()
+        );
+    });
+}

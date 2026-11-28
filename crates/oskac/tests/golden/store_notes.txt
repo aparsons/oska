@@ -1,0 +1,10 @@
+first run
+before: 0 notes
+wrote, 1 left
+a: buy oat milk
+b: none
+second run
+before: 1 notes
+wrote, 1 left
+a: buy oat milk
+b: none

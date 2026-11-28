@@ -187,6 +187,12 @@ pub static STD_MODULES: &[StdModule] = &[
         written_in_oska: true,
     },
     StdModule {
+        path: "std.store",
+        source: include_str!("std/store.osk"),
+        sink_literal: None,
+        written_in_oska: true,
+    },
+    StdModule {
         path: "std.core",
         source: include_str!("std/core.osk"),
         sink_literal: None,

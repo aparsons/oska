@@ -50,6 +50,7 @@ pub const MODULES: &[&str] = &[
     "std.tls",
     "std.http",
     "std.map",
+    "std.store",
 ];
 
 /// What kind of item an entry is.
