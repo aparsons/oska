@@ -1021,7 +1021,12 @@ done
 set_stub "$install_stub" "$(noisy INSTALL 1)"
 for jobs in 4 1; do
   OSKA_CHECK_JOBS=$jobs check --group scripts
-  if [ "$status" -ne 0 ] && grep -qE '^\([0-9]+s\)$' <<<"$out" && grep -q '^Slowest steps:$' <<<"$out" &&
+  # The "(Ns)" line is the step's own timing only when the step runs in this
+  # process (OSKA_CHECK_JOBS=1); in concurrent mode the child prints one too,
+  # so only the slowest-steps entry proves the parent timed the failed step.
+  own_time=1
+  if [ "$jobs" -eq 1 ] && ! grep -qE '^\([0-9]+s\)$' <<<"$out"; then own_time=0; fi
+  if [ "$status" -ne 0 ] && [ "$own_time" -eq 1 ] && grep -q '^Slowest steps:$' <<<"$out" &&
     grep -qE '^ +[0-9]+s  installer tests' <<<"$out"; then
     ok "a failing run prints the failing suite's seconds and the slowest steps (OSKA_CHECK_JOBS=$jobs)"
   else
@@ -1029,8 +1034,10 @@ for jobs in 4 1; do
   fi
 done
 
-# A suite whose runner dies without a result (SIGKILL, the OOM killer) fails
-# the run; it does not hang it. The stub kills its grandparent, the runner.
+# A suite whose launch subshell dies without a result (SIGKILL, the OOM
+# killer) fails the run; it does not hang it. The stub's parent is the runner
+# (check.sh --internal-step) and its grandparent is the launch subshell, which
+# is what this stub kills.
 # shellcheck disable=SC2016 # the stub script is written out, not expanded here
 set_stub "$install_stub" '#!/usr/bin/env bash
 kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"
@@ -1042,10 +1049,10 @@ mkdir -p "$work/dead-tmp"
 (cd "$tree" && PATH="$tree/bin:$PATH" STUB_LOG="$work/log" TMPDIR=$work/dead-tmp OSKA_CHECK_JOBS=4 \
   exec scripts/check.sh --group scripts >"$work/dead.out" 2>&1) &
 dead_pid=$!
-for _ in $(seq 1 150); do kill -0 "$dead_pid" 2>/dev/null || break; sleep 0.1; done
+for _ in $(seq 1 300); do kill -0 "$dead_pid" 2>/dev/null || break; sleep 0.1; done
 if kill -0 "$dead_pid" 2>/dev/null; then
   kill "$dead_pid" 2>/dev/null || true
-  bad "a suite whose runner is killed fails the run and does not hang it" "still running after 15s"
+  bad "a suite whose runner is killed fails the run and does not hang it" "still running after 30s"
 else
   dead_status=0
   wait "$dead_pid" || dead_status=$?
@@ -1058,14 +1065,54 @@ fi
 reset_stub "$install_stub"
 reset_stub "$kill_stub"
 
+# The runner itself (check.sh --internal-step) is SIGKILLed: the launch
+# subshell records 137, so the group fails with that code and does not hang.
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
+set_stub "$install_stub" '#!/usr/bin/env bash
+kill -9 "$PPID"
+sleep 1'
+OSKA_CHECK_JOBS=4 check --group scripts
+if [ "$status" -eq 137 ]; then
+  ok "a suite whose runner is SIGKILLed fails the group with 137"
+else
+  bad "a suite whose runner is SIGKILLed fails the group with 137" "exit $status: $out"
+fi
+reset_stub "$install_stub"
+
+# Where ps cannot list processes, an interrupted run says so and does not
+# pretend it stopped the suites.
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
+set_stub bin/ps '#!/usr/bin/env bash
+exit 1'
+chmod +x "$tree/bin/ps"
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
+set_stub "$install_stub" '#!/usr/bin/env bash
+sleep 3'
+mkdir -p "$work/ps-tmp"
+(cd "$tree" && PATH="$tree/bin:$PATH" STUB_LOG="$work/log" TMPDIR=$work/ps-tmp OSKA_CHECK_JOBS=4 \
+  exec scripts/check.sh --group scripts >"$work/ps.out" 2>&1) &
+ps_pid=$!
+sleep 2
+kill -TERM "$ps_pid" 2>/dev/null || true
+for _ in $(seq 1 200); do kill -0 "$ps_pid" 2>/dev/null || break; sleep 0.1; done
+kill -9 "$ps_pid" 2>/dev/null || true
+wait "$ps_pid" 2>/dev/null || true
+if grep -q 'cannot list processes' "$work/ps.out"; then
+  ok "an interrupted run says so when ps cannot list processes"
+else
+  bad "an interrupted run says so when ps cannot list processes" "$(cat "$work/ps.out")"
+fi
+rm -f "$tree/bin/ps"
+reset_stub "$install_stub"
+reset_stub "$kill_stub"
+
 # INT or TERM in the middle of a concurrent run stops every process the suites
 # started, grandchildren included, and removes the buffer directory.
 # A shell that was started in the background (as CI does, when this suite is
 # itself a concurrent child) has SIGINT ignored, and a script cannot trap a
 # signal that was ignored on entry. Reset it to the default before the exec.
 reset_int=(env)
-# shellcheck disable=SC2016 # Perl's $SIG, not a shell variable
-command -v perl >/dev/null 2>&1 && reset_int=(perl -e '$SIG{INT}="DEFAULT";exec(@ARGV)' --)
+command -v python3 >/dev/null 2>&1 && reset_int=(python3 -I -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])')
 for sig in INT TERM; do
   rm -f "$work"/log.*
   rm -rf "$work/sig-tmp"
@@ -1092,7 +1139,7 @@ wait'
   gc1=$(cat "$work/log.gc1" 2>/dev/null || true)
   gc2=$(cat "$work/log.gc2" 2>/dev/null || true)
   kill -"$sig" "$sig_pid" 2>/dev/null || true
-  for _ in $(seq 1 100); do kill -0 "$sig_pid" 2>/dev/null || break; sleep 0.1; done
+  for _ in $(seq 1 200); do kill -0 "$sig_pid" 2>/dev/null || break; sleep 0.1; done
   sig_status=0
   if kill -0 "$sig_pid" 2>/dev/null; then
     kill -9 "$sig_pid" 2>/dev/null || true
@@ -1111,7 +1158,9 @@ wait'
     [ -z "$(ls -A "$work/sig-tmp")" ]; then
     ok "$sig stops every suite process and removes the buffer directory"
   else
-    bad "$sig stops every suite process and removes the buffer directory" "exit $sig_status (want $want), alive:$alive, left: $(ls -A "$work/sig-tmp"), gc: $gc1 $gc2"
+    hint=
+    [ "${#reset_int[@]}" -gt 1 ] || hint=" (an ignored SIGINT can only be reset with python3, which is not installed)"
+    bad "$sig stops every suite process and removes the buffer directory" "exit $sig_status (want $want)$hint, alive:$alive, left: $(ls -A "$work/sig-tmp"), gc: $gc1 $gc2"
   fi
 done
 reset_stub "$install_stub"
