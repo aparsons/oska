@@ -29,7 +29,7 @@ The broken models follow the rule in `docs/agents/formal.md`: a `.cfg` that star
 - A snapshot whose data no sync made durable may be torn.
 - A rename that no directory sync made durable may or may not have happened.
 - Not modelled: a file edited on purpose. That is the attack tests' job (spec #842, ticket "Tamper and crash attack tests").
-- Assumed, and not modelled: dropping the log's front (`Truncate`) is atomic and durable. The log is a sequence of files, and the engine removes an old one and syncs the directory. The ticket that builds the engine either keeps this true or extends the model first.
+- Assumed, and not modelled: dropping the log's front (`Truncate`) is atomic and durable. The log is a sequence of files, and the engine removes an old one and syncs the directory. The ticket that builds the engine either keeps this true or extends the model first. `Store.snapshot` (#851) keeps it true without a sequence of files: it drops the front by replacing `log` with its last record through a temporary file, `rename` and a directory sync, which the file API makes atomic and, after the sync, durable. The last record stays so that a deleted snapshot shows as a log that starts after record 1. What the file API does not promise is that `remove_file` or `rename` is durable before the directory sync; the engine syncs the directory after each, and `CrashHost` tests it at every boundary.
 
 ## The operation order the file API must offer
 
