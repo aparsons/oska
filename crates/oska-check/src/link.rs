@@ -33,8 +33,8 @@
 use std::collections::{HashMap, HashSet};
 
 use oska_syntax::ast::{
-    Block, Expr, ExprKind, FnDecl, GenericParam, Ident, Item, ItemKind, Module, Pattern,
-    PatternKind, StmtKind, StrPart, Type, TypeKind, UseDecl, Visibility,
+    Block, ClosureParam, Expr, ExprKind, FnDecl, GenericParam, Ident, Item, ItemKind, MatchArm,
+    Module, Pattern, PatternKind, StmtKind, StrPart, Type, TypeKind, UseDecl, Visibility,
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
@@ -267,7 +267,7 @@ impl Keys {
             let boundary = text[..at]
                 .chars()
                 .next_back()
-                .map_or(true, |c| !is_name_char(c) && c != '.');
+                .is_none_or(|c| !is_name_char(c) && c != '.');
             if !boundary {
                 continue;
             }
@@ -1390,18 +1390,7 @@ impl Rewriter<'_> {
                     self.expr(item);
                 }
             }
-            ExprKind::Closure { params, body } => {
-                let mark = self.locals.len();
-                for param in params.iter_mut() {
-                    if let Some(ty) = &mut param.ty {
-                        self.ty(ty);
-                    }
-                }
-                self.locals
-                    .extend(params.iter().map(|p| p.name.name.clone()));
-                self.expr(body);
-                self.locals.truncate(mark);
-            }
+            ExprKind::Closure { params, body } => self.closure_expr(params, body),
             ExprKind::If {
                 cond,
                 then_block,
@@ -1419,18 +1408,35 @@ impl Rewriter<'_> {
                 self.block(body);
                 self.locals.pop();
             }
-            ExprKind::Match { scrutinee, arms } => {
-                self.expr(scrutinee);
-                for arm in arms {
-                    let mark = self.locals.len();
-                    self.pattern(&mut arm.pattern);
-                    if let Some(guard) = &mut arm.guard {
-                        self.expr(guard);
-                    }
-                    self.expr(&mut arm.body);
-                    self.locals.truncate(mark);
-                }
+            ExprKind::Match { scrutinee, arms } => self.match_expr(scrutinee, arms),
+        }
+    }
+
+    /// A closure: its parameters are locals in its body.
+    fn closure_expr(&mut self, params: &mut [ClosureParam], body: &mut Expr) {
+        let mark = self.locals.len();
+        for param in params.iter_mut() {
+            if let Some(ty) = &mut param.ty {
+                self.ty(ty);
             }
+        }
+        self.locals
+            .extend(params.iter().map(|p| p.name.name.clone()));
+        self.expr(body);
+        self.locals.truncate(mark);
+    }
+
+    /// A `match`: each arm's pattern binds locals in its guard and body.
+    fn match_expr(&mut self, scrutinee: &mut Expr, arms: &mut [MatchArm]) {
+        self.expr(scrutinee);
+        for arm in arms {
+            let mark = self.locals.len();
+            self.pattern(&mut arm.pattern);
+            if let Some(guard) = &mut arm.guard {
+                self.expr(guard);
+            }
+            self.expr(&mut arm.body);
+            self.locals.truncate(mark);
         }
     }
 

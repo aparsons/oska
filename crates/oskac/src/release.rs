@@ -31,7 +31,9 @@ use oska_native::Target;
 use oska_syntax::{json_escape, Diagnostic, Span};
 
 use crate::cache::Cached;
-use crate::{print_diagnostics, sha256, Places};
+use crate::check::print_diagnostics;
+use crate::places::Places;
+use crate::sha256;
 
 /// How `oskac release` was asked to release: the output directory `-o`
 /// names, the version, and the signing key.
@@ -135,7 +137,7 @@ fn is_version(version: &str) -> bool {
                 && n.bytes().all(|b| b.is_ascii_digit())
                 && (n.len() == 1 || !n.starts_with('0'))
         })
-        && pre.map_or(true, |pre| {
+        && pre.is_none_or(|pre| {
             !pre.is_empty()
                 && pre
                     .split('.')

@@ -433,7 +433,7 @@ fn agrees(
         .map(|(from, to)| to.cmp(from));
     use std::cmp::Ordering::{Equal, Greater, Less};
     let ok = updated.from == version
-        && requested.map_or(true, |r| r == updated.to)
+        && requested.is_none_or(|r| r == updated.to)
         && match (updated.action.as_str(), order) {
             ("updated", Some(Greater)) | ("current", Some(Equal)) => true,
             ("downgraded", Some(Less)) => allow_downgrade && requested.is_some(),

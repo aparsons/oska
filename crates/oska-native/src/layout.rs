@@ -354,7 +354,7 @@ impl Rodata {
     }
 
     fn start(&mut self) -> u32 {
-        while self.bytes.len() % WORD as usize != 0 {
+        while !self.bytes.len().is_multiple_of(WORD as usize) {
             self.bytes.push(0);
         }
         self.bytes.len() as u32

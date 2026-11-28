@@ -7,13 +7,13 @@ version = "0.6.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/aparsons/oska"
-rust-version = "1.77"
+rust-version = "1.100.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-unwrap_used = "warn"
+unwrap_used = "deny"
 
 # Release builds use fat link-time optimisation and one codegen unit: a
 # faster interpreter and compiler and a smaller binary, for a longer build.

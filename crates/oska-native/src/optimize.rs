@@ -529,7 +529,7 @@ impl Code {
                             ir::Width::W64 => 8,
                         };
                         let folded = *offset + imm as u32;
-                        if folded % size == 0 && folded / size < 4096 {
+                        if folded.is_multiple_of(size) && folded / size < 4096 {
                             *base = lhs;
                             *offset = folded;
                         }
