@@ -1070,3 +1070,6 @@ pub(crate) fn trace(module: &Module) -> Vec<Vec<crate::target::Selected>> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
