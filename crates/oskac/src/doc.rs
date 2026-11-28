@@ -7,6 +7,7 @@
 //! `E0370` or `E0371`. The command reads only the toolchain's embedded
 //! sources and writes only to standard output.
 
+use crate::cli::Flags;
 use oska_check::api::{self, ApiItem, Kind, PRELUDE};
 use oska_syntax::json_escape;
 
@@ -201,4 +202,37 @@ pub fn to_json(entries: &[Entry]) -> String {
         return "{\"items\": []}\n".to_string();
     }
     format!("{{\"items\": [\n  {}\n]}}\n", items.join(",\n  "))
+}
+
+/// `oskac doc [filter]`: the API reference, or the part `filter` selects.
+/// An unknown module or item is a usage error (exit code 2).
+pub(crate) fn command(filter: Option<&str>, Flags { json, .. }: Flags) -> std::process::ExitCode {
+    let entries = entries();
+    let entries = match filter {
+        None => entries,
+        Some(filter) => match select(entries, filter) {
+            Some(selected) => selected,
+            None => {
+                let message = format!(
+                    "the reference has no module or item named `{filter}`; \
+                     run `oskac doc` for the whole list"
+                );
+                if json {
+                    outln!(
+                        "{{\"error\":\"unknown item\",\"item\":\"{}\"}}",
+                        oska_syntax::json_escape(filter)
+                    );
+                } else {
+                    eprintln!("error: {message}");
+                }
+                return std::process::ExitCode::from(2);
+            }
+        },
+    };
+    if json {
+        out!("{}", to_json(&entries));
+    } else {
+        out!("{}", to_human(&entries));
+    }
+    std::process::ExitCode::SUCCESS
 }

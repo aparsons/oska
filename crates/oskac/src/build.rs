@@ -35,7 +35,11 @@ use oska_native::Target;
 use oska_syntax::{json_escape, Diagnostic, Span};
 
 use crate::cache::{self, Cached};
-use crate::{print_diagnostics, read_source, release, Flags, Places};
+use crate::check::print_diagnostics;
+use crate::cli::Flags;
+use crate::places::Places;
+use crate::release;
+use crate::source::read_source;
 
 /// What `oskac build` builds for: one target platform, or all of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

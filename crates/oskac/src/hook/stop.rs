@@ -198,8 +198,8 @@ fn run(shown: &Shown) -> Result<Outcome, String> {
         Checked::File { source, .. } => {
             let locate = |d| target::locate(&shown.name, &source, d);
             let mut report = oska_run::test(&source, &mut host, tests);
-            let (dir, stem) = crate::file_snapshots(path_of(shown));
-            crate::settle_in(&mut report, &dir, &|_| Some(stem.clone()), false);
+            let (dir, stem) = crate::test::file_snapshots(path_of(shown));
+            crate::test::settle_in(&mut report, &dir, &|_| Some(stem.clone()), false);
             for test in &mut report.tests {
                 test.failure = test.failure.take().map(locate);
             }
@@ -212,10 +212,10 @@ fn run(shown: &Shown) -> Result<Outcome, String> {
                 _ => return Ok(Outcome::checked(report.diagnostics)),
             };
             let locator = Locator::new(&package);
-            let locate = |d| crate::from_here(&shown.name, locator.locate(d));
+            let locate = |d| crate::places::from_here(&shown.name, locator.locate(d));
             let mut report = oska_run::test_program(&program, &mut host, tests);
-            let file_of = |span| crate::package_test_file(&locator, span);
-            crate::settle_in(&mut report, path_of(shown), &file_of, false);
+            let file_of = |span| crate::test::package_test_file(&locator, span);
+            crate::test::settle_in(&mut report, path_of(shown), &file_of, false);
             for test in &mut report.tests {
                 test.module = locator.module_of(test.span).map(str::to_string);
                 test.failure = test.failure.take().map(locate);

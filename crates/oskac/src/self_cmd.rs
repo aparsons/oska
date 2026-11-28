@@ -148,7 +148,7 @@ pub(crate) fn usage(json: bool) -> ExitCode {
             quote("the self commands are `oskac self info [--format=json]` and `oskac self uninstall [--format=json]`")
         );
     } else {
-        eprint!("{}", crate::USAGE);
+        eprint!("{}", crate::cli::USAGE);
     }
     ExitCode::from(2)
 }

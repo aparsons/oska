@@ -23,8 +23,8 @@ use std::process::ExitCode;
 use oska_check::{CheckOptions, CheckReport, Package, MANIFEST_PATH};
 use oska_syntax::{json_escape, Diagnostic};
 
+use crate::cli::Flags;
 use crate::package::{self, Files};
-use crate::Flags;
 
 /// What `oskac fix` was given, read from disk.
 struct Target {
@@ -45,7 +45,7 @@ pub fn command(path: Option<&str>, flags: Flags) -> ExitCode {
     let target = match package::target(path) {
         package::Target::File(file) => {
             let code = fix_target(read_file(&file), flags);
-            crate::hint_package(&file, "fix");
+            crate::target::hint_package(&file, "fix");
             return code;
         }
         package::Target::Dir(dir) => read_package(&dir),
@@ -359,7 +359,7 @@ fn describe(refusal: &rounds::Refusal, dir: Option<&str>) -> String {
 /// directory.
 fn located(diagnostic: &Diagnostic, dir: Option<&str>) -> String {
     let diagnostic = match dir {
-        Some(dir) => crate::from_here(dir, diagnostic.clone()),
+        Some(dir) => crate::places::from_here(dir, diagnostic.clone()),
         None => diagnostic.clone(),
     };
     diagnostic
@@ -401,11 +401,11 @@ fn print(report: &Report, flags: Flags) {
         .diagnostics
         .iter()
         .map(|d| match report.dir {
-            Some(dir) => crate::from_here(dir, d.clone()),
+            Some(dir) => crate::places::from_here(dir, d.clone()),
             None => d.clone(),
         })
         .collect();
-    crate::print_diagnostics(&remaining);
+    crate::check::print_diagnostics(&remaining);
 }
 
 /// The JSON object `oskac fix --format=json` prints.
