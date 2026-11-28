@@ -161,6 +161,23 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("String.starts_with", Prelude::Runtime("string_starts_with")),
     ("String.ends_with", Prelude::Runtime("string_ends_with")),
     ("String.trim", Prelude::Runtime("string_trim")),
+    ("String.trim_start", Prelude::Runtime("string_trim_start")),
+    ("String.trim_end", Prelude::Runtime("string_trim_end")),
+    (
+        "String.to_uppercase",
+        Prelude::Runtime("string_to_uppercase"),
+    ),
+    ("String.find", Prelude::Runtime("string_find")),
+    ("String.split_once", Prelude::Runtime("string_split_once")),
+    (
+        "String.strip_prefix",
+        Prelude::Runtime("string_strip_prefix"),
+    ),
+    (
+        "String.strip_suffix",
+        Prelude::Runtime("string_strip_suffix"),
+    ),
+    ("String.is_empty", Prelude::Runtime("string_is_empty")),
     (
         "String.to_lowercase",
         Prelude::Runtime("string_to_lowercase"),
@@ -221,6 +238,14 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ),
     ("DirRead.read_bytes", Prelude::Runtime("dir_read_bytes")),
     ("DirRead.list_dir", Prelude::Runtime("dir_list_dir")),
+    ("DirRead.exists", Prelude::Runtime("dir_exists")),
+    ("DirRead.metadata", Prelude::Runtime("dir_metadata")),
+    ("DirWrite.append", Prelude::Runtime("dir_append")),
+    ("DirWrite.remove_file", Prelude::Runtime("dir_remove_file")),
+    ("DirWrite.remove_dir", Prelude::Runtime("dir_remove_dir")),
+    ("DirWrite.rename", Prelude::Runtime("dir_rename")),
+    ("FileRead.metadata", Prelude::Runtime("file_metadata")),
+    ("FileWrite.append", Prelude::Runtime("file_append")),
     ("DirWrite.write", Prelude::Runtime("dir_write")),
     ("DirWrite.write_bytes", Prelude::Runtime("dir_write_bytes")),
     ("DirWrite.create_dir", Prelude::Runtime("dir_create_dir")),
@@ -363,6 +388,17 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("Bytes.to_text", Prelude::Runtime("bytes_to_text")),
     ("Bytes.eq", Prelude::Runtime("bytes_eq")),
     ("Bytes.hash", Prelude::Runtime("bytes_hash")),
+    ("Int.cmp", Prelude::Runtime("int_cmp")),
+    ("I8.cmp", Prelude::Runtime("int_cmp")),
+    ("I16.cmp", Prelude::Runtime("int_cmp")),
+    ("I32.cmp", Prelude::Runtime("int_cmp")),
+    ("I64.cmp", Prelude::Runtime("int_cmp")),
+    ("U8.cmp", Prelude::Runtime("int_cmp")),
+    ("U16.cmp", Prelude::Runtime("int_cmp")),
+    ("U32.cmp", Prelude::Runtime("int_cmp")),
+    ("U64.cmp", Prelude::Runtime("u64_cmp")),
+    ("Bool.cmp", Prelude::Runtime("int_cmp")),
+    ("String.cmp", Prelude::Runtime("string_cmp")),
     ("Int.hash", Prelude::Runtime("int_hash")),
     ("I8.hash", Prelude::Runtime("int_hash")),
     ("I16.hash", Prelude::Runtime("int_hash")),
@@ -503,6 +539,8 @@ pub enum Sys {
     Fstat,
     Ftruncate,
     Readlinkat,
+    Unlinkat,
+    Renameat,
     Getcwd,
     Fcntl,
     // `flock(fd, operation)`: Linux's call, and `libSystem`'s on macOS.
@@ -548,6 +586,7 @@ pub enum Sys {
     SetEndOfFile,
     NtCreateFile,
     NtQueryInformationFile,
+    NtSetInformationFile,
     NtQueryDirectoryFile,
     VirtualAlloc,
     VirtualFree,
@@ -733,6 +772,8 @@ fn linux_call(call: Sys, number: fn(Sys) -> Option<u16>) -> OsCall {
     };
     let extra_args: &'static [i64] = match call {
         Sys::Random => &[0],
+        // renameat2(olddirfd, old, newdirfd, new, flags): no flags.
+        Sys::Renameat => &[0],
         Sys::Sigaction => &[0, 8],
         // accept4(fd, 0, 0, flags): no flags.
         Sys::Accept => &[0],
@@ -768,6 +809,8 @@ fn linux_aarch64_syscall(call: Sys) -> Option<u16> {
         Sys::Fstat => 80,
         Sys::Ftruncate => 46,
         Sys::Readlinkat => 78,
+        Sys::Unlinkat => 35,
+        Sys::Renameat => 276,
         Sys::Getcwd => 17,
         Sys::Fcntl => 25,
         Sys::Flock => 32,
@@ -826,6 +869,8 @@ fn linux_x86_64_syscall(call: Sys) -> Option<u16> {
         Sys::Fstat => 5,
         Sys::Ftruncate => 77,
         Sys::Readlinkat => 267,
+        Sys::Unlinkat => 263,
+        Sys::Renameat => 316,
         Sys::Getcwd => 79,
         Sys::Fcntl => 72,
         Sys::Flock => 73,
@@ -943,6 +988,8 @@ const CLOSEDIR: Import = plain("_closedir", 1);
 const FSTAT: Import = plain("_fstat", 2);
 const FSTAT_INODE64: Import = plain("_fstat$INODE64", 2);
 const FTRUNCATE: Import = plain("_ftruncate", 2);
+const UNLINKAT: Import = plain("_unlinkat", 3);
+const RENAMEAT: Import = plain("_renameat", 4);
 const READLINKAT: Import = Import {
     wide: true,
     ..plain("_readlinkat", 4)
@@ -1022,7 +1069,7 @@ const POLL: Import = plain("_poll", 3);
 /// Every function a macOS executable imports from `libSystem`: always
 /// all of them, whatever the program calls, so the import table depends
 /// on the target alone. [`ERROR`] is first ([`Platform::errno`]).
-const MACOS_IMPORTS: [&Import; 36] = [
+const MACOS_IMPORTS: [&Import; 38] = [
     &ERROR,
     &READ,
     &WRITE,
@@ -1035,6 +1082,8 @@ const MACOS_IMPORTS: [&Import; 36] = [
     &FSTAT,
     &FTRUNCATE,
     &READLINKAT,
+    &UNLINKAT,
+    &RENAMEAT,
     &GETCWD,
     &FCNTL,
     &FLOCK,
@@ -1063,7 +1112,7 @@ const MACOS_IMPORTS: [&Import; 36] = [
 
 /// [`MACOS_IMPORTS`] with the `$INODE64` functions of x86_64's
 /// `libSystem` in place of the plain ones, in the same slots.
-const MACOS_X86_64_IMPORTS: [&Import; 36] = [
+const MACOS_X86_64_IMPORTS: [&Import; 38] = [
     &ERROR,
     &READ,
     &WRITE,
@@ -1076,6 +1125,8 @@ const MACOS_X86_64_IMPORTS: [&Import; 36] = [
     &FSTAT_INODE64,
     &FTRUNCATE,
     &READLINKAT,
+    &UNLINKAT,
+    &RENAMEAT,
     &GETCWD,
     &FCNTL,
     &FLOCK,
@@ -1121,6 +1172,8 @@ fn macos_call(call: Sys) -> OsCall {
         Sys::Fstat => &FSTAT,
         Sys::Ftruncate => &FTRUNCATE,
         Sys::Readlinkat => &READLINKAT,
+        Sys::Unlinkat => &UNLINKAT,
+        Sys::Renameat => &RENAMEAT,
         Sys::Getcwd => &GETCWD,
         Sys::Fcntl => &FCNTL,
         Sys::Flock => &FLOCK,
@@ -1165,6 +1218,7 @@ fn windows_only(call: Sys) -> bool {
             | Sys::SetEndOfFile
             | Sys::NtCreateFile
             | Sys::NtQueryInformationFile
+            | Sys::NtSetInformationFile
             | Sys::NtQueryDirectoryFile
             | Sys::VirtualAlloc
             | Sys::VirtualFree
@@ -1286,6 +1340,8 @@ const NT_CREATE_FILE: Import = Import {
 };
 /// `NtQueryInformationFile(h, &status, buf, length, class)`.
 const NT_QUERY_INFORMATION_FILE: Import = nt("NtQueryInformationFile", 5);
+/// `NtSetInformationFile(h, &status, buf, length, class)`.
+const NT_SET_INFORMATION_FILE: Import = nt("NtSetInformationFile", 5);
 /// `NtQueryDirectoryFile(h, NULL, NULL, NULL, &status, buf, length,
 /// class, single, NULL, restart)`.
 const NT_QUERY_DIRECTORY_FILE: Import = nt("NtQueryDirectoryFile", 11);
@@ -1406,7 +1462,7 @@ const GET_ADAPTERS_ADDRESSES: Import = Import {
 /// Every function a Windows executable imports, `kernel32.dll`'s first:
 /// always all of them, so the import table depends on the target alone.
 /// [`GET_LAST_ERROR`] is first ([`Platform::errno`]).
-const WINDOWS_IMPORTS: [&Import; 39] = [
+const WINDOWS_IMPORTS: [&Import; 40] = [
     &GET_LAST_ERROR,
     &GET_STD_HANDLE,
     &WRITE_FILE,
@@ -1428,6 +1484,7 @@ const WINDOWS_IMPORTS: [&Import; 39] = [
     &SET_END_OF_FILE,
     &NT_CREATE_FILE,
     &NT_QUERY_INFORMATION_FILE,
+    &NT_SET_INFORMATION_FILE,
     &NT_QUERY_DIRECTORY_FILE,
     &NT_STATUS_TO_ERROR,
     &PROCESS_PRNG,
@@ -1472,6 +1529,7 @@ fn windows_call(call: Sys) -> OsCall {
         Sys::SetEndOfFile => &SET_END_OF_FILE,
         Sys::NtCreateFile => &NT_CREATE_FILE,
         Sys::NtQueryInformationFile => &NT_QUERY_INFORMATION_FILE,
+        Sys::NtSetInformationFile => &NT_SET_INFORMATION_FILE,
         Sys::NtQueryDirectoryFile => &NT_QUERY_DIRECTORY_FILE,
         Sys::ProcessPrng => &PROCESS_PRNG,
         Sys::WsaStartup => &WSA_STARTUP,
@@ -1517,6 +1575,8 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_fstat", Runtime::Syscall(Sys::Fstat)),
     ("rt_sys_ftruncate", Runtime::Syscall(Sys::Ftruncate)),
     ("rt_sys_readlinkat", Runtime::Syscall(Sys::Readlinkat)),
+    ("rt_sys_unlinkat", Runtime::Syscall(Sys::Unlinkat)),
+    ("rt_sys_renameat", Runtime::Syscall(Sys::Renameat)),
     ("rt_sys_getcwd", Runtime::Syscall(Sys::Getcwd)),
     ("rt_sys_fcntl", Runtime::Syscall(Sys::Fcntl)),
     ("rt_sys_flock", Runtime::Syscall(Sys::Flock)),
@@ -1553,6 +1613,10 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     (
         "rt_sys_nt_query_information_file",
         Runtime::Syscall(Sys::NtQueryInformationFile),
+    ),
+    (
+        "rt_sys_nt_set_information_file",
+        Runtime::Syscall(Sys::NtSetInformationFile),
     ),
     (
         "rt_sys_nt_query_directory_file",
@@ -1724,6 +1788,9 @@ mod tests {
             ("rt_sys_fstat", 80, 5, &[]),
             ("rt_sys_ftruncate", 46, 77, &[]),
             ("rt_sys_readlinkat", 78, 267, &[]),
+            ("rt_sys_unlinkat", 35, 263, &[]),
+            // renameat2(old dir, old, new dir, new, flags): no flags.
+            ("rt_sys_renameat", 276, 316, &[0]),
             ("rt_sys_getcwd", 17, 79, &[]),
             ("rt_sys_fcntl", 25, 72, &[]),
             ("rt_sys_flock", 32, 73, &[]),
@@ -1799,8 +1866,16 @@ mod tests {
     write.write(Path.new("b.txt"), "b")?
     write.create_dir(Path.new("c"))?
     write.with_lock(|d: DirWrite| 0)?
+    let found = read.exists(Path.new("a.txt"))?
+    let meta = read.metadata(Path.new("a.txt"))?
+    write.append(Path.new("b.txt"), "b")?
+    write.rename(Path.new("b.txt"), Path.new("e.txt"))?
+    write.remove_file(Path.new("e.txt"))?
+    write.remove_dir(Path.new("c"))?
     let file = fs.write_only().restrict_to_file("root/d.txt")
     file.write("d")?
+    file.append("d")?
+    let size = fs.read_only().restrict_to_file("root/d.txt").metadata()?
     let listener = net.listen_only().restrict_to_loopback(0)
     let host = net.restrict_to("127.0.0.1", listener.port())
     let client = host.connect()?
@@ -1864,6 +1939,7 @@ mod tests {
             (29, 3),
             (32, 2),
             (34, 3),
+            (35, 3),
             (46, 2),
             (56, 4),
             (57, 1),
@@ -1891,6 +1967,7 @@ mod tests {
             (215, 2),
             (222, 6),
             (242, 4),
+            (276, 5),
             (278, 3),
         ];
         // read, write, close, fstat, mmap, munmap, rt_sigaction, ioctl,
@@ -1927,9 +2004,11 @@ mod tests {
             (231, 1),
             (257, 4),
             (258, 3),
+            (263, 3),
             (267, 4),
             (271, 5),
             (288, 4),
+            (316, 5),
             (318, 3),
         ];
         assert_eq!(system_calls(crate::Target::LinuxAarch64), aarch64);
@@ -1984,6 +2063,8 @@ mod tests {
                 MinusOne,
                 &[],
             ),
+            ("rt_sys_unlinkat", "_unlinkat", 3, 3, false, MinusOne, &[]),
+            ("rt_sys_renameat", "_renameat", 4, 4, false, MinusOne, &[]),
             ("rt_sys_getcwd", "_getcwd", 2, 2, true, Null, &[]),
             ("rt_sys_fcntl", "_fcntl", 3, 2, false, MinusOne, &[]),
             ("rt_sys_flock", "_flock", 2, 2, false, MinusOne, &[]),
@@ -2338,6 +2419,15 @@ mod tests {
                 "rt_sys_nt_query_information_file",
                 "ntdll.dll",
                 "NtQueryInformationFile",
+                5,
+                false,
+                Status,
+                &[],
+            ),
+            (
+                "rt_sys_nt_set_information_file",
+                "ntdll.dll",
+                "NtSetInformationFile",
                 5,
                 false,
                 Status,

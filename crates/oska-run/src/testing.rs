@@ -30,7 +30,7 @@ use oska_check::builtins;
 use oska_check::program::{Program, Test};
 use oska_syntax::{json_escape, Diagnostic, SnapshotRecord, Span};
 
-use crate::host::{FakeHost, Host, Output, RootHandle};
+use crate::host::{FakeHost, Host, Meta, Output, RootHandle};
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
 use crate::intrinsics::{debug, Args, Table};
@@ -609,6 +609,40 @@ impl Host for TestHost<'_> {
 
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
         self.world().list_dir_beneath(root, names)
+    }
+
+    fn exists_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<bool> {
+        self.world().exists_beneath(root, names)
+    }
+
+    fn metadata_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Meta> {
+        self.world().metadata_beneath(root, names)
+    }
+
+    fn append_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+        contents: &[u8],
+    ) -> io::Result<()> {
+        self.world().append_file_beneath(root, names, contents)
+    }
+
+    fn remove_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        self.world().remove_file_beneath(root, names)
+    }
+
+    fn remove_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        self.world().remove_dir_beneath(root, names)
+    }
+
+    fn rename_beneath(
+        &mut self,
+        root: &RootHandle,
+        from: &[String],
+        to: &[String],
+    ) -> io::Result<()> {
+        self.world().rename_beneath(root, from, to)
     }
 
     fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {

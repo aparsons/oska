@@ -20,6 +20,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 
 use crate::refusal;
+use crate::{Kind, Meta};
 
 /// Fill `buf` from the operating system's secure random source
 /// (`ProcessPrng`).
@@ -203,6 +204,17 @@ mod nt {
             restart_scan: u8,
         ) -> NtStatus;
 
+        /// `NtSetInformationFile`: set the information of class `class`,
+        /// `length` bytes of it at `file_information`, of `file_handle`.
+        #[link_name = "NtSetInformationFile"]
+        pub fn set_information_file(
+            file_handle: Handle,
+            io_status_block: *mut IoStatusBlock,
+            file_information: *const c_void,
+            length: u32,
+            class: u32,
+        ) -> NtStatus;
+
         /// `RtlNtStatusToDosError`: the Win32 error code for a status.
         #[link_name = "RtlNtStatusToDosError"]
         pub fn status_to_error(status: NtStatus) -> u32;
@@ -243,6 +255,8 @@ mod nt {
     pub const SYNCHRONIZE: u32 = 0x0010_0000;
     pub const FILE_GENERIC_READ: u32 = 0x0012_0089;
     pub const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
+    pub const FILE_WRITE_DATA: u32 = 0x0002;
+    pub const DELETE: u32 = 0x0001_0000;
 
     /// `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`: as on
     /// Unix, an open handle keeps no one from renaming or deleting.
@@ -275,6 +289,8 @@ mod nt {
     pub const FILE_BASIC_INFORMATION: u32 = 4;
     pub const FILE_STANDARD_INFORMATION: u32 = 5;
     pub const FILE_NAMES_INFORMATION: u32 = 12;
+    pub const FILE_RENAME_INFORMATION: u32 = 10;
+    pub const FILE_DISPOSITION_INFORMATION: u32 = 13;
 
     /// `ERROR_DIRECTORY`, the Win32 error for a directory expected and
     /// not found.
@@ -299,6 +315,13 @@ mod nt {
     /// The access a file is opened with to write it, and to read its
     /// attributes.
     pub const FILE_WRITE: u32 = FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES;
+
+    /// The access a file is opened with to append to it: as to write it,
+    /// but without the right to write anywhere else than the end.
+    pub const FILE_APPEND: u32 = (FILE_GENERIC_WRITE & !FILE_WRITE_DATA) | FILE_READ_ATTRIBUTES;
+
+    /// The access a name is opened with to remove it or move it.
+    pub const REMOVE: u32 = DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
 
     /// The access a name is opened with only to see what it is.
     pub const ATTRIBUTES_ONLY: u32 = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
@@ -440,6 +463,149 @@ impl Dir {
         lone_file(handle, info, &names)
     }
 
+    /// Whether anything is at the path `names` reach beneath this one:
+    /// `false` when a name, or a directory before it, is not there, and
+    /// no names ask about this directory itself. A reparse point anywhere
+    /// on the way is refused, as for a read.
+    pub fn exists<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<bool> {
+        let Some((last, parents)) = names.split_last() else {
+            return Ok(true);
+        };
+        let walked = match self.walk(parents) {
+            Ok(walked) => walked,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let parent = walked.as_ref().unwrap_or(self);
+        match open_name(parent, last.as_ref(), Open::ATTRIBUTES_ONLY, names) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// What the path `names` reach beneath this one is, and for a regular
+    /// file its size. A reparse point is refused, and so is a regular
+    /// file with another hard link, as for a read. No names describe this
+    /// directory itself.
+    pub fn metadata<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<Meta> {
+        let info = match names.split_last() {
+            None => info(&self.handle)?,
+            Some((last, parents)) => {
+                let parent = self.walk(parents)?;
+                open_name(
+                    parent.as_ref().unwrap_or(self),
+                    last.as_ref(),
+                    Open::ATTRIBUTES_ONLY,
+                    names,
+                )?
+                .1
+            }
+        };
+        if info.is_dir() {
+            return Ok(Meta {
+                kind: Kind::Directory,
+                size: 0,
+            });
+        }
+        if info.links > 1 {
+            return Err(refusal::hard_linked(names));
+        }
+        Ok(Meta {
+            kind: Kind::File,
+            size: info.size,
+        })
+    }
+
+    /// The regular file reached by walking `names` beneath this one, open
+    /// for appending: created when nothing is there, and never emptied.
+    /// Names, reparse points and hard links are as for
+    /// [`Dir::create_file`].
+    pub fn append_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
+        let parent = self.walk(parents)?;
+        let (handle, info) = open_name(
+            parent.as_ref().unwrap_or(self),
+            last.as_ref(),
+            Open::FILE_APPEND,
+            names,
+        )?;
+        lone_file(handle, info, names)
+    }
+
+    /// Remove the regular file reached by walking `names` beneath this
+    /// one. A reparse point, a directory and a file with another hard link
+    /// are refused, as for a read, so a removal never reaches past the
+    /// walk. Names are as for [`Dir::open_dir`]; there must be one.
+    pub fn delete_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
+        let walked = self.walk(parents)?;
+        let (handle, info) = open_name(
+            walked.as_ref().unwrap_or(self),
+            last.as_ref(),
+            Open::REMOVE,
+            names,
+        )?;
+        let handle = lone_file(handle, info, names).map(OwnedHandle::from)?;
+        mark_for_deletion(&handle).map_err(|error| refusal::at(&refusal::joined(names), error))
+    }
+
+    /// Remove the empty directory reached by walking `names` beneath this
+    /// one. A reparse point is refused, and so is a directory with
+    /// anything in it. Names are as for [`Dir::open_dir`]; there must be
+    /// one.
+    pub fn delete_dir<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
+        let walked = self.walk(parents)?;
+        let (handle, info) = open_name(
+            walked.as_ref().unwrap_or(self),
+            last.as_ref(),
+            Open::REMOVE,
+            names,
+        )?;
+        if !info.is_dir() {
+            return Err(refusal::symlink_or_not_a_directory(&refusal::joined(names)));
+        }
+        mark_for_deletion(&handle).map_err(|error| refusal::at(&refusal::joined(names), error))
+    }
+
+    /// Move the regular file reached by walking `from` beneath this one to
+    /// the path `to` reaches beneath it, replacing a regular file already
+    /// there. Both walks stay beneath this directory; every name before
+    /// the last is a directory. A reparse point, a directory or a file
+    /// with another hard link at either name is refused. Moving a file to
+    /// its own name changes nothing.
+    pub fn move_file<N: AsRef<OsStr>, M: AsRef<OsStr>>(
+        &self,
+        from: &[N],
+        to: &[M],
+    ) -> io::Result<()> {
+        let (from_last, from_parents) = from.split_last().ok_or_else(refusal::no_name)?;
+        let (to_last, to_parents) = to.split_last().ok_or_else(refusal::no_name)?;
+        let from_walked = self.walk(from_parents)?;
+        let (handle, info) = open_name(
+            from_walked.as_ref().unwrap_or(self),
+            from_last.as_ref(),
+            Open::REMOVE,
+            from,
+        )?;
+        let handle = lone_file(handle, info, from).map(OwnedHandle::from)?;
+        let to_walked = self.walk(to_parents)?;
+        let to_dir = to_walked.as_ref().unwrap_or(self);
+        match open_name(to_dir, to_last.as_ref(), Open::ATTRIBUTES_ONLY, to) {
+            Ok((there, info)) => {
+                lone_file(there, info, to)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        if refusal::joined(from) == refusal::joined(to) {
+            return Ok(());
+        }
+        rename_to(&handle, to_dir, &plain_name(to_last.as_ref())?)
+            .map_err(|error| refusal::at(&refusal::joined(from), error))
+    }
+
     /// The names of the entries of this directory, in the order the
     /// directory gives them, without `.` and `..`. No entry is followed:
     /// a reparse point is listed by its own name.
@@ -570,6 +736,20 @@ impl Open {
         share: 0,
     };
 
+    /// A file to append to, created when nothing is at its name.
+    const FILE_APPEND: Open = Open {
+        access: nt::FILE_APPEND,
+        disposition: nt::FILE_OPEN_IF,
+        options: 0,
+    };
+
+    /// An existing name, to remove or to move.
+    const REMOVE: Open = Open {
+        access: nt::REMOVE,
+        disposition: nt::FILE_OPEN,
+        options: 0,
+    };
+
     /// Whatever is at a name, only to read its attributes.
     const ATTRIBUTES_ONLY: Open = Open {
         access: nt::ATTRIBUTES_ONLY,
@@ -584,6 +764,7 @@ impl Open {
 struct Info {
     attributes: u32,
     links: u32,
+    size: u64,
 }
 
 impl Info {
@@ -729,6 +910,7 @@ fn info(handle: &OwnedHandle) -> io::Result<Info> {
     Ok(Info {
         attributes: basic.file_attributes,
         links: standard.number_of_links,
+        size: u64::try_from(standard.end_of_file).unwrap_or(0),
     })
 }
 
@@ -795,6 +977,71 @@ fn plain_name(name: &OsStr) -> io::Result<Vec<u16>> {
         return Err(refusal::not_a_single_name(name));
     }
     Ok(wide)
+}
+
+/// Mark the file or empty directory `handle` opened (with the right to
+/// delete it) to be deleted when its last handle closes, which is when
+/// `handle` drops: `FileDispositionInformation`.
+fn mark_for_deletion(handle: &OwnedHandle) -> io::Result<()> {
+    // `FILE_DISPOSITION_INFORMATION`: one `BOOLEAN`, `DeleteFile`.
+    let delete: u8 = 1;
+    let mut status = nt::IoStatusBlock::default();
+    // SAFETY: `handle` is live and was opened with `DELETE` access, and
+    // `delete` is readable for the one byte given. `status` is writable.
+    let result = unsafe {
+        nt::set_information_file(
+            handle.as_raw_handle(),
+            &mut status,
+            (&delete as *const u8).cast(),
+            1,
+            nt::FILE_DISPOSITION_INFORMATION,
+        )
+    };
+    checked(result)
+}
+
+/// Rename what `handle` opened (with the right to delete it) to `name`,
+/// UTF-16, in the directory `to_dir`, replacing a file already there:
+/// `FileRenameInformation` with `to_dir` as its root directory.
+fn rename_to(handle: &OwnedHandle, to_dir: &Dir, name: &[u16]) -> io::Result<()> {
+    let name_bytes = u32::try_from(name.len() * 2)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a file name is too long"))?;
+    // `FILE_RENAME_INFORMATION` on 64-bit Windows: `ReplaceIfExists` (a
+    // `BOOLEAN`) at 0, `RootDirectory` at 8, `FileNameLength` in bytes at
+    // 16, and `FileName` from 20.
+    let mut bytes = vec![0u8; 20 + name.len() * 2];
+    bytes[0] = 1;
+    bytes[8..16].copy_from_slice(&(to_dir.handle.as_raw_handle() as usize).to_ne_bytes());
+    bytes[16..20].copy_from_slice(&name_bytes.to_ne_bytes());
+    for (at, unit) in name.iter().enumerate() {
+        bytes[20 + at * 2..22 + at * 2].copy_from_slice(&unit.to_ne_bytes());
+    }
+    // `u64`s, so the structure is aligned as the system expects.
+    let words: Vec<u64> = bytes
+        .chunks(8)
+        .map(|chunk| {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            u64::from_ne_bytes(word)
+        })
+        .collect();
+    let length = byte_length(bytes.len())?;
+    let mut status = nt::IoStatusBlock::default();
+    // SAFETY: `handle` is live and was opened with `DELETE` access, which
+    // renaming needs. `words` holds the structure, readable for `length`
+    // bytes, which is the whole of `bytes`. `status` is writable. The
+    // root directory in the structure is the handle of a live `Dir`,
+    // borrowed for the call.
+    let result = unsafe {
+        nt::set_information_file(
+            handle.as_raw_handle(),
+            &mut status,
+            words.as_ptr().cast(),
+            length,
+            nt::FILE_RENAME_INFORMATION,
+        )
+    };
+    checked(result)
 }
 
 /// `handle`, opened by walking `names` and described by `info`, as a

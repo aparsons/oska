@@ -1,0 +1,11 @@
+{
+  "diagnostics": [
+    {"code":"E0228","message":"`Option<Int>` has no method `flat_map`","path":"crates/oskac/tests/fixtures/unknown_method_closure.osk","span":{"start":63,"end":71},"line":3,"column":13,"end_line":3,"end_column":21,"severity":"error","url":"https://oskalang.dev/codes/E0228","related":[],"suggestions":[]}
+  ],
+  "functions": [
+    {"name":"main","authority":[],"via":[],"pure":true}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "verdict": "diagnostics"
+}

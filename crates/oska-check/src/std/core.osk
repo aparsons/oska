@@ -1,0 +1,274 @@
+// SPDX-License-Identifier: Apache-2.0
+// The bodies of the core library's methods on `List` (spec #660, ADR
+// 0034). A method such as `filter` is declared body-less on `List` in the
+// prelude, so the checker and the API reference list it as a method of
+// `List`. A call of it resolves to the function here whose name starts
+// with `list_`, which takes the receiver as its first argument. This file
+// is the module `std.core`: both backends run it as Oska, so there is one
+// implementation, and every loop back-edge and closure call in it is a
+// step (ADR 0021). A program is joined to it only when its text calls one
+// of these methods.
+
+// For maintainers: this file is Oska source, checked under the rules for
+// user code. The type parameters of each function are, in order, those of
+// the prelude's `impl` and then those of the method, so a call's type
+// arguments line up. Write only what a method needs: a new method is a
+// body-less declaration in `prelude.osk`, a function here, and its name in
+// `CORE_METHODS` (`prelude.rs`).
+
+// A new list of the items for which `keep` is true, in order.
+pub fn list_filter<T>(items: List<T>, keep: fn(T) -> Bool) -> List<T> {
+    var found: List<T> = []
+    for item in items {
+        if keep(item) {
+            found.push(item)
+        }
+    }
+    found
+}
+
+// `f` applied to `init` and the first item, then to that result and the
+// next item, and so on: `init` for an empty list.
+pub fn list_fold<T, A>(items: List<T>, init: A, f: fn(A, T) -> A) -> A {
+    var total = init
+    for item in items {
+        total = f(total, item)
+    }
+    total
+}
+
+// Whether `check` is true for some item. It stops at the first item that
+// passes.
+pub fn list_any<T>(items: List<T>, check: fn(T) -> Bool) -> Bool {
+    for item in items {
+        if check(item) {
+            return true
+        }
+    }
+    false
+}
+
+// Whether `check` is true for every item. It stops at the first item that
+// fails.
+pub fn list_all<T>(items: List<T>, check: fn(T) -> Bool) -> Bool {
+    for item in items {
+        if !check(item) {
+            return false
+        }
+    }
+    true
+}
+
+// The first item for which `check` is true, or `None`.
+pub fn list_find<T>(items: List<T>, check: fn(T) -> Bool) -> Option<T> {
+    for item in items {
+        if check(item) {
+            return Some(item)
+        }
+    }
+    None
+}
+
+// Whether some item equals `wanted`.
+pub fn list_contains<T: Eq>(items: List<T>, wanted: T) -> Bool {
+    for item in items {
+        if item == wanted {
+            return true
+        }
+    }
+    false
+}
+
+// The first item, or `None` for an empty list.
+pub fn list_first<T>(items: List<T>) -> Option<T> {
+    items.get(0)
+}
+
+// The last item, or `None` for an empty list.
+pub fn list_last<T>(items: List<T>) -> Option<T> {
+    items.get(items.len() - 1)
+}
+
+// Whether the list has no item.
+pub fn list_is_empty<T>(items: List<T>) -> Bool {
+    items.len() == 0
+}
+
+// A new list of the items in the opposite order.
+pub fn list_reverse<T>(items: List<T>) -> List<T> {
+    var flipped: List<T> = []
+    var at = items.len() - 1
+    while at >= 0 {
+        flipped.push(items.at(at))
+        at = at - 1
+    }
+    flipped
+}
+
+// A new list of the items of `items`, then those of `more`.
+pub fn list_concat<T>(items: List<T>, more: List<T>) -> List<T> {
+    var joined: List<T> = []
+    for item in items {
+        joined.push(item)
+    }
+    for item in more {
+        joined.push(item)
+    }
+    joined
+}
+
+// ---- Option ------------------------------------------------------------
+// The functions of `Option`'s methods are named `option_<method>`.
+
+// Whether there is no value.
+pub fn option_is_none<T>(o: Option<T>) -> Bool {
+    match o {
+        Some(_) => false
+        None => true
+    }
+}
+
+// `Some(f(value))`, or `None`.
+pub fn option_map<T, U>(o: Option<T>, f: fn(T) -> U) -> Option<U> {
+    match o {
+        Some(v) => Some(f(v))
+        None => None
+    }
+}
+
+// `f(value)`, or `None`.
+pub fn option_and_then<T, U>(o: Option<T>, f: fn(T) -> Option<U>) -> Option<U> {
+    match o {
+        Some(v) => f(v)
+        None => None
+    }
+}
+
+// The value, or what `f()` gives.
+pub fn option_unwrap_or_else<T>(o: Option<T>, f: fn() -> T) -> T {
+    match o {
+        Some(v) => v
+        None => f()
+    }
+}
+
+// The value if `keep` is true for it, otherwise `None`.
+pub fn option_filter<T>(o: Option<T>, keep: fn(T) -> Bool) -> Option<T> {
+    match o {
+        Some(v) => if keep(v) { Some(v) } else { None }
+        None => None
+    }
+}
+
+// ---- Result ------------------------------------------------------------
+// The functions of `Result`'s methods are named `result_<method>`.
+
+// Whether it is `Err`.
+pub fn result_is_err<T, E>(r: Result<T, E>) -> Bool {
+    match r {
+        Ok(_) => false
+        Err(_) => true
+    }
+}
+
+// `Ok(f(value))`, or the `Err`.
+pub fn result_map<T, E, U>(r: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+    match r {
+        Ok(v) => Ok(f(v))
+        Err(e) => Err(e)
+    }
+}
+
+// `Err(f(error))`, or the `Ok`.
+pub fn result_map_err<T, E, F>(r: Result<T, E>, f: fn(E) -> F) -> Result<T, F> {
+    match r {
+        Ok(v) => Ok(v)
+        Err(e) => Err(f(e))
+    }
+}
+
+// `f(value)`, or the `Err`.
+pub fn result_and_then<T, E, U>(r: Result<T, E>, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+    match r {
+        Ok(v) => f(v)
+        Err(e) => Err(e)
+    }
+}
+
+// The `Ok` value, or what `f(error)` gives.
+pub fn result_unwrap_or_else<T, E>(r: Result<T, E>, f: fn(E) -> T) -> T {
+    match r {
+        Ok(v) => v
+        Err(e) => f(e)
+    }
+}
+
+// `Some(value)` for an `Ok`, `None` for an `Err`.
+pub fn result_ok<T, E>(r: Result<T, E>) -> Option<T> {
+    match r {
+        Ok(v) => Some(v)
+        Err(_) => None
+    }
+}
+
+// `Some(error)` for an `Err`, `None` for an `Ok`.
+pub fn result_err<T, E>(r: Result<T, E>) -> Option<E> {
+    match r {
+        Ok(_) => None
+        Err(e) => Some(e)
+    }
+}
+
+// A new list of the items ordered by `cmp`, a stable merge sort: items
+// that `cmp` calls equal keep their order. It takes O(n log n) steps and
+// one extra list. It reads only positions below the length whatever `cmp`
+// answers, so a `cmp` that is not a total order gives some order of the
+// same items and never reads out of bounds. The receiver is not changed,
+// so a `cmp` that panics leaves it as it was.
+pub fn list_sorted_by<T>(items: List<T>, cmp: fn(T, T) -> Ordering) -> List<T> {
+    let n = items.len()
+    var from = items
+    var width = 1
+    while width < n {
+        var into: List<T> = []
+        var lo = 0
+        while lo < n {
+            let mid = if lo + width < n { lo + width } else { n }
+            let hi = if lo + 2 * width < n { lo + 2 * width } else { n }
+            var left = lo
+            var right = mid
+            while left < mid && right < hi {
+                // The right item goes first only when it is strictly less,
+                // which keeps equal items in their order.
+                let right_first = match cmp(from.at(right), from.at(left)) {
+                    Ordering.Less => true
+                    _ => false
+                }
+                if right_first {
+                    into.push(from.at(right))
+                    right = right + 1
+                } else {
+                    into.push(from.at(left))
+                    left = left + 1
+                }
+            }
+            while left < mid {
+                into.push(from.at(left))
+                left = left + 1
+            }
+            while right < hi {
+                into.push(from.at(right))
+                right = right + 1
+            }
+            lo = lo + 2 * width
+        }
+        from = into
+        width = width * 2
+    }
+    from
+}
+
+// A new list of the items in ascending order, stable.
+pub fn list_sorted<T: Ord>(items: List<T>) -> List<T> {
+    list_sorted_by(items, |a, b| a.cmp(b))
+}

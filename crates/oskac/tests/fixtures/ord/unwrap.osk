@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// `unwrap` and `expect` are refused (ADR 0034): the message names `?`,
+// `unwrap_or` and `match`.
+
+fn first_unwrap(o: Option<Int>) -> Int {
+    o.unwrap()
+}
+
+fn first_expect(r: Result<Int, String>) -> Int {
+    r.expect("missing")
+}

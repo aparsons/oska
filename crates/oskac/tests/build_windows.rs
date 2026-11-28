@@ -54,6 +54,7 @@ const IMPORTS: [(&str, &[&str]); 5] = [
         &[
             "NtCreateFile",
             "NtQueryInformationFile",
+            "NtSetInformationFile",
             "NtQueryDirectoryFile",
             "RtlNtStatusToDosError",
         ],
