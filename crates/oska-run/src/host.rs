@@ -26,6 +26,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::prng::SplitMix64;
 use oska_syntax::SnapshotRecord;
 
+pub use oska_sys::{Kind, Meta};
+
 /// What a program wrote to its standard streams, as a host recorded it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Output {
@@ -128,6 +130,69 @@ pub trait Host: Send {
     /// valid UTF-8. No names lists `root`.
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>>;
 
+    /// Whether anything is at the path `names` reach beneath `root`, none
+    /// of them a symlink: `false` when a name, or a directory before it,
+    /// is not there. No names ask about `root` itself, which is there.
+    fn exists_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<bool> {
+        let _ = (root, names);
+        Err(no_file_operation("exists"))
+    }
+
+    /// The kind and size of what `names` reach beneath `root`, none of
+    /// them a symlink, and a file with more than one hard link refused as
+    /// a read refuses it. No names describe `root`: a directory, or the
+    /// one file a file root reaches.
+    fn metadata_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Meta> {
+        let _ = (root, names);
+        Err(no_file_operation("metadata"))
+    }
+
+    /// Add `contents` to the end of the regular file reached by walking
+    /// `names` beneath `root`, creating it when nothing is there. Nothing
+    /// is followed or emptied; a file with more than one hard link is
+    /// refused as a write refuses it. When `root` is itself a file,
+    /// `names` is empty.
+    fn append_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+        contents: &[u8],
+    ) -> io::Result<()> {
+        let _ = (root, names, contents);
+        Err(no_file_operation("append"))
+    }
+
+    /// Remove the regular file reached by walking `names` beneath `root`
+    /// (one name at least). A symlink, a directory and a file with more
+    /// than one hard link are refused, as a read refuses them.
+    fn remove_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        let _ = (root, names);
+        Err(no_file_operation("remove_file"))
+    }
+
+    /// Remove the empty directory reached by walking `names` beneath
+    /// `root` (one name at least). A symlink is refused, and so is a
+    /// directory with anything in it: nothing is removed recursively.
+    fn remove_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        let _ = (root, names);
+        Err(no_file_operation("remove_dir"))
+    }
+
+    /// Move the regular file reached by walking `from` beneath `root` to
+    /// the path `to` reaches beneath it (each one name at least), replacing
+    /// a regular file there. Both stay beneath `root`: there is no way to
+    /// name anything else. A symlink, a directory or a file with more than
+    /// one hard link at either name is refused.
+    fn rename_beneath(
+        &mut self,
+        root: &RootHandle,
+        from: &[String],
+        to: &[String],
+    ) -> io::Result<()> {
+        let _ = (root, from, to);
+        Err(no_file_operation("rename"))
+    }
+
     /// Open a connection to `host` at `port`, as `HostConnect.connect`
     /// asks. A host with no network refuses with an error whose message is
     /// the same every time.
@@ -185,6 +250,15 @@ pub trait Host: Send {
     /// the last call. A host that writes straight to the real streams
     /// records nothing.
     fn take_output(&mut self) -> Output;
+}
+
+/// The error of a host that offers no file operation beyond the first
+/// six: it refuses, with the same message every time.
+fn no_file_operation(name: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!("`{name}` is not available on this host"),
+    )
 }
 
 /// The error of a host with no network, such as a plain test's: the same
@@ -569,6 +643,53 @@ impl Host for RealHost {
         sorted_names(entries, &joined(root, names))
     }
 
+    fn exists_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<bool> {
+        let (dir, names) = target(root, names)?;
+        dir.exists(&names)
+    }
+
+    fn metadata_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Meta> {
+        let (dir, names) = target(root, names)?;
+        dir.metadata(&names)
+    }
+
+    fn append_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+        contents: &[u8],
+    ) -> io::Result<()> {
+        let (dir, names) = target(root, names)?;
+        dir.append_file(&names)?.write_all(contents)
+    }
+
+    fn remove_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        checked_names(root, names)?.delete_file(names)
+    }
+
+    fn remove_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        checked_names(root, names)?.delete_dir(names)
+    }
+
+    fn rename_beneath(
+        &mut self,
+        root: &RootHandle,
+        from: &[String],
+        to: &[String],
+    ) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        windows_names(from)?;
+        checked_names(root, to)?.move_file(from, to)
+    }
+
     fn printed(&self) -> Vec<String> {
         Vec::new()
     }
@@ -607,6 +728,24 @@ impl Host for RealHost {
 
     fn take_output(&mut self) -> Output {
         Output::default()
+    }
+}
+
+/// The directory handle and the names to walk beneath it for an
+/// operation on `names` beneath `root`: for a directory root, the root's
+/// own handle and `names`; for a file root, which holds nothing beneath
+/// it, the file's parent directory and the file's own name.
+fn target<'r>(
+    root: &'r RootHandle,
+    names: &[String],
+) -> io::Result<(&'r oska_sys::Dir, Vec<std::ffi::OsString>)> {
+    match &root.file {
+        Some(_) if !names.is_empty() => Err(beneath_a_file(names)),
+        Some(name) => Ok((root_dir(root)?, vec![name.to_os_string()])),
+        None => Ok((
+            checked_names(root, names)?,
+            names.iter().map(std::ffi::OsString::from).collect(),
+        )),
     }
 }
 
@@ -1013,6 +1152,33 @@ impl FakeHost {
         }
     }
 
+    /// Make `path`'s parent a directory that stays, as it is when its
+    /// last entry goes: a directory holding nothing is still there.
+    fn keep_parent(&mut self, path: &Path) {
+        if let Some(parent) = path.parent() {
+            self.dirs.insert(parent.to_path_buf());
+        }
+    }
+
+    /// Remove the regular file at `path`, reached by `names` beneath
+    /// `root`, and give its bytes; refused when it is a directory or is
+    /// not there.
+    fn take_file(
+        &mut self,
+        path: &Path,
+        root: &RootHandle,
+        names: &[String],
+    ) -> io::Result<Vec<u8>> {
+        if !self.files.contains_key(path) {
+            return Err(match self.is_dir(path) {
+                true => not_a_regular_file(root, names),
+                false => missing(root, names),
+            });
+        }
+        self.keep_parent(path);
+        Ok(self.files.remove(path).unwrap_or_default())
+    }
+
     /// The names of the entries of the directory at `path`, sorted.
     fn entries(&self, path: &Path) -> io::Result<Vec<String>> {
         if !self.is_dir(path) {
@@ -1093,6 +1259,44 @@ fn not_a_directory(path: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
         format!("`{}` is not a directory", shown(path)),
+    )
+}
+
+/// `names` beneath `root` as a message shows them: with `/` between, or a
+/// file root's own name.
+fn shown_names(root: &RootHandle, names: &[String]) -> String {
+    match &root.file {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => names.join("/"),
+    }
+}
+
+/// The error for a name that is not there, worded as `oska-sys` words it.
+fn missing(root: &RootHandle, names: &[String]) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("`{}`: not found", shown_names(root, names)),
+    )
+}
+
+/// The error for a name that is not a regular file, worded as `oska-sys`
+/// words it.
+fn not_a_regular_file(root: &RootHandle, names: &[String]) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("`{}` is not a regular file", shown_names(root, names)),
+    )
+}
+
+/// The error for a name that is not a directory, or is a symlink, worded
+/// as `oska-sys` words it.
+fn not_a_directory_or_symlink(root: &RootHandle, names: &[String]) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "`{}` is a symlink or not a directory, and confined access never follows a symlink",
+            shown_names(root, names)
+        ),
     )
 }
 
@@ -1222,6 +1426,127 @@ impl Host for FakeHost {
         }
         let path = self.walk(root, names)?;
         self.entries(&path)
+    }
+
+    fn exists_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<bool> {
+        let path = match self.walk_file(root, names) {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        Ok(self.files.contains_key(&path) || self.is_dir(&path))
+    }
+
+    fn metadata_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Meta> {
+        let path = self.walk_file(root, names)?;
+        if let Some(bytes) = self.files.get(&path) {
+            return Ok(Meta {
+                kind: Kind::File,
+                size: bytes.len() as u64,
+            });
+        }
+        if self.is_dir(&path) && !root.is_file() {
+            return Ok(Meta {
+                kind: Kind::Directory,
+                size: 0,
+            });
+        }
+        Err(missing(root, names))
+    }
+
+    fn append_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+        contents: &[u8],
+    ) -> io::Result<()> {
+        if !root.is_file() && names.is_empty() {
+            return Err(no_name());
+        }
+        let path = self.walk_file(root, names)?;
+        if self.is_dir(&path) && !self.files.contains_key(&path) {
+            return Err(not_a_regular_file(root, names));
+        }
+        match self.files.get_mut(&path) {
+            Some(bytes) => {
+                bytes.extend_from_slice(contents);
+                Ok(())
+            }
+            None => self.put_file(path, contents),
+        }
+    }
+
+    fn remove_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        if names.is_empty() {
+            return Err(no_name());
+        }
+        let path = self.walk(root, names)?;
+        self.take_file(&path, root, names).map(drop)
+    }
+
+    fn remove_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        if names.is_empty() {
+            return Err(no_name());
+        }
+        let path = self.walk(root, names)?;
+        if self.files.contains_key(&path) {
+            return Err(not_a_directory_or_symlink(root, names));
+        }
+        if !self.is_dir(&path) {
+            return Err(missing(root, names));
+        }
+        let inside = |entry: &PathBuf| entry != &path && entry.starts_with(&path);
+        if self
+            .files
+            .keys()
+            .chain(&self.dirs)
+            .chain(self.links.keys())
+            .any(inside)
+        {
+            return Err(io::Error::other(format!(
+                "`{}`: directory not empty",
+                names.join("/")
+            )));
+        }
+        self.keep_parent(&path);
+        self.dirs.remove(&path);
+        Ok(())
+    }
+
+    fn rename_beneath(
+        &mut self,
+        root: &RootHandle,
+        from: &[String],
+        to: &[String],
+    ) -> io::Result<()> {
+        if root.is_file() {
+            return Err(a_file_root(root));
+        }
+        if from.is_empty() || to.is_empty() {
+            return Err(no_name());
+        }
+        let from_path = self.walk(root, from)?;
+        if !self.files.contains_key(&from_path) {
+            return Err(match self.is_dir(&from_path) {
+                true => not_a_regular_file(root, from),
+                false => missing(root, from),
+            });
+        }
+        let to_path = self.walk(root, to)?;
+        if self.is_dir(&to_path) && !self.files.contains_key(&to_path) {
+            return Err(not_a_regular_file(root, to));
+        }
+        if from_path == to_path {
+            return Ok(());
+        }
+        let bytes = self.take_file(&from_path, root, from)?;
+        self.put_file(to_path, &bytes)
     }
 
     fn net_connect(&mut self, host: &str, port: i128) -> io::Result<oska_sys::NetStream> {
